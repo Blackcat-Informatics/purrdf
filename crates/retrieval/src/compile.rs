@@ -3375,7 +3375,7 @@ mod tests {
         let options = || QueryOptions::new().with_env(&env);
         let engine = NativeSparqlEngine::new();
         let prepared = engine
-            .prepare_query_with_options(text, None, options())
+            .prepare_query_with_options(text, None, &options())
             .expect("the caller's text prepares");
         let lookups = supplied_exclusion_texts(&prepared, registry, ExclusionBasis::Membership)?;
         let [lookup] = <[LookupText; 1]>::try_from(lookups.concat())
@@ -3383,7 +3383,7 @@ mod tests {
         assert_eq!(lookup.parameter, CANDIDATE_NAME);
         assert!(!lookup.driven, "nothing in the text drives the call");
         engine
-            .prepare_execution(&lookup.text, None, &[CANDIDATE_NAME], options())
+            .prepare_execution(&lookup.text, None, &[CANDIDATE_NAME], &options())
             .unwrap_or_else(|error| {
                 panic!("the derived lookup prepares: {error}\n{}", lookup.text)
             });
@@ -3502,7 +3502,7 @@ mod tests {
                      ?candidate <{NEIGHBOURS}> ( ?seed \"5\"^^<{INTEGER}> ?score ) }}"
                 ),
                 None,
-                options(),
+                &options(),
             )
             .expect("the caller's text prepares");
         let lookups = supplied_exclusion_texts(&prepared, &registry, ExclusionBasis::Membership)
@@ -3532,7 +3532,7 @@ mod tests {
             "read whole, one row per seed: {text}"
         );
         engine
-            .prepare_execution(text, None, &[CANDIDATE_NAME], options())
+            .prepare_execution(text, None, &[CANDIDATE_NAME], &options())
             .unwrap_or_else(|error| panic!("the driven lookup prepares: {error}\n{text}"));
     }
 
@@ -3641,7 +3641,7 @@ mod tests {
         let prepared_under = |registry: &PropertyFunctionRegistry<'_>, text: &str| {
             let env = ExtensionEnv::over_relations(registry.clone()).expect("the fixture env");
             engine
-                .prepare_query_with_options(text, None, QueryOptions::new().with_env(&env))
+                .prepare_query_with_options(text, None, &QueryOptions::new().with_env(&env))
                 .map_err(|error| error.to_string())
         };
 
@@ -3686,7 +3686,7 @@ mod tests {
                 &lookup.text,
                 None,
                 &[CANDIDATE_NAME],
-                QueryOptions::new().with_env(&env),
+                &QueryOptions::new().with_env(&env),
             )
             .unwrap_or_else(|error| panic!("the driven lookup prepares: {error}\n{}", lookup.text));
     }

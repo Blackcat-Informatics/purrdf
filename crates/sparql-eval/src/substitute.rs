@@ -47,6 +47,8 @@ use purrdf_sparql_algebra::{Chain, Child};
 pub(crate) enum Prebindings<'a> {
     /// A generic consumer's list, names owned.
     Owned(&'a [(String, TermValue)]),
+    /// Evaluated function arguments, borrowed until the admitted rewrite completes.
+    Referenced(&'a [(&'a str, &'a TermValue)]),
     /// An interned entry point's list, names borrowed from the caller.
     Borrowed(&'a [crate::interned::Prebinding<'a>]),
     /// A prepared execution's parameters and their current values, as parallel
@@ -108,6 +110,7 @@ impl<'a> Prebindings<'a> {
     pub(crate) fn len(self) -> usize {
         match self {
             Self::Owned(list) => list.len(),
+            Self::Referenced(list) => list.len(),
             Self::Borrowed(list) => list.len(),
             Self::Paired(names, _) => names.len(),
         }
@@ -133,6 +136,7 @@ impl<'a> Prebindings<'a> {
     pub(crate) fn name(self, index: usize) -> &'a str {
         match self {
             Self::Owned(list) => list[index].0.as_str(),
+            Self::Referenced(list) => list[index].0,
             Self::Borrowed(list) => list[index].variable,
             Self::Paired(names, _) => names[index].as_str(),
         }
@@ -164,6 +168,7 @@ impl<'a> Prebindings<'a> {
     ) -> Result<GroundTerm, GroundFailure> {
         match self {
             Self::Owned(list) => ground_term_from_value_with_memory(&list[index].1, memory),
+            Self::Referenced(list) => ground_term_from_value_with_memory(list[index].1, memory),
             Self::Borrowed(list) => ground_term_from_value_with_memory(&list[index].value, memory),
             Self::Paired(_, values) => match values[index]
                 .as_ref()
@@ -228,6 +233,7 @@ impl<'a> Prebindings<'a> {
     fn value(self, index: usize) -> Option<&'a TermValue> {
         match self {
             Self::Owned(list) => Some(&list[index].1),
+            Self::Referenced(list) => Some(list[index].1),
             Self::Borrowed(list) => Some(&list[index].value),
             Self::Paired(_, values) => match values[index].as_ref()? {
                 ParameterValue::Value(value) => Some(value),
@@ -1162,6 +1168,7 @@ pub(crate) fn term_pattern_from_ground_with_memory<
 /// # Errors
 ///
 /// As [`build_probes`].
+#[cfg(test)]
 pub(crate) fn apply_shacl_prebinding(
     query: Query,
     substitutions: Prebindings<'_>,

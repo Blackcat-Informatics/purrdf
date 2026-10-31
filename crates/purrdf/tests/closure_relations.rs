@@ -152,7 +152,7 @@ fn answer(
             substitutions: &[],
         },
         entailment,
-        QueryOptions::new().with_env(
+        &QueryOptions::new().with_env(
             &purrdf_sparql_eval::ExtensionEnv::over_relations(registry.clone())
                 .expect("the fixture declarations read cleanly"),
         ),

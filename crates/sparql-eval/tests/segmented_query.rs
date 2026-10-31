@@ -157,13 +157,13 @@ fn chronological_segmented_stack_matches_eager_raw_and_prepared_queries() {
             let prepared = engine.prepare_query(text, None).unwrap();
             let expected = support::solutions(
                 engine
-                    .query_prepared(&eager, &prepared, &[], QueryOptions::EMPTY)
+                    .query_prepared(&eager, &prepared, &[], &QueryOptions::EMPTY)
                     .unwrap(),
             );
             for prepared_entry in [false, true] {
                 let view = snapshot.query(read_limits).unwrap();
                 let actual = if prepared_entry {
-                    engine.query_prepared_fallible_view(&view, &prepared, &[], QueryOptions::EMPTY)
+                    engine.query_prepared_fallible_view(&view, &prepared, &[], &QueryOptions::EMPTY)
                 } else {
                     engine.query_fallible_view(
                         &view,
@@ -172,7 +172,7 @@ fn chronological_segmented_stack_matches_eager_raw_and_prepared_queries() {
                             base_iri: None,
                             substitutions: &[],
                         },
-                        QueryOptions::EMPTY,
+                        &QueryOptions::EMPTY,
                     )
                 }
                 .unwrap_or_else(|error| match error {
@@ -238,7 +238,7 @@ fn chronological_segmented_provider_failure_preserves_original_final_evidence() 
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
         )
         .unwrap_err();
     let FallibleSparqlError::Operational { error, evidence } = error else {
@@ -271,7 +271,7 @@ fn persistent_id_binding_retains_original_admission_and_refuses_atomically() {
     let engine = NativeSparqlEngine::new();
     let query = "ASK { ?this <https://example.org/p> \"漢字\"@zh }";
     let mut execution = engine
-        .prepare_execution(query, None, &["this"], QueryOptions::EMPTY)
+        .prepare_execution(query, None, &["this"], &QueryOptions::EMPTY)
         .unwrap();
     let before = source.evidence().live_bytes();
     let window = purrdf_alloc_probe::CurrentThreadWindow::open();
@@ -283,16 +283,16 @@ fn persistent_id_binding_retains_original_admission_and_refuses_atomically() {
     assert_eq!(source.evidence().live_bytes(), before);
     execution.bind_id_fallible(0, &source, id).unwrap();
     let mut expected = engine
-        .prepare_execution(query, None, &["this"], QueryOptions::EMPTY)
+        .prepare_execution(query, None, &["this"], &QueryOptions::EMPTY)
         .unwrap();
     expected.bind(0, target).unwrap();
     let expected_answer = engine
-        .execute(&mut expected, &*resident, QueryOptions::EMPTY, |answer| {
+        .execute(&mut expected, &*resident, &QueryOptions::EMPTY, |answer| {
             matches!(answer, purrdf_sparql_eval::InternedOutcome::Boolean(true))
         })
         .unwrap();
     let (answer, _) = engine
-        .execute_fallible(&mut execution, &source, QueryOptions::EMPTY, |answer| {
+        .execute_fallible(&mut execution, &source, &QueryOptions::EMPTY, |answer| {
             matches!(answer, purrdf_sparql_eval::InternedOutcome::Boolean(true))
         })
         .unwrap();
@@ -322,7 +322,7 @@ fn persistent_id_binding_retains_original_admission_and_refuses_atomically() {
     assert!(u64::try_from(measured.peak_working_bytes).unwrap() <= small.evidence().peak_bytes());
     // Failed replacement keeps the old valid binding and its original owner.
     let (answer, _) = engine
-        .execute_fallible(&mut execution, &source, QueryOptions::EMPTY, |answer| {
+        .execute_fallible(&mut execution, &source, &QueryOptions::EMPTY, |answer| {
             matches!(answer, purrdf_sparql_eval::InternedOutcome::Boolean(true))
         })
         .unwrap();
@@ -348,7 +348,7 @@ impl GovernedEntry<'_> {
         source: &'d SegmentedSession,
         prepared: &PreparedQuery,
         substitutions: &[(String, TermValue)],
-        options: QueryOptions<'d, 'd>,
+        options: &QueryOptions<'d, 'd>,
         governors: &QueryGovernors,
     ) -> FallibleSparqlResult<SegmentedError, GovernedEvidence<SegmentedEvidence>> {
         match self {
@@ -433,10 +433,10 @@ fn dense_pages_price_only_the_exact_subject_range_and_preserve_source_refusal() 
     let engine = NativeSparqlEngine::new();
     let prepared = engine.prepare_query(QUERY, None).unwrap();
     let expected = engine
-        .query_prepared(&resident, &prepared, &[], QueryOptions::EMPTY)
+        .query_prepared(&resident, &prepared, &[], &QueryOptions::EMPTY)
         .unwrap();
     let answer = engine
-        .query_prepared_fallible_view(&source, &prepared, &[], QueryOptions::EMPTY)
+        .query_prepared_fallible_view(&source, &prepared, &[], &QueryOptions::EMPTY)
         .unwrap();
     let found = answer.result.solutions().expect("SELECT shape").1;
     let expected = expected.solutions().expect("SELECT shape").1;
@@ -463,7 +463,7 @@ fn dense_pages_price_only_the_exact_subject_range_and_preserve_source_refusal() 
         Some(SegmentedError::Provider { .. })
     ));
     assert!(matches!(
-        engine.query_prepared_fallible_view(&source, &prepared, &[], QueryOptions::EMPTY),
+        engine.query_prepared_fallible_view(&source, &prepared, &[], &QueryOptions::EMPTY),
         Err(FallibleSparqlError::Operational {
             error: SegmentedError::Provider { .. },
             ..
@@ -505,7 +505,7 @@ fn long_host_refusal_keeps_its_typed_cause_without_unbounded_report_allocation()
             &source,
             &prepared,
             &[],
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::METERED,
         );
         let ledger = source.evidence().peak_bytes();
@@ -552,12 +552,12 @@ fn selective_join_matches_resident_and_actual_peak_stays_below_shared_ledger() {
     let engine = NativeSparqlEngine::new();
     let prepared = engine.prepare_query(QUERY, None).unwrap();
     let expected = engine
-        .query_prepared(&resident, &prepared, &[], QueryOptions::EMPTY)
+        .query_prepared(&resident, &prepared, &[], &QueryOptions::EMPTY)
         .unwrap();
     let window = purrdf_alloc_probe::CurrentThreadWindow::open();
     let source = open_with_evidence(&image, CEILING, 2, 16_384);
     let answer = engine
-        .query_prepared_fallible_view(&source, &prepared, &[], QueryOptions::EMPTY)
+        .query_prepared_fallible_view(&source, &prepared, &[], &QueryOptions::EMPTY)
         .unwrap();
     let (actual_variables, actual_rows) = answer.result.solutions().expect("SELECT shape");
     let SparqlResult::Solutions {
@@ -591,10 +591,10 @@ fn scoped_and_prepared_engine_egresses_hold_the_reservation_through_consumption(
     let source = open(&image, CEILING);
     let before = source.evidence().live_bytes();
     let mut execution = engine
-        .prepare_execution(QUERY, None, &[], QueryOptions::EMPTY)
+        .prepare_execution(QUERY, None, &[], &QueryOptions::EMPTY)
         .unwrap();
     engine
-        .execute_fallible(&mut execution, &source, QueryOptions::EMPTY, |outcome| {
+        .execute_fallible(&mut execution, &source, &QueryOptions::EMPTY, |outcome| {
             assert!(
                 source.evidence().live_bytes() > before,
                 "execution owns its working storage through the visitor"
@@ -611,7 +611,7 @@ fn scoped_and_prepared_engine_egresses_hold_the_reservation_through_consumption(
         substitutions: &[],
     };
     let answer = engine
-        .query_fallible_view(&open(&image, CEILING), request, QueryOptions::EMPTY)
+        .query_fallible_view(&open(&image, CEILING), request, &QueryOptions::EMPTY)
         .unwrap();
     assert_eq!(answer.result.solutions().expect("SELECT shape").1.len(), 1);
 }
@@ -746,7 +746,7 @@ fn fallible_explain_preserves_a_segmented_provider_fault_over_a_fired_stop() {
             &source,
             QUERY,
             None,
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             stop,
         )
         .expect_err("storage refusal outranks the measuring run's stop signal");
@@ -889,7 +889,7 @@ fn bounded_select_algebra_matches_resident_bags_across_public_entries() {
             .prepare_query(query, None)
             .unwrap_or_else(|error| panic!("{name}: parse: {error:?}"));
         let expected = engine
-            .query_prepared(&resident, &prepared, &[], QueryOptions::EMPTY)
+            .query_prepared(&resident, &prepared, &[], &QueryOptions::EMPTY)
             .unwrap_or_else(|error| panic!("{name}: resident: {error:?}"));
         if name == "zero-column bag" {
             let (variables, rows) = expected.solutions().expect("SELECT");
@@ -938,14 +938,14 @@ fn bounded_select_algebra_matches_resident_bags_across_public_entries() {
                                 base_iri: None,
                                 substitutions: &[],
                             },
-                            QueryOptions::EMPTY,
+                            &QueryOptions::EMPTY,
                         )
                         .unwrap_or_else(|error| panic!("{name}: direct: {error:?}"))
                         .result
                 }
                 1 => {
                     engine
-                        .query_prepared_fallible_view(&source, &prepared, &[], QueryOptions::EMPTY)
+                        .query_prepared_fallible_view(&source, &prepared, &[], &QueryOptions::EMPTY)
                         .unwrap_or_else(|error| panic!("{name}: prepared: {error:?}"))
                         .result
                 }
@@ -955,7 +955,7 @@ fn bounded_select_algebra_matches_resident_bags_across_public_entries() {
                             &source,
                             &prepared,
                             &[],
-                            QueryOptions::EMPTY,
+                            &QueryOptions::EMPTY,
                             &QueryGovernors::METERED,
                         )
                         .unwrap_or_else(|error| panic!("{name}: governed: {error:?}"))
@@ -991,7 +991,7 @@ fn duplicate_computed_payload_releases_temporaries_and_retains_extracted_output(
     );
     let prepared = engine.prepare_query(&query, None).expect("computed query");
     let expected = engine
-        .query_prepared(&resident, &prepared, &[], QueryOptions::EMPTY)
+        .query_prepared(&resident, &prepared, &[], &QueryOptions::EMPTY)
         .expect("resident computed result");
     let (_, expected_rows) = expected.solutions().expect("SELECT");
     assert_eq!(expected_rows.len(), 1);
@@ -1006,7 +1006,7 @@ fn duplicate_computed_payload_releases_temporaries_and_retains_extracted_output(
     // physical ceiling still governs every source and engine owner.
     let source = open_with_evidence(&image, CEILING, 2, 65_536);
     let answer = engine
-        .query_prepared_fallible_view(&source, &prepared, &[], QueryOptions::EMPTY)
+        .query_prepared_fallible_view(&source, &prepared, &[], &QueryOptions::EMPTY)
         .expect("live temporary ownership must fit independently of row count");
     assert_eq!(answer.result.solutions().expect("SELECT").1, expected_rows);
     let output = answer.result;
@@ -1063,7 +1063,7 @@ fn bounded_ask_construct_describe_match_resident_across_public_entries() {
     ] {
         let prepared = engine.prepare_query(query, None).expect("graph-form query");
         let expected = engine
-            .query_prepared(&resident, &prepared, &[], QueryOptions::EMPTY)
+            .query_prepared(&resident, &prepared, &[], &QueryOptions::EMPTY)
             .expect("resident graph-form result");
         for route in 0..3 {
             let source = open_with_evidence(&image, CEILING, 2, 16_384);
@@ -1077,14 +1077,14 @@ fn bounded_ask_construct_describe_match_resident_across_public_entries() {
                                 base_iri: None,
                                 substitutions: &[],
                             },
-                            QueryOptions::EMPTY,
+                            &QueryOptions::EMPTY,
                         )
                         .expect("direct bounded form")
                         .result
                 }
                 1 => {
                     engine
-                        .query_prepared_fallible_view(&source, &prepared, &[], QueryOptions::EMPTY)
+                        .query_prepared_fallible_view(&source, &prepared, &[], &QueryOptions::EMPTY)
                         .expect("prepared bounded form")
                         .result
                 }
@@ -1094,7 +1094,7 @@ fn bounded_ask_construct_describe_match_resident_across_public_entries() {
                             &source,
                             &prepared,
                             &[],
-                            QueryOptions::EMPTY,
+                            &QueryOptions::EMPTY,
                             &QueryGovernors::METERED,
                         )
                         .expect("governed bounded form")
@@ -1251,7 +1251,7 @@ fn bounded_virtual_streams_and_empty_graph_declarations_match_resident() {
             .prepare_query(query, None)
             .expect("RDF 1.2 graph query");
         let expected = engine
-            .query_prepared(&resident, &prepared, &[], QueryOptions::EMPTY)
+            .query_prepared(&resident, &prepared, &[], &QueryOptions::EMPTY)
             .expect("resident graph scope");
         let expected = support::sorted_rows(&expected, |value| format!("{value:?}"));
         assert_eq!(
@@ -1271,14 +1271,14 @@ fn bounded_virtual_streams_and_empty_graph_declarations_match_resident() {
                                 base_iri: None,
                                 substitutions: &[],
                             },
-                            QueryOptions::EMPTY,
+                            &QueryOptions::EMPTY,
                         )
                         .expect("direct graph scope")
                         .result
                 }
                 1 => {
                     engine
-                        .query_prepared_fallible_view(&source, &prepared, &[], QueryOptions::EMPTY)
+                        .query_prepared_fallible_view(&source, &prepared, &[], &QueryOptions::EMPTY)
                         .expect("prepared graph scope")
                         .result
                 }
@@ -1288,7 +1288,7 @@ fn bounded_virtual_streams_and_empty_graph_declarations_match_resident() {
                             &source,
                             &prepared,
                             &[],
-                            QueryOptions::EMPTY,
+                            &QueryOptions::EMPTY,
                             &QueryGovernors::METERED,
                         )
                         .expect("governed graph scope")
@@ -1426,7 +1426,7 @@ fn persisted_reifier_limit_bounds_touched_terms_and_full_count_matches() {
                         base_iri: None,
                         substitutions: &[],
                     },
-                    QueryOptions::EMPTY,
+                    &QueryOptions::EMPTY,
                 )
                 .unwrap();
             assert_eq!(support::solutions(limited.result).1.len(), 10);
@@ -1454,7 +1454,7 @@ fn persisted_reifier_limit_bounds_touched_terms_and_full_count_matches() {
                 let prepared = engine.prepare_query(&text, None).unwrap();
                 let expected = support::solutions(
                     engine
-                        .query_prepared(&resident, &prepared, &[], QueryOptions::EMPTY)
+                        .query_prepared(&resident, &prepared, &[], &QueryOptions::EMPTY)
                         .unwrap(),
                 );
                 assert_eq!(
@@ -1481,7 +1481,7 @@ fn persisted_reifier_limit_bounds_touched_terms_and_full_count_matches() {
                             base_iri: None,
                             substitutions: &[],
                         },
-                        QueryOptions::EMPTY,
+                        &QueryOptions::EMPTY,
                     )
                     .unwrap();
                 assert_eq!(support::solutions(counted.result), expected);
@@ -1497,7 +1497,7 @@ fn persisted_reifier_limit_bounds_touched_terms_and_full_count_matches() {
             let prepared = engine.prepare_query(text, None).unwrap();
             let expected = support::solutions(
                 engine
-                    .query_prepared(&resident, &prepared, &[], QueryOptions::EMPTY)
+                    .query_prepared(&resident, &prepared, &[], &QueryOptions::EMPTY)
                     .unwrap(),
             );
             assert_eq!(
@@ -1516,7 +1516,7 @@ fn persisted_reifier_limit_bounds_touched_terms_and_full_count_matches() {
                         base_iri: None,
                         substitutions: &[],
                     },
-                    QueryOptions::EMPTY,
+                    &QueryOptions::EMPTY,
                 )
                 .unwrap();
             assert_eq!(support::solutions(counted.result), expected);
@@ -1542,12 +1542,12 @@ fn ordered_query_matches_resident_and_tiny_capacity_refuses() {
     for query in [QUERY, ordered.as_str()] {
         let prepared = engine.prepare_query(query, None).unwrap();
         let expected = engine
-            .query_prepared(&resident, &prepared, &[], QueryOptions::EMPTY)
+            .query_prepared(&resident, &prepared, &[], &QueryOptions::EMPTY)
             .unwrap();
         let window = purrdf_alloc_probe::CurrentThreadWindow::open();
         let source = open(&image, CEILING);
         let answer = engine
-            .query_prepared_fallible_view(&source, &prepared, &[], QueryOptions::EMPTY)
+            .query_prepared_fallible_view(&source, &prepared, &[], &QueryOptions::EMPTY)
             .unwrap();
         let measured = window.close();
         assert_eq!(
@@ -1562,7 +1562,7 @@ fn ordered_query_matches_resident_and_tiny_capacity_refuses() {
         let small = open(&image, baseline_ceiling(&image));
         let before = small.evidence();
         let refused =
-            engine.query_prepared_fallible_view(&small, &prepared, &[], QueryOptions::EMPTY);
+            engine.query_prepared_fallible_view(&small, &prepared, &[], &QueryOptions::EMPTY);
         assert!(matches!(
             refused,
             Err(FallibleSparqlError::Operational {
@@ -1623,7 +1623,7 @@ fn governed_reporting_refuses_independently_tight_capacity() {
                     &source,
                     &prepared,
                     &[],
-                    QueryOptions::EMPTY,
+                    &QueryOptions::EMPTY,
                     &QueryGovernors::METERED,
                 );
                 let measured = window.close();
@@ -1689,7 +1689,7 @@ fn construct_mint_prefix_completes_and_tight_refusal_preserves_destination() {
             &source,
             &prepared,
             &[],
-            options,
+            &options,
             &state,
             &mut destination,
         );
@@ -1747,7 +1747,7 @@ fn request_metadata_and_prefix_match_resident_and_refuse_tight_capacity() {
                     base_iri: None,
                     substitutions: values,
                 },
-                options,
+                &options,
             )
             .unwrap();
         for route in 0..3 {
@@ -1767,7 +1767,7 @@ fn request_metadata_and_prefix_match_resident_and_refuse_tight_capacity() {
                     &source,
                     &prepared,
                     values,
-                    options,
+                    &options,
                     &QueryGovernors::METERED,
                 )
                 .unwrap();
@@ -1794,7 +1794,7 @@ fn request_metadata_and_prefix_match_resident_and_refuse_tight_capacity() {
                     base_iri: None,
                     substitutions: values,
                 },
-                options,
+                &options,
             );
             assert!(matches!(
                 outcome,
@@ -1835,7 +1835,7 @@ fn request_metadata_and_prefix_match_resident_and_refuse_tight_capacity() {
             base_iri: None,
             substitutions: &large,
         },
-        QueryOptions::EMPTY,
+        &QueryOptions::EMPTY,
     );
     let measured = window.close();
     assert!(matches!(
@@ -1913,7 +1913,7 @@ fn configured_explain_matches_resident_and_retains_last_owner() {
             for signalled in [false, true] {
                 let expected_engine = NativeSparqlEngine::new();
                 let expected = expected_engine
-                    .explain_query_with_options(&resident, query, None, options)
+                    .explain_query_with_options(&resident, query, None, &options)
                     .unwrap()
                     .render();
                 let engine = NativeSparqlEngine::new();
@@ -1922,10 +1922,10 @@ fn configured_explain_matches_resident_and_retains_last_owner() {
                 let window = purrdf_alloc_probe::CurrentThreadWindow::open();
                 let (explanation, receipt) = if signalled {
                     engine.explain_query_with_stop_signal_fallible_view(
-                        &source, query, None, options, stop,
+                        &source, query, None, &options, stop,
                     )
                 } else {
-                    engine.explain_query_with_options_fallible_view(&source, query, None, options)
+                    engine.explain_query_with_options_fallible_view(&source, query, None, &options)
                 }
                 .unwrap();
                 let measured = window.close();
@@ -1969,13 +1969,13 @@ fn prepared_governed_cold_sessions_match_text_receipts_and_release_reporting() {
     let ((), scoped_evidence) = {
         let engine = NativeSparqlEngine::new();
         let mut execution = engine
-            .prepare_execution(QUERY, None, &[], QueryOptions::EMPTY)
+            .prepare_execution(QUERY, None, &[], &QueryOptions::EMPTY)
             .unwrap();
         engine
             .execute_fallible(
                 &mut execution,
                 &scoped_source,
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 |outcome| {
                     let active = scoped_source.evidence();
                     assert!(
@@ -2025,7 +2025,7 @@ fn prepared_governed_cold_sessions_match_text_receipts_and_release_reporting() {
                 &source,
                 &prepared,
                 &[],
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &governors,
             );
             let measured = window.close();
@@ -2097,7 +2097,7 @@ fn interned_graph_retention_keeps_original_account_until_last_extraction() {
     let engine = NativeSparqlEngine::new();
     let query = "CONSTRUCT { <https://example.org/target> <https://example.org/p> ?o } WHERE { <https://example.org/target> <https://example.org/p> ?o }";
     let mut execution = engine
-        .prepare_execution(query, None, &[], QueryOptions::EMPTY)
+        .prepare_execution(query, None, &[], &QueryOptions::EMPTY)
         .unwrap();
     let window = purrdf_alloc_probe::CurrentThreadWindow::open();
     let source = open(&image, CEILING);
@@ -2105,7 +2105,7 @@ fn interned_graph_retention_keeps_original_account_until_last_extraction() {
     let opening_owners =
         opening.live_bytes() - opening.unpinned_cache_bytes() - opening.bookkeeping_bytes();
     let (graph, evidence) = engine
-        .execute_fallible(&mut execution, &source, QueryOptions::EMPTY, |outcome| {
+        .execute_fallible(&mut execution, &source, &QueryOptions::EMPTY, |outcome| {
             let purrdf_sparql_eval::InternedOutcome::Graph(graph) = outcome else {
                 panic!("CONSTRUCT returns graph")
             };
@@ -2233,7 +2233,7 @@ fn authenticated_annotation_ranges_reduce_cold_reads_and_keep_exact_filter() {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
             )
             .unwrap();
         (support::solutions(result.result), source.evidence())

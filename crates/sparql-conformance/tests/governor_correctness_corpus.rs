@@ -167,7 +167,7 @@ fn ungoverned(
     .map_err(|e| format!("extension environment: {e}"))?;
     let options = QueryOptions::new().with_env(&env);
     engine
-        .query_with_source(dataset, request(query), remote, options)
+        .query_with_source(dataset, request(query), remote, &options)
         .map_err(|error| error.to_string())
 }
 
@@ -254,7 +254,7 @@ fn d0_governed_unbounded_is_byte_identical_to_ungoverned() {
                     &dataset,
                     request(&query),
                     &remote,
-                    QueryOptions::new().with_env(&governed_env),
+                    &QueryOptions::new().with_env(&governed_env),
                     &QueryGovernors::UNBOUNDED,
                 )
                 .map_err(|error| error.to_string());

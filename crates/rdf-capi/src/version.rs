@@ -310,7 +310,14 @@ pub const PURRDF_ABI_MAJOR: u32 = 0;
 /// or a canonical decimal `u64`. Every run reports its own effective policy and
 /// charged work. Errors retain original native causes and receipts until freed.
 /// All output slots must be distinct; rebuild affected callers against this header.
-pub const PURRDF_ABI_MINOR: u32 = 17;
+///
+/// # `0.17.0` → `0.18.0`: caller-selected logical UDF depth
+///
+/// `PurrdfQueryGovernors` gains `max_udf_depth` before `deadline_millis`.
+/// MaxUdfDepth enables that inclusive finite limit; UnlimitedUdfDepth removes
+/// the default depth limit of 32. The two flag bits conflict. Rebuild callers
+/// against the new structure layout and regenerate any copied declarations.
+pub const PURRDF_ABI_MINOR: u32 = 18;
 /// ABI patch version. Reset to `0` by the MINOR bump documented above.
 pub const PURRDF_ABI_PATCH: u32 = 0;
 

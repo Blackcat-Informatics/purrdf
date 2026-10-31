@@ -27,10 +27,10 @@ const MIN: &str = "-170141183460469231731687303715884105728";
 const MIN_1: &str = "-170141183460469231731687303715884105727";
 
 fn run(query: &str) -> Vec<Vec<Option<TermValue>>> {
-    run_with(query, QueryOptions::EMPTY)
+    run_with(query, &QueryOptions::EMPTY)
 }
 
-fn run_with(query: &str, options: QueryOptions<'_, '_>) -> Vec<Vec<Option<TermValue>>> {
+fn run_with(query: &str, options: &QueryOptions<'_, '_>) -> Vec<Vec<Option<TermValue>>> {
     let query = format!("PREFIX xsd: <{XSD}>\n{query}");
     let result = NativeSparqlEngine::new()
         .query_with_options_view(
@@ -152,7 +152,7 @@ fn absorbed_numeric_errors_reach_the_caller_as_their_codes() {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &QueryGovernors::METERED,
             )
             .expect("a governed outcome")
@@ -204,7 +204,7 @@ fn explain_divides_under_the_query_s_policy() {
                 &*empty_dataset(),
                 query,
                 None,
-                QueryOptions::EMPTY.with_division(division),
+                &QueryOptions::EMPTY.with_division(division),
             )
             .unwrap_or_else(|e| panic!("{query} explains: {e}"))
     };
@@ -230,7 +230,7 @@ fn a_non_terminating_quotient_under_exact_is_an_expression_error() {
     let exact = QueryOptions::EMPTY.with_division(DivisionPolicy::Exact);
     let rows = run_with(
         "SELECT (COALESCE(1 / 3, \"caught\") AS ?c) (1 / 3 AS ?x) (1 / 8 AS ?y) WHERE {}",
-        exact,
+        &exact,
     );
     assert_eq!(cell(rows[0][0].as_ref()), "caught^^string");
     assert_eq!(cell(rows[0][1].as_ref()), "-");
@@ -238,7 +238,7 @@ fn a_non_terminating_quotient_under_exact_is_an_expression_error() {
     let means = run_with(
         "SELECT ?g (AVG(?v) AS ?mean) WHERE { VALUES (?g ?v) { (1 1) (1 1) (1 2) (2 1) (2 2) } } \
          GROUP BY ?g ORDER BY ?g",
-        exact,
+        &exact,
     );
     assert_eq!(cell(means[0][1].as_ref()), "-", "4/3 does not terminate");
     assert_eq!(cell(means[1][1].as_ref()), "1.5^^decimal");
@@ -253,7 +253,7 @@ fn a_non_terminating_quotient_under_exact_is_an_expression_error() {
                 base_iri: None,
                 substitutions: &[],
             },
-            exact,
+            &exact,
             &QueryGovernors::METERED,
         )
         .expect("an expression error is not a query error");
@@ -297,7 +297,7 @@ fn statistical_aggregates_see_every_digit() {
                  (AGG(<{STAT}MODE>, ?v) AS ?mode) \
                  WHERE {{ VALUES ?v {{ {high} {low} {mid} {high} }} }}"
             ),
-            options,
+            &options,
         );
         let between = format!("{mid}.5^^decimal");
         assert_eq!(
@@ -317,7 +317,7 @@ fn statistical_aggregates_see_every_digit() {
                 "SELECT (AGG(<{STAT}MODE>, ?v) AS ?mode) (AGG(<{STAT}MEDIAN>, ?v) AS ?median) \
                  WHERE {{ VALUES ?v {{ {high} {low} {mid} }} }}"
             ),
-            options,
+            &options,
         );
         assert_eq!(cell(rows[0][0].as_ref()), format!("{low}^^integer"));
         // The median interpolates, so it is a decimal of the middle value.
@@ -344,7 +344,7 @@ fn variances_divide_under_the_query_s_policy() {
     let answer = |query: &str, division: DivisionPolicy| {
         let rows = run_with(
             query,
-            QueryOptions::new().with_env(&env).with_division(division),
+            &QueryOptions::new().with_env(&env).with_division(division),
         );
         cell(rows[0][0].as_ref())
     };
@@ -384,7 +384,7 @@ fn variances_divide_under_the_query_s_policy() {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::new().with_env(&env).with_division(exact),
+            &QueryOptions::new().with_env(&env).with_division(exact),
             &QueryGovernors::METERED,
         )
         .expect("an expression error is not a query error");

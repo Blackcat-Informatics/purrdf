@@ -9,7 +9,7 @@ SPDX-License-Identifier: CC-BY-4.0
 project drop the PostgreSQL `tsvector`/`tsquery` it kept beside its triple
 store for ranked text search: the question becomes a property-function call in
 the SPARQL query that already holds the graph, in-process, over the same
-dataset, and the answer is byte-identical natively and on wasm32. It is BM25
+dataset, and the answer is byte-identical natively and on `wasm32`. It is BM25
 ranking, not a Lucene — Unicode case folding and word-boundary segmentation,
 explicit English stemming and costed dictionary analysis, no stop-word lists, no query dialect (phrase and proximity compose
 in SPARQL from the term-occurrence relation), fixed `k1` with explicit per-field
@@ -106,7 +106,7 @@ let result = NativeSparqlEngine::new().query_with_options_view(
         base_iri: None,
         substitutions: &[],
     },
-    QueryOptions::new().with_env(&env),
+    &QueryOptions::new().with_env(&env),
 )?;
 ```
 

@@ -122,7 +122,7 @@ use purrdf_xsd::datatype::XSD_STRING;
 use crate::agg_fn::AggregateAccumulator as _;
 use crate::convert::ground_term_to_workspace_value;
 use crate::error::EvalError;
-use crate::eval::{EvalCtx, eval_evaluated};
+use crate::eval::EvalCtx;
 #[cfg(test)]
 use crate::expr::xsd_of;
 use crate::governor::ChargePoint;
@@ -130,7 +130,7 @@ use crate::governor::lift::{Evaluated, Lift, Truncation};
 use crate::parallel::{OrderedRows, par_loop_try_map_owned};
 use crate::parsed_value::ParsedValue;
 use crate::scratch::SolutionTerm;
-use crate::solution::{RetainedRow, RowsBuilder, Solution, SolutionSeq, VarSchema};
+use crate::solution::{RetainedRow, RowsBuilder, SolutionSeq, VarSchema};
 use crate::user_fn::Volatility;
 
 /// Inline `VALUES`: one solution per binding row, each cell an interned ground term
@@ -265,15 +265,12 @@ macro_rules! eval_project_sequence {
     }};
 }
 
-/// `SELECT`-list projection: restrict to `variables` in order. A projected variable
-/// absent from the inner solution yields an all-unbound column.
-// Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
-#[inline(never)]
-pub(crate) fn eval_project<D: DatasetView + Sync>(
+pub(crate) fn finish_project<D: DatasetView + Sync>(
     node: &GraphPattern,
-    inner: &GraphPattern,
     variables: purrdf_sparql_algebra::ProjectionNames<'_>,
-    ctx: &mut EvalCtx<'_, D>,
+    lift: crate::governor::lift::DetachedLift,
+    evaluated: Evaluated<D::Id>,
+    ctx: &EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
     let workspace = ctx.growth.clone();
     let layout = || {
@@ -291,8 +288,7 @@ pub(crate) fn eval_project<D: DatasetView + Sync>(
             })
         }
     };
-    let mut lift = Lift::at_admitted(node, &ctx.growth)?;
-    let evaluated = crate::service_endpoints::eval_projected(inner, variables, ctx)?;
+    let mut lift = lift.attach(node);
     let Some(seq) = lift.absorb(0, evaluated) else {
         let schema = layout()?;
         return Ok(lift.finish(SolutionSeq::empty(schema)));
@@ -302,76 +298,14 @@ pub(crate) fn eval_project<D: DatasetView + Sync>(
     Ok(lift.finish(projected))
 }
 
-// Erase the static delivery wrapper; the native operator retains its call boundary.
-#[allow(clippy::inline_always)]
-#[inline(always)]
-pub(crate) fn eval_project_with<D: DatasetView + Sync, M: crate::eval::RowDelivery<D>>(
+pub(crate) fn finish_dedup<D: DatasetView + Sync, const ADJACENT: bool>(
     node: &GraphPattern,
-    inner: &GraphPattern,
-    variables: purrdf_sparql_algebra::ProjectionNames<'_>,
-    delivery: M,
-    ctx: &mut EvalCtx<'_, D>,
+    lift: crate::governor::lift::DetachedLift,
+    evaluated: Evaluated<D::Id>,
+    ctx: &EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
-    if M::ACTIVE {
-        crate::eval::yield_transform(
-            node,
-            inner,
-            delivery,
-            |seq, ctx| {
-                let out = if ctx.growth.is_bounded() {
-                    VarSchema::from_vars_admitted(variables.iter().cloned(), &ctx.growth)?
-                        .shared_admitted(&ctx.growth)?
-                } else {
-                    match variables {
-                        purrdf_sparql_algebra::ProjectionNames::Explicit(names) => {
-                            VarSchema::interned(names)
-                        }
-                        purrdf_sparql_algebra::ProjectionNames::Star(names) => {
-                            VarSchema::from_vars(names.iter().cloned()).shared_resident()
-                        }
-                    }
-                };
-                let lift = Lift::at_admitted(node, &ctx.growth)?;
-                let projected =
-                    eval_project_sequence!(&seq, out, &ctx.growth, ctx.evidence_input.is_some());
-                Ok(lift.finish(projected))
-            },
-            ctx,
-        )
-    } else {
-        eval_project(node, inner, variables, ctx)
-    }
-}
-
-/// `DISTINCT` and `REDUCED`: drop duplicate whole-solution rows, preserving first-seen
-/// order. `REDUCED` is permitted to drop duplicates, and applying the same dedup as
-/// `DISTINCT` is a stronger-but-permitted reduction than the spec's minimum (§18.5), so
-/// the two operators share this one body.
-///
-/// Binding de-duplication commits **per input row**: a prefix of the input dedups to
-/// a prefix of the output, so a truncation below either operator keeps its bound.
-/// Retained declarations also coalesce later witnesses for the same binding; an
-/// immutable downstream delivery therefore waits for that original witness bag.
-// Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
-// Erase the ZST mode at the wrapper; the shared kernel keeps its call boundary.
-#[allow(clippy::inline_always)]
-#[inline(always)]
-pub(crate) fn eval_dedup<D: DatasetView + Sync>(
-    node: &GraphPattern,
-    inner: &GraphPattern,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    eval_dedup_with::<D, false>(node, inner, ctx)
-}
-
-#[inline(never)]
-pub(crate) fn eval_dedup_with<D: DatasetView + Sync, const ADJACENT: bool>(
-    node: &GraphPattern,
-    inner: &GraphPattern,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    let mut lift = Lift::at_admitted(node, &ctx.growth)?;
-    let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
+    let mut lift = lift.attach(node);
+    let Some(seq) = lift.absorb(0, evaluated) else {
         return Ok(lift.withheld());
     };
     // A shared blank's column is not part of a solution: two rows that differ only
@@ -384,32 +318,10 @@ pub(crate) fn eval_dedup_with<D: DatasetView + Sync, const ADJACENT: bool>(
     )?))
 }
 
-// Erase the static delivery wrapper; the native operator retains its call boundary.
-#[allow(clippy::inline_always)]
-#[inline(always)]
-pub(crate) fn eval_dedup_delivered<
-    D: DatasetView + Sync,
-    const ADJACENT: bool,
-    M: crate::eval::RowDelivery<D>,
->(
-    node: &GraphPattern,
+pub(crate) fn dedup_streaming_safe<D: DatasetView + Sync>(
     inner: &GraphPattern,
-    delivery: M,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    if !M::ACTIVE {
-        return if ADJACENT {
-            eval_dedup_with::<D, true>(node, inner, ctx)
-        } else {
-            eval_dedup(node, inner, ctx)
-        };
-    }
-    // A duplicate's later witness can improve a previously seen record. Keep
-    // the original operator owner live until all witnesses are coalesced before
-    // exposing immutable evidence to a downstream consumer.
-    // Native producer envelopes do not require an external EvidenceSource. The
-    // numbered subtree gives the same barrier proof without walking its algebra
-    // again; a raw or substituted tree without that identity stays conservative.
+    ctx: &EvalCtx<'_, D>,
+) -> bool {
     let native_evidence = !ctx.property_functions.is_empty()
         && (!ctx.user_functions.is_empty()
             || ctx.plan.as_ref().is_none_or(|plan| {
@@ -421,40 +333,39 @@ pub(crate) fn eval_dedup_delivered<
                     shape.kind(crate::plan::NodeId::from_index(index)).label() == "PropertyFunction"
                 })
             }));
-    if ctx.evidence_input.is_some() || !ctx.shapes.providers.is_empty() || native_evidence {
-        let evaluated = eval_dedup_with::<D, ADJACENT>(node, inner, ctx)?;
-        crate::eval::deliver_evaluated(&evaluated, delivery, ctx)?;
-        return Ok(evaluated);
-    }
-    eval_dedup_yielding::<D, ADJACENT, M>(node, inner, delivery, ctx)
+    ctx.evidence_input.is_none() && ctx.shapes.providers.is_empty() && !native_evidence
 }
 
-#[inline(never)]
-fn eval_dedup_yielding<
-    D: DatasetView + Sync,
-    const ADJACENT: bool,
-    M: crate::eval::RowDelivery<D>,
->(
-    node: &GraphPattern,
-    inner: &GraphPattern,
-    delivery: M,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    let mut state = DedupState::<RetainedRow<D::Id>, ADJACENT>::new(&ctx.growth);
-    crate::eval::yield_transform(
-        node,
-        inner,
-        delivery,
-        |seq, ctx| {
-            let seq = crate::blank_scope::without_joined_blanks_admitted(seq, &ctx.growth)?;
-            Ok(Evaluated::Complete(dedup_with_state(
-                seq,
-                &mut state,
-                &ctx.growth,
-            )?))
-        },
-        ctx,
-    )
+pub(crate) struct DeliveryDedup<I: ViewTermId> {
+    state: DeliveryDedupState<I>,
+}
+
+enum DeliveryDedupState<I: ViewTermId> {
+    Ordinary(DedupState<RetainedRow<I>, false>),
+    Adjacent(DedupState<RetainedRow<I>, true>),
+}
+
+impl<I: ViewTermId> DeliveryDedup<I> {
+    pub(crate) fn new(adjacent: bool, workspace: &crate::WorkspaceCapability) -> Self {
+        Self {
+            state: if adjacent {
+                DeliveryDedupState::Adjacent(DedupState::new(workspace))
+            } else {
+                DeliveryDedupState::Ordinary(DedupState::new(workspace))
+            },
+        }
+    }
+    pub(crate) fn apply(
+        &mut self,
+        seq: SolutionSeq<I>,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<SolutionSeq<I>, EvalError> {
+        let seq = crate::blank_scope::without_joined_blanks_admitted(seq, workspace)?;
+        match &mut self.state {
+            DeliveryDedupState::Ordinary(state) => dedup_with_state(seq, state, workspace),
+            DeliveryDedupState::Adjacent(state) => dedup_with_state(seq, state, workspace),
+        }
+    }
 }
 
 /// Drop duplicate rows, preserving first-seen order (SolutionTerm equality is exact
@@ -490,28 +401,6 @@ fn dedup_with_state<K: DedupKey, const ADJACENT: bool>(
         schema: seq.schema,
         rows: rows.finish()?,
     })
-}
-
-/// `LIMIT`/`OFFSET`: skip `start` solutions then keep at most `length`.
-///
-/// # Under a truncated child
-///
-/// A restricting slice selects **by position**, so it needs a genuine prefix: given only
-/// a sub-bag it can select rows the true query never returns. The lift enforces that —
-/// a truncation that reaches this node having lost positional fidelity anywhere below it
-/// yields no rows at all — so the ordinary slice below only ever runs over a prefix.
-// Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
-#[inline(never)]
-pub(crate) fn eval_slice<D: DatasetView + Sync>(
-    node: &GraphPattern,
-    inner: &GraphPattern,
-    start: usize,
-    length: Option<usize>,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    let lift = Lift::at_admitted(node, &ctx.growth)?.detach();
-    let child = eval_evaluated(inner, ctx)?;
-    finish_slice(node, start, length, lift, child, ctx)
 }
 
 /// Complete the original slice after its child returns. The ordinary node
@@ -566,180 +455,212 @@ pub(crate) fn finish_slice<D: DatasetView + Sync>(
     }))
 }
 
-// Erase the static delivery wrapper; the native operator retains its call boundary.
-#[allow(clippy::inline_always)]
-#[inline(always)]
-pub(crate) fn eval_slice_with<D: DatasetView + Sync, M: crate::eval::RowDelivery<D>>(
-    node: &GraphPattern,
-    inner: &GraphPattern,
-    start: usize,
-    length: Option<usize>,
-    delivery: M,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    if !M::ACTIVE {
-        return eval_slice(node, inner, start, length, ctx);
-    }
-    eval_slice_yielding(node, inner, start, length, delivery, ctx)
+pub(crate) enum OrderLink<'e> {
+    Borrowed(&'e [OrderExpression]),
+    Copied(crate::expr::PreparedPattern),
 }
 
-#[inline(never)]
-fn eval_slice_yielding<D: DatasetView + Sync, M: crate::eval::RowDelivery<D>>(
-    node: &GraphPattern,
-    inner: &GraphPattern,
-    start: usize,
-    length: Option<usize>,
-    mut delivery: M,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    if ctx.candidate_scope.is_some() {
-        // A prefix-only delivery cannot account for undecided candidates later
-        // in the original order. Use the same native slice owner, then deliver
-        // its established and undecided partitions without a second evaluation.
-        let evaluated = eval_slice(node, inner, start, length, ctx)?;
-        delivery.deliver(evaluated.rows(), ctx)?;
-        return Ok(evaluated);
-    }
-    let mut lift = Lift::at_admitted(node, &ctx.growth)?;
-    if length == Some(0) {
-        return Ok(
-            lift.finish(SolutionSeq::empty(crate::eval::syntactic_schema_admitted(
-                inner,
-                &ctx.growth,
-            )?)),
-        );
-    }
-    let mut index = 0usize;
-    let mut kept = 0usize;
-    let mut rows = RowsBuilder::new(&ctx.growth);
-    let mut schema = None;
-    let mut consume = |seq: &SolutionSeq<D::Id>, ctx: &mut EvalCtx<'_, D>| {
-        for row in &seq.rows {
-            if index >= start {
-                let mut output_rows = RowsBuilder::new(&ctx.growth);
-                output_rows.push_row(row.clone_admitted(&ctx.growth)?)?;
-                let output = SolutionSeq {
-                    schema: seq.schema.clone(),
-                    rows: output_rows.finish()?,
-                };
-                delivery.deliver(&output, ctx)?;
-                schema = Some(output.schema.clone());
-                for row in output.rows {
-                    rows.push_row(row)?;
-                }
-                kept = kept.saturating_add(1);
-            }
-            index = index.saturating_add(1);
-            if delivery.stopped() || length.is_some_and(|limit| kept >= limit) {
-                return Ok(std::ops::ControlFlow::Break(()));
-            }
-        }
-        Ok(std::ops::ControlFlow::Continue(()))
-    };
-    let evaluated =
-        crate::eval::eval_yielding(inner, &mut crate::eval::RowConsumer::new(&mut consume), ctx)?;
-    drop(consume);
-    if lift.absorb(0, evaluated).is_none() {
-        return Ok(lift.withheld());
-    }
-    let schema = match schema {
-        Some(schema) => schema,
-        None => crate::eval::syntactic_schema_admitted(inner, &ctx.growth)?,
-    };
-    Ok(lift.finish(SolutionSeq {
-        schema,
-        rows: rows.finish()?,
-    }))
+/// Row-major ORDER key execution. Each original row moves through its keys
+/// and into the retained input-order bag without copying its cells.
+pub(crate) struct OrderSequence<'e, I: ViewTermId> {
+    schema: crate::solution::SharedSchema,
+    input: Option<crate::solution::RowBagIntoIter<I>>,
+    rows: RowsBuilder<I>,
+    row: Option<RetainedRow<I>>,
+    linked: AdmittedVec<Option<crate::vm::Linked<'e, I>>>,
+    active: Option<crate::vm::RowExpressionFrame<'e, I>>,
+    values: AdmittedVec<Option<crate::WorkspaceTerm>>,
+    search_evidence: crate::evidence_exec::RowEvidence,
+    lift: crate::governor::lift::DetachedLift,
+    key: usize,
 }
 
-/// `ORDER BY`: stable-sort by the sort keys under SPARQL ordering (§15.1).
-// Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
-#[inline(never)]
-pub(crate) fn eval_order_by<D: DatasetView + Sync>(
-    node: &GraphPattern,
-    inner: &GraphPattern,
-    exprs: &[OrderExpression],
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    let mut lift = Lift::at_admitted(node, &ctx.growth)?;
-    let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
-        return Ok(lift.withheld());
-    };
-    let schema = seq.schema.clone();
+#[expect(
+    clippy::large_enum_variant,
+    reason = "the ORDER sequence moves into the driver's admitted frame"
+)]
+pub(crate) enum OrderStart<'e, I: ViewTermId> {
+    Complete(Evaluated<I>),
+    Sequence(OrderSequence<'e, I>),
+}
 
-    // Evaluate every row's sort values first, then [`project`] each ONCE: the XSD
-    // parse the ordering needs is paid per row instead of re-run inside the
-    // O(n log n) comparator. Row `i`'s keys are `keys[i * width..][..width]`, and
-    // sorting the PERMUTATION leaves them where their borrows point.
-    let width = exprs.len();
+#[expect(
+    clippy::large_enum_variant,
+    reason = "the suspended ORDER sequence already has an admitted owner"
+)]
+pub(crate) enum OrderStep<'e, 'd, I: ViewTermId> {
+    Complete(Evaluated<I>),
+    Suspend(OrderSequence<'e, I>, crate::vm::Suspend<'d>),
+}
+
+pub(crate) fn begin_order_child_with_owner<'e, D: DatasetView + Sync>(
+    node: &GraphPattern,
+    expressions: &[OrderExpression],
+    owner: &OrderLink<'e>,
+    lift: crate::governor::lift::DetachedLift,
+    child: Evaluated<D::Id>,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<OrderStart<'e, D::Id>, EvalError> {
+    let mut lift = lift.attach(node);
+    let Some(seq) = lift.absorb(0, child) else {
+        return Ok(OrderStart::Complete(lift.withheld()));
+    };
     let cells = seq
         .rows
         .len()
-        .checked_mul(width)
+        .checked_mul(expressions.len())
         .ok_or(EvalError::WorkspaceBoundOverflow)?;
-    let mut linked = AdmittedVec::with_capacity(width, &ctx.growth)?;
-    for oe in exprs {
-        let (OrderExpression::Asc(e) | OrderExpression::Desc(e)) = oe;
-        let program = crate::vm::program_at(ctx, node, e)?;
-        linked.push(crate::vm::Linked::link_admitted(program, e, &schema, ctx)?)?;
+    let mut linked = AdmittedVec::with_capacity(expressions.len(), &ctx.growth)?;
+    if let OrderLink::Borrowed(original) = owner
+        && !std::ptr::eq(*original, expressions)
+    {
+        return Err(EvalError::internal("ORDER changed its expression owner"));
     }
-    let mut values = AdmittedVec::with_capacity(cells, &ctx.growth)?;
-    for row in &seq.rows {
-        for (key, order) in linked.as_mut_slice().iter_mut().zip(exprs) {
-            let (OrderExpression::Asc(expression) | OrderExpression::Desc(expression)) = order;
-            let term = key.term(Some(expression), row, &schema, ctx)?;
-            values.push(
-                term.map(|t| {
-                    ctx.scratch
-                        .try_owned_value_of(ctx.dataset, t, &ctx.growth, |error| {
-                            ctx.workspace.source_error(error)
-                        })
-                })
-                .transpose()?,
-            )?;
+    for (index, order) in expressions.iter().enumerate() {
+        let (OrderExpression::Asc(expression) | OrderExpression::Desc(expression)) = order;
+        let program = crate::vm::program_at(ctx, node, expression)?;
+        let key = match owner {
+            OrderLink::Borrowed(original) => {
+                let original = *original;
+                let (OrderExpression::Asc(expression) | OrderExpression::Desc(expression)) =
+                    &original[index];
+                crate::vm::Linked::link_admitted(program, expression, &seq.schema, ctx)?
+            }
+            OrderLink::Copied(pattern) => crate::vm::Linked::link_copied_filter_owner_admitted(
+                program,
+                expression,
+                pattern.clone(),
+                &seq.schema,
+                ctx,
+            )?,
+        };
+        linked.push(Some(key))?;
+    }
+    Ok(OrderStart::Sequence(OrderSequence {
+        schema: seq.schema,
+        search_evidence: seq.rows.search_evidence().clone(),
+        input: Some(seq.rows.into_iter()),
+        rows: RowsBuilder::new(&ctx.growth),
+        row: None,
+        linked,
+        active: None,
+        values: AdmittedVec::with_capacity(cells, &ctx.growth)?,
+        lift: lift.detach(),
+        key: 0,
+    }))
+}
+
+impl<'e, I: ViewTermId> OrderSequence<'e, I> {
+    pub(crate) fn expression_index(&self) -> usize {
+        self.key
+    }
+
+    pub(crate) fn step<'d, D: DatasetView<Id = I> + Sync>(
+        mut self,
+        node: &GraphPattern,
+        expressions: &[OrderExpression],
+        ctx: &mut EvalCtx<'d, D>,
+    ) -> Result<OrderStep<'e, 'd, I>, EvalError> {
+        if expressions.len() != self.linked.len() {
+            return Err(EvalError::internal("ORDER changed its key count"));
         }
-    }
-    let mut keys = AdmittedVec::with_capacity(cells, &ctx.growth)?;
-    for value in &values {
-        keys.push(project_admitted(value.as_deref(), &ctx.growth)?)?;
-    }
-    // Numbers past the bounded variants align their coefficients to compare: the
-    // sort's worst case is priced before it runs, and a refusal truncates here.
-    let cost = sort_keys_numeric_cost_admitted(
-        &keys.iter().map(|key| &key.key),
-        keys.len(),
-        width,
-        &ctx.growth,
-    )?;
-    if !crate::expr::numeric_step_admitted(ctx, cost) {
-        let tripped = ctx
-            .expression_barrier
-            .observed()
-            .expect("a refused numeric charge records its trip");
-        return Ok(Evaluated::Truncated(Truncation::barred_at(
-            node,
-            tripped,
-            schema.clone(),
-        )));
-    }
-    let order = order_permutation(seq.rows.len(), &ctx.growth, |left, right| {
-        compare_keys_admitted(
-            &keys[left * width..],
-            &keys[right * width..],
-            exprs,
+        loop {
+            let mut frame = if let Some(frame) = self.active.take() {
+                frame
+            } else {
+                let row = match self.row.take() {
+                    Some(row) => row,
+                    None => {
+                        let Some(row) = self.input.as_mut().and_then(Iterator::next) else {
+                            break;
+                        };
+                        self.key = 0;
+                        row
+                    }
+                };
+                if expressions.is_empty() {
+                    self.rows.push_row(row)?;
+                    continue;
+                }
+                crate::vm::RowExpressionFrame::begin(
+                    self.linked[self.key].take().expect("one ORDER key link"),
+                    row,
+                    ctx,
+                )?
+            };
+            match frame.poll(ctx)? {
+                crate::vm::VmStep::Suspend(request) => {
+                    self.active = Some(frame);
+                    return Ok(OrderStep::Suspend(self, request));
+                }
+                crate::vm::VmStep::Value(value) => {
+                    let (linked, row, term, _evidence) = frame.finish_term(value)?;
+                    self.linked[self.key] = Some(linked);
+                    self.values.push(
+                        term.map(|term| {
+                            ctx.scratch.try_owned_value_of(
+                                ctx.dataset,
+                                term,
+                                &ctx.growth,
+                                |error| ctx.workspace.source_error(error),
+                            )
+                        })
+                        .transpose()?,
+                    )?;
+                    self.key += 1;
+                    if self.key == expressions.len() {
+                        self.rows.push_row(row)?;
+                    } else {
+                        self.row = Some(row);
+                    }
+                }
+            }
+        }
+        // Consume input owners before publishing the rebuilt input-order bag.
+        drop(self.input.take());
+        let mut rows = self.rows.finish()?;
+        rows.retain_search_evidence(self.search_evidence);
+        let width = expressions.len();
+        let mut keys = AdmittedVec::with_capacity(self.values.len(), &ctx.growth)?;
+        for value in &self.values {
+            keys.push(project_admitted(value.as_deref(), &ctx.growth)?)?;
+        }
+        let cost = sort_keys_numeric_cost_admitted(
+            &keys.iter().map(|key| &key.key),
+            keys.len(),
+            width,
             &ctx.growth,
-        )
-    })?;
-    let rows = seq.rows.ordered_admitted(order, &ctx.growth)?;
-    // An `EXISTS` inside a sort key is an opaque edge; see `eval_left_join`.
-    if let Some(tripped) = ctx.expression_barrier.observed() {
-        return Ok(Evaluated::Truncated(Truncation::barred_at(
-            node,
-            tripped,
-            schema.clone(),
-        )));
+        )?;
+        if !crate::expr::numeric_step_admitted(ctx, cost) {
+            let tripped = ctx
+                .expression_barrier
+                .observed()
+                .expect("a refused numeric charge records its trip");
+            return Ok(OrderStep::Complete(Evaluated::Truncated(
+                Truncation::barred_at(node, tripped, self.schema),
+            )));
+        }
+        let order = order_permutation(rows.len(), &ctx.growth, |left, right| {
+            compare_keys_admitted(
+                &keys[left * width..],
+                &keys[right * width..],
+                expressions,
+                &ctx.growth,
+            )
+        })?;
+        let rows = rows.ordered_admitted(order, &ctx.growth)?;
+        if let Some(tripped) = ctx.expression_barrier.observed() {
+            return Ok(OrderStep::Complete(Evaluated::Truncated(
+                Truncation::barred_at(node, tripped, self.schema),
+            )));
+        }
+        Ok(OrderStep::Complete(self.lift.attach(node).finish(
+            SolutionSeq {
+                schema: self.schema,
+                rows,
+            },
+        )))
     }
-    Ok(lift.finish(SolutionSeq { schema, rows }))
 }
 
 /// The exact tower's share of sorting rows by `keys` (`width` keys per row): for
@@ -810,73 +731,266 @@ pub(crate) fn rebuild_order(order: &OrderExpression, expr: Expression) -> OrderE
     }
 }
 
-/// `GRAPH name { ... }`: scope the inner pattern to a named graph (or, for a
-/// variable, every named graph in turn, binding the variable to each).
-// Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
-#[inline(never)]
-pub(crate) fn eval_graph_with<D: DatasetView + Sync, M: crate::eval::RowDelivery<D>>(
+/// The ordinary GRAPH loop owns its graph list and all completed graph blocks.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "emptiness proof, visitation, fallback, halt and truncation are independent graph obligations"
+)]
+pub(crate) struct GraphSequence<I: ViewTermId> {
+    graphs: AdmittedVec<I>,
+    named: Option<I>,
+    variable: Option<Variable>,
+    next: usize,
+    current: Option<I>,
+    saved: GraphMatch<I>,
+    skippable: bool,
+    passed_over: bool,
+    fallback: bool,
+    halted: bool,
+    truncated: bool,
+    schema: Option<VarSchema>,
+    rows: RowsBuilder<I>,
+    lift: Option<crate::governor::lift::DetachedLift>,
+    direct: Option<Evaluated<I>>,
+}
+
+#[expect(
+    clippy::large_enum_variant,
+    reason = "inline handoff preserves the driver admitted frame ownership without another allocation"
+)]
+pub(crate) enum GraphStart<I: ViewTermId> {
+    Complete(Evaluated<I>),
+    Sequence(GraphSequence<I>),
+}
+
+pub(crate) fn begin_graph_child<D: DatasetView + Sync>(
     node: &GraphPattern,
     name: &NamedNodePattern,
     inner: &GraphPattern,
-    mut delivery: M,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    match name {
-        NamedNodePattern::NamedNode(n) => {
-            let mut lift = Lift::at_admitted(node, &ctx.growth)?;
-            let name = crate::convert::named_node_to_workspace_value(n, &ctx.growth)?;
+    ctx: &EvalCtx<'_, D>,
+) -> Result<GraphStart<D::Id>, EvalError> {
+    let lift = Lift::at_admitted(node, &ctx.growth)?;
+    let mut graphs = AdmittedVec::new(&ctx.growth);
+    let (named, variable, skippable) = match name {
+        NamedNodePattern::NamedNode(name) => {
+            let name = crate::convert::named_node_to_workspace_value(name, &ctx.growth)?;
             match ctx
                 .dataset
                 .term_id_by_value(&name)
                 .map_err(|error| ctx.workspace.source_error(error))?
             {
-                // Addressable only if the term names a graph of the dataset — the same
-                // set `GRAPH ?g` ranges over, so a term known only in another position
-                // names nothing — and the active dataset's named set admits it (a
-                // `FROM NAMED` / `USING NAMED` may restrict which graphs `GRAPH` sees).
                 Some(id)
                     if ctx.dataset.has_named_graph(id) && ctx.active_dataset.named_allows(id) =>
                 {
-                    let saved = ctx.active_graph;
-                    ctx.active_graph = GraphMatch::Named(id);
-                    let result = if M::ACTIVE {
-                        let mut consume = |rows: &SolutionSeq<D::Id>, ctx: &mut EvalCtx<'_, D>| {
-                            let producer_graph = ctx.active_graph;
-                            ctx.active_graph = saved;
-                            let delivered = delivery.deliver(rows, ctx);
-                            ctx.active_graph = producer_graph;
-                            delivered?;
-                            Ok(if delivery.stopped() {
-                                std::ops::ControlFlow::Break(())
-                            } else {
-                                std::ops::ControlFlow::Continue(())
-                            })
-                        };
-                        crate::eval::eval_yielding(
-                            inner,
-                            &mut crate::eval::RowConsumer::new(&mut consume),
-                            ctx,
-                        )
-                    } else {
-                        eval_evaluated(inner, ctx)
-                    };
-                    ctx.active_graph = saved;
-                    let Some(seq) = lift.absorb(0, result?) else {
-                        return Ok(lift.withheld());
-                    };
-                    Ok(lift.finish(seq))
+                    (Some(id), None, false)
                 }
-                // The IRI is not a term, names no graph, or is not in the named
-                // dataset → empty.
-                _ => Ok(
-                    lift.finish(SolutionSeq::empty(crate::eval::syntactic_schema_admitted(
-                        inner,
-                        &ctx.growth,
-                    )?)),
-                ),
+                _ => {
+                    return Ok(GraphStart::Complete(lift.finish(SolutionSeq::empty(
+                        crate::eval::syntactic_schema_admitted(inner, &ctx.growth)?,
+                    ))));
+                }
             }
         }
-        NamedNodePattern::Variable(v) => eval_graph_var(node, v, inner, delivery, ctx),
+        NamedNodePattern::Variable(variable) => {
+            for graph in ctx.dataset.named_graphs() {
+                if ctx.active_dataset.named_allows(graph) {
+                    graphs.push(graph)?;
+                }
+            }
+            (
+                None,
+                Some(variable.clone()),
+                yields_nothing_without_rows_in_the_active_graph(inner),
+            )
+        }
+    };
+    Ok(GraphStart::Sequence(GraphSequence {
+        graphs,
+        named,
+        variable,
+        next: 0,
+        current: None,
+        saved: ctx.active_graph,
+        skippable,
+        passed_over: false,
+        fallback: false,
+        halted: false,
+        truncated: false,
+        schema: None,
+        rows: RowsBuilder::new(&ctx.growth),
+        lift: Some(lift.detach()),
+        direct: None,
+    }))
+}
+
+impl<I: ViewTermId> GraphSequence<I> {
+    pub(crate) fn saved_graph(&self) -> GraphMatch<I> {
+        self.saved
+    }
+    pub(crate) fn next_graph<D: DatasetView<Id = I> + Sync>(
+        &mut self,
+        ctx: &EvalCtx<'_, D>,
+    ) -> Option<GraphMatch<I>> {
+        self.next_graph_with(ctx, true)
+    }
+    pub(crate) fn next_delivered_graph<D: DatasetView<Id = I> + Sync>(
+        &mut self,
+        ctx: &EvalCtx<'_, D>,
+    ) -> Option<GraphMatch<I>> {
+        self.next_graph_with(ctx, false)
+    }
+    fn next_graph_with<D: DatasetView<Id = I> + Sync>(
+        &mut self,
+        ctx: &EvalCtx<'_, D>,
+        fallback: bool,
+    ) -> Option<GraphMatch<I>> {
+        if self.halted {
+            return None;
+        }
+        if let Some(graph) = self.named {
+            if self.next == 0 {
+                self.next = 1;
+                self.current = Some(graph);
+                return Some(GraphMatch::Named(graph));
+            }
+            return None;
+        }
+        while let Some(&graph) = self.graphs.get(self.next) {
+            self.next += 1;
+            if self.skippable && graph_holds_no_rows(ctx.dataset, graph) {
+                self.passed_over = true;
+                continue;
+            }
+            self.current = Some(graph);
+            return Some(GraphMatch::Named(graph));
+        }
+        // Preserve the original ordinary no-graph schema evaluation and its effects.
+        if fallback
+            && self.schema.is_none()
+            && !self.truncated
+            && !self.passed_over
+            && !self.fallback
+        {
+            self.fallback = true;
+            return Some(self.saved);
+        }
+        None
+    }
+    pub(crate) fn delivery_block<D: DatasetView<Id = I> + Sync>(
+        &self,
+        input: SolutionSeq<I>,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<(SolutionSeq<I>, GraphMatch<I>), EvalError> {
+        let transformed = if self.named.is_some() {
+            None
+        } else {
+            let mut rows = RowsBuilder::new(&ctx.growth);
+            let schema = append_graph_rows(
+                input.clone(),
+                self.variable.as_ref().expect("variable GRAPH"),
+                SolutionTerm::Existing(self.current.expect("entered delivered graph")),
+                &mut rows,
+                &ctx.growth,
+            )?;
+            Some((schema, rows))
+        };
+        let producer = ctx.active_graph;
+        let mut pending = crate::eval::ResidentPending {
+            child: Some(GraphDeliveryRestore(producer)),
+            ctx,
+        };
+        pending.ctx.active_graph = self.saved;
+        let output = if let Some((schema, rows)) = transformed {
+            SolutionSeq {
+                schema: schema.shared_admitted(&pending.ctx.growth)?,
+                rows: rows.finish()?,
+            }
+        } else {
+            input
+        };
+        pending.child.take();
+        Ok((output, producer))
+    }
+    pub(crate) fn absorb<D: DatasetView<Id = I> + Sync>(
+        &mut self,
+        node: &GraphPattern,
+        evaluated: Evaluated<I>,
+        ctx: &EvalCtx<'_, D>,
+    ) -> Result<(), EvalError> {
+        let mut lift = self.lift.take().expect("one GRAPH lift").attach(node);
+        if self.named.is_some() {
+            self.direct = Some(match lift.absorb(0, evaluated) {
+                Some(rows) => lift.finish(rows),
+                None => lift.withheld(),
+            });
+            self.halted = true;
+            return Ok(());
+        }
+        if self.fallback {
+            self.halted = true;
+            let Some(rows) = lift.absorb(0, evaluated) else {
+                self.direct = Some(lift.withheld());
+                return Ok(());
+            };
+            self.schema = Some((*rows.schema).clone());
+            self.lift = Some(lift.detach());
+            return Ok(());
+        }
+        match evaluated {
+            Evaluated::Complete(rows) => {
+                self.schema = Some(append_graph_rows(
+                    rows,
+                    self.variable.as_ref().expect("variable GRAPH"),
+                    SolutionTerm::Existing(self.current.expect("entered graph")),
+                    &mut self.rows,
+                    &ctx.growth,
+                )?);
+            }
+            truncated @ Evaluated::Truncated(_) => {
+                self.truncated = true;
+                self.halted = true;
+                if lift.absorb(0, truncated).is_none() {
+                    self.direct = Some(lift.withheld());
+                    return Ok(());
+                }
+            }
+        }
+        self.lift = Some(lift.detach());
+        Ok(())
+    }
+    pub(crate) fn finish<D: DatasetView<Id = I> + Sync>(
+        self,
+        node: &GraphPattern,
+        inner: &GraphPattern,
+        ctx: &EvalCtx<'_, D>,
+    ) -> Result<Evaluated<I>, EvalError> {
+        if let Some(direct) = self.direct {
+            return Ok(direct);
+        }
+        let lift = self.lift.expect("one variable GRAPH lift").attach(node);
+        let mut schema = match self.schema {
+            Some(schema) => schema,
+            None if self.truncated => match lift.absorbed_schema() {
+                Some(schema) => (*schema).clone(),
+                None => (*crate::eval::syntactic_schema_admitted(inner, &ctx.growth)?).clone(),
+            },
+            None => (*crate::eval::syntactic_schema_admitted(inner, &ctx.growth)?).clone(),
+        };
+        schema.push_admitted(self.variable.expect("variable GRAPH"), &ctx.growth)?;
+        Ok(lift.finish(SolutionSeq {
+            schema: schema.shared_admitted(&ctx.growth)?,
+            rows: self.rows.finish()?,
+        }))
+    }
+}
+
+struct GraphDeliveryRestore<I: ViewTermId>(GraphMatch<I>);
+
+impl<I: ViewTermId, D: DatasetView<Id = I> + Sync> crate::eval::ResidentAbort<D>
+    for GraphDeliveryRestore<I>
+{
+    fn abort(&mut self, ctx: &mut EvalCtx<'_, D>) {
+        ctx.active_graph = self.0;
     }
 }
 
@@ -1146,179 +1260,6 @@ fn graph_holds_no_rows<D: DatasetView>(dataset: &D, g: D::Id) -> bool {
         .is_none()
         && dataset.reifier_quads_in_graph(scope).next().is_none()
         && dataset.annotation_quads_in_graph(scope).next().is_none()
-}
-
-/// `GRAPH ?g { ... }`: evaluate the inner pattern once per named graph, binding `?g`
-/// to the graph IRI, and union the results.
-///
-/// Per SPARQL 1.1 §8.3/§18.6, `?g` ranges over **every named graph in the active
-/// dataset**, including one that owns zero quads (RDF 1.1 §3 allows an empty named
-/// graph — see [`purrdf_core::RdfDataset::named_graphs`]), NOT just graphs a `quads()`
-/// scan happens to find. And if `var` is ALREADY bound when this node is entered
-/// (e.g. an outer `VALUES (?g ?t) { ... }` nested inside the `GRAPH ?g { }` block,
-/// or any other pre-binding), each candidate graph must be JOINED against that
-/// existing binding — kept only when compatible — rather than blindly overwritten.
-///
-/// # Graph-major iteration
-///
-/// The loop is driven graph by graph, and each graph's inner evaluation runs under
-/// `GraphMatch::Named(g)` — so a backend that indexes its storage units by graph reads
-/// only the units owning `g`, and the whole loop costs one pass over the dataset rather
-/// than one pass PER named graph. On top of that, a graph the dataset reports row-free
-/// is passed over without evaluating the inner pattern at all, whenever the pattern's
-/// shape proves it would yield nothing there
-/// ([`yields_nothing_without_rows_in_the_active_graph`]). Neither step changes what `?g`
-/// ranges over: a declared-empty named graph and a graph named only by a reifier or
-/// annotation row still enumerate, exactly as SPARQL 1.1 §8.3/§18.6 requires — they just
-/// stop costing a full algebra evaluation each.
-///
-/// # Under a truncated child
-///
-/// The inner pattern is evaluated once per named graph, so a trip inside it is a trip in
-/// flight: the graph being scanned contributes nothing (its block is incomplete) while
-/// every graph already scanned keeps its complete block — commit granularity at the
-/// per-graph boundary, which is this operator's input row.
-fn eval_graph_var<D: DatasetView + Sync, M: crate::eval::RowDelivery<D>>(
-    node: &GraphPattern,
-    var: &Variable,
-    inner: &GraphPattern,
-    mut delivery: M,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    let mut lift = Lift::at_admitted(node, &ctx.growth)?;
-    // Enumerate every named graph the dataset knows about, restricted to those the
-    // active dataset admits (a `FROM NAMED` / `USING NAMED` may limit which graphs
-    // `GRAPH ?g` binds to).
-    let mut graphs = AdmittedVec::new(&ctx.growth);
-    for graph in ctx.dataset.named_graphs() {
-        if ctx.active_dataset.named_allows(graph) {
-            graphs.push(graph)?;
-        }
-    }
-
-    // Whether a graph the dataset reports row-free can be passed over instead of driven
-    // through a full inner evaluation. Decided ONCE from the pattern's shape — it cannot
-    // vary per graph — so a pattern this does not admit (`{}`, a bare `VALUES`, an
-    // unkeyed aggregate, a nested `GRAPH`/`SERVICE`, a property function) costs one
-    // boolean here and nothing else.
-    let skippable_when_row_free = yields_nothing_without_rows_in_the_active_graph(inner);
-
-    let saved = ctx.active_graph;
-    // Held as a plain `VarSchema` across the per-graph loop and wrapped in `Arc` ONCE
-    // after it (the last graph's schema wins either way): one allocation, not one per
-    // named graph.
-    let mut out_schema: Option<VarSchema> = None;
-    let mut rows = RowsBuilder::new(&ctx.growth);
-    let mut truncated = false;
-    // Whether any graph was passed over below, which is the one case the schema fallback
-    // must NOT answer by re-evaluating the inner pattern (see the `match` after the loop).
-    let mut passed_over_a_graph = false;
-    for g in graphs {
-        if M::ACTIVE && delivery.stopped() {
-            break;
-        }
-        // The graph-major narrowing. A graph that holds no row of any kind cannot
-        // contribute a solution to an inner pattern that needs one, so it is passed over
-        // for the price of a short-circuiting emptiness probe rather than a whole inner
-        // algebra evaluation. `?g` still ranges over exactly the same graph set — this
-        // decides only whether a graph's (provably empty) block is computed or known.
-        if skippable_when_row_free && graph_holds_no_rows(ctx.dataset, g) {
-            passed_over_a_graph = true;
-            continue;
-        }
-        ctx.active_graph = GraphMatch::Named(g);
-        let evaluated = if M::ACTIVE {
-            let mut consume = |seq: &SolutionSeq<D::Id>, ctx: &mut EvalCtx<'_, D>| {
-                let mut rows = RowsBuilder::new(&ctx.growth);
-                let schema = append_graph_rows(
-                    seq.clone(),
-                    var,
-                    SolutionTerm::Existing(g),
-                    &mut rows,
-                    &ctx.growth,
-                )?;
-                let producer_graph = ctx.active_graph;
-                ctx.active_graph = saved;
-                let delivered = delivery.deliver(
-                    &SolutionSeq {
-                        schema: schema.shared_admitted(&ctx.growth)?,
-                        rows: rows.finish()?,
-                    },
-                    ctx,
-                );
-                ctx.active_graph = producer_graph;
-                delivered?;
-                Ok(if delivery.stopped() {
-                    std::ops::ControlFlow::Break(())
-                } else {
-                    std::ops::ControlFlow::Continue(())
-                })
-            };
-            crate::eval::eval_yielding(inner, &mut crate::eval::RowConsumer::new(&mut consume), ctx)
-        } else {
-            eval_evaluated(inner, ctx)
-        };
-        let inner_seq = match evaluated {
-            Ok(Evaluated::Complete(seq)) => seq,
-            Ok(truncation @ Evaluated::Truncated(_)) => {
-                truncated = true;
-                if lift.absorb(0, truncation).is_none() {
-                    ctx.active_graph = saved;
-                    return Ok(lift.withheld());
-                }
-                break;
-            }
-            Err(e) => {
-                ctx.active_graph = saved;
-                return Err(e);
-            }
-        };
-        let appended = append_graph_rows(
-            inner_seq,
-            var,
-            SolutionTerm::Existing(g),
-            &mut rows,
-            &ctx.growth,
-        );
-        match appended {
-            Ok(schema) => out_schema = Some(schema),
-            Err(error) => {
-                ctx.active_graph = saved;
-                return Err(error);
-            }
-        }
-    }
-    ctx.active_graph = saved;
-
-    // No named graphs (or none matched): still produce the right schema with no rows.
-    // A truncation already in hand means the inner pattern must NOT be evaluated again
-    // (that would be a fresh scan after the budget is spent), so the schema is taken
-    // from the partial result instead. Likewise when every graph was passed over as
-    // row-free: re-evaluating the inner pattern purely for its column list would reach
-    // OUTSIDE this node's scope (`active_graph` is restored above) and undo the very
-    // work the narrowing saved, so the syntactic schema answers instead — the same
-    // answer the `GRAPH <iri>` arm already gives an empty named-graph result.
-    let mut schema = match out_schema {
-        Some(s) => s,
-        None if truncated => match lift.absorbed_schema() {
-            Some(schema) => (*schema).clone(),
-            None => (*crate::eval::syntactic_schema_admitted(inner, &ctx.growth)?).clone(),
-        },
-        None if passed_over_a_graph || M::ACTIVE => {
-            (*crate::eval::syntactic_schema_admitted(inner, &ctx.growth)?).clone()
-        }
-        None => {
-            let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
-                return Ok(lift.withheld());
-            };
-            (*seq.schema).clone()
-        }
-    };
-    schema.push_admitted(var.clone(), &ctx.growth)?;
-    Ok(lift.finish(SolutionSeq {
-        schema: schema.shared_admitted(&ctx.growth)?,
-        rows: rows.finish()?,
-    }))
 }
 
 /// Match a graph candidate against an existing column, or append its new column.
@@ -2073,123 +2014,607 @@ pub fn fold_values_with_division(
 // GROUP BY + aggregates
 // ---------------------------------------------------------------------------
 
-/// `GROUP BY ... ` with aggregates: partition the inner solutions by the grouping
-/// key (term identity), then compute each aggregate per group. One output row per
-/// group; the columns are the grouping variables followed by the aggregate outputs.
-///
-/// With **no** grouping variables but aggregates present, the whole input is a
-/// single group — even when empty (so `COUNT(*)` yields one row binding `0`).
-///
-/// # Under a truncated child
-///
-/// Nothing crosses. An aggregate over a partial input is a **different number**, not a
-/// subset of the true one — `COUNT` under-counts, `SUM` under-sums — so the edge to the
-/// grouped input is opaque and the lift withholds every row, carrying the barrier in
-/// their place. Computing the aggregates anyway and discarding them would be the same
-/// answer at higher cost, so the operator returns before grouping.
-// The ZST wrapper must disappear; the shared body retains the native boundary.
-#[allow(clippy::inline_always)]
-#[inline(always)]
-pub(crate) fn eval_group<D: DatasetView + Sync>(
-    node: &GraphPattern,
-    inner: &GraphPattern,
-    variables: &[Variable],
-    aggregates: &[(Variable, AggregateExpression)],
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    eval_group_with(node, inner, variables, aggregates, (), ctx)
+pub(crate) struct BuiltinAggregateSequence<'e, I: ViewTermId> {
+    linked: Option<crate::vm::Linked<'e, I>>,
+    active: Option<crate::vm::RowExpressionFrame<'e, I>>,
+    schema: crate::solution::SharedSchema,
+    ordinal: usize,
+    checkpoint: crate::row_checkpoint::RowCheckpoint,
+    seen: Option<crate::AdmittedMap<SolutionTerm<I>, ()>>,
+    survivors: AggregateSurvivors,
 }
 
-pub(crate) trait GroupDomain: Copy + Sync {
-    const CONTEXTUAL: bool;
-    fn visible(
-        &self,
-        schema: &VarSchema,
-        workspace: &crate::WorkspaceCapability,
-    ) -> Result<Option<AdmittedVec<usize>>, EvalError>;
+#[expect(
+    clippy::large_enum_variant,
+    reason = "the driver admits the suspended aggregate owner"
+)]
+pub(crate) enum BuiltinAggregateStart<'e, I: ViewTermId> {
+    Complete {
+        linked: crate::vm::Linked<'e, I>,
+        value: Option<SolutionTerm<I>>,
+    },
+    Sequence(BuiltinAggregateSequence<'e, I>),
 }
 
-impl GroupDomain for () {
-    const CONTEXTUAL: bool = false;
-    fn visible(
-        &self,
-        schema: &VarSchema,
-        workspace: &crate::WorkspaceCapability,
-    ) -> Result<Option<AdmittedVec<usize>>, EvalError> {
-        crate::blank_scope::visible_columns_admitted(schema, workspace)
+#[expect(
+    clippy::large_enum_variant,
+    reason = "the driver admits the suspended aggregate owner"
+)]
+pub(crate) enum BuiltinAggregateStep<'e, 'd, I: ViewTermId> {
+    Complete {
+        linked: crate::vm::Linked<'e, I>,
+        value: Option<SolutionTerm<I>>,
+    },
+    Suspend(BuiltinAggregateSequence<'e, I>, crate::vm::Suspend<'d>),
+}
+
+impl<'e, I: ViewTermId> BuiltinAggregateSequence<'e, I> {
+    /// The invocation charge belongs here, before any argument runs. Dispatch
+    /// COUNT(*), custom and FOLD before this entry; do not charge it twice.
+    pub(crate) fn begin<D: DatasetView<Id = I> + Sync>(
+        aggregate: &AggregateExpression,
+        linked: crate::vm::Linked<'e, I>,
+        schema: crate::solution::SharedSchema,
+        ctx: &EvalCtx<'_, D>,
+    ) -> Result<BuiltinAggregateStart<'e, I>, EvalError> {
+        if aggregate.args().len() != 1
+            || matches!(
+                aggregate.function(),
+                AggregateFunction::Custom(_) | AggregateFunction::Fold
+            )
+        {
+            return Err(EvalError::internal(
+                "non-unary aggregate entered unary continuation",
+            ));
+        }
+        if let Err(tripped) = ctx.charge(ChargePoint::AggregateInvocation) {
+            ctx.record_barrier(tripped);
+            return Ok(BuiltinAggregateStart::Complete {
+                linked,
+                value: None,
+            });
+        }
+        Ok(BuiltinAggregateStart::Sequence(Self {
+            linked: Some(linked),
+            active: None,
+            schema,
+            ordinal: 0,
+            checkpoint: crate::row_checkpoint::RowCheckpoint::sequential(
+                ctx,
+                ChargePoint::AggregateAccumulation,
+            ),
+            seen: aggregate.distinct.then(crate::AdmittedMap::default),
+            survivors: AggregateSurvivors::new(&ctx.growth),
+        }))
     }
-}
 
-impl GroupDomain for &[Variable] {
-    const CONTEXTUAL: bool = true;
-    fn visible(
-        &self,
-        schema: &VarSchema,
-        workspace: &crate::WorkspaceCapability,
-    ) -> Result<Option<AdmittedVec<usize>>, EvalError> {
-        let mut columns = AdmittedVec::new(workspace);
-        for name in *self {
-            if let Some(column) = schema.index_of(name) {
-                columns.push(column)?;
+    pub(crate) fn argument_index(&self) -> usize {
+        0
+    }
+
+    fn complete<'d>(mut self, value: Option<SolutionTerm<I>>) -> BuiltinAggregateStep<'e, 'd, I> {
+        BuiltinAggregateStep::Complete {
+            linked: self.linked.take().expect("completed aggregate link"),
+            value,
+        }
+    }
+
+    pub(crate) fn step<'d, D: DatasetView<Id = I> + Sync>(
+        mut self,
+        aggregate: &AggregateExpression,
+        indices: &[usize],
+        rows: &[RetainedRow<I>],
+        ctx: &mut EvalCtx<'d, D>,
+    ) -> Result<BuiltinAggregateStep<'e, 'd, I>, EvalError> {
+        loop {
+            let mut frame = match self.active.take() {
+                Some(frame) => frame,
+                None => {
+                    let Some(&index) = indices.get(self.ordinal) else {
+                        break;
+                    };
+                    crate::vm::RowExpressionFrame::begin(
+                        self.linked.take().expect("available aggregate link"),
+                        rows.get(index)
+                            .ok_or_else(|| EvalError::internal("aggregate source row missing"))?
+                            .clone_admitted(&ctx.growth)?,
+                        ctx,
+                    )?
+                }
+            };
+            match frame.poll(ctx)? {
+                crate::vm::VmStep::Suspend(request) => {
+                    self.active = Some(frame);
+                    return Ok(BuiltinAggregateStep::Suspend(self, request));
+                }
+                crate::vm::VmStep::Value(value) => {
+                    let (linked, _row, term, _evidence) = frame.finish_term(value)?;
+                    self.linked = Some(linked);
+                    self.ordinal += 1;
+                    let Some(term) = term else {
+                        continue;
+                    };
+                    // The original schedule is argument, checkpoint, DISTINCT,
+                    // destination admission, owned value, ScratchBytes, retain.
+                    if let Err(tripped) = self.checkpoint.pass(ctx) {
+                        ctx.record_barrier(tripped);
+                        return Ok(self.complete(None));
+                    }
+                    if let Some(seen) = &mut self.seen {
+                        if seen.get(&term).is_some() {
+                            continue;
+                        }
+                        let _ = seen.insert_admitted(term, (), &ctx.growth)?;
+                    }
+                    self.survivors.reserve_next()?;
+                    let value = ctx.scratch.try_owned_value_of(
+                        ctx.dataset,
+                        term,
+                        &ctx.growth,
+                        |error| ctx.workspace.source_error(error),
+                    )?;
+                    if let Err(tripped) = ctx.charge_amount(
+                        purrdf_core::ResourceDimension::ScratchBytes,
+                        crate::scratch::value_bytes(&value),
+                    ) {
+                        ctx.record_barrier(tripped);
+                        return Ok(self.complete(None));
+                    }
+                    self.survivors.push(value)?;
+                }
             }
         }
-        Ok(Some(columns))
+        let value = finish_builtin_aggregate(aggregate, &self.survivors, ctx)?;
+        Ok(self.complete(value))
     }
 }
 
-fn aggregate_evidence<D: DatasetView + Sync>(
-    evidence: &crate::evidence_exec::RowEvidence,
-    aggregates: &[(Variable, AggregateExpression)],
-    ctx: &EvalCtx<'_, D>,
-) -> Result<crate::evidence_exec::RowEvidence, EvalError> {
-    match &ctx.evidence_input {
-        Some(input) => {
-            input.aggregate_evidence(evidence, aggregates, ctx.active_graph, &ctx.growth)
+fn finish_builtin_aggregate<D: DatasetView + Sync>(
+    agg: &AggregateExpression,
+    survivors: &AggregateSurvivors,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+    // The exact tower's share of the fold, priced from the survivors' lexical forms
+    // before any of it runs: a chain of additions whose running total takes the
+    // largest scale it meets, a quotient under the query's policy and its
+    // rendering, or the comparisons of a running extreme.
+    if !crate::expr::numeric_step_admitted(
+        ctx,
+        aggregate_numeric_cost(agg.function(), survivors, ctx.division),
+    ) {
+        return Ok(None);
+    }
+
+    // Phase 2: fold the (already `DISTINCT`-resolved, already in row order)
+    // survivor list through the built-in's [`crate::agg_fn::AggregateAccumulator`]
+    // instance — chunked in parallel for a large enough group, strictly
+    // sequential for a small one — see [`fold_builtin`]/
+    // `crate::parallel::par_chunk_reduce_init`'s docs for why this phase needs
+    // no `EvalCtx`/governor access at all (every charge already happened in
+    // phase 1 above) and is therefore always safe to chunk regardless of any
+    // volatility concern: nothing here can reach `RAND`/`BNODE`/an `EXISTS`
+    // re-entry, because nothing here evaluates an expression.
+    let sequential = ctx.sequential_operation_required();
+    let capability = ctx.growth.clone();
+    let value = match agg.function() {
+        AggregateFunction::Count => fold_builtin_admitted(
+            sequential,
+            survivors,
+            || Ok(CountAccumulator::default()),
+            |acc, value| acc.step_admitted(std::slice::from_ref(value), &capability),
+            &capability,
+        )?,
+        AggregateFunction::Sum => fold_numeric_admitted(
+            sequential,
+            survivors,
+            NumericAggregate::Sum,
+            ctx.division,
+            &mut |code| ctx.record_expression_error(Some(code)),
+            &capability,
+        )?,
+        AggregateFunction::Avg => fold_numeric_admitted(
+            sequential,
+            survivors,
+            NumericAggregate::Avg,
+            ctx.division,
+            &mut |code| ctx.record_expression_error(Some(code)),
+            &capability,
+        )?,
+        AggregateFunction::Min => fold_builtin_admitted(
+            sequential,
+            survivors,
+            || Ok(MinAccumulator::default()),
+            |acc, value| acc.step_admitted(std::slice::from_ref(value), &capability),
+            &capability,
+        )?,
+        AggregateFunction::Max => fold_builtin_admitted(
+            sequential,
+            survivors,
+            || Ok(MaxAccumulator::default()),
+            |acc, value| acc.step_admitted(std::slice::from_ref(value), &capability),
+            &capability,
+        )?,
+        AggregateFunction::Sample => fold_builtin_admitted(
+            sequential,
+            survivors,
+            || Ok(SampleAccumulator::default()),
+            |acc, value| acc.step_admitted(std::slice::from_ref(value), &capability),
+            &capability,
+        )?,
+        AggregateFunction::GroupConcat => {
+            let sep = agg.separator().unwrap_or(" ");
+            fold_builtin_admitted(
+                sequential,
+                survivors,
+                || GroupConcatAccumulator::new_admitted(sep, &capability),
+                |acc, value| acc.step_admitted(std::slice::from_ref(value), &capability),
+                &capability,
+            )?
         }
-        None => evidence.native_aggregate(aggregates, &ctx.growth, || {
-            ctx.evidence_owner()?.query_owner(&ctx.growth)
-        }),
-    }
+        // `Custom` was dispatched away at the top of this function, before any
+        // charge or row was consulted — this arm cannot be reached by any
+        // `AggregateExpression` this crate's own planner ever hands to
+        // `eval_aggregate`. `AggregateFunction` is defined in
+        // `purrdf_sparql_algebra`, a crate this one does not own, so its
+        // `Custom` variant cannot be removed from this match at the type
+        // level; a typed, non-panicking internal error is the honest stand-in
+        // for that unencodable invariant (never observed by any test or
+        // conformance case — see this function's own dispatch order).
+        AggregateFunction::Custom(_) => {
+            return Err(EvalError::internal(
+                "AggregateFunction::Custom reached the built-in dispatch arm; the Custom \
+                 short-circuit at the top of eval_aggregate should have already handled it",
+            ));
+        }
+        // Unreachable for exactly the same reason `Custom` is: `FOLD` was
+        // dispatched to `crate::cdt_agg::eval_fold` at the top of this function,
+        // before any row was consulted, because its phase 1 retains unbound rows
+        // that the loop above has already skipped. Reaching here would mean
+        // folding a `FOLD` over a survivor list its own semantics never built, so
+        // it is a typed internal error rather than a silently wrong answer.
+        AggregateFunction::Fold => {
+            return Err(EvalError::internal(
+                "AggregateFunction::Fold reached the built-in dispatch arm; the FOLD \
+                 short-circuit at the top of eval_aggregate should have already handled it",
+            ));
+        }
+    };
+    value
+        .map(|value| ctx.intern_workspace_term(value))
+        .transpose()
+        .map(Option::flatten)
 }
 
-fn group_evidence<D: DatasetView + Sync>(
-    members: &[usize],
-    rows: &crate::solution::RowBag<D::Id>,
-    ctx: &EvalCtx<'_, D>,
-) -> Result<crate::evidence_exec::RowEvidence, EvalError> {
-    if ctx.evidence_input.is_none()
-        && rows.search_evidence().is_virtual()
-        && !members
-            .iter()
-            .any(|&member| rows[member].has_evidence_attachment())
-    {
-        return Ok(crate::evidence_exec::RowEvidence::default());
+crate::vm::row_continuation!(BuiltinAggregateSequence, schema);
+
+pub(crate) struct CustomAggregateSequence<'e, I: ViewTermId> {
+    links: AdmittedVec<crate::vm::Linked<'e, I>>,
+    active: Option<crate::vm::RowExpressionFrame<'e, I>>,
+    row: Option<RetainedRow<I>>,
+    schema: crate::solution::SharedSchema,
+    custom: Arc<dyn crate::agg_fn::CustomAggregate>,
+    state_bound: u64,
+    ordinal: usize,
+    argument: usize,
+    tuple: Option<AggregateSurvivors>,
+    checkpoint: crate::row_checkpoint::RowCheckpoint,
+    seen: Option<AggregateTupleWitnesses>,
+    // Payloads and their vector must die before their original independent grants.
+    survivors: AdmittedVec<Vec<TermValue>>,
+    survivor_owners: AdmittedVec<AggregateSurvivorOwners>,
+}
+
+#[expect(
+    clippy::large_enum_variant,
+    reason = "the driver admits suspended aggregate storage"
+)]
+pub(crate) enum CustomAggregateStart<'e, I: ViewTermId> {
+    Complete {
+        links: AdmittedVec<crate::vm::Linked<'e, I>>,
+        value: Option<SolutionTerm<I>>,
+    },
+    Sequence(CustomAggregateSequence<'e, I>),
+}
+
+#[expect(
+    clippy::large_enum_variant,
+    reason = "the driver admits suspended aggregate storage"
+)]
+pub(crate) enum CustomAggregateStep<'e, 'd, I: ViewTermId> {
+    Complete {
+        links: AdmittedVec<crate::vm::Linked<'e, I>>,
+        value: Option<SolutionTerm<I>>,
+    },
+    Suspend(CustomAggregateSequence<'e, I>, crate::vm::Suspend<'d>),
+}
+
+impl<'e, I: ViewTermId> CustomAggregateSequence<'e, I> {
+    pub(crate) fn begin<D: DatasetView<Id = I> + Sync>(
+        iri: &str,
+        aggregate: &AggregateExpression,
+        links: AdmittedVec<crate::vm::Linked<'e, I>>,
+        row_count: usize,
+        schema: crate::solution::SharedSchema,
+        ctx: &EvalCtx<'_, D>,
+    ) -> Result<CustomAggregateStart<'e, I>, EvalError> {
+        if let Err(tripped) = ctx.charge(ChargePoint::AggregateInvocation) {
+            ctx.record_barrier(tripped);
+            return Ok(CustomAggregateStart::Complete { links, value: None });
+        }
+        let custom = ctx
+            .aggregates
+            .resolve(iri)
+            .cloned()
+            .ok_or_else(|| missing_custom_aggregate(iri, &ctx.growth))?;
+        let state_bound =
+            crate::agg_fn::state_bound_contained_admitted(custom.as_ref(), iri, &ctx.growth)?;
+        if let Err(tripped) =
+            ctx.charge_amount(purrdf_core::ResourceDimension::ScratchBytes, state_bound)
+        {
+            ctx.record_barrier(tripped);
+            return Ok(CustomAggregateStart::Complete { links, value: None });
+        }
+        let capacity = if aggregate.distinct { 0 } else { row_count };
+        // Preserve the old allocation order: owners backing, then tuple backing.
+        let survivor_owners = AdmittedVec::with_capacity(capacity, &ctx.growth)?;
+        let survivors = AdmittedVec::with_capacity(capacity, &ctx.growth)?;
+        Ok(CustomAggregateStart::Sequence(Self {
+            links,
+            active: None,
+            row: None,
+            schema,
+            custom,
+            state_bound,
+            ordinal: 0,
+            argument: 0,
+            tuple: None,
+            checkpoint: crate::row_checkpoint::RowCheckpoint::sequential(
+                ctx,
+                ChargePoint::AggregateAccumulation,
+            ),
+            seen: aggregate.distinct.then(AggregateTupleWitnesses::default),
+            survivors,
+            survivor_owners,
+        }))
     }
-    let mut evidence = rows.search_evidence().clone();
-    for &member in members {
-        evidence = evidence.combine(
-            rows[member].evidence(),
-            purrdf_core::evidence::EvidenceCombination::Conjunction,
+
+    pub(crate) fn argument_index(&self) -> usize {
+        self.argument
+    }
+
+    fn complete<'d>(self, value: Option<SolutionTerm<I>>) -> CustomAggregateStep<'e, 'd, I> {
+        CustomAggregateStep::Complete {
+            links: self.links,
+            value,
+        }
+    }
+
+    pub(crate) fn step<'d, D: DatasetView<Id = I> + Sync>(
+        mut self,
+        iri: &str,
+        aggregate: &AggregateExpression,
+        indices: &[usize],
+        rows: &[RetainedRow<I>],
+        ctx: &mut EvalCtx<'d, D>,
+    ) -> Result<CustomAggregateStep<'e, 'd, I>, EvalError> {
+        while self.ordinal < indices.len() {
+            if self.tuple.is_none() {
+                self.tuple = Some(AggregateSurvivors::new(&ctx.growth));
+                self.argument = 0;
+                let index = indices[self.ordinal];
+                self.row = Some(
+                    rows.get(index)
+                        .ok_or_else(|| {
+                            EvalError::internal("custom aggregate source row is absent")
+                        })?
+                        .clone_admitted(&ctx.growth)?,
+                );
+            }
+            if self.argument < aggregate.args().len() {
+                let mut frame = if let Some(frame) = self.active.take() {
+                    frame
+                } else {
+                    let link = crate::vm::take_slot(&mut self.links, self.argument)?;
+                    crate::vm::RowExpressionFrame::begin(
+                        link,
+                        self.row.take().expect("one custom aggregate source row"),
+                        ctx,
+                    )?
+                };
+                match frame.poll(ctx)? {
+                    crate::vm::VmStep::Suspend(request) => {
+                        self.active = Some(frame);
+                        return Ok(CustomAggregateStep::Suspend(self, request));
+                    }
+                    crate::vm::VmStep::Value(value) => {
+                        let (link, row, term, _evidence) = frame.finish_term(value)?;
+                        self.row = Some(row);
+                        crate::vm::restore_slot(&mut self.links, self.argument, link);
+                        let Some(term) = term else {
+                            // An unbound tuple position skips the remaining arguments
+                            // and this row's checkpoint, DISTINCT and callbacks.
+                            self.tuple = None;
+                            self.row = None;
+                            self.ordinal += 1;
+                            continue;
+                        };
+                        let tuple = self.tuple.as_mut().expect("one argument tuple");
+                        tuple.reserve_next()?;
+                        tuple.push(ctx.scratch.try_owned_value_of(
+                            ctx.dataset,
+                            term,
+                            &ctx.growth,
+                            |error| ctx.workspace.source_error(error),
+                        )?)?;
+                        self.argument += 1;
+                        continue;
+                    }
+                }
+            }
+            let tuple = self.tuple.take().expect("one complete argument tuple");
+            self.row = None;
+            self.ordinal += 1;
+            if let Err(tripped) = self.checkpoint.pass(ctx) {
+                ctx.record_barrier(tripped);
+                return Ok(self.complete(None));
+            }
+            if let Some(seen) = &mut self.seen
+                && !seen.keep(&tuple, &self.survivors, &ctx.growth)?
+            {
+                continue;
+            }
+            let tuple_bytes = tuple
+                .iter()
+                .map(crate::scratch::value_bytes)
+                .fold(0u64, u64::saturating_add);
+            if let Err(tripped) =
+                ctx.charge_amount(purrdf_core::ResourceDimension::ScratchBytes, tuple_bytes)
+            {
+                ctx.record_barrier(tripped);
+                return Ok(self.complete(None));
+            }
+            self.survivors.reserve_next()?;
+            self.survivor_owners.reserve_next()?;
+            let (values, owners) = tuple.into_parts();
+            self.survivors.push_reserved(values);
+            self.survivor_owners.push_reserved(owners);
+        }
+        let value = finish_custom_aggregate(
+            iri,
+            aggregate,
+            &self.custom,
+            self.state_bound,
+            &self.survivors,
+            ctx,
         )?;
+        Ok(self.complete(value))
     }
-    Ok(evidence)
 }
 
-// Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
-#[inline(never)]
-pub(crate) fn eval_group_with<D: DatasetView + Sync, M: GroupDomain>(
-    node: &GraphPattern,
-    inner: &GraphPattern,
+fn finish_custom_aggregate<D: DatasetView + Sync>(
+    iri: &str,
+    agg: &AggregateExpression,
+    custom: &Arc<dyn crate::agg_fn::CustomAggregate>,
+    state_bound: u64,
+    survivors: &[Vec<TermValue>],
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+    let stable = crate::agg_fn::volatility_contained_admitted(custom.as_ref(), iri, &ctx.growth)?
+        == Volatility::Stable;
+    let sequential = ctx.sequential_operation_required() || !stable;
+    let chunk_count = crate::parallel::planned_aggregate_chunk_count(sequential, survivors.len());
+    if chunk_count > 1 {
+        let extra = state_bound.saturating_mul(u64::try_from(chunk_count - 1).unwrap_or(u64::MAX));
+        if let Err(tripped) = ctx.charge_amount(purrdf_core::ResourceDimension::ScratchBytes, extra)
+        {
+            ctx.record_barrier(tripped);
+            return Ok(None);
+        }
+    }
+    let scalarvals = AggregateScalarvals::resolve(agg, &ctx.growth)?;
+    let cost = crate::agg_fn::exact_numeric_cost_contained_admitted(
+        custom.as_ref(),
+        iri,
+        survivors,
+        &scalarvals,
+        ctx.division,
+        &ctx.growth,
+    )?;
+    if !crate::expr::numeric_step_admitted(ctx, cost) {
+        return Ok(None);
+    }
+    let accumulator = crate::parallel::par_chunk_reduce_init_admitted(
+        sequential,
+        survivors,
+        &ctx.growth,
+        || {
+            crate::agg_fn::init_contained_admitted(
+                custom.as_ref(),
+                iri,
+                &scalarvals,
+                ctx.division,
+                &ctx.growth,
+            )
+        },
+        |accumulator, tuple| {
+            crate::agg_fn::step_contained_admitted(accumulator, iri, tuple, &ctx.growth)
+        },
+        |accumulator, other| {
+            crate::agg_fn::combine_contained_admitted(accumulator, iri, other, &ctx.growth)
+        },
+    )?;
+    let value = crate::agg_fn::finish_contained_admitted(
+        accumulator,
+        iri,
+        &mut |code| ctx.record_expression_error(Some(code)),
+        &ctx.growth,
+    )?;
+    Ok(value
+        .map(|value| ctx.intern_workspace_term(value))
+        .transpose()?
+        .flatten())
+}
+
+crate::vm::row_continuation!(CustomAggregateSequence, schema);
+
+pub(crate) enum GroupLink<'e> {
+    Borrowed(&'e [(Variable, AggregateExpression)]),
+    Copied(crate::expr::PreparedPattern),
+}
+
+type MaterializedGroups<I> = AdmittedVec<(usize, RetainedRow<I>, AdmittedVec<usize>)>;
+
+pub(crate) struct GroupSequence<'e, I: ViewTermId> {
+    input: SolutionSeq<I>,
+    out_schema: crate::solution::SharedSchema,
+    groups: MaterializedGroups<I>,
+    links: AdmittedVec<AdmittedVec<crate::vm::Linked<'e, I>>>,
+    active: Option<GroupAggregate<'e, I>>,
+    output: RowsBuilder<I>,
+    row: Option<RetainedRow<I>>,
+    lift: crate::governor::lift::DetachedLift,
+    group_tracking: bool,
+    native: bool,
+    var_count: usize,
+    group: usize,
+    aggregate: usize,
+}
+
+enum GroupAggregate<'e, I: ViewTermId> {
+    Builtin {
+        sequence: BuiltinAggregateSequence<'e, I>,
+        // The argument's exact slot is absent while the unary VM owns it.
+        remaining: AdmittedVec<crate::vm::Linked<'e, I>>,
+    },
+    Custom(CustomAggregateSequence<'e, I>),
+    Fold(crate::cdt_agg::FoldSequence<'e, I>),
+}
+
+#[expect(
+    clippy::large_enum_variant,
+    reason = "the driver admits the GROUP continuation"
+)]
+pub(crate) enum GroupStart<'e, I: ViewTermId> {
+    Complete(Evaluated<I>),
+    Sequence(GroupSequence<'e, I>),
+}
+#[expect(
+    clippy::large_enum_variant,
+    reason = "the suspended GROUP already has its driver owner"
+)]
+pub(crate) enum GroupStep<'e, 'd, I: ViewTermId> {
+    Complete(Evaluated<I>),
+    Suspend(GroupSequence<'e, I>, crate::vm::Suspend<'d>),
+}
+
+/// Validate the syntactic output before any child evaluation.
+pub(crate) fn group_output_schema<D: DatasetView + Sync>(
     variables: &[Variable],
     aggregates: &[(Variable, AggregateExpression)],
-    domain: M,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    // The output schema is syntactic, including when the input is truncated.
-    // Check aggregate targets once before either path can publish its columns.
+    ctx: &EvalCtx<'_, D>,
+) -> Result<crate::solution::SharedSchema, EvalError> {
     let mut schema = crate::solution::SchemaBuilder::new(&ctx.growth);
     schema.try_extend(variables.iter().cloned())?;
-    let var_count = schema.vars().len();
     for (out_var, _) in aggregates {
         let next = schema.vars().len();
         if schema.push(out_var.clone())? != next {
@@ -2198,110 +2623,150 @@ pub(crate) fn eval_group_with<D: DatasetView + Sync, M: GroupDomain>(
             ));
         }
     }
-    let out_schema = schema.finish()?.shared_admitted(&ctx.growth)?;
-    if M::CONTEXTUAL
-        && !aggregates
-            .iter()
-            .any(|(_, agg)| matches!(agg.function(), AggregateFunction::Fold))
+    schema.finish()?.shared_admitted(&ctx.growth)
+}
+
+fn link_group_expressions_with_owner<'e, D: DatasetView + Sync>(
+    node: &GraphPattern,
+    aggregates: &[(Variable, AggregateExpression)],
+    owner: &GroupLink<'e>,
+    schema: &VarSchema,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<AdmittedVec<AdmittedVec<crate::vm::Linked<'e, D::Id>>>, EvalError> {
+    if let GroupLink::Borrowed(original) = owner
+        && !std::ptr::eq(*original, aggregates)
     {
-        return contextual_group_rows(node, inner, variables, aggregates, out_schema, domain, ctx);
+        return Err(EvalError::internal("GROUP changed its aggregate owner"));
     }
-    let mut lift = Lift::at_admitted(node, &ctx.growth)?;
-    let Some(mut seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
-        // No rows cross an opaque edge, but the COLUMNS still do: a `GROUP BY`'s output
-        // schema is syntactic — the grouping variables followed by the aggregate output
-        // variables — so it costs nothing to report the columns this node would have
-        // produced rather than the columns of the input it withheld.
-        return Ok(lift.finish(SolutionSeq::empty(out_schema)));
-    };
-    let in_schema = seq.schema.clone();
-    let search_evidence = seq.rows.search_evidence().clone();
-    // Inspect physical attachments once in input order. Ordinary groups need
-    // no per-group dictionary scan or aggregate evidence publication; an
-    // original search owner, rank or declaration always retains that path.
-    let group_tracking = ctx.evidence_input.is_some()
-        || !search_evidence.is_virtual()
-        || seq.rows.may_have_evidence_attachment();
-    // Redundant GROUP BY keys do not create extra output columns. Derive both
-    // partition keys and row offsets from the same first-seen schema, so adding
-    // an aggregate after a repeated key cannot index past the output row.
-    let mut key_cols = AdmittedVec::with_capacity(var_count, &ctx.growth)?;
-    for variable in &out_schema.vars()[..var_count] {
-        key_cols.push(in_schema.index_of(variable))?;
-    }
-
-    // The physical series strategy partitions the same native keys in one
-    // ordered pass, then restores first-seen groups and original member order.
-    // Every aggregate below still uses its original body and argument order.
-    let mut groups = if ctx.bucketed_group == Some(std::ptr::from_ref(node) as usize) {
-        ctx.shape_state.work.add(
-            u64::try_from(seq.rows.len()).map_err(|_| EvalError::WorkspaceBoundOverflow)?,
-            u64::try_from(seq.rows.len()).map_err(|_| EvalError::WorkspaceBoundOverflow)?,
-        )?;
-        crate::shapes::bucket::partition(&seq, &key_cols, &ctx.growth)?
-    } else {
-        let mut group_index = crate::AdmittedMap::<RetainedRow<D::Id>, usize>::default();
-        let mut groups = AdmittedVec::new(&ctx.growth);
-        for (idx, row) in seq.rows.iter().enumerate() {
-            let key = RetainedRow::from_cells(
-                key_cols.len(),
-                key_cols.iter().map(|c| c.and_then(|c| row[c])),
-                &ctx.growth,
-            )?;
-            let next_ordinal = groups.len();
-            if let Some(&ordinal) = group_index.get(&key) {
-                let (_, _, members): &mut (usize, RetainedRow<D::Id>, AdmittedVec<usize>) =
-                    &mut groups.as_mut_slice()[ordinal];
-                members.push(idx)?;
-            } else {
-                let mut members = AdmittedVec::new(&ctx.growth);
-                members.push(idx)?;
-                let _ = group_index.insert_admitted(
-                    key.clone_admitted(&ctx.growth)?,
-                    next_ordinal,
-                    &ctx.growth,
-                )?;
-                groups.push((next_ordinal, key, members))?;
-            }
+    let mut groups = AdmittedVec::with_capacity(aggregates.len(), &ctx.growth)?;
+    for (ordinal, (_, aggregate)) in aggregates.iter().enumerate() {
+        let mut links = AdmittedVec::new(&ctx.growth);
+        for (slot, expression) in aggregate
+            .args()
+            .iter()
+            .chain(aggregate.order_by().iter().map(OrderExpression::expression))
+            .enumerate()
+        {
+            let program = crate::vm::program_at(ctx, node, expression)?;
+            let link = match owner {
+                GroupLink::Borrowed(original) => {
+                    let original = *original;
+                    let expression = original[ordinal].1.args().get(slot).unwrap_or_else(|| {
+                        original[ordinal].1.order_by()[slot - original[ordinal].1.args().len()]
+                            .expression()
+                    });
+                    crate::vm::Linked::link_admitted(program, expression, schema, ctx)?
+                }
+                GroupLink::Copied(pattern) => crate::vm::Linked::link_copied_filter_owner_admitted(
+                    program,
+                    expression,
+                    pattern.clone(),
+                    schema,
+                    ctx,
+                )?,
+            };
+            links.push(link)?;
         }
-        groups
-    };
-    // No GROUP BY + empty input + aggregates → a single empty group.
-    if groups.is_empty() && variables.is_empty() && !aggregates.is_empty() {
-        groups.push((
-            0,
-            RetainedRow::from_cells(0, std::iter::empty(), &ctx.growth)?,
-            AdmittedVec::new(&ctx.growth),
-        ))?;
+        groups.push(links)?;
     }
+    Ok(groups)
+}
 
-    let out_width = out_schema.len();
-
-    // Every aggregate expression must be parallel-safe (no RAND/UUID/STRUUID/
-    // BNODE/list-mint reachable) for the per-group compute below to run under
-    // the fork-join model, AND every `Custom` aggregate reached must resolve to a
-    // registered, non-`Volatile` accumulator — `ctx.may_fork_aggregate` checks
-    // both; `should_parallelize` (inside `par_chunk_try_map_init`) still gates on
-    // group count. `COUNT(*)`'s empty `args` trivially passes (nothing to check),
-    // exactly as the prior `CountStar { .. } => true` arm did.
-    // A governed fold forks its groups only under a fuel ceiling alone, through an
-    // ordered ledger: each worker defers the fuel a group charges from inside its own
-    // evaluation (its accumulation, its arbitrary-precision work) to the group's entry,
-    // and the commit charges the entries in group order, so the group a ceiling trips at
-    // is the same on every host (`crate::row_checkpoint::ItemLedger`). Under any other
-    // ceiling the groups fold in order on the evaluation's own context.
-    let safe = !ctx.growth.is_bounded()
+pub(crate) fn begin_group_child_with_owner<'e, D: DatasetView + Sync>(
+    node: &GraphPattern,
+    aggregates: &[(Variable, AggregateExpression)],
+    owner: &GroupLink<'e>,
+    out_schema: crate::solution::SharedSchema,
+    lift: crate::governor::lift::DetachedLift,
+    child: Evaluated<D::Id>,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<GroupStart<'e, D::Id>, EvalError> {
+    let GraphPattern::Group { variables, .. } = node else {
+        return Err(EvalError::internal(
+            "GROUP continuation lost its grouping variables",
+        ));
+    };
+    let mut lift = lift.attach(node);
+    let Some(input) = lift.absorb(0, child) else {
+        return Ok(GroupStart::Complete(
+            lift.finish(SolutionSeq::empty(out_schema)),
+        ));
+    };
+    let var_count = out_schema
+        .len()
+        .checked_sub(aggregates.len())
+        .ok_or_else(|| EvalError::internal("GROUP output schema lost aggregate columns"))?;
+    let group_tracking = ctx.evidence_input.is_some()
+        || !input.rows.search_evidence().is_virtual()
+        || input.rows.may_have_evidence_attachment();
+    let groups = materialized_groups(
+        node,
+        &input,
+        &out_schema,
+        var_count,
+        variables.is_empty(),
+        !aggregates.is_empty(),
+        ctx,
+    )?;
+    // Preserve the original post-grouping, pre-link host metadata order.
+    // Actual registry classification rejects SPARQL and expression bodies;
+    // a separate pass excludes every EXISTS without skipping metadata calls.
+    let native = !ctx.growth.is_bounded()
         && ctx.may_fork_governed_loop()
         && aggregates
             .iter()
-            .all(|(_, agg)| ctx.may_fork_aggregate(agg));
-    let mut links = link_aggregates(node, aggregates, &in_schema, ctx)?;
+            .all(|(_, aggregate)| ctx.may_fork_aggregate(aggregate))
+        && aggregates.iter().all(|(_, aggregate)| {
+            aggregate
+                .args()
+                .iter()
+                .chain(aggregate.order_by().iter().map(OrderExpression::expression))
+                .all(|expression| !crate::parallel::expression_re_enters_evaluation(expression))
+        });
+    let links = link_group_expressions_with_owner(node, aggregates, owner, &input.schema, ctx)?;
+    Ok(GroupStart::Sequence(GroupSequence {
+        input,
+        out_schema,
+        groups,
+        links,
+        active: None,
+        output: RowsBuilder::new(&ctx.growth),
+        row: None,
+        lift: lift.detach(),
+        group_tracking,
+        native,
+        var_count,
+        group: 0,
+        aggregate: 0,
+    }))
+}
 
-    let mut rows = if safe {
+/// Complete the original native across-group kernel after graph materialization.
+fn complete_parallel_groups<D: DatasetView + Sync, M: GroupDomain>(
+    sequence: GroupSequence<'_, D::Id>,
+    node: &GraphPattern,
+    aggregates: &[(Variable, AggregateExpression)],
+    domain: M,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    let GroupSequence {
+        input: mut seq,
+        out_schema,
+        groups,
+        mut links,
+        group_tracking,
+        var_count,
+        lift,
+        ..
+    } = sequence;
+    let lift = lift.attach(node);
+    let out_width = out_schema.len();
+    let in_schema = seq.schema.clone();
+    let search_evidence = seq.rows.search_evidence().clone();
+    let mut rows = {
         let base = ctx.scratch.computed_count();
-        // Harvesting, for `crate::expr::eval_filter`'s reason: an aggregate's argument
-        // expression can reach a property function through an embedded `EXISTS`, and
-        // the per-group worker's attestation must reach the parent's receipt.
+        // Preserve worker witnesses with their ordered group ledgers so the
+        // original source receipts reach the parent context.
         let loop_ledger = crate::row_checkpoint::ItemLedger::for_items(ctx);
         let snapshot = ctx.loop_snapshot(groups.len());
         let (minted, harvests): (OrderedRows<_>, _) = par_loop_try_map_owned(
@@ -2327,8 +2792,9 @@ pub(crate) fn eval_group_with<D: DatasetView + Sync, M: GroupDomain>(
                 // `key.len() == var_count`: one memcpy replaces the indexed loop.
                 row[..var_count].copy_from_slice(key);
                 for (j, ((_, agg), links)) in aggregates.iter().zip(links.iter_mut()).enumerate() {
-                    row[var_count + j] =
-                        eval_aggregate(agg, links, idxs, &seq.rows, &in_schema, domain, child)?;
+                    row[var_count + j] = complete_inline_aggregate(
+                        agg, links, idxs, &seq.rows, &in_schema, domain, child,
+                    )?;
                 }
                 let row = RetainedRow::from_resident(row);
                 let row = if group_tracking {
@@ -2392,7 +2858,7 @@ pub(crate) fn eval_group_with<D: DatasetView + Sync, M: GroupDomain>(
                     .zip(links.as_mut_slice().iter_mut())
                     .enumerate()
                 {
-                    row[var_count + j] = eval_aggregate(
+                    row[var_count + j] = complete_inline_aggregate(
                         agg,
                         links.as_mut_slice(),
                         idxs,
@@ -2422,42 +2888,7 @@ pub(crate) fn eval_group_with<D: DatasetView + Sync, M: GroupDomain>(
             &ctx.growth,
         )
         .finish()?
-    } else {
-        let mut rows = RowsBuilder::new(&ctx.growth);
-        for (_, key, idxs) in &groups {
-            let growth = ctx.growth.clone();
-            let row = RetainedRow::try_build(out_width, &growth, |row| {
-                // `key.len() == var_count` (built from `key_cols`): one memcpy, no index loop.
-                row[..var_count].copy_from_slice(key);
-                for (j, ((_, agg), links)) in aggregates
-                    .iter()
-                    .zip(links.as_mut_slice().iter_mut())
-                    .enumerate()
-                {
-                    row[var_count + j] = eval_aggregate(
-                        agg,
-                        links.as_mut_slice(),
-                        idxs,
-                        &seq.rows,
-                        &in_schema,
-                        domain,
-                        ctx,
-                    )?;
-                }
-                Ok(())
-            })?;
-            rows.push_row(if group_tracking {
-                row.with_evidence(
-                    aggregate_evidence(&group_evidence(idxs, &seq.rows, ctx)?, aggregates, ctx)?,
-                    &growth,
-                )?
-            } else {
-                row
-            })?;
-        }
-        rows.finish()?
     };
-
     rows.retain_search_evidence(search_evidence);
     // An `EXISTS` inside an aggregate argument is an opaque edge; see `eval_left_join`.
     if let Some(tripped) = ctx.expression_barrier.observed() {
@@ -2471,30 +2902,386 @@ pub(crate) fn eval_group_with<D: DatasetView + Sync, M: GroupDomain>(
     }))
 }
 
-/// Link every aggregate's expressions to the group input's schema, once per `GROUP`
-/// call: for each aggregate, its arguments in order, then its own `ORDER BY` keys.
-fn link_aggregates<'e, D: DatasetView + Sync>(
-    node: &GraphPattern,
-    aggregates: &'e [(Variable, AggregateExpression)],
-    schema: &VarSchema,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<AdmittedVec<AdmittedVec<crate::vm::Linked<'e, D::Id>>>, EvalError> {
-    let mut groups = AdmittedVec::with_capacity(aggregates.len(), &ctx.growth)?;
-    for (_, aggregate) in aggregates {
-        let mut links = AdmittedVec::new(&ctx.growth);
-        for expression in aggregate
-            .args()
-            .iter()
-            .chain(aggregate.order_by().iter().map(OrderExpression::expression))
-        {
-            let program = crate::vm::program_at(ctx, node, expression)?;
-            links.push(crate::vm::Linked::link_admitted(
-                program, expression, schema, ctx,
-            )?)?;
-        }
-        groups.push(links)?;
+impl<'e, I: ViewTermId> GroupSequence<'e, I> {
+    pub(crate) fn aggregate_index(&self) -> usize {
+        self.aggregate
     }
+    /// FOLD slots include arguments THEN the aggregate's own ORDER keys.
+    pub(crate) fn expression_index(&self) -> usize {
+        match self.active.as_ref().expect("suspended GROUP aggregate") {
+            GroupAggregate::Builtin { sequence, .. } => sequence.argument_index(),
+            GroupAggregate::Custom(sequence) => sequence.argument_index(),
+            GroupAggregate::Fold(sequence) => sequence.argument_index(),
+        }
+    }
+    fn finish_aggregate(
+        &mut self,
+        links: AdmittedVec<crate::vm::Linked<'e, I>>,
+        value: Option<SolutionTerm<I>>,
+    ) -> Result<(), EvalError> {
+        crate::vm::restore_slot(&mut self.links, self.aggregate, links);
+        self.row
+            .as_mut()
+            .expect("unpublished GROUP output row")
+            .set_unpublished_cell_unique(self.var_count + self.aggregate, value)?;
+        self.aggregate += 1;
+        Ok(())
+    }
+
+    pub(crate) fn step<'d, D: DatasetView<Id = I> + Sync, M: GroupDomain>(
+        mut self,
+        node: &GraphPattern,
+        aggregates: &[(Variable, AggregateExpression)],
+        domain: M,
+        ctx: &mut EvalCtx<'d, D>,
+    ) -> Result<GroupStep<'e, 'd, I>, EvalError> {
+        if self.native {
+            return complete_parallel_groups(self, node, aggregates, domain, ctx)
+                .map(GroupStep::Complete);
+        }
+        while self.group < self.groups.len() {
+            if self.row.is_none() {
+                let key = &self.groups[self.group].1;
+                self.row = Some(RetainedRow::try_build(
+                    self.out_schema.len(),
+                    &ctx.growth,
+                    |row| {
+                        row[..self.var_count].copy_from_slice(key);
+                        Ok(())
+                    },
+                )?);
+                self.aggregate = 0;
+            }
+            if self.aggregate == aggregates.len() {
+                let row = self.row.take().expect("completed GROUP output row");
+                let members = &self.groups[self.group].2;
+                self.output.push_row(if self.group_tracking {
+                    row.with_evidence(
+                        aggregate_evidence(
+                            &group_evidence(members, &self.input.rows, ctx)?,
+                            aggregates,
+                            ctx,
+                        )?,
+                        &ctx.growth,
+                    )?
+                } else {
+                    row
+                })?;
+                self.group += 1;
+                continue;
+            }
+            let aggregate = &aggregates[self.aggregate].1;
+            let members = &self.groups[self.group].2;
+            if let Some(active) = self.active.take() {
+                match active {
+                    GroupAggregate::Builtin {
+                        sequence,
+                        mut remaining,
+                    } => match sequence.step(aggregate, members, &self.input.rows, ctx)? {
+                        BuiltinAggregateStep::Suspend(sequence, request) => {
+                            self.active = Some(GroupAggregate::Builtin {
+                                sequence,
+                                remaining,
+                            });
+                            return Ok(GroupStep::Suspend(self, request));
+                        }
+                        BuiltinAggregateStep::Complete { linked, value } => {
+                            crate::vm::restore_slot(&mut remaining, 0, linked);
+                            self.finish_aggregate(remaining, value)?;
+                        }
+                    },
+                    GroupAggregate::Custom(sequence) => {
+                        let AggregateFunction::Custom(iri) = aggregate.function() else {
+                            return Err(EvalError::internal(
+                                "GROUP custom aggregate identity changed",
+                            ));
+                        };
+                        match sequence.step(
+                            iri.as_str(),
+                            aggregate,
+                            members,
+                            &self.input.rows,
+                            ctx,
+                        )? {
+                            CustomAggregateStep::Suspend(sequence, request) => {
+                                self.active = Some(GroupAggregate::Custom(sequence));
+                                return Ok(GroupStep::Suspend(self, request));
+                            }
+                            CustomAggregateStep::Complete { links, value } => {
+                                self.finish_aggregate(links, value)?;
+                            }
+                        }
+                    }
+                    GroupAggregate::Fold(sequence) => {
+                        match sequence.step(aggregate, members, &self.input.rows, ctx)? {
+                            crate::cdt_agg::FoldStep::Suspend(sequence, request) => {
+                                self.active = Some(GroupAggregate::Fold(sequence));
+                                return Ok(GroupStep::Suspend(self, request));
+                            }
+                            crate::cdt_agg::FoldStep::Complete { links, value } => {
+                                self.finish_aggregate(links, value)?;
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
+            let mut links = crate::vm::take_slot(&mut self.links, self.aggregate)?;
+            match aggregate.function() {
+                AggregateFunction::Count if aggregate.args().is_empty() => {
+                    // This original path has no VM argument to suspend. It owns
+                    // invocation/checkpoint/distinct visibility/count finalization.
+                    let value = eval_count_star(
+                        aggregate,
+                        members,
+                        &self.input.rows,
+                        &self.input.schema,
+                        domain,
+                        ctx,
+                    )?;
+                    self.finish_aggregate(links, value)?;
+                }
+                AggregateFunction::Custom(iri) => {
+                    match CustomAggregateSequence::begin(
+                        iri.as_str(),
+                        aggregate,
+                        links,
+                        members.len(),
+                        self.input.schema.clone(),
+                        ctx,
+                    )? {
+                        CustomAggregateStart::Complete { links, value } => {
+                            self.finish_aggregate(links, value)?;
+                        }
+                        CustomAggregateStart::Sequence(sequence) => {
+                            self.active = Some(GroupAggregate::Custom(sequence));
+                        }
+                    }
+                }
+                AggregateFunction::Fold => {
+                    match crate::cdt_agg::FoldSequence::begin(
+                        aggregate,
+                        links,
+                        self.input.schema.clone(),
+                        ctx,
+                    )? {
+                        crate::cdt_agg::FoldStart::Complete { links, value } => {
+                            self.finish_aggregate(links, value)?;
+                        }
+                        crate::cdt_agg::FoldStart::Sequence(sequence) => {
+                            self.active = Some(GroupAggregate::Fold(sequence));
+                        }
+                    }
+                }
+                _ => {
+                    let linked = crate::vm::take_slot(&mut links, 0)?;
+                    match BuiltinAggregateSequence::begin(
+                        aggregate,
+                        linked,
+                        self.input.schema.clone(),
+                        ctx,
+                    )? {
+                        BuiltinAggregateStart::Complete { linked, value } => {
+                            crate::vm::restore_slot(&mut links, 0, linked);
+                            self.finish_aggregate(links, value)?;
+                        }
+                        BuiltinAggregateStart::Sequence(sequence) => {
+                            self.active = Some(GroupAggregate::Builtin {
+                                sequence,
+                                remaining: links,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        let mut rows = self.output.finish()?;
+        rows.retain_search_evidence(self.input.rows.search_evidence().clone());
+        if let Some(tripped) = ctx.expression_barrier.observed() {
+            return Ok(GroupStep::Complete(Evaluated::Truncated(
+                Truncation::barred_at(node, tripped, self.out_schema),
+            )));
+        }
+        Ok(GroupStep::Complete(self.lift.attach(node).finish(
+            SolutionSeq {
+                schema: self.out_schema,
+                rows,
+            },
+        )))
+    }
+}
+
+fn materialized_groups<D: DatasetView + Sync>(
+    node: &GraphPattern,
+    seq: &SolutionSeq<D::Id>,
+    out_schema: &crate::solution::SharedSchema,
+    var_count: usize,
+    no_variables: bool,
+    has_aggregates: bool,
+    ctx: &EvalCtx<'_, D>,
+) -> Result<MaterializedGroups<D::Id>, EvalError> {
+    let mut key_cols = AdmittedVec::with_capacity(var_count, &ctx.growth)?;
+    for variable in &out_schema.vars()[..var_count] {
+        key_cols.push(seq.schema.index_of(variable))?;
+    }
+
+    // The physical series strategy partitions the same native keys in one
+    // ordered pass, then restores first-seen groups and original member order.
+    // Every aggregate below still uses its original body and argument order.
+    let mut groups = if ctx.bucketed_group == Some(std::ptr::from_ref(node) as usize) {
+        ctx.shape_state.work.add(
+            u64::try_from(seq.rows.len()).map_err(|_| EvalError::WorkspaceBoundOverflow)?,
+            u64::try_from(seq.rows.len()).map_err(|_| EvalError::WorkspaceBoundOverflow)?,
+        )?;
+        crate::shapes::bucket::partition(seq, &key_cols, &ctx.growth)?
+    } else {
+        let mut group_index = crate::AdmittedMap::<RetainedRow<D::Id>, usize>::default();
+        let mut groups = AdmittedVec::new(&ctx.growth);
+        for (idx, row) in seq.rows.iter().enumerate() {
+            let key = RetainedRow::from_cells(
+                key_cols.len(),
+                key_cols.iter().map(|c| c.and_then(|c| row[c])),
+                &ctx.growth,
+            )?;
+            let next_ordinal = groups.len();
+            if let Some(&ordinal) = group_index.get(&key) {
+                let (_, _, members): &mut (usize, RetainedRow<D::Id>, AdmittedVec<usize>) =
+                    &mut groups.as_mut_slice()[ordinal];
+                members.push(idx)?;
+            } else {
+                let mut members = AdmittedVec::new(&ctx.growth);
+                members.push(idx)?;
+                let _ = group_index.insert_admitted(
+                    key.clone_admitted(&ctx.growth)?,
+                    next_ordinal,
+                    &ctx.growth,
+                )?;
+                groups.push((next_ordinal, key, members))?;
+            }
+        }
+        groups
+    };
+    // No GROUP BY + empty input + aggregates → a single empty group.
+    if groups.is_empty() && no_variables && has_aggregates {
+        groups.push((
+            0,
+            RetainedRow::from_cells(0, std::iter::empty(), &ctx.growth)?,
+            AdmittedVec::new(&ctx.growth),
+        ))?;
+    }
+
     Ok(groups)
+}
+
+impl<'e, I: ViewTermId> crate::vm::RowContinuation<'e, I> for GroupSequence<'e, I> {
+    fn row_frame<'s>(&'s self) -> &'s crate::vm::RowExpressionFrame<'e, I>
+    where
+        'e: 's,
+    {
+        match self.active.as_ref().expect("suspended GROUP aggregate") {
+            GroupAggregate::Builtin { sequence, .. } => sequence.row_frame(),
+            GroupAggregate::Custom(sequence) => sequence.row_frame(),
+            GroupAggregate::Fold(sequence) => sequence.row_frame(),
+        }
+    }
+    fn row_frame_mut<'s>(&'s mut self) -> &'s mut crate::vm::RowExpressionFrame<'e, I>
+    where
+        'e: 's,
+    {
+        match self.active.as_mut().expect("suspended GROUP aggregate") {
+            GroupAggregate::Builtin { sequence, .. } => sequence.row_frame_mut(),
+            GroupAggregate::Custom(sequence) => sequence.row_frame_mut(),
+            GroupAggregate::Fold(sequence) => sequence.row_frame_mut(),
+        }
+    }
+    fn schema(&self) -> &VarSchema {
+        &self.input.schema
+    }
+}
+
+pub(crate) trait GroupDomain: Copy + Sync {
+    fn visible(
+        &self,
+        schema: &VarSchema,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Option<AdmittedVec<usize>>, EvalError>;
+}
+
+impl GroupDomain for () {
+    fn visible(
+        &self,
+        schema: &VarSchema,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Option<AdmittedVec<usize>>, EvalError> {
+        crate::blank_scope::visible_columns_admitted(schema, workspace)
+    }
+}
+
+impl GroupDomain for &[Variable] {
+    fn visible(
+        &self,
+        schema: &VarSchema,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Option<AdmittedVec<usize>>, EvalError> {
+        let mut columns = AdmittedVec::new(workspace);
+        for name in *self {
+            if let Some(column) = schema.index_of(name) {
+                columns.push(column)?;
+            }
+        }
+        Ok(Some(columns))
+    }
+}
+
+impl GroupDomain for Option<&[Variable]> {
+    fn visible(
+        &self,
+        schema: &VarSchema,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Option<AdmittedVec<usize>>, EvalError> {
+        match self {
+            Some(domain) => domain.visible(schema, workspace),
+            None => ().visible(schema, workspace),
+        }
+    }
+}
+
+fn aggregate_evidence<D: DatasetView + Sync>(
+    evidence: &crate::evidence_exec::RowEvidence,
+    aggregates: &[(Variable, AggregateExpression)],
+    ctx: &EvalCtx<'_, D>,
+) -> Result<crate::evidence_exec::RowEvidence, EvalError> {
+    match &ctx.evidence_input {
+        Some(input) => {
+            input.aggregate_evidence(evidence, aggregates, ctx.active_graph, &ctx.growth)
+        }
+        None => evidence.native_aggregate(aggregates, &ctx.growth, || {
+            ctx.evidence_owner()?.query_owner(&ctx.growth)
+        }),
+    }
+}
+
+fn group_evidence<D: DatasetView + Sync>(
+    members: &[usize],
+    rows: &crate::solution::RowBag<D::Id>,
+    ctx: &EvalCtx<'_, D>,
+) -> Result<crate::evidence_exec::RowEvidence, EvalError> {
+    if ctx.evidence_input.is_none()
+        && rows.search_evidence().is_virtual()
+        && !members
+            .iter()
+            .any(|&member| rows[member].has_evidence_attachment())
+    {
+        return Ok(crate::evidence_exec::RowEvidence::default());
+    }
+    let mut evidence = rows.search_evidence().clone();
+    for &member in members {
+        evidence = evidence.combine(
+            rows[member].evidence(),
+            purrdf_core::evidence::EvidenceCombination::Conjunction,
+        )?;
+    }
+    Ok(evidence)
 }
 
 /// Stateful scheduling of the existing accumulators. Contextual aggregates update
@@ -2801,38 +3588,476 @@ fn record_contextual_trip<D: DatasetView + Sync>(
     }
 }
 
-fn contextual_group_rows<D: DatasetView + Sync, M: GroupDomain>(
-    node: &GraphPattern,
-    inner: &GraphPattern,
-    variables: &[Variable],
-    aggregates: &[(Variable, AggregateExpression)],
-    out_schema: crate::solution::SharedSchema,
-    domain: M,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Evaluated<D::Id>, EvalError> {
-    let in_schema = crate::eval::syntactic_schema_admitted(inner, &ctx.growth)?;
-    let var_count = out_schema.len() - aggregates.len();
-    let mut key_cols = AdmittedVec::with_capacity(var_count, &ctx.growth)?;
-    for name in &out_schema.vars()[..var_count] {
-        key_cols.push(in_schema.index_of(name))?;
+// Each lane finishes its current input row before the original producer advances.
+#[derive(Clone, Copy)]
+enum ContextualArgumentPhase {
+    Probe,
+    Update,
+}
+
+pub(crate) struct ContextualLaneSequence<'e, I: ViewTermId> {
+    lane: ContextualLane<I>,
+    links: AdmittedVec<crate::vm::Linked<'e, I>>,
+    row: Option<RetainedRow<I>>,
+    schema: crate::solution::SharedSchema,
+    active: Option<crate::vm::RowExpressionFrame<'e, I>>,
+    tuple: Option<RetainedRow<I>>,
+    argument: usize,
+    phase: ContextualArgumentPhase,
+}
+
+crate::vm::row_continuation!(ContextualLaneSequence, schema);
+
+impl<'e, I: ViewTermId> crate::vm::RowContinuation<'e, I> for ContextualRowSequence<'e, I> {
+    fn row_frame<'s>(&'s self) -> &'s crate::vm::RowExpressionFrame<'e, I>
+    where
+        'e: 's,
+    {
+        crate::vm::RowContinuation::row_frame(
+            self.active.as_ref().expect("suspended contextual lane"),
+        )
     }
-    let mut links = link_aggregates(node, aggregates, &in_schema, ctx)?;
-    let mut group_index = crate::AdmittedMap::<RetainedRow<D::Id>, usize>::default();
-    let mut states =
-        AdmittedVec::<(RetainedRow<D::Id>, AdmittedVec<ContextualLane<D::Id>>)>::new(&ctx.growth);
-    // The physical series mode orders keys once. Accumulator steps still run
-    // in ORIGINAL global row order, including contextual and volatile ones.
-    // Creating lanes at their first row preserves invocation/error precedence.
-    let mut bucket_input = None;
-    let mut bucket_ordinals = None;
-    if ctx.bucketed_group == Some(std::ptr::from_ref(node) as usize) {
-        let mut lift = Lift::at_admitted(node, &ctx.growth)?;
-        let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
-            return Ok(lift.finish(SolutionSeq::empty(out_schema)));
+    fn row_frame_mut<'s>(&'s mut self) -> &'s mut crate::vm::RowExpressionFrame<'e, I>
+    where
+        'e: 's,
+    {
+        crate::vm::RowContinuation::row_frame_mut(
+            self.active.as_mut().expect("suspended contextual lane"),
+        )
+    }
+    fn schema(&self) -> &VarSchema {
+        &self.schema
+    }
+}
+
+impl<'e, I: ViewTermId> crate::vm::RowContinuation<'e, I> for ContextualGroupSequence<'e, I> {
+    fn row_frame<'s>(&'s self) -> &'s crate::vm::RowExpressionFrame<'e, I>
+    where
+        'e: 's,
+    {
+        crate::vm::RowContinuation::row_frame(
+            self.active.as_ref().expect("suspended contextual row"),
+        )
+    }
+    fn row_frame_mut<'s>(&'s mut self) -> &'s mut crate::vm::RowExpressionFrame<'e, I>
+    where
+        'e: 's,
+    {
+        crate::vm::RowContinuation::row_frame_mut(
+            self.active.as_mut().expect("suspended contextual row"),
+        )
+    }
+    fn schema(&self) -> &VarSchema {
+        crate::vm::RowContinuation::schema(self.active.as_ref().expect("suspended contextual row"))
+    }
+}
+
+pub(crate) struct CompletedContextualLane<'e, I: ViewTermId> {
+    lane: ContextualLane<I>,
+    pub(crate) links: AdmittedVec<crate::vm::Linked<'e, I>>,
+    pub(crate) row: RetainedRow<I>,
+    pub(crate) tripped: Option<purrdf_core::TrippedGovernor>,
+}
+
+#[expect(
+    clippy::large_enum_variant,
+    reason = "the graph driver admits the lane continuation"
+)]
+pub(crate) enum ContextualLaneStep<'e, 'd, I: ViewTermId> {
+    Complete(CompletedContextualLane<'e, I>),
+    Suspend(ContextualLaneSequence<'e, I>, crate::vm::Suspend<'d>),
+}
+
+impl<'e, I: ViewTermId> ContextualLaneSequence<'e, I> {
+    /// Lane invocation and initial accumulator construction remain at first
+    /// group discovery in contextual_lanes, before entering this row update.
+    fn begin(
+        lane: ContextualLane<I>,
+        links: AdmittedVec<crate::vm::Linked<'e, I>>,
+        row: RetainedRow<I>,
+        schema: crate::solution::SharedSchema,
+    ) -> Self {
+        let phase = if lane.seen.is_some() {
+            ContextualArgumentPhase::Probe
+        } else {
+            ContextualArgumentPhase::Update
         };
-        let groups = crate::shapes::bucket::partition(&seq, &key_cols, &ctx.growth)?;
-        let mut ordinals = AdmittedVec::with_capacity(seq.rows.len(), &ctx.growth)?;
-        for _ in &seq.rows {
+        Self {
+            lane,
+            links,
+            row: Some(row),
+            schema,
+            active: None,
+            tuple: None,
+            argument: 0,
+            phase,
+        }
+    }
+    pub(crate) fn argument_index(&self) -> usize {
+        self.argument
+    }
+    fn complete<'d>(
+        mut self,
+        tripped: Option<purrdf_core::TrippedGovernor>,
+    ) -> ContextualLaneStep<'e, 'd, I> {
+        ContextualLaneStep::Complete(CompletedContextualLane {
+            lane: self.lane,
+            links: self.links,
+            row: self.row.take().expect("completed contextual source row"),
+            tripped,
+        })
+    }
+    pub(crate) fn step<'d, D: DatasetView<Id = I> + Sync>(
+        mut self,
+        aggregate: &AggregateExpression,
+        visible: Option<&[usize]>,
+        ctx: &mut EvalCtx<'d, D>,
+    ) -> Result<ContextualLaneStep<'e, 'd, I>, EvalError> {
+        if self.lane.retired {
+            return Ok(self.complete(None));
+        }
+        loop {
+            if self.tuple.is_none() {
+                self.argument = 0;
+                self.tuple = Some(if aggregate.args().is_empty() {
+                    let row = self.row.as_ref().expect("contextual source row");
+                    RetainedRow::try_build(
+                        visible.map_or(row.len(), <[usize]>::len),
+                        &ctx.growth,
+                        |identity| {
+                            if let Some(keep) = visible {
+                                for (slot, &column) in identity.iter_mut().zip(keep) {
+                                    *slot = row[column];
+                                }
+                            } else {
+                                identity.copy_from_slice(row);
+                            }
+                            Ok(())
+                        },
+                    )?
+                } else {
+                    RetainedRow::try_build(aggregate.args().len(), &ctx.growth, |terms| {
+                        terms.fill(None);
+                        Ok(())
+                    })?
+                });
+            }
+            while self.argument < aggregate.args().len() {
+                let mut frame = match self.active.take() {
+                    Some(frame) => frame,
+                    None => crate::vm::RowExpressionFrame::begin(
+                        crate::vm::take_slot(&mut self.links, self.argument)?,
+                        self.row.take().expect("contextual source row"),
+                        ctx,
+                    )?,
+                };
+                match frame.poll(ctx)? {
+                    crate::vm::VmStep::Suspend(request) => {
+                        self.active = Some(frame);
+                        return Ok(ContextualLaneStep::Suspend(self, request));
+                    }
+                    crate::vm::VmStep::Value(value) => {
+                        let (linked, row, term, _evidence) = frame.finish_term(value)?;
+                        crate::vm::restore_slot(&mut self.links, self.argument, linked);
+                        self.row = Some(row);
+                        self.tuple
+                            .as_mut()
+                            .expect("contextual tuple")
+                            .set_unpublished_cell_unique(self.argument, term)?;
+                        self.argument += 1;
+                    }
+                }
+            }
+            let terms = self.tuple.take().expect("completed contextual tuple");
+            if matches!(self.phase, ContextualArgumentPhase::Probe) {
+                if self
+                    .lane
+                    .seen
+                    .as_ref()
+                    .expect("DISTINCT probe witness")
+                    .get(&terms)
+                    .is_some()
+                {
+                    return Ok(self.complete(None));
+                }
+                // Eligibility and update are intentionally different evaluations.
+                // No probe value is reused; RAND/BNODE/host calls run again here.
+                self.phase = ContextualArgumentPhase::Update;
+                continue;
+            }
+            if !aggregate.args().is_empty()
+                && terms.iter().any(Option::is_none)
+                && !matches!(aggregate.function(), AggregateFunction::Fold)
+            {
+                return Ok(self.complete(None));
+            }
+            let mut checkpoint = crate::row_checkpoint::RowCheckpoint::sequential(
+                ctx,
+                ChargePoint::AggregateAccumulation,
+            );
+            if let Err(tripped) = checkpoint.pass(ctx) {
+                ctx.record_barrier(tripped);
+                return Ok(self.complete(Some(tripped)));
+            }
+            let mut values = AggregateSurvivors::new(&ctx.growth);
+            if !aggregate.args().is_empty() {
+                for term in terms.iter().filter_map(|term| *term) {
+                    values.reserve_next()?;
+                    values.push(ctx.scratch.try_owned_value_of(
+                        ctx.dataset,
+                        term,
+                        &ctx.growth,
+                        |error| ctx.workspace.source_error(error),
+                    )?)?;
+                }
+            }
+            let bytes = values
+                .iter()
+                .map(crate::scratch::value_bytes)
+                .fold(0u64, u64::saturating_add);
+            if let Err(tripped) =
+                ctx.charge_amount(purrdf_core::ResourceDimension::ScratchBytes, bytes)
+            {
+                ctx.record_barrier(tripped);
+                return Ok(self.complete(Some(tripped)));
+            }
+            if let Err(tripped) =
+                ctx.charge_exact_numeric(self.lane.numeric_cost.step(aggregate.function(), &values))
+            {
+                ctx.record_barrier(tripped);
+                return Ok(self.complete(Some(tripped)));
+            }
+            if let Some(tripped) = self.lane.fold.step(values, ctx)? {
+                ctx.record_barrier(tripped);
+                return Ok(self.complete(Some(tripped)));
+            }
+            if let Some(seen) = &mut self.lane.seen {
+                let _ = seen.insert_admitted(terms, (), &ctx.growth)?;
+            }
+            self.lane.retired = matches!(aggregate.function(), AggregateFunction::Sample);
+            return Ok(self.complete(None));
+        }
+    }
+}
+
+/// All aggregate lanes for one original contextual input row. The enclosing
+/// group owner temporarily lends the selected group's lanes and the shared
+/// links by move, not by references into its own mutable fields.
+pub(crate) struct ContextualRowSequence<'e, I: ViewTermId> {
+    lanes: AdmittedVec<ContextualLane<I>>,
+    links: AdmittedVec<AdmittedVec<crate::vm::Linked<'e, I>>>,
+    row: Option<RetainedRow<I>>,
+    schema: crate::solution::SharedSchema,
+    active: Option<ContextualLaneSequence<'e, I>>,
+    aggregate: usize,
+}
+
+pub(crate) struct CompletedContextualRow<'e, I: ViewTermId> {
+    lanes: AdmittedVec<ContextualLane<I>>,
+    links: AdmittedVec<AdmittedVec<crate::vm::Linked<'e, I>>>,
+    row: RetainedRow<I>,
+    tripped: Option<purrdf_core::TrippedGovernor>,
+}
+
+#[expect(
+    clippy::large_enum_variant,
+    reason = "the driver admits the contextual row owner"
+)]
+pub(crate) enum ContextualRowStep<'e, 'd, I: ViewTermId> {
+    Complete(CompletedContextualRow<'e, I>),
+    Suspend(ContextualRowSequence<'e, I>, crate::vm::Suspend<'d>),
+}
+
+impl<'e, I: ViewTermId> ContextualRowSequence<'e, I> {
+    /// Call after the ORIGINAL grouping/key-evidence update. In particular the
+    /// producer sets current_row=0 before key creation and contextual_lanes.
+    fn begin(
+        lanes: AdmittedVec<ContextualLane<I>>,
+        links: AdmittedVec<AdmittedVec<crate::vm::Linked<'e, I>>>,
+        row: RetainedRow<I>,
+        schema: crate::solution::SharedSchema,
+    ) -> Self {
+        Self {
+            lanes,
+            links,
+            row: Some(row),
+            schema,
+            active: None,
+            aggregate: 0,
+        }
+    }
+    pub(crate) fn aggregate_index(&self) -> usize {
+        self.aggregate
+    }
+    pub(crate) fn argument_index(&self) -> usize {
+        self.active
+            .as_ref()
+            .expect("contextual row argument")
+            .argument_index()
+    }
+    fn complete<'d>(
+        mut self,
+        tripped: Option<purrdf_core::TrippedGovernor>,
+    ) -> ContextualRowStep<'e, 'd, I> {
+        ContextualRowStep::Complete(CompletedContextualRow {
+            lanes: self.lanes,
+            links: self.links,
+            row: self.row.take().expect("completed contextual row"),
+            tripped,
+        })
+    }
+    pub(crate) fn step<'d, D: DatasetView<Id = I> + Sync>(
+        mut self,
+        aggregates: &[(Variable, AggregateExpression)],
+        visible: Option<&[usize]>,
+        ctx: &mut EvalCtx<'d, D>,
+    ) -> Result<ContextualRowStep<'e, 'd, I>, EvalError> {
+        while self.aggregate < aggregates.len() {
+            let sequence = match self.active.take() {
+                Some(sequence) => sequence,
+                None => ContextualLaneSequence::begin(
+                    crate::vm::take_slot(&mut self.lanes, self.aggregate)?,
+                    crate::vm::take_slot(&mut self.links, self.aggregate)?,
+                    self.row.take().expect("contextual row"),
+                    self.schema.clone(),
+                ),
+            };
+            match sequence.step(&aggregates[self.aggregate].1, visible, ctx)? {
+                ContextualLaneStep::Suspend(sequence, request) => {
+                    self.active = Some(sequence);
+                    return Ok(ContextualRowStep::Suspend(self, request));
+                }
+                ContextualLaneStep::Complete(done) => {
+                    crate::vm::restore_slot(&mut self.lanes, self.aggregate, done.lane);
+                    crate::vm::restore_slot(&mut self.links, self.aggregate, done.links);
+                    self.row = Some(done.row);
+                    if done.tripped.is_some() {
+                        return Ok(self.complete(done.tripped));
+                    }
+                    self.aggregate += 1;
+                }
+            }
+        }
+        Ok(self.complete(None))
+    }
+}
+type ContextualGroups<I> = AdmittedVec<(RetainedRow<I>, AdmittedVec<ContextualLane<I>>)>;
+
+pub(crate) struct ContextualGroupSequence<'e, I: ViewTermId> {
+    in_schema: crate::solution::SharedSchema,
+    out_schema: crate::solution::SharedSchema,
+    key_cols: AdmittedVec<Option<usize>>,
+    visible: Option<AdmittedVec<usize>>,
+    visible_ready: bool,
+    links: AdmittedVec<AdmittedVec<crate::vm::Linked<'e, I>>>,
+    group_index: crate::AdmittedMap<RetainedRow<I>, usize>,
+    states: ContextualGroups<I>,
+    bucket_ordinals: Option<AdmittedVec<usize>>,
+    input_ordinal: usize,
+    local_trip: std::cell::Cell<Option<purrdf_core::TrippedGovernor>>,
+    block: Option<crate::solution::RowBagIntoIter<I>>,
+    block_schema: Option<crate::solution::SharedSchema>,
+    active: Option<ContextualRowSequence<'e, I>>,
+    active_group: Option<usize>,
+    var_count: usize,
+    no_variables: bool,
+}
+
+// Use the existing ResidentPending home for panic/error restoration. The
+// source integrator may share/rename this small cursor owner with the driver's
+// DeliveryReturn owner; do not move admission before enter_node to avoid it.
+struct ContextualNodeCursor(Option<crate::eval::NodeCursors>);
+impl<D: DatasetView + Sync> crate::eval::ResidentAbort<D> for ContextualNodeCursor {
+    fn abort(&mut self, ctx: &mut EvalCtx<'_, D>) {
+        if let Some(restore) = self.0.take() {
+            ctx.leave_node(restore);
+        }
+    }
+}
+
+pub(crate) enum ContextualOffer {
+    Stopped,
+    // The DeliveryReturn frame, not this movable sequence, owns restoration
+    // throughout expression/EXISTS/UDF suspension and on failure/unwind.
+    Entered(crate::eval::NodeCursors),
+}
+
+pub(crate) enum ContextualGroupStep<'e, 'd, I: ViewTermId> {
+    BlockComplete(ContextualGroupSequence<'e, I>, std::ops::ControlFlow<()>),
+    Suspend(ContextualGroupSequence<'e, I>, crate::vm::Suspend<'d>),
+}
+
+impl<'e, I: ViewTermId> ContextualGroupSequence<'e, I> {
+    pub(crate) fn output_schema(&self) -> crate::solution::SharedSchema {
+        self.out_schema.clone()
+    }
+    pub(crate) fn begin<D: DatasetView<Id = I> + Sync, M: GroupDomain>(
+        node: &GraphPattern,
+        variables: &[Variable],
+        aggregates: &[(Variable, AggregateExpression)],
+        owner: &GroupLink<'e>,
+        out_schema: crate::solution::SharedSchema,
+        domain: M,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<Self, EvalError> {
+        let GraphPattern::Group { inner, .. } = node else {
+            return Err(EvalError::internal(
+                "contextual GROUP continuation lost its graph child",
+            ));
+        };
+        let in_schema = crate::eval::syntactic_schema_admitted(inner, &ctx.growth)?;
+        let var_count = out_schema
+            .len()
+            .checked_sub(aggregates.len())
+            .ok_or_else(|| {
+                EvalError::internal("contextual GROUP output schema lost its aggregate columns")
+            })?;
+        let mut key_cols = AdmittedVec::with_capacity(var_count, &ctx.growth)?;
+        for name in &out_schema.vars()[..var_count] {
+            key_cols.push(in_schema.index_of(name))?;
+        }
+        let links = link_group_expressions_with_owner(node, aggregates, owner, &in_schema, ctx)?;
+        let bucketed = ctx.bucketed_group == Some(std::ptr::from_ref(node) as usize);
+        let visible = if bucketed {
+            None
+        } else {
+            domain.visible(&in_schema, &ctx.growth)?
+        };
+        Ok(Self {
+            visible,
+            visible_ready: !bucketed,
+            in_schema,
+            out_schema,
+            key_cols,
+            links,
+            group_index: crate::AdmittedMap::default(),
+            states: AdmittedVec::new(&ctx.growth),
+            bucket_ordinals: None,
+            input_ordinal: 0,
+            local_trip: std::cell::Cell::new(None),
+            block: None,
+            block_schema: None,
+            active: None,
+            active_group: None,
+            var_count,
+            no_variables: variables.is_empty(),
+        })
+    }
+
+    /// Only the original bucketed route calls this AFTER its existing child
+    /// Lift absorbs a complete materialized input. Return the SAME input owner
+    /// for one offer_block call followed by finish(Complete(input)). Ordinary
+    /// contextual input never passes through this materializing entry.
+    pub(crate) fn prepare_bucket<D: DatasetView<Id = I> + Sync, M: GroupDomain>(
+        &mut self,
+        input: SolutionSeq<I>,
+        lift: Lift<'_>,
+        domain: M,
+        ctx: &EvalCtx<'_, D>,
+    ) -> Result<SolutionSeq<I>, EvalError> {
+        let groups = crate::shapes::bucket::partition(&input, &self.key_cols, &ctx.growth)?;
+        let mut ordinals = AdmittedVec::with_capacity(input.rows.len(), &ctx.growth)?;
+        for _ in &input.rows {
             ordinals.push(0usize)?;
         }
         for (ordinal, _, members) in groups {
@@ -2840,196 +4065,224 @@ fn contextual_group_rows<D: DatasetView + Sync, M: GroupDomain>(
                 ordinals.as_mut_slice()[member] = ordinal;
             }
         }
-        let rows = u64::try_from(seq.rows.len()).map_err(|_| EvalError::WorkspaceBoundOverflow)?;
-        ctx.shape_state.work.add(rows, rows)?;
-        bucket_ordinals = Some(ordinals);
-        bucket_input = Some(seq);
+        let count =
+            u64::try_from(input.rows.len()).map_err(|_| EvalError::WorkspaceBoundOverflow)?;
+        ctx.shape_state.work.add(count, count)?;
+        self.bucket_ordinals = Some(ordinals);
+        drop(lift);
+        // Original bucketed execution computes domain visibility only after
+        // child evaluation, partitioning and the shape-work observation.
+        self.visible = domain.visible(&self.in_schema, &ctx.growth)?;
+        self.visible_ready = true;
+        Ok(input)
     }
-    let mut input_ordinal = 0usize;
-    let local_trip = std::cell::Cell::new(None);
-    let visible = domain.visible(&in_schema, &ctx.growth)?;
-    let mut consume = |input: &SolutionSeq<D::Id>, ctx: &mut EvalCtx<'_, D>| {
+
+    /// Invoke at the original callback boundary, never on a complete future
+    /// input. The caller parks the returned cursor in DeliveryReturn BEFORE
+    /// calling step, and leaves it on BlockComplete/error/unwind, exactly once.
+    pub(crate) fn offer_block<D: DatasetView<Id = I> + Sync>(
+        &mut self,
+        node: &GraphPattern,
+        input: &SolutionSeq<I>,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<ContextualOffer, EvalError> {
+        if self.block.is_some() || self.active.is_some() {
+            return Err(EvalError::internal(
+                "contextual GROUP received overlapping input blocks",
+            ));
+        }
+        if !self.visible_ready {
+            return Err(EvalError::internal(
+                "bucketed contextual GROUP lost its materialized preparation",
+            ));
+        }
         if ctx.expression_barrier.observed().is_some() || ctx.stop_check().is_some() {
-            return Ok(std::ops::ControlFlow::Break(()));
+            return Ok(ContextualOffer::Stopped);
         }
         let restore = ctx.enter_node(node);
-        let result = (|| {
-            let seq = input
-                .clone()
-                .reorder_like_admitted(&in_schema, &ctx.growth)?;
-            for row in &seq.rows {
-                // Labelled BNODE uses the contextual query's shared identity,
-                // including argument evaluation performed by an accumulator.
-                ctx.current_row = 0;
-                let key = RetainedRow::try_build(var_count, &ctx.growth, |key| {
-                    for (slot, column) in key.iter_mut().zip(key_cols.iter()) {
-                        *slot = column.and_then(|column| row[column]);
-                    }
-                    Ok(())
-                })?;
-                let physical_ordinal = bucket_ordinals
-                    .as_ref()
-                    .map(|ordinals| ordinals[input_ordinal]);
-                input_ordinal = input_ordinal
-                    .checked_add(1)
-                    .ok_or(EvalError::WorkspaceBoundOverflow)?;
-                let ordinal = if let Some(ordinal) =
-                    physical_ordinal.filter(|&ordinal| ordinal < states.len())
-                {
-                    ordinal
-                } else if physical_ordinal.is_none()
-                    && let Some(&ordinal) = group_index.get(&key)
-                {
-                    ordinal
-                } else {
-                    let ordinal = states.len();
-                    let Some(lanes) = contextual_lanes(aggregates, ctx, &local_trip)? else {
-                        return Ok(std::ops::ControlFlow::Break(()));
-                    };
-                    if physical_ordinal.is_none() {
-                        let _ = group_index.insert_admitted(
-                            key.clone_admitted(&ctx.growth)?,
-                            ordinal,
-                            &ctx.growth,
-                        )?;
-                    }
-                    states.push((key.with_evidence_from(row, &ctx.growth)?, lanes))?;
-                    ordinal
-                };
-                let (key, lanes) = &mut states.as_mut_slice()[ordinal];
-                key.combine_evidence(
-                    row.evidence(),
-                    purrdf_core::evidence::EvidenceCombination::Conjunction,
-                    &ctx.growth,
-                )?;
-                for ((lane, (_, agg)), links) in lanes
-                    .as_mut_slice()
-                    .iter_mut()
-                    .zip(aggregates)
-                    .zip(links.as_mut_slice().iter_mut())
-                {
-                    if lane.retired {
-                        continue;
-                    }
-                    let identity_growth = ctx.growth.clone();
-                    let identity = |row: &Solution<D::Id>| {
-                        RetainedRow::try_build(
-                            visible.as_ref().map_or(row.len(), |columns| columns.len()),
-                            &identity_growth,
-                            |identity| {
-                                if let Some(keep) = &visible {
-                                    for (slot, &column) in identity.iter_mut().zip(keep) {
-                                        *slot = row[column];
-                                    }
-                                } else {
-                                    identity.copy_from_slice(row);
-                                }
-                                Ok(())
-                            },
-                        )
-                    };
-                    if let Some(seen) = &lane.seen {
-                        let probe = if agg.args().is_empty() {
-                            identity(row)?
-                        } else {
-                            RetainedRow::try_build(
-                                agg.args().len(),
-                                &ctx.growth.clone(),
-                                |probe| {
-                                    for ((slot, link), expression) in probe
-                                        .iter_mut()
-                                        .zip(&mut links.as_mut_slice()[..agg.args().len()])
-                                        .zip(agg.args())
-                                    {
-                                        *slot =
-                                            link.term(Some(expression), row, &seq.schema, ctx)?;
-                                    }
-                                    Ok(())
-                                },
-                            )?
-                        };
-                        if seen.get(&probe).is_some() {
-                            continue;
-                        }
-                    }
-                    let terms = if agg.args().is_empty() {
-                        identity(row)?
-                    } else {
-                        RetainedRow::try_build(agg.args().len(), &ctx.growth.clone(), |terms| {
-                            for ((slot, link), expression) in terms
-                                .iter_mut()
-                                .zip(&mut links.as_mut_slice()[..agg.args().len()])
-                                .zip(agg.args())
-                            {
-                                *slot = link.term(Some(expression), row, &seq.schema, ctx)?;
-                            }
-                            Ok(())
+        // Arm before clone/reorder: allocation admission can invoke arbitrary
+        // WorkspaceReservation code. Both Err and panic restore the node while
+        // attribution of those admissions remains at the GROUP node.
+        let mut pending = crate::eval::ResidentPending {
+            child: Some(ContextualNodeCursor(Some(restore))),
+            ctx,
+        };
+        let input = input
+            .clone()
+            .reorder_like_admitted(&self.in_schema, &pending.ctx.growth)?;
+        self.block_schema = Some(input.schema);
+        self.block = Some(input.rows.into_iter());
+        let restore = pending
+            .child
+            .take()
+            .expect("armed contextual cursor")
+            .0
+            .take()
+            .expect("contextual cursor handoff");
+        Ok(ContextualOffer::Entered(restore))
+    }
+
+    pub(crate) fn aggregate_index(&self) -> usize {
+        self.active
+            .as_ref()
+            .expect("suspended contextual GROUP row")
+            .aggregate_index()
+    }
+    pub(crate) fn expression_index(&self) -> usize {
+        self.active
+            .as_ref()
+            .expect("suspended contextual GROUP row")
+            .argument_index()
+    }
+
+    pub(crate) fn step<'d, D: DatasetView<Id = I> + Sync>(
+        mut self,
+        aggregates: &[(Variable, AggregateExpression)],
+        ctx: &mut EvalCtx<'d, D>,
+    ) -> Result<ContextualGroupStep<'e, 'd, I>, EvalError> {
+        loop {
+            let sequence = match self.active.take() {
+                Some(sequence) => sequence,
+                None => {
+                    let row = self
+                        .block
+                        .as_mut()
+                        .ok_or_else(|| {
+                            EvalError::internal("contextual GROUP has no offered block")
                         })?
+                        .next();
+                    let Some(row) = row else {
+                        self.block = None;
+                        self.block_schema = None;
+                        return Ok(ContextualGroupStep::BlockComplete(
+                            self,
+                            std::ops::ControlFlow::Continue(()),
+                        ));
                     };
-                    if !agg.args().is_empty()
-                        && terms.iter().any(Option::is_none)
-                        && !matches!(agg.function(), AggregateFunction::Fold)
-                    {
-                        continue;
-                    }
-                    let mut checkpoint = crate::row_checkpoint::RowCheckpoint::sequential(
-                        ctx,
-                        ChargePoint::AggregateAccumulation,
-                    );
-                    if let Err(tripped) = checkpoint.pass(ctx) {
-                        record_contextual_trip(ctx, &local_trip, tripped);
-                        return Ok(std::ops::ControlFlow::Break(()));
-                    }
-                    let mut values = AggregateSurvivors::new(&ctx.growth);
-                    if !agg.args().is_empty() {
-                        for term in terms.iter().filter_map(|term| *term) {
-                            values.reserve_next()?;
-                            values.push(ctx.scratch.try_owned_value_of(
-                                ctx.dataset,
-                                term,
-                                &ctx.growth,
-                                |error| ctx.workspace.source_error(error),
-                            )?)?;
+                    // Preserve the contextual query's labelled BNODE identity
+                    // before first-key discovery or custom lane construction.
+                    ctx.current_row = 0;
+                    let key = RetainedRow::try_build(self.var_count, &ctx.growth, |key| {
+                        for (slot, column) in key.iter_mut().zip(self.key_cols.iter()) {
+                            *slot = column.and_then(|column| row[column]);
                         }
-                    }
-                    let bytes = values
-                        .iter()
-                        .map(crate::scratch::value_bytes)
-                        .fold(0u64, u64::saturating_add);
-                    if let Err(tripped) =
-                        ctx.charge_amount(purrdf_core::ResourceDimension::ScratchBytes, bytes)
+                        Ok(())
+                    })?;
+                    let physical = self
+                        .bucket_ordinals
+                        .as_ref()
+                        .map(|ordinals| {
+                            ordinals.get(self.input_ordinal).copied().ok_or_else(|| {
+                                EvalError::internal("contextual bucket input ordinal missing")
+                            })
+                        })
+                        .transpose()?;
+                    self.input_ordinal = self
+                        .input_ordinal
+                        .checked_add(1)
+                        .ok_or(EvalError::WorkspaceBoundOverflow)?;
+                    let ordinal = if let Some(ordinal) =
+                        physical.filter(|&ordinal| ordinal < self.states.len())
                     {
-                        record_contextual_trip(ctx, &local_trip, tripped);
-                        return Ok(std::ops::ControlFlow::Break(()));
-                    }
-                    if let Err(tripped) =
-                        ctx.charge_exact_numeric(lane.numeric_cost.step(agg.function(), &values))
+                        ordinal
+                    } else if physical.is_none()
+                        && let Some(&ordinal) = self.group_index.get(&key)
                     {
-                        record_contextual_trip(ctx, &local_trip, tripped);
-                        return Ok(std::ops::ControlFlow::Break(()));
+                        ordinal
+                    } else {
+                        let ordinal = self.states.len();
+                        let Some(lanes) = contextual_lanes(aggregates, ctx, &self.local_trip)?
+                        else {
+                            self.block = None;
+                            self.block_schema = None;
+                            return Ok(ContextualGroupStep::BlockComplete(
+                                self,
+                                std::ops::ControlFlow::Break(()),
+                            ));
+                        };
+                        if physical.is_none() {
+                            let _ = self.group_index.insert_admitted(
+                                key.clone_admitted(&ctx.growth)?,
+                                ordinal,
+                                &ctx.growth,
+                            )?;
+                        }
+                        self.states
+                            .push((key.with_evidence_from(&row, &ctx.growth)?, lanes))?;
+                        ordinal
+                    };
+                    let (key, lanes) = &mut self.states.as_mut_slice()[ordinal];
+                    key.combine_evidence(
+                        row.evidence(),
+                        purrdf_core::evidence::EvidenceCombination::Conjunction,
+                        &ctx.growth,
+                    )?;
+                    let lanes = std::mem::replace(lanes, AdmittedVec::new(&ctx.growth));
+                    let links = std::mem::replace(&mut self.links, AdmittedVec::new(&ctx.growth));
+                    self.active_group = Some(ordinal);
+                    ContextualRowSequence::begin(
+                        lanes,
+                        links,
+                        row,
+                        self.block_schema
+                            .as_ref()
+                            .expect("offered contextual block schema")
+                            .clone(),
+                    )
+                }
+            };
+            match sequence.step(aggregates, self.visible.as_deref(), ctx)? {
+                ContextualRowStep::Suspend(sequence, request) => {
+                    self.active = Some(sequence);
+                    return Ok(ContextualGroupStep::Suspend(self, request));
+                }
+                ContextualRowStep::Complete(done) => {
+                    drop(done.row);
+                    let ordinal = self.active_group.take().expect("active contextual group");
+                    self.states.as_mut_slice()[ordinal].1 = done.lanes;
+                    self.links = done.links;
+                    if let Some(tripped) = done.tripped {
+                        record_contextual_trip(ctx, &self.local_trip, tripped);
+                        self.block = None;
+                        self.block_schema = None;
+                        return Ok(ContextualGroupStep::BlockComplete(
+                            self,
+                            std::ops::ControlFlow::Break(()),
+                        ));
                     }
-                    if let Some(tripped) = lane.fold.step(values, ctx)? {
-                        record_contextual_trip(ctx, &local_trip, tripped);
-                        return Ok(std::ops::ControlFlow::Break(()));
-                    }
-                    if let Some(seen) = &mut lane.seen {
-                        let _ = seen.insert_admitted(terms, (), &ctx.growth)?;
-                    }
-                    lane.retired = matches!(agg.function(), AggregateFunction::Sample);
                 }
             }
-            Ok(std::ops::ControlFlow::Continue(()))
-        })();
-        ctx.leave_node(restore);
-        result
-    };
-    let evaluated = if let Some(seq) = bucket_input {
-        let _ = consume(&seq, ctx)?;
-        Evaluated::Complete(seq)
-    } else {
-        crate::eval::eval_yielding(inner, &mut crate::eval::RowConsumer::new(&mut consume), ctx)?
-    };
-    drop(consume);
+        }
+    }
+
+    pub(crate) fn finish<D: DatasetView<Id = I> + Sync>(
+        self,
+        node: &GraphPattern,
+        aggregates: &[(Variable, AggregateExpression)],
+        evaluated: Evaluated<I>,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<Evaluated<I>, EvalError> {
+        if self.block.is_some() || self.active.is_some() {
+            return Err(EvalError::internal(
+                "contextual GROUP finished before delivery acknowledgement",
+            ));
+        }
+        finish_contextual_groups(self, node, aggregates, evaluated, ctx)
+    }
+}
+
+fn finish_contextual_groups<D: DatasetView + Sync>(
+    sequence: ContextualGroupSequence<'_, D::Id>,
+    node: &GraphPattern,
+    aggregates: &[(Variable, AggregateExpression)],
+    evaluated: Evaluated<D::Id>,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    let no_variables = sequence.no_variables;
+    let out_schema = sequence.out_schema;
+    let mut states = sequence.states;
+    let local_trip = sequence.local_trip;
+    let var_count = sequence.var_count;
     let mut lift = Lift::at_admitted(node, &ctx.growth)?;
     let Some(input) = lift.absorb(0, evaluated) else {
         return Ok(lift.finish(SolutionSeq::empty(out_schema)));
@@ -3042,7 +4295,7 @@ fn contextual_group_rows<D: DatasetView + Sync, M: GroupDomain>(
             node, tripped, out_schema,
         )));
     }
-    if states.is_empty() && variables.is_empty() && !aggregates.is_empty() {
+    if states.is_empty() && no_variables && !aggregates.is_empty() {
         let Some(lanes) = contextual_lanes(aggregates, ctx, &local_trip)? else {
             return Ok(Evaluated::Truncated(Truncation::barred_at(
                 node,
@@ -3139,7 +4392,7 @@ fn contextual_lanes<D: DatasetView + Sync>(
 }
 
 /// Compute one aggregate over a group's rows, its expressions evaluated through `links`
-/// ([`link_aggregates`]'s entry for it), in two phases: phase 1 evaluates
+/// ([`link_group_expressions_with_owner`]'s entry for it), in two phases: phase 1 evaluates
 /// every surviving row's argument(s) and materializes them into a per-group
 /// buffer (`survivors`, already `DISTINCT`-resolved and in row order); phase 2
 /// folds that buffer through an accumulator, sequentially or in parallel
@@ -3180,7 +4433,7 @@ fn contextual_lanes<D: DatasetView + Sync>(
 /// `COUNT(*)`, every other built-in, and every registered custom aggregate. A
 /// refused charge is recorded on [`EvalCtx::expression_barrier`] and answered as
 /// unbound — the same doctrine [`crate::user_fn::eval_native_function`]'s
-/// invocation charge follows — leaving [`eval_group`] to notice the barrier and
+/// invocation charge follows — leaving [`begin_group_child_with_owner`] to notice the barrier and
 /// withhold the whole grouped output.
 struct AggregateSurvivors {
     values: AdmittedVec<TermValue>,
@@ -3345,7 +4598,8 @@ fn missing_custom_aggregate(iri: &str, workspace: &crate::WorkspaceCapability) -
     )
 }
 
-fn eval_aggregate<D: DatasetView + Sync, M: GroupDomain>(
+/// Native row completion admitted only for arguments that cannot suspend.
+fn complete_inline_aggregate<D: DatasetView + Sync, M: GroupDomain>(
     agg: &AggregateExpression,
     links: &mut [crate::vm::Linked<'_, D::Id>],
     idxs: &[usize],
@@ -3360,7 +4614,7 @@ fn eval_aggregate<D: DatasetView + Sync, M: GroupDomain>(
     }
 
     if let AggregateFunction::Custom(iri) = agg.function() {
-        return eval_custom_aggregate(iri.as_str(), agg, links, idxs, rows, schema, ctx);
+        return complete_inline_custom_aggregate(iri.as_str(), agg, links, idxs, rows, schema, ctx);
     }
 
     // `FOLD` is dispatched away here for the same reason `Custom` is: its PHASE 1
@@ -3372,85 +4626,11 @@ fn eval_aggregate<D: DatasetView + Sync, M: GroupDomain>(
     // [`crate::agg_fn::AggregateAccumulator`] — one fold algebra, as the rest of
     // this module's dispatch promises. See [`crate::cdt_agg`].
     if matches!(agg.function(), AggregateFunction::Fold) {
-        return crate::cdt_agg::eval_fold(agg, links, idxs, rows, schema, ctx);
+        return crate::cdt_agg::complete_inline_fold(agg, links, idxs, rows, schema, ctx);
     }
 
-    // `COUNT(*)`/`COUNT(DISTINCT *)` is the spec's empty exprlist, and
-    // [`AggregateExpression::new`] enforces that `COUNT` is the ONLY function
-    // that can ever carry one — so dispatch reads `agg.function()` itself
-    // rather than asking whether `args` is empty. A zero-arity custom
-    // aggregate cannot reach this arm by accident and fall through to a row
-    // count: it cannot be constructed at all, and even if some future
-    // registry made one legal, the `Custom` short-circuit above already
-    // claimed it.
-    //
-    // The row loop below (charge, then row-identity `DISTINCT`) is UNCHANGED
-    // from before this restructuring — it decides how many rows survive, not
-    // how the survivors fold. What changes is the TAIL: rather than
-    // hand-incrementing an `i64` outside any accumulator (the third,
-    // bolted-on dispatch path this restructuring removes), `COUNT(*)` now
-    // folds through the exact same [`CountAccumulator`] `COUNT(?x)` uses,
-    // via [`fold_builtin`] — `CountAccumulator::step` ignores its argument
-    // entirely, so a run of `survivors` zero-sized units is a faithful
-    // (and allocation-free — `Vec<()>` never touches the heap) stand-in for
-    // "this many rows survived to be folded."
     if matches!(agg.function(), AggregateFunction::Count) && agg.args().is_empty() {
-        // Every row is a value `COUNT(*)` folds, whether or not `DISTINCT` keeps
-        // it — see [`ChargePoint::AggregateAccumulation`]'s doc for why the
-        // charge precedes the dedup check. An explicit loop, rather than
-        // `Iterator::count`, so a refused charge stops the count exactly where
-        // the budget ran out instead of after the whole group was scanned.
-        // A solution is its pattern's variables only, so a shared blank's column
-        // (see `crate::blank_scope`) is left out of the row identity `DISTINCT *`
-        // compares; `None` — every schema without one — compares the row itself.
-        let visible = if agg.distinct {
-            domain.visible(schema, &ctx.growth)?
-        } else {
-            None
-        };
-        let mut seen: Option<crate::AdmittedMap<RetainedRow<D::Id>, ()>> =
-            agg.distinct.then(crate::AdmittedMap::default);
-        let mut survivors: usize = 0;
-        // Each value folded passes the row checkpoint (`crate::row_checkpoint`): a
-        // latched trip first, then the `aggregate-accumulation` charge and its poll.
-        let mut checkpoint = crate::row_checkpoint::RowCheckpoint::sequential(
-            ctx,
-            ChargePoint::AggregateAccumulation,
-        );
-        for &i in idxs {
-            if let Err(tripped) = checkpoint.pass(ctx) {
-                ctx.record_barrier(tripped);
-                return Ok(None);
-            }
-            if let Some(seen) = seen.as_mut() {
-                let identity = match &visible {
-                    None => rows[i].clone_admitted(&ctx.growth)?,
-                    Some(keep) => RetainedRow::try_build(keep.len(), &ctx.growth, |identity| {
-                        for (slot, &column) in identity.iter_mut().zip(keep) {
-                            *slot = rows[i][column];
-                        }
-                        Ok(())
-                    })?,
-                };
-                if seen.get(&identity).is_some() {
-                    continue;
-                }
-                let _ = seen.insert_admitted(identity, (), &ctx.growth)?;
-            }
-            survivors += 1;
-        }
-        let capability = ctx.growth.clone();
-        let value = fold_builtin_admitted(
-            ctx.sequential_operation_required(),
-            &vec![(); survivors],
-            || Ok(CountAccumulator::default()),
-            |acc, ()| acc.step_admitted(&[], &capability),
-            &capability,
-        )?;
-        return value
-            .map(|value| ctx.intern_workspace_term(value))
-            .transpose()
-            .map(Option::flatten);
+        return eval_count_star_after_invocation(agg, idxs, rows, schema, domain, ctx);
     }
 
     // Every built-in aggregate reaching here is `COUNT(?x)`/`SUM`/`AVG`/`MIN`/
@@ -3535,111 +4715,166 @@ fn eval_aggregate<D: DatasetView + Sync, M: GroupDomain>(
         }
     }
 
-    // The exact tower's share of the fold, priced from the survivors' lexical forms
-    // before any of it runs: a chain of additions whose running total takes the
-    // largest scale it meets, a quotient under the query's policy and its
-    // rendering, or the comparisons of a running extreme.
-    if !crate::expr::numeric_step_admitted(
-        ctx,
-        aggregate_numeric_cost(agg.function(), &survivors, ctx.division),
-    ) {
+    finish_builtin_aggregate(agg, &survivors, ctx)
+}
+
+fn complete_inline_custom_aggregate<D: DatasetView + Sync>(
+    iri: &str,
+    agg: &AggregateExpression,
+    links: &mut [crate::vm::Linked<'_, D::Id>],
+    idxs: &[usize],
+    rows: &[RetainedRow<D::Id>],
+    schema: &VarSchema,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+    let custom = ctx
+        .aggregates
+        .resolve(iri)
+        .cloned()
+        .ok_or_else(|| missing_custom_aggregate(iri, &ctx.growth))?;
+
+    // The existing governor charge is a declared host-state meter; physical
+    // factories and growth are separately admitted at their native lifecycle.
+    let state_bound =
+        crate::agg_fn::state_bound_contained_admitted(custom.as_ref(), iri, &ctx.growth)?;
+    if let Err(tripped) =
+        ctx.charge_amount(purrdf_core::ResourceDimension::ScratchBytes, state_bound)
+    {
+        ctx.record_barrier(tripped);
         return Ok(None);
     }
 
-    // Phase 2: fold the (already `DISTINCT`-resolved, already in row order)
-    // survivor list through the built-in's [`crate::agg_fn::AggregateAccumulator`]
-    // instance — chunked in parallel for a large enough group, strictly
-    // sequential for a small one — see [`fold_builtin`]/
-    // `crate::parallel::par_chunk_reduce_init`'s docs for why this phase needs
-    // no `EvalCtx`/governor access at all (every charge already happened in
-    // phase 1 above) and is therefore always safe to chunk regardless of any
-    // volatility concern: nothing here can reach `RAND`/`BNODE`/an `EXISTS`
-    // re-entry, because nothing here evaluates an expression.
-    let sequential = ctx.sequential_operation_required();
-    let capability = ctx.growth.clone();
-    let value = match agg.function() {
-        AggregateFunction::Count => fold_builtin_admitted(
-            sequential,
-            &survivors,
-            || Ok(CountAccumulator::default()),
-            |acc, value| acc.step_admitted(std::slice::from_ref(value), &capability),
-            &capability,
-        )?,
-        AggregateFunction::Sum => fold_numeric_admitted(
-            sequential,
-            &survivors,
-            NumericAggregate::Sum,
-            ctx.division,
-            &mut |code| ctx.record_expression_error(Some(code)),
-            &capability,
-        )?,
-        AggregateFunction::Avg => fold_numeric_admitted(
-            sequential,
-            &survivors,
-            NumericAggregate::Avg,
-            ctx.division,
-            &mut |code| ctx.record_expression_error(Some(code)),
-            &capability,
-        )?,
-        AggregateFunction::Min => fold_builtin_admitted(
-            sequential,
-            &survivors,
-            || Ok(MinAccumulator::default()),
-            |acc, value| acc.step_admitted(std::slice::from_ref(value), &capability),
-            &capability,
-        )?,
-        AggregateFunction::Max => fold_builtin_admitted(
-            sequential,
-            &survivors,
-            || Ok(MaxAccumulator::default()),
-            |acc, value| acc.step_admitted(std::slice::from_ref(value), &capability),
-            &capability,
-        )?,
-        AggregateFunction::Sample => fold_builtin_admitted(
-            sequential,
-            &survivors,
-            || Ok(SampleAccumulator::default()),
-            |acc, value| acc.step_admitted(std::slice::from_ref(value), &capability),
-            &capability,
-        )?,
-        AggregateFunction::GroupConcat => {
-            let sep = agg.separator().unwrap_or(" ");
-            fold_builtin_admitted(
-                sequential,
-                &survivors,
-                || GroupConcatAccumulator::new_admitted(sep, &capability),
-                |acc, value| acc.step_admitted(std::slice::from_ref(value), &capability),
-                &capability,
-            )?
+    let mut seen = agg.distinct.then(AggregateTupleWitnesses::default);
+    let capacity = if agg.distinct { 0 } else { idxs.len() };
+    // Locals drop in reverse declaration order: all survivor values and their
+    // containing array die before the independent original payload grants.
+    let mut survivor_owners = AdmittedVec::with_capacity(capacity, &ctx.growth)?;
+    let mut survivors = AdmittedVec::<Vec<TermValue>>::with_capacity(capacity, &ctx.growth)?;
+    let mut checkpoint =
+        crate::row_checkpoint::RowCheckpoint::sequential(ctx, ChargePoint::AggregateAccumulation);
+    for &i in idxs {
+        let mut tuple = AggregateSurvivors::new(&ctx.growth);
+        let mut every_position_bound = true;
+        for (argument, expression) in links[..agg.args().len()].iter_mut().zip(agg.args()) {
+            let Some(term) = argument.term(Some(expression), &rows[i], schema, ctx)? else {
+                every_position_bound = false;
+                break;
+            };
+            tuple.reserve_next()?;
+            tuple.push(ctx.scratch.try_owned_value_of(
+                ctx.dataset,
+                term,
+                &ctx.growth,
+                |error| ctx.workspace.source_error(error),
+            )?)?;
         }
-        // `Custom` was dispatched away at the top of this function, before any
-        // charge or row was consulted — this arm cannot be reached by any
-        // `AggregateExpression` this crate's own planner ever hands to
-        // `eval_aggregate`. `AggregateFunction` is defined in
-        // `purrdf_sparql_algebra`, a crate this one does not own, so its
-        // `Custom` variant cannot be removed from this match at the type
-        // level; a typed, non-panicking internal error is the honest stand-in
-        // for that unencodable invariant (never observed by any test or
-        // conformance case — see this function's own dispatch order).
-        AggregateFunction::Custom(_) => {
-            return Err(EvalError::internal(
-                "AggregateFunction::Custom reached the built-in dispatch arm; the Custom \
-                 short-circuit at the top of eval_aggregate should have already handled it",
-            ));
+        if !every_position_bound {
+            continue;
         }
-        // Unreachable for exactly the same reason `Custom` is: `FOLD` was
-        // dispatched to `crate::cdt_agg::eval_fold` at the top of this function,
-        // before any row was consulted, because its phase 1 retains unbound rows
-        // that the loop above has already skipped. Reaching here would mean
-        // folding a `FOLD` over a survivor list its own semantics never built, so
-        // it is a typed internal error rather than a silently wrong answer.
-        AggregateFunction::Fold => {
-            return Err(EvalError::internal(
-                "AggregateFunction::Fold reached the built-in dispatch arm; the FOLD \
-                 short-circuit at the top of eval_aggregate should have already handled it",
-            ));
+        // Preserve callback/governor order: every bound tuple is charged before
+        // DISTINCT, even when the identity witness then rejects a duplicate.
+        if let Err(tripped) = checkpoint.pass(ctx) {
+            ctx.record_barrier(tripped);
+            return Ok(None);
         }
+        if let Some(seen) = &mut seen
+            && !seen.keep(&tuple, &survivors, &ctx.growth)?
+        {
+            continue;
+        }
+        let tuple_bytes = tuple
+            .iter()
+            .map(crate::scratch::value_bytes)
+            .fold(0u64, u64::saturating_add);
+        if let Err(tripped) =
+            ctx.charge_amount(purrdf_core::ResourceDimension::ScratchBytes, tuple_bytes)
+        {
+            ctx.record_barrier(tripped);
+            return Ok(None);
+        }
+        survivors.reserve_next()?;
+        survivor_owners.reserve_next()?;
+        let (values, owners) = tuple.into_parts();
+        survivors.push_reserved(values);
+        survivor_owners.push_reserved(owners);
+    }
+
+    finish_custom_aggregate(iri, agg, &custom, state_bound, &survivors, ctx)
+}
+
+fn eval_count_star<D: DatasetView + Sync, M: GroupDomain>(
+    agg: &AggregateExpression,
+    idxs: &[usize],
+    rows: &[RetainedRow<D::Id>],
+    schema: &VarSchema,
+    domain: M,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+    if let Err(tripped) = ctx.charge(ChargePoint::AggregateInvocation) {
+        ctx.record_barrier(tripped);
+        return Ok(None);
+    }
+    eval_count_star_after_invocation(agg, idxs, rows, schema, domain, ctx)
+}
+
+fn eval_count_star_after_invocation<D: DatasetView + Sync, M: GroupDomain>(
+    agg: &AggregateExpression,
+    idxs: &[usize],
+    rows: &[RetainedRow<D::Id>],
+    schema: &VarSchema,
+    domain: M,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+    // Every row is a value `COUNT(*)` folds, whether or not `DISTINCT` keeps
+    // it — see [`ChargePoint::AggregateAccumulation`]'s doc for why the
+    // charge precedes the dedup check. An explicit loop, rather than
+    // `Iterator::count`, so a refused charge stops the count exactly where
+    // the budget ran out instead of after the whole group was scanned.
+    // A solution is its pattern's variables only, so a shared blank's column
+    // (see `crate::blank_scope`) is left out of the row identity `DISTINCT *`
+    // compares; `None` — every schema without one — compares the row itself.
+    let visible = if agg.distinct {
+        domain.visible(schema, &ctx.growth)?
+    } else {
+        None
     };
+    let mut seen: Option<crate::AdmittedMap<RetainedRow<D::Id>, ()>> =
+        agg.distinct.then(crate::AdmittedMap::default);
+    let mut survivors: usize = 0;
+    // Each value folded passes the row checkpoint (`crate::row_checkpoint`): a
+    // latched trip first, then the `aggregate-accumulation` charge and its poll.
+    let mut checkpoint =
+        crate::row_checkpoint::RowCheckpoint::sequential(ctx, ChargePoint::AggregateAccumulation);
+    for &i in idxs {
+        if let Err(tripped) = checkpoint.pass(ctx) {
+            ctx.record_barrier(tripped);
+            return Ok(None);
+        }
+        if let Some(seen) = seen.as_mut() {
+            let identity = match &visible {
+                None => rows[i].clone_admitted(&ctx.growth)?,
+                Some(keep) => RetainedRow::try_build(keep.len(), &ctx.growth, |identity| {
+                    for (slot, &column) in identity.iter_mut().zip(keep) {
+                        *slot = rows[i][column];
+                    }
+                    Ok(())
+                })?,
+            };
+            if seen.get(&identity).is_some() {
+                continue;
+            }
+            let _ = seen.insert_admitted(identity, (), &ctx.growth)?;
+        }
+        survivors += 1;
+    }
+    let capability = ctx.growth.clone();
+    let value = fold_builtin_admitted(
+        ctx.sequential_operation_required(),
+        &vec![(); survivors],
+        || Ok(CountAccumulator::default()),
+        |acc, ()| acc.step_admitted(&[], &capability),
+        &capability,
+    )?;
     value
         .map(|value| ctx.intern_workspace_term(value))
         .transpose()
@@ -3813,161 +5048,6 @@ pub(crate) fn fold_builtin_admitted<A: crate::agg_fn::AggregateAccumulator, T: S
             construct: "aggregate finish control",
         })?
         .finish_admitted(workspace)
-}
-
-/// Fold a group through a registered [`crate::agg_fn::CustomAggregate`], its arguments
-/// evaluated through `links` ([`link_aggregates`]'s entry for it):
-/// resolve the IRI, meter its declared per-accumulator state bound, then stream
-/// every row's positional argument tuple through
-/// [`crate::agg_fn::step_contained`], deduping on the FULL tuple under
-/// `DISTINCT` (fixing the multi-argument case a single-argument built-in never
-/// exercises; for an arity-1 call this reduces to exactly the same "first
-/// occurrence kept" rule the built-in path applies).
-///
-/// # Errors
-///
-/// [`EvalError::Function`] if `iri` is unregistered (a defense-in-depth repeat of
-/// `crate::property_fn_plan::plan_query`'s prepare-time refusal — reachable here
-/// only when a caller evaluates algebra that bypassed that walk) or if the
-/// resolved aggregate panics anywhere in its contained lifecycle.
-pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
-    iri: &str,
-    agg: &AggregateExpression,
-    links: &mut [crate::vm::Linked<'_, D::Id>],
-    idxs: &[usize],
-    rows: &[RetainedRow<D::Id>],
-    schema: &VarSchema,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    let custom = ctx
-        .aggregates
-        .resolve(iri)
-        .cloned()
-        .ok_or_else(|| missing_custom_aggregate(iri, &ctx.growth))?;
-
-    // The existing governor charge is a declared host-state meter; physical
-    // factories and growth are separately admitted at their native lifecycle.
-    let state_bound =
-        crate::agg_fn::state_bound_contained_admitted(custom.as_ref(), iri, &ctx.growth)?;
-    if let Err(tripped) =
-        ctx.charge_amount(purrdf_core::ResourceDimension::ScratchBytes, state_bound)
-    {
-        ctx.record_barrier(tripped);
-        return Ok(None);
-    }
-
-    let mut seen = agg.distinct.then(AggregateTupleWitnesses::default);
-    let capacity = if agg.distinct { 0 } else { idxs.len() };
-    // Locals drop in reverse declaration order: all survivor values and their
-    // containing array die before the independent original payload grants.
-    let mut survivor_owners = AdmittedVec::with_capacity(capacity, &ctx.growth)?;
-    let mut survivors = AdmittedVec::<Vec<TermValue>>::with_capacity(capacity, &ctx.growth)?;
-    let mut checkpoint =
-        crate::row_checkpoint::RowCheckpoint::sequential(ctx, ChargePoint::AggregateAccumulation);
-    for &i in idxs {
-        let mut tuple = AggregateSurvivors::new(&ctx.growth);
-        let mut every_position_bound = true;
-        for (argument, expression) in links[..agg.args().len()].iter_mut().zip(agg.args()) {
-            let Some(term) = argument.term(Some(expression), &rows[i], schema, ctx)? else {
-                every_position_bound = false;
-                break;
-            };
-            tuple.reserve_next()?;
-            tuple.push(ctx.scratch.try_owned_value_of(
-                ctx.dataset,
-                term,
-                &ctx.growth,
-                |error| ctx.workspace.source_error(error),
-            )?)?;
-        }
-        if !every_position_bound {
-            continue;
-        }
-        // Preserve callback/governor order: every bound tuple is charged before
-        // DISTINCT, even when the identity witness then rejects a duplicate.
-        if let Err(tripped) = checkpoint.pass(ctx) {
-            ctx.record_barrier(tripped);
-            return Ok(None);
-        }
-        if let Some(seen) = &mut seen
-            && !seen.keep(&tuple, &survivors, &ctx.growth)?
-        {
-            continue;
-        }
-        let tuple_bytes = tuple
-            .iter()
-            .map(crate::scratch::value_bytes)
-            .fold(0u64, u64::saturating_add);
-        if let Err(tripped) =
-            ctx.charge_amount(purrdf_core::ResourceDimension::ScratchBytes, tuple_bytes)
-        {
-            ctx.record_barrier(tripped);
-            return Ok(None);
-        }
-        survivors.reserve_next()?;
-        survivor_owners.reserve_next()?;
-        let (values, owners) = tuple.into_parts();
-        survivors.push_reserved(values);
-        survivor_owners.push_reserved(owners);
-    }
-
-    // Keep the exact existing chunk plan and chunk-index reduction/error order.
-    let stable = crate::agg_fn::volatility_contained_admitted(custom.as_ref(), iri, &ctx.growth)?
-        == Volatility::Stable;
-    let sequential = ctx.sequential_operation_required() || !stable;
-    let chunk_count = crate::parallel::planned_aggregate_chunk_count(sequential, survivors.len());
-    if chunk_count > 1 {
-        let extra = state_bound.saturating_mul(u64::try_from(chunk_count - 1).unwrap_or(u64::MAX));
-        if let Err(tripped) = ctx.charge_amount(purrdf_core::ResourceDimension::ScratchBytes, extra)
-        {
-            ctx.record_barrier(tripped);
-            return Ok(None);
-        }
-    }
-    let scalarvals = AggregateScalarvals::resolve(agg, &ctx.growth)?;
-    let cost = crate::agg_fn::exact_numeric_cost_contained_admitted(
-        custom.as_ref(),
-        iri,
-        &survivors,
-        &scalarvals,
-        ctx.division,
-        &ctx.growth,
-    )?;
-    if !crate::expr::numeric_step_admitted(ctx, cost) {
-        return Ok(None);
-    }
-    let accumulator = crate::parallel::par_chunk_reduce_init_admitted(
-        sequential,
-        &survivors,
-        &ctx.growth,
-        || {
-            crate::agg_fn::init_contained_admitted(
-                custom.as_ref(),
-                iri,
-                &scalarvals,
-                ctx.division,
-                &ctx.growth,
-            )
-        },
-        |accumulator, tuple| {
-            crate::agg_fn::step_contained_admitted(accumulator, iri, tuple, &ctx.growth)
-        },
-        |accumulator, other| {
-            crate::agg_fn::combine_contained_admitted(accumulator, iri, other, &ctx.growth)
-        },
-    )?;
-    let value = crate::agg_fn::finish_contained_admitted(
-        accumulator,
-        iri,
-        &mut |code| {
-            ctx.record_expression_error(Some(code));
-        },
-        &ctx.growth,
-    )?;
-    Ok(value
-        .map(|value| ctx.intern_workspace_term(value))
-        .transpose()?
-        .flatten())
 }
 
 /// The source-order `SUM`/`AVG` fold, poisoned by its caller's `Option`.
@@ -4395,7 +5475,7 @@ fn round_i128_div_to_i64(numerator: i128, denominator: i128) -> Option<i64> {
 // there) — one fold algebra, two ways of reaching a concrete type: statically, by
 // generic monomorphization, when the type is known at compile time (every built-in);
 // dynamically, through `Box<dyn AggregateAccumulator>`, when it is resolved from an
-// IRI at run time (a registered custom aggregate). See [`eval_aggregate`]'s doc
+// IRI at run time (a registered custom aggregate). See [`eval_count_star`]'s doc
 // comment for the dispatch site, and [`fold_builtin`]'s for why the static path never
 // pays a per-row vtable cost despite implementing the identical trait a dynamically
 // dispatched aggregate uses.
@@ -4417,7 +5497,7 @@ fn round_i128_div_to_i64(numerator: i128, denominator: i128) -> Option<i64> {
 // mismatch can actually hit (see [`crate::agg_fn::AggregateAccumulator::combine`]'s
 // trait docs) instead of as a panic no target could safely rely on containing.
 
-/// `COUNT` (and, via [`eval_aggregate`], `COUNT(*)`) — folds a survivor count.
+/// `COUNT` (and, via [`eval_count_star`], `COUNT(*)`) — folds a survivor count.
 /// `step` ignores its argument entirely, which is exactly why `COUNT(*)` (whose
 /// survivors carry no value at all, only the fact that a row survived) can share
 /// this SAME type with `COUNT(?x)`/`COUNT(DISTINCT ?x)`.
@@ -5489,7 +6569,7 @@ mod tests {
         ctx.growth = workspace.capability();
         let inner = GraphPattern::empty_bgp();
         let node = GraphPattern::ProjectStar {
-            inner: Child::new(inner.clone()),
+            inner: Child::new(inner),
             variables: variables.clone(),
         };
         let mut delivered = 0;
@@ -5504,10 +6584,8 @@ mod tests {
             );
             Ok(std::ops::ControlFlow::Continue(()))
         };
-        let outcome = eval_project_with(
+        let outcome = crate::eval::eval_yielding(
             &node,
-            &inner,
-            purrdf_sparql_algebra::ProjectionNames::Star(variables),
             &mut crate::eval::RowConsumer::new(&mut consume),
             &mut ctx,
         )
@@ -9663,15 +10741,18 @@ mod custom_owner_regressions {
             variables: Vec::new(),
             aggregates: vec![(Variable::new("n"), aggregate)],
         };
-        let GraphPattern::Group {
-            inner,
-            variables,
-            aggregates,
-        } = &node
-        else {
-            unreachable!()
+        let node = GraphPattern::Apply {
+            left: Child::new(GraphPattern::empty_bgp()),
+            right: Child::new(node),
+            policy: Box::new(purrdf_sparql_algebra::algebra::ApplicationPolicy {
+                dataset_required: false,
+                row_pipeline: false,
+                reduced_adjacent: false,
+                group_domain: Some(Box::new([a, b])),
+                inputs: Vec::new(),
+                optional: None,
+            }),
         };
-        let domain = [a, b];
         let live = Arc::new(AtomicU64::new(0));
         let mut reservation = Reservation(live.clone());
         WorkspaceReservation::resize(
@@ -9683,17 +10764,10 @@ mod custom_owner_regressions {
         let baseline = live.load(AtomicOrdering::Relaxed);
         let mut ctx = EvalCtx::new(&dataset).with_aggregates(&registry);
         ctx.growth = workspace.capability();
-        let result = eval_group_with(
-            &node,
-            inner,
-            variables,
-            aggregates,
-            domain.as_slice(),
-            &mut ctx,
-        )
-        .unwrap()
-        .into_complete(|_| ())
-        .unwrap();
+        let result = crate::eval::eval_evaluated(&node, &mut ctx)
+            .unwrap()
+            .into_complete(|_| ())
+            .unwrap();
         assert_eq!(result.rows.len(), 1);
         let value = ctx
             .scratch
@@ -9718,3 +10792,5 @@ mod custom_owner_regressions {
         assert_eq!(live.load(AtomicOrdering::Relaxed), 0);
     }
 }
+
+crate::vm::row_continuation!(OrderSequence, schema);

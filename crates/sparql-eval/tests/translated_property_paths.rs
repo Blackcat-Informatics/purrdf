@@ -93,10 +93,10 @@ fn linked_typed_endpoints_complete_under_a_linear_cell_ceiling() {
         version,
     };
     let prepared = engine
-        .prepare_algebra(untranslated, QueryOptions::EMPTY)
+        .prepare_algebra(untranslated, &QueryOptions::EMPTY)
         .expect("the control is valid public algebra");
     let refused = engine
-        .query_prepared_governed_view(&*dataset, &prepared, &[], QueryOptions::EMPTY, &governors)
+        .query_prepared_governed_view(&*dataset, &prepared, &[], &QueryOptions::EMPTY, &governors)
         .expect("admission refusal is an outcome");
     let exhausted = refused.exhausted().expect("the cross product is refused");
     assert!(matches!(
@@ -125,7 +125,7 @@ fn linked_typed_endpoints_complete_under_a_linear_cell_ceiling() {
                     base_iri: None,
                     substitutions: &[],
                 },
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &governors,
             )
             .expect("the connected query evaluates");
@@ -405,7 +405,7 @@ fn graph_scope_and_service_forwarding_keep_the_same_solution_bags() {
                     substitutions: &[],
                 },
                 &resolver,
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
             )
             .expect("the service reparses translated triples");
         let local = if body.contains("GRAPH") {
@@ -451,7 +451,7 @@ fn construct_and_update_where_accept_paths_without_accepting_path_templates() {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::METERED.with_max_intermediate_cells(64),
         )
         .expect("an update WHERE translates the inverse chain");

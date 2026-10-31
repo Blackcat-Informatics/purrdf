@@ -519,6 +519,10 @@ pub(crate) struct GovernorArgs {
     max_scratch_bytes: Option<u64>,
     /// Requests issued to remote or federated endpoints.
     max_remote_requests: Option<u64>,
+    /// Inclusive logical function depth; omitted keeps the native default.
+    max_udf_depth: Option<u64>,
+    /// Remove the logical user-function depth ceiling.
+    unlimited_udf_depth: bool,
 }
 
 impl GovernorArgs {
@@ -530,6 +534,10 @@ impl GovernorArgs {
     /// # Errors
     ///
     /// The first negative ceiling, in [`decode_ceiling_message`]'s words.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one typed decoder for all explicit host governor fields"
+    )]
     pub(crate) fn decode(
         fuel: Option<i64>,
         deadline_ms: Option<i64>,
@@ -537,6 +545,8 @@ impl GovernorArgs {
         max_intermediate_cells: Option<i64>,
         max_scratch_bytes: Option<i64>,
         max_remote_requests: Option<i64>,
+        max_udf_depth: Option<i64>,
+        unlimited_udf_depth: Option<bool>,
     ) -> Result<Self, String> {
         Ok(Self {
             no_ceiling: false,
@@ -549,6 +559,8 @@ impl GovernorArgs {
             )?,
             max_scratch_bytes: decode_ceiling_message("maxScratchBytes", max_scratch_bytes)?,
             max_remote_requests: decode_ceiling_message("maxRemoteRequests", max_remote_requests)?,
+            max_udf_depth: decode_ceiling_message("maxUdfDepth", max_udf_depth)?,
+            unlimited_udf_depth: unlimited_udf_depth.unwrap_or(false),
         })
     }
 
@@ -573,6 +585,8 @@ impl GovernorArgs {
             max_intermediate_cells: self.max_intermediate_cells,
             max_scratch_bytes: self.max_scratch_bytes,
             max_remote_requests: self.max_remote_requests,
+            max_udf_depth: self.max_udf_depth,
+            unlimited_udf_depth: self.unlimited_udf_depth,
             no_ceiling: self.no_ceiling,
         }
     }
@@ -672,6 +686,10 @@ fn decode_ceiling_message(name: &str, value: Option<i64>) -> Result<Option<u64>,
 }
 
 /// [`GovernorArgs::decode`] at the synchronous `#[wasm_bindgen]` boundary.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the binding forwards each governor to the shared typed decoder"
+)]
 fn decode_governor_args(
     fuel: Option<i64>,
     deadline_ms: Option<i64>,
@@ -679,6 +697,8 @@ fn decode_governor_args(
     max_intermediate_cells: Option<i64>,
     max_scratch_bytes: Option<i64>,
     max_remote_requests: Option<i64>,
+    max_udf_depth: Option<i64>,
+    unlimited_udf_depth: Option<bool>,
 ) -> Result<GovernorArgs, JsError> {
     GovernorArgs::decode(
         fuel,
@@ -687,6 +707,8 @@ fn decode_governor_args(
         max_intermediate_cells,
         max_scratch_bytes,
         max_remote_requests,
+        max_udf_depth,
+        unlimited_udf_depth,
     )
     .map_err(|message| JsError::new(&message))
 }
@@ -1767,6 +1789,8 @@ impl QueryEngine {
         max_intermediate_cells: Option<i64>,
         max_scratch_bytes: Option<i64>,
         max_remote_requests: Option<i64>,
+        max_udf_depth: Option<i64>,
+        unlimited_udf_depth: Option<bool>,
         cancel: Option<CancellationToken>,
         no_ceiling: Option<bool>,
         xpath_regex: Option<String>,
@@ -1780,6 +1804,8 @@ impl QueryEngine {
             max_intermediate_cells,
             max_scratch_bytes,
             max_remote_requests,
+            max_udf_depth,
+            unlimited_udf_depth,
         )?
         .with_no_ceiling(no_ceiling.unwrap_or(false));
         let mut input = self.input(
@@ -1857,6 +1883,8 @@ impl QueryEngine {
         max_intermediate_cells: Option<i64>,
         max_scratch_bytes: Option<i64>,
         max_remote_requests: Option<i64>,
+        max_udf_depth: Option<i64>,
+        unlimited_udf_depth: Option<bool>,
         cancel: Option<CancellationToken>,
         no_ceiling: Option<bool>,
         xpath_regex: Option<String>,
@@ -1870,6 +1898,8 @@ impl QueryEngine {
             max_intermediate_cells,
             max_scratch_bytes,
             max_remote_requests,
+            max_udf_depth,
+            unlimited_udf_depth,
         )?
         .with_no_ceiling(no_ceiling.unwrap_or(false));
         let mut input = self.input(
@@ -1942,6 +1972,8 @@ impl QueryEngine {
         max_intermediate_cells: Option<i64>,
         max_scratch_bytes: Option<i64>,
         max_remote_requests: Option<i64>,
+        max_udf_depth: Option<i64>,
+        unlimited_udf_depth: Option<bool>,
         cancel: Option<CancellationToken>,
         no_ceiling: Option<bool>,
         xpath_regex: Option<String>,
@@ -1955,6 +1987,8 @@ impl QueryEngine {
             max_intermediate_cells,
             max_scratch_bytes,
             max_remote_requests,
+            max_udf_depth,
+            unlimited_udf_depth,
         )?
         .with_no_ceiling(no_ceiling.unwrap_or(false));
         args.update_ceilings()
@@ -2742,6 +2776,8 @@ mod tests {
                             None,
                             None,
                             None,
+                            None,
+                            None,
                             Some(true),
                             None,
                             None,
@@ -3331,6 +3367,8 @@ mod tests {
                 .query_governed(
                     &seed(),
                     sparql,
+                    None,
+                    None,
                     None,
                     None,
                     None,

@@ -1,6 +1,6 @@
-# purrdf-sparql-governors profile v18 — normative vector manifest.
+# purrdf-sparql-governors profile v23 — normative vector manifest.
 # Columns: case <TAB> data <TAB> query <TAB> source <TAB> governors <TAB> band <TAB> outcome
-#   source     none | http | relation | aggregate
+#   source     none | http | relation | aggregate | user-function
 #              http wires the injected transport described in transport.tsv;
 #              relation wires the scripted property function described in relations.tsv;
 #              aggregate wires the registered custom aggregate from governor_corpus.rs's
@@ -9,7 +9,7 @@
 #              what every other lane's `.answer`/`.spend`/`.metered` already record)
 #   governors  comma-separated <setting>=<value>; a ceiling names a caller-settable
 #              dimension (fuel, answer-rows, intermediate-cells, scratch-bytes,
-#              remote-requests); "deadline-polls" names the deterministic injected
+#              remote-requests, udf-depth); "deadline-polls" names the deterministic injected
 #              deadline; and "stop" names a signal (cancelled, cancellation,
 #              deadline-zero).
 #   band       zero       the ceiling is 0 and admits no charged work
@@ -76,3 +76,6 @@ numeric-default-fuel-boundary	cases/numeric-default.ttl	cases/numeric-default.rq
 numeric-default-fuel-over-bound	cases/numeric-default.ttl	cases/numeric-default.rq	none	fuel=1762	over-bound	budget-exhausted fuel
 temporal-exact-fuel-boundary	cases/numeric-default.ttl	cases/temporal-exact.rq	none	fuel=621	boundary	complete
 temporal-exact-fuel-over-bound	cases/numeric-default.ttl	cases/temporal-exact.rq	none	fuel=620	over-bound	budget-exhausted fuel
+udf-depth-zero	cases/udf-depth.ttl	cases/udf-depth.rq	user-function	udf-depth=0	zero	budget-exhausted udf-depth
+udf-depth-boundary	cases/udf-depth.ttl	cases/udf-depth.rq	user-function	udf-depth=2	boundary	complete
+udf-depth-over-bound	cases/udf-depth.ttl	cases/udf-depth.rq	user-function	udf-depth=1	over-bound	budget-exhausted udf-depth

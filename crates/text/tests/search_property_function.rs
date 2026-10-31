@@ -107,7 +107,7 @@ fn borrowed_native_ranked_and_positional_producers_keep_their_rows() {
             let purrdf_sparql_eval::GovernedOutcome::Complete { result, relations, .. } = engine.query_governed(
                 &dataset,
                 SparqlRequest { query, base_iri: None, substitutions: &[] },
-                QueryOptions::EMPTY.with_env(&environment),
+                &QueryOptions::EMPTY.with_env(&environment),
                 &QueryGovernors::METERED,
             ).unwrap() else {
                 panic!("native frozen producer completes");
@@ -271,7 +271,7 @@ fn answer_with_options(
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::new().with_env(
+            &QueryOptions::new().with_env(
                 &ExtensionEnv::new(
                     options,
                     registry.clone(),
@@ -299,7 +299,7 @@ fn refusal(
             base_iri: None,
             substitutions: &[],
         },
-        QueryOptions::new().with_env(
+        &QueryOptions::new().with_env(
             &ExtensionEnv::new(
                 options,
                 registry.clone(),
@@ -876,7 +876,7 @@ fn attested_generations(
         .prepare_query_with_options(
             query,
             None,
-            QueryOptions::new().with_env(
+            &QueryOptions::new().with_env(
                 &ExtensionEnv::over_relations(registry.clone())
                     .expect("the fixture declarations read cleanly"),
             ),
@@ -887,7 +887,7 @@ fn attested_generations(
             dataset,
             &prepared,
             &[],
-            QueryOptions::new().with_env(
+            &QueryOptions::new().with_env(
                 &ExtensionEnv::over_relations(registry.clone())
                     .expect("the fixture declarations read cleanly"),
             ),

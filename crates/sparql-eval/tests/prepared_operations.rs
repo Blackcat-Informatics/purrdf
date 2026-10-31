@@ -93,7 +93,7 @@ fn prepared_operations_match_text_with_shacl_prebinding_for_each_result_form() {
                         base_iri: None,
                         substitutions: &substitutions,
                     },
-                    options,
+                    &options,
                     &text_state,
                 )
                 .unwrap();
@@ -102,7 +102,7 @@ fn prepared_operations_match_text_with_shacl_prebinding_for_each_result_form() {
                     &*dataset,
                     &prepared,
                     &substitutions,
-                    options,
+                    &options,
                     &prepared_state,
                 )
                 .unwrap();
@@ -154,7 +154,7 @@ fn prepared_fallible_calls_match_text_and_shared_receipts_for_every_query_form()
                             base_iri: None,
                             substitutions: &substitutions,
                         },
-                        options,
+                        &options,
                         &QueryGovernors::METERED,
                     )
                     .unwrap();
@@ -163,7 +163,7 @@ fn prepared_fallible_calls_match_text_and_shared_receipts_for_every_query_form()
                         &paged.query_view(PagedQueryLimits::UNBOUNDED),
                         &prepared,
                         &substitutions,
-                        options,
+                        &options,
                         &QueryGovernors::METERED,
                     )
                     .unwrap();
@@ -173,7 +173,7 @@ fn prepared_fallible_calls_match_text_and_shared_receipts_for_every_query_form()
                         &paged.query_view(PagedQueryLimits::UNBOUNDED),
                         &prepared,
                         &substitutions,
-                        options,
+                        &options,
                         &state,
                     )
                     .unwrap();
@@ -212,7 +212,7 @@ fn compiler_constructed_plans_execute_without_text_or_cache_activity() {
         base_iri: None,
         version: None,
     };
-    let prepared = PreparedQuery::rewritten(query, QueryOptions::EMPTY).unwrap();
+    let prepared = PreparedQuery::rewritten(query, &QueryOptions::EMPTY).unwrap();
     let paged = pages();
     let worker = NativeSparqlEngine::new();
     let answer = worker
@@ -220,7 +220,7 @@ fn compiler_constructed_plans_execute_without_text_or_cache_activity() {
             &paged.query_view(PagedQueryLimits::UNBOUNDED),
             &prepared,
             &[],
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::METERED,
         )
         .unwrap();
@@ -232,7 +232,7 @@ fn compiler_constructed_plans_execute_without_text_or_cache_activity() {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::METERED,
         )
         .unwrap();
@@ -262,7 +262,7 @@ fn repeated_prepared_calls_own_independent_budgets_and_certified_answers() {
                 &paged.query_view(PagedQueryLimits::UNBOUNDED),
                 &prepared,
                 &[],
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &governors,
             )
             .unwrap_err();
@@ -320,7 +320,7 @@ fn shared_prepared_fallible_operations_keep_both_meters_and_certified_prefixes()
                 &view,
                 &prepared,
                 &substitutions,
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &state,
             )
             .unwrap();
@@ -354,7 +354,7 @@ fn shared_prepared_fallible_operations_keep_both_meters_and_certified_prefixes()
             &view,
             &prepared,
             &[],
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &limited,
         )
         .unwrap_err();
@@ -402,7 +402,7 @@ fn fallible_prepared_checkpoints_discard_answers_and_preserve_operational_preced
             &view,
             &prepared,
             &[],
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &metered(),
         )
         .unwrap_err();
@@ -445,7 +445,7 @@ fn fallible_prepared_checkpoints_discard_answers_and_preserve_operational_preced
         .prepare_query_with_options(
             "ASK { ?s <http://example.org/relation> ?o }",
             None,
-            relation_options,
+            &relation_options,
         )
         .expect("admits under the relation registry");
     let stop = Arc::new(CancellationFlag::new());
@@ -457,7 +457,7 @@ fn fallible_prepared_checkpoints_discard_answers_and_preserve_operational_preced
             &view,
             &admission_mismatched,
             &[],
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &cancelled,
         )
         .unwrap_err();
@@ -468,7 +468,7 @@ fn fallible_prepared_checkpoints_discard_answers_and_preserve_operational_preced
             &view,
             &admission_mismatched,
             &[],
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &governors,
         )
         .unwrap_err();
@@ -499,21 +499,21 @@ fn healthy_prepared_views_keep_query_errors_and_registry_admission_typed() {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::METERED,
         ),
         engine.query_prepared_governed_fallible_view(
             &view,
             &prepared,
             &[],
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::METERED,
         ),
         engine.query_prepared_governed_fallible_in_operation(
             &view,
             &prepared,
             &[],
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &state,
         ),
     ] {
@@ -552,7 +552,7 @@ fn healthy_prepared_views_keep_query_errors_and_registry_admission_typed() {
         .prepare_query_with_options(
             "SELECT ?this ?value WHERE { ?this <http://example.org/relation> ?value }",
             None,
-            options,
+            &options,
         )
         .unwrap();
     for shared in [false, true] {
@@ -563,7 +563,7 @@ fn healthy_prepared_views_keep_query_errors_and_registry_admission_typed() {
                 &view,
                 &relation,
                 &[],
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &state,
             )
         } else {
@@ -571,7 +571,7 @@ fn healthy_prepared_views_keep_query_errors_and_registry_admission_typed() {
                 &view,
                 &relation,
                 &[],
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &QueryGovernors::METERED,
             )
         };
@@ -590,7 +590,7 @@ fn healthy_prepared_views_keep_query_errors_and_registry_admission_typed() {
                 &view,
                 &relation,
                 &[],
-                options,
+                &options,
                 &state,
             )
         } else {
@@ -598,7 +598,7 @@ fn healthy_prepared_views_keep_query_errors_and_registry_admission_typed() {
                 &view,
                 &relation,
                 &[],
-                options,
+                &options,
                 &QueryGovernors::METERED,
             )
         }
@@ -639,7 +639,7 @@ fn explicit_per_call_source_replaces_options_remote_and_preserves_receipts() {
             &prepared,
             &[],
             &source,
-            QueryOptions::EMPTY.with_remote(Some(&replaced)),
+            &QueryOptions::EMPTY.with_remote(Some(&replaced)),
             &QueryGovernors::METERED,
         )
         .unwrap();
@@ -648,7 +648,7 @@ fn explicit_per_call_source_replaces_options_remote_and_preserves_receipts() {
             &paged.query_view(PagedQueryLimits::UNBOUNDED),
             &prepared,
             &[],
-            QueryOptions::EMPTY.with_remote(Some(&source)),
+            &QueryOptions::EMPTY.with_remote(Some(&source)),
             &QueryGovernors::METERED,
         )
         .unwrap();
@@ -687,7 +687,7 @@ fn remote_cancellation_prevents_prepared_fallible_publication() {
                 &prepared,
                 &[],
                 &source,
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &state,
             )
         } else {
@@ -696,7 +696,7 @@ fn remote_cancellation_prevents_prepared_fallible_publication() {
                 &prepared,
                 &[],
                 &source,
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &governors,
             )
         };
@@ -727,7 +727,7 @@ fn simultaneously_started_worker_local_engines_share_one_plan_and_fuel_ceiling()
             &*dataset,
             &prepared,
             &[],
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &measured,
         )
         .unwrap();
@@ -746,7 +746,7 @@ fn simultaneously_started_worker_local_engines_share_one_plan_and_fuel_ceiling()
                             &*dataset,
                             &prepared,
                             &[],
-                            QueryOptions::EMPTY,
+                            &QueryOptions::EMPTY,
                             &shared,
                         )
                         .unwrap();

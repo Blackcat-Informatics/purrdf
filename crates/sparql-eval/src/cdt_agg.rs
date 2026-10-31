@@ -357,22 +357,8 @@ impl AggregateAccumulator for FoldAccumulator {
     }
 }
 
-/// Evaluate one `FOLD` aggregate over a group's rows.
-///
-/// `links` holds the aggregate's arguments, then its `ORDER BY` keys, each linked to
-/// `schema` once for the whole `GROUP` call. `idxs` indexes `rows` in the group's own
-/// row order, exactly as
-/// `crate::modifier`'s `eval_aggregate` supplies it. The two phases are the ones
-/// this module's docs describe: evaluate + de-duplicate + order (here), then fold
-/// (through [`FoldAccumulator`], driven by [`fold_builtin_admitted`]).
-///
-/// # Errors
-///
-/// Any error the argument or sort-key expressions raise, and
-/// [`EvalError::CompositeBound`] for a fold that crosses one of `purrdf-cdt`'s
-/// bounds. A refused governor charge is recorded on `ctx.expression_barrier` and
-/// answered as unbound, the doctrine every aggregate in `crate::modifier` follows.
-pub(crate) fn eval_fold<D: DatasetView + Sync>(
+/// Complete the native parallel group kernel's non-suspendable FOLD.
+pub(crate) fn complete_inline_fold<D: DatasetView + Sync>(
     agg: &AggregateExpression,
     links: &mut [crate::vm::Linked<'_, D::Id>],
     idxs: &[usize],
@@ -392,7 +378,6 @@ pub(crate) fn eval_fold<D: DatasetView + Sync>(
         }
     };
     let order_by: &[OrderExpression] = agg.order_by();
-    let width = order_by.len();
 
     // Phase 1. `DISTINCT` keys on the exprlist's own terms — see the module docs
     // for why that is TERM identity and why it ignores the sort key.
@@ -468,12 +453,224 @@ pub(crate) fn eval_fold<D: DatasetView + Sync>(
         }
     }
 
-    // The aggregate's own `ORDER BY`, over the crate's ONE projection of SPARQL's
-    // solution ordering. `sort_by` is stable, so conditions that do not separate
-    // two rows leave them in row order.
+    finish_fold(agg, survivors, &sort_values, ctx)
+}
+
+enum FoldPhase {
+    Arguments,
+    Retain,
+    Keys,
+}
+
+pub(crate) struct FoldSequence<'e, I: purrdf_core::ViewTermId> {
+    links: AdmittedVec<crate::vm::Linked<'e, I>>,
+    active: Option<crate::vm::RowExpressionFrame<'e, I>>,
+    row: Option<crate::solution::RetainedRow<I>>,
+    schema: crate::solution::SharedSchema,
+    ordinal: usize,
+    slot: usize,
+    phase: FoldPhase,
+    terms: [Option<SolutionTerm<I>>; 2],
+    checkpoint: crate::row_checkpoint::RowCheckpoint,
+    seen: FoldDistinct<I>,
+    survivors: AdmittedVec<FoldRow>,
+    sort_values: AdmittedVec<Option<crate::WorkspaceTerm>>,
+}
+
+#[expect(
+    clippy::large_enum_variant,
+    reason = "the driver admits the suspended FOLD owner"
+)]
+pub(crate) enum FoldStart<'e, I: purrdf_core::ViewTermId> {
+    Complete {
+        links: AdmittedVec<crate::vm::Linked<'e, I>>,
+        value: Option<SolutionTerm<I>>,
+    },
+    Sequence(FoldSequence<'e, I>),
+}
+
+#[expect(
+    clippy::large_enum_variant,
+    reason = "the driver admits the suspended FOLD owner"
+)]
+pub(crate) enum FoldStep<'e, 'd, I: purrdf_core::ViewTermId> {
+    Complete {
+        links: AdmittedVec<crate::vm::Linked<'e, I>>,
+        value: Option<SolutionTerm<I>>,
+    },
+    Suspend(FoldSequence<'e, I>, crate::vm::Suspend<'d>),
+}
+
+impl<'e, I: purrdf_core::ViewTermId> FoldSequence<'e, I> {
+    pub(crate) fn begin<D: DatasetView<Id = I> + Sync>(
+        aggregate: &AggregateExpression,
+        links: AdmittedVec<crate::vm::Linked<'e, I>>,
+        schema: crate::solution::SharedSchema,
+        ctx: &EvalCtx<'_, D>,
+    ) -> Result<FoldStart<'e, I>, EvalError> {
+        if let Err(tripped) = ctx.charge(ChargePoint::AggregateInvocation) {
+            ctx.record_barrier(tripped);
+            return Ok(FoldStart::Complete { links, value: None });
+        }
+        if !(1..=2).contains(&aggregate.args().len())
+            || links.len() < aggregate.args().len() + aggregate.order_by().len()
+        {
+            return Err(EvalError::internal(
+                "FOLD lost its argument or sort-key links",
+            ));
+        }
+        Ok(FoldStart::Sequence(Self {
+            links,
+            active: None,
+            row: None,
+            schema,
+            ordinal: 0,
+            slot: 0,
+            phase: FoldPhase::Arguments,
+            terms: [None; 2],
+            checkpoint: crate::row_checkpoint::RowCheckpoint::sequential(
+                ctx,
+                ChargePoint::AggregateAccumulation,
+            ),
+            seen: aggregate.distinct.then(AdmittedMap::default),
+            survivors: AdmittedVec::new(&ctx.growth),
+            sort_values: AdmittedVec::new(&ctx.growth),
+        }))
+    }
+    /// Arguments come first, followed by the aggregate's own ORDER expressions.
+    pub(crate) fn argument_index(&self) -> usize {
+        self.slot
+    }
+
+    fn complete<'d>(self, value: Option<SolutionTerm<I>>) -> FoldStep<'e, 'd, I> {
+        FoldStep::Complete {
+            links: self.links,
+            value,
+        }
+    }
+    fn advance_row(&mut self) {
+        self.ordinal += 1;
+        self.row = None;
+        self.terms = [None; 2];
+        self.slot = 0;
+        self.phase = FoldPhase::Arguments;
+    }
+
+    pub(crate) fn step<'d, D: DatasetView<Id = I> + Sync>(
+        mut self,
+        aggregate: &AggregateExpression,
+        indices: &[usize],
+        rows: &[crate::solution::RetainedRow<I>],
+        ctx: &mut EvalCtx<'d, D>,
+    ) -> Result<FoldStep<'e, 'd, I>, EvalError> {
+        let arity = aggregate.args().len();
+        loop {
+            if self.row.is_none() && self.active.is_none() {
+                let Some(&index) = indices.get(self.ordinal) else {
+                    break;
+                };
+                self.row = Some(
+                    rows.get(index)
+                        .ok_or_else(|| EvalError::internal("FOLD source row is absent"))?
+                        .clone_admitted(&ctx.growth)?,
+                );
+            }
+            if matches!(self.phase, FoldPhase::Retain) {
+                if let Err(tripped) = self.checkpoint.pass(ctx) {
+                    ctx.record_barrier(tripped);
+                    return Ok(self.complete(None));
+                }
+                if let Some(seen) = &mut self.seen {
+                    if seen.get(&self.terms).is_some() {
+                        self.advance_row();
+                        continue;
+                    }
+                    let _ = seen.insert_admitted(self.terms, (), &ctx.growth)?;
+                }
+                let retained = FoldRow {
+                    first: self.terms[0]
+                        .map(|term| crate::expr::owned_value_of(ctx, term))
+                        .transpose()?,
+                    second: self.terms[1]
+                        .map(|term| crate::expr::owned_value_of(ctx, term))
+                        .transpose()?,
+                };
+                if let Err(tripped) = ctx.charge_amount(
+                    purrdf_core::ResourceDimension::ScratchBytes,
+                    row_bytes(&retained),
+                ) {
+                    ctx.record_barrier(tripped);
+                    return Ok(self.complete(None));
+                }
+                self.survivors.push(retained)?;
+                self.phase = FoldPhase::Keys;
+                self.slot = arity;
+            }
+            if matches!(self.phase, FoldPhase::Keys)
+                && self.slot == arity + aggregate.order_by().len()
+            {
+                self.advance_row();
+                continue;
+            }
+            let mut frame = if let Some(frame) = self.active.take() {
+                frame
+            } else {
+                let link = crate::vm::take_slot(&mut self.links, self.slot)?;
+                crate::vm::RowExpressionFrame::begin(
+                    link,
+                    self.row.take().expect("one FOLD source row"),
+                    ctx,
+                )?
+            };
+            match frame.poll(ctx)? {
+                crate::vm::VmStep::Suspend(request) => {
+                    self.active = Some(frame);
+                    return Ok(FoldStep::Suspend(self, request));
+                }
+                crate::vm::VmStep::Value(value) => {
+                    let (link, row, term, _evidence) = frame.finish_term(value)?;
+                    crate::vm::restore_slot(&mut self.links, self.slot, link);
+                    self.row = Some(row);
+                    if matches!(self.phase, FoldPhase::Arguments) {
+                        self.terms[self.slot] = term;
+                        self.slot += 1;
+                        if self.slot == arity {
+                            self.phase = FoldPhase::Retain;
+                        }
+                    } else {
+                        let key = term
+                            .map(|term| crate::expr::owned_value_of(ctx, term))
+                            .transpose()?;
+                        if let Err(tripped) = ctx.charge_amount(
+                            purrdf_core::ResourceDimension::ScratchBytes,
+                            key.as_deref().map_or(0, crate::scratch::value_bytes),
+                        ) {
+                            ctx.record_barrier(tripped);
+                            return Ok(self.complete(None));
+                        }
+                        self.sort_values.push(key)?;
+                        self.slot += 1;
+                    }
+                }
+            }
+        }
+        let survivors = std::mem::replace(&mut self.survivors, AdmittedVec::new(&ctx.growth));
+        let value = finish_fold(aggregate, survivors, &self.sort_values, ctx)?;
+        Ok(self.complete(value))
+    }
+}
+
+fn finish_fold<D: DatasetView + Sync>(
+    agg: &AggregateExpression,
+    mut survivors: AdmittedVec<FoldRow>,
+    sort_values: &[Option<crate::WorkspaceTerm>],
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+    let order_by = agg.order_by();
+    let width = order_by.len();
     if width > 0 {
         let mut keys = AdmittedVec::with_capacity(sort_values.len(), &ctx.growth)?;
-        for value in &sort_values {
+        for value in sort_values {
             keys.push(project_admitted(value.as_deref(), &ctx.growth)?)?;
         }
         let cost = crate::modifier::sort_keys_numeric_cost_admitted(
@@ -521,6 +718,8 @@ pub(crate) fn eval_fold<D: DatasetView + Sync>(
         .transpose()
         .map(Option::flatten)
 }
+
+crate::vm::row_continuation!(FoldSequence, schema);
 
 /// The scratch-byte cost of one retained [`FoldRow`], through the same
 /// deterministic per-value proxy the arena's own automatic charge uses.

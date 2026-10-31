@@ -725,10 +725,10 @@ fn scoped_real_producers_keep_unknown_receipts_outside_the_original_fusion() {
             unit.sparql()
         );
         let prepared = engine
-            .prepare_query_with_options(&query, None, options)
+            .prepare_query_with_options(&query, None, &options)
             .unwrap();
         let mut cursor = engine
-            .open_call_cursor_admitted(&prepared, options, &workspace)
+            .open_call_cursor_admitted(&prepared, &options, &workspace)
             .unwrap();
         assert!(cursor.physical_row_bound() >= 1);
         let mut unknowns = 0;
@@ -3591,7 +3591,7 @@ fn native_suffix_settlement_refusal_is_typed_terminal_and_releases_rows() {
                 "SELECT ?candidate WHERE {}",
                 None,
                 &["candidate"],
-                purrdf_sparql_eval::QueryOptions::default(),
+                &purrdf_sparql_eval::QueryOptions::default(),
             )
             .unwrap(),
     );

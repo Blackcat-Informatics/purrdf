@@ -247,18 +247,18 @@ fn actual_new_default_empty_and_prepared_use_the_ellipsoidal_kernel() {
             expected
         );
         let ordinary = engine
-            .query_with_options_view(&*dataset, request(&query), QueryOptions::EMPTY)
+            .query_with_options_view(&*dataset, request(&query), &QueryOptions::EMPTY)
             .expect("standard functions are installed");
         assert_eq!(distance(ordinary), expected);
         let prepared = engine
-            .prepare_query_with_options(&query, None, QueryOptions::EMPTY)
+            .prepare_query_with_options(&query, None, &QueryOptions::EMPTY)
             .expect("standard prepare");
         assert_eq!(
             prepared.geo_identity(),
             purrdf_geo_kernel::binding::STANDARD_PROFILE.query_identity()
         );
         let replay = engine
-            .query_prepared_view(&*dataset, &prepared, &[], QueryOptions::EMPTY)
+            .query_prepared_view(&*dataset, &prepared, &[], &QueryOptions::EMPTY)
             .expect("standard prepared call");
         assert_eq!(distance(replay), expected);
     }
@@ -290,7 +290,7 @@ fn standard_geographic_rows_match_in_sequential_and_parallel_workers() {
             rows,
             aux,
         } = engine
-            .query_with_options_view(&*data, request(&query), QueryOptions::EMPTY)
+            .query_with_options_view(&*data, request(&query), &QueryOptions::EMPTY)
             .unwrap()
         else {
             panic!("the geographic row query must produce SELECT solutions");
@@ -331,7 +331,7 @@ fn standard_buffers_use_complete_native_materialization_and_governed_admission()
             ogc::geo::WKT_LITERAL
         );
         let result = engine
-            .query_with_options_view(&*data, request(&query), QueryOptions::EMPTY)
+            .query_with_options_view(&*data, request(&query), &QueryOptions::EMPTY)
             .unwrap();
         let term = distance(result);
         let actual = purrdf_geo_kernel::carrier::geometry_arg(
@@ -344,7 +344,7 @@ fn standard_buffers_use_complete_native_materialization_and_governed_admission()
             .query_governed(
                 &data,
                 request(&query),
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &QueryGovernors::UNBOUNDED.with_fuel(100),
             )
             .unwrap();
@@ -437,7 +437,7 @@ fn complete_length_and_exact_declared_unit_reach_standard_dispatch() {
         .query_with_options_view(
             &*data,
             request(&query),
-            QueryOptions::EMPTY.with_geo(&profile),
+            &QueryOptions::EMPTY.with_geo(&profile),
         )
         .expect("geographic length with declared unit");
     assert_eq!(
@@ -460,7 +460,7 @@ fn complete_length_and_exact_declared_unit_reach_standard_dispatch() {
             .query_with_options_view(
                 &*data,
                 request(&query),
-                QueryOptions::EMPTY.with_geo(&too_small)
+                &QueryOptions::EMPTY.with_geo(&too_small)
             )
             .is_err(),
         "operational precision refusal propagates through BIND"
@@ -495,7 +495,7 @@ fn nested_sparql_bodies_and_update_where_resolve_the_same_standard_set() {
         .query_with_options_view(
             &*dataset,
             request("SELECT (<http://example.org/function/nested>() AS ?distance) WHERE {}"),
-            QueryOptions::EMPTY.with_functions(&functions),
+            &QueryOptions::EMPTY.with_functions(&functions),
         )
         .expect("nested standard resolution");
     assert_eq!(
@@ -506,7 +506,7 @@ fn nested_sparql_bodies_and_update_where_resolve_the_same_standard_set() {
         "INSERT {{ <http://example.org/s> <http://example.org/distance> ?distance }} WHERE {{ BIND({expression} AS ?distance) }}"
     );
     engine
-        .update_with_options(&mut dataset, request(&update), QueryOptions::EMPTY)
+        .update_with_options(&mut dataset, request(&update), &QueryOptions::EMPTY)
         .expect("UPDATE standard resolution");
     let read = engine.query(&dataset, request("SELECT ?distance WHERE { <http://example.org/s> <http://example.org/distance> ?distance }")).expect("stored metric result");
     assert_eq!(
@@ -567,7 +567,7 @@ fn a_real_precision_exhaustion_remains_fatal_in_filter_and_bind() {
             .query_with_options_view(
                 &*dataset,
                 request(&query),
-                QueryOptions::EMPTY.with_geo(&profile),
+                &QueryOptions::EMPTY.with_geo(&profile),
             )
             .expect_err("a numerical refusal cannot drop or unbind a row");
         assert!(error.message.contains("precision"));
@@ -580,7 +580,7 @@ fn explicit_epsg_registration_swaps_source_axes_and_preserves_crs84() {
     let engine = NativeSparqlEngine::new();
     let query = distance_query(&format!("<{}> POINT(0 1)", ogc::EPSG4326), "POINT(0 0)");
     let refused = engine
-        .query_with_options_view(&*dataset, request(&query), QueryOptions::EMPTY)
+        .query_with_options_view(&*dataset, request(&query), &QueryOptions::EMPTY)
         .expect_err("EPSG:4326 is not implicit");
     assert!(refused.message.contains("unregistered"));
     let mut profile = GeoProfile::STANDARD;
@@ -594,7 +594,7 @@ fn explicit_epsg_registration_swaps_source_axes_and_preserves_crs84() {
         .query_with_options_view(
             &*dataset,
             request(&query),
-            QueryOptions::EMPTY.with_geo(&profile),
+            &QueryOptions::EMPTY.with_geo(&profile),
         )
         .expect("declared axes");
     assert_eq!(
@@ -617,7 +617,7 @@ fn sealed_identical_registration_coalesces_and_arbitrary_shadow_refuses_before_u
         .query_with_options_view(
             &*dataset,
             request(&query),
-            QueryOptions::EMPTY.with_functions(&identical),
+            &QueryOptions::EMPTY.with_functions(&identical),
         )
         .expect("coalesced");
     assert_eq!(
@@ -652,10 +652,10 @@ fn prepared_cache_and_admission_bind_reference_and_policy_independently() {
         )
         .expect("reference");
     let plain = engine
-        .prepare_query_with_options("ASK {}", None, QueryOptions::EMPTY)
+        .prepare_query_with_options("ASK {}", None, &QueryOptions::EMPTY)
         .expect("plain plan");
     let bound = engine
-        .prepare_query_with_options("ASK {}", None, QueryOptions::EMPTY.with_geo(&profile))
+        .prepare_query_with_options("ASK {}", None, &QueryOptions::EMPTY.with_geo(&profile))
         .expect("bound plan");
     assert!(!Arc::ptr_eq(&plain, &bound));
     let error = engine
@@ -663,7 +663,7 @@ fn prepared_cache_and_admission_bind_reference_and_policy_independently() {
             &*dataset,
             &plain,
             &[],
-            QueryOptions::EMPTY.with_geo(&profile),
+            &QueryOptions::EMPTY.with_geo(&profile),
         )
         .expect_err("no stale profile replay");
     assert_eq!(error.code, "native-sparql-geo-profile-mismatch");
@@ -684,7 +684,7 @@ fn a_governor_trip_inside_geodesy_withholds_the_filter_or_bind_answer() {
         .query_governed(
             &dataset,
             request(&query),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::UNBOUNDED.with_fuel(100),
         )
         .expect("a governor trip is an outcome");
@@ -703,7 +703,7 @@ fn a_parser_namespace_cannot_intercept_a_standard_function() {
         .prepare_query_with_options(
             "not valid SPARQL",
             None,
-            QueryOptions::EMPTY.with_env(&environment),
+            &QueryOptions::EMPTY.with_env(&environment),
         )
         .expect_err("namespace collision precedes parsing");
     assert_eq!(error.code, "native-sparql-standard-function-conflict");
@@ -785,7 +785,7 @@ fn geojson_conversion_uses_actual_registered_continuous_chain() {
             .query_with_options_view(
                 &*data,
                 request(&query),
-                QueryOptions::EMPTY.with_geo(&profile),
+                &QueryOptions::EMPTY.with_geo(&profile),
             )
             .expect("actual transformation"),
     );
@@ -839,7 +839,7 @@ fn governor_cancellation_during_carrier_construction_preserves_incomplete_eviden
             .query_governed(
                 &data,
                 request(&query),
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &QueryGovernors::UNBOUNDED.with_fuel(100),
             )
             .expect("the parser's governor trip is an outcome");

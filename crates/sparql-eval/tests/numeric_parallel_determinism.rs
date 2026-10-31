@@ -121,7 +121,7 @@ fn bookkeeping_optional_filters_fork_and_reachable_cell_bounds_stay_sequential()
             *mask.0.lock().expect("reset predicate witness") = 0;
             require_overlap.store(forks && threads > 1, Ordering::Relaxed);
             visits.store(0, Ordering::Relaxed);
-            let observed = pool.install(|| observe(&dataset, &query, options, &governors));
+            let observed = pool.install(|| observe(&dataset, &query, &options, &governors));
             let workers = mask.0.lock().expect("read predicate witness").count_ones();
             assert_eq!(visits.load(Ordering::Relaxed), ROWS, "{label}/{threads}");
             assert!(
@@ -167,7 +167,7 @@ fn bookkeeping_optional_filters_fork_and_reachable_cell_bounds_stay_sequential()
             observe(
                 &dataset,
                 &query,
-                options,
+                &options,
                 &QueryGovernors::METERED.with_max_intermediate_cells(cells - 1),
             )
         });
@@ -238,7 +238,7 @@ fn rows(result: &SparqlResult) -> String {
 fn observe(
     dataset: &Arc<RdfDataset>,
     query: &str,
-    options: QueryOptions<'_, '_>,
+    options: &QueryOptions<'_, '_>,
     governors: &QueryGovernors,
 ) -> Observation {
     let outcome = NativeSparqlEngine::new()
@@ -285,7 +285,7 @@ fn observe(
 /// Run `query` metered, then at half its metered fuel and at half its metered scratch,
 /// on pools of every size, `REPEATS` times each: every run of one ceiling must report
 /// the same observation, and the halved fuel ceiling must really trip.
-fn assert_deterministic(query: &str, options: QueryOptions<'_, '_>) {
+fn assert_deterministic(query: &str, options: &QueryOptions<'_, '_>) {
     const REPEATS: usize = 6;
     let dataset = dataset();
     let metered = rayon::ThreadPoolBuilder::new()
@@ -347,7 +347,7 @@ fn assert_deterministic(query: &str, options: QueryOptions<'_, '_>) {
 fn a_filter_over_exact_values_trips_at_one_row() {
     assert_deterministic(
         &format!("SELECT ?s WHERE {{ ?s <{EX}v> ?v FILTER(?v * ?v * ?v > 0) }}"),
-        QueryOptions::EMPTY,
+        &QueryOptions::EMPTY,
     );
 }
 
@@ -358,7 +358,7 @@ fn a_projection_over_exact_values_trips_at_one_row() {
             "SELECT ?s (STR(?v * ?v * ?v) AS ?cube) (?d * ?d AS ?fine) \
              WHERE {{ ?s <{EX}v> ?v ; <{EX}d> ?d }}"
         ),
-        QueryOptions::EMPTY,
+        &QueryOptions::EMPTY,
     );
 }
 
@@ -369,7 +369,7 @@ fn per_group_sums_over_exact_values_trip_at_one_group() {
             "SELECT ?g (SUM(?v * ?v) AS ?sum) (AVG(?d) AS ?mean) \
              WHERE {{ ?s <{EX}v> ?v ; <{EX}d> ?d ; <{EX}g> ?g }} GROUP BY ?g"
         ),
-        QueryOptions::EMPTY,
+        &QueryOptions::EMPTY,
     );
 }
 
@@ -384,7 +384,7 @@ fn per_group_statistical_aggregates_over_exact_values_trip_at_one_group() {
              (AGG(<{STAT}MEDIAN>, ?d) AS ?median) \
              WHERE {{ ?s <{EX}v> ?v ; <{EX}d> ?d ; <{EX}g> ?g }} GROUP BY ?g"
         ),
-        QueryOptions::new().with_env(&env),
+        &QueryOptions::new().with_env(&env),
     );
 }
 
@@ -395,7 +395,7 @@ fn an_optional_filter_over_exact_values_trips_at_one_row() {
             "SELECT ?s ?d WHERE {{ ?s <{EX}v> ?v \
              OPTIONAL {{ {{ SELECT ?s ?d WHERE {{ ?s <{EX}d> ?d }} }} FILTER(?v * ?v * ?d > 0) }} }}"
         ),
-        QueryOptions::EMPTY,
+        &QueryOptions::EMPTY,
     );
 }
 
@@ -435,7 +435,7 @@ fn a_chain_of_forked_loops_reports_one_scratch_figure_at_a_fuel_trip() {
         observe(
             &dataset,
             &query,
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::METERED,
         )
     });
@@ -447,12 +447,12 @@ fn a_chain_of_forked_loops_reports_one_scratch_figure_at_a_fuel_trip() {
     for parts in [2_u64, 5] {
         let governors = QueryGovernors::METERED.with_fuel(fuel * parts / 7);
         let reference =
-            pool(1).install(|| observe(&dataset, &query, QueryOptions::EMPTY, &governors));
+            pool(1).install(|| observe(&dataset, &query, &QueryOptions::EMPTY, &governors));
         assert!(reference.tripped.is_some(), "{parts}/7 of the fuel trips");
         for threads in [2_usize, 4, 8, 32] {
             for _ in 0..3 {
                 let observed = pool(threads)
-                    .install(|| observe(&dataset, &query, QueryOptions::EMPTY, &governors));
+                    .install(|| observe(&dataset, &query, &QueryOptions::EMPTY, &governors));
                 assert_eq!(
                     observed, reference,
                     "{parts}/7 of the fuel on {threads} threads"
@@ -471,7 +471,7 @@ fn per_group_counts_trip_at_one_group() {
             "SELECT ?g (SUM(1) AS ?sum) (COUNT(?s) AS ?n) \
              WHERE {{ ?s <{EX}v> ?v ; <{EX}g> ?g }} GROUP BY ?g"
         ),
-        QueryOptions::EMPTY,
+        &QueryOptions::EMPTY,
     );
 }
 
@@ -493,7 +493,7 @@ fn a_scratch_ceiling_trips_at_one_row() {
                 observe(
                     &dataset,
                     &query,
-                    QueryOptions::EMPTY,
+                    &QueryOptions::EMPTY,
                     &QueryGovernors::UNBOUNDED.with_max_scratch_bytes(ceiling),
                 )
             })
@@ -531,7 +531,7 @@ fn a_scratch_ceiling_trips_at_one_row() {
                 observe(
                     &dataset,
                     &query,
-                    QueryOptions::EMPTY,
+                    &QueryOptions::EMPTY,
                     &QueryGovernors::UNBOUNDED.with_max_scratch_bytes(ceiling),
                 )
             });
@@ -554,7 +554,7 @@ fn a_scratch_ceiling_trips_at_one_row() {
                 observe(
                     &dataset,
                     &query,
-                    QueryOptions::EMPTY,
+                    &QueryOptions::EMPTY,
                     &QueryGovernors::UNBOUNDED.with_max_scratch_bytes(boundary),
                 )
             });
@@ -573,7 +573,7 @@ fn inclusive_fuel_boundary_keeps_full_values_and_all_dimensions() {
     let metered = observe(
         &dataset,
         &query,
-        QueryOptions::EMPTY,
+        &QueryOptions::EMPTY,
         &QueryGovernors::METERED,
     );
     let fuel = metered
@@ -588,7 +588,7 @@ fn inclusive_fuel_boundary_keeps_full_values_and_all_dimensions() {
             .num_threads(1)
             .build()
             .expect("pool")
-            .install(|| observe(&dataset, &query, QueryOptions::EMPTY, &governors));
+            .install(|| observe(&dataset, &query, &QueryOptions::EMPTY, &governors));
         assert_eq!(
             reference.tripped.is_some(),
             boundary < fuel,
@@ -603,7 +603,7 @@ fn inclusive_fuel_boundary_keeps_full_values_and_all_dimensions() {
                 .build()
                 .expect("pool");
             let observed =
-                pool.install(|| observe(&dataset, &query, QueryOptions::EMPTY, &governors));
+                pool.install(|| observe(&dataset, &query, &QueryOptions::EMPTY, &governors));
             assert_eq!(
                 observed, reference,
                 "fuel boundary {boundary} at {threads} workers"

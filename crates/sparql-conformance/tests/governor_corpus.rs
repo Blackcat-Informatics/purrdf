@@ -32,7 +32,8 @@
 //! A "boundary" case whose ceiling was typed in by hand tests whatever its author
 //! believed. Each numeric case therefore also carries `expected/<case>.metered`: the
 //! consumption vector of the *same* case run under [`QueryGovernors::METERED`], which
-//! engages every counter and bounds nothing. The injected-deadline cases analogously
+//! engages every counter and retains the default UDF depth limit. Fixtures must complete
+//! under that policy. The injected-deadline cases analogously
 //! measure the complete run's stop-signal poll count with a never-firing signal. A
 //! `boundary` ceiling must equal that measurement exactly and an `over-bound` ceiling
 //! exactly one less — and the relation is re-derived and re-checked on every run rather
@@ -162,16 +163,17 @@ use purrdf_testkit::paths::workspace_root;
 /// Spelled through [`ResourceDimension::label`](purrdf_core::ResourceDimension::label), so
 /// a consumer reading a `.spend` file and a consumer reading a [`GovernorEvidence`] are
 /// reading one vocabulary rather than two that happen to agree today.
-const PINNED_DIMENSIONS: [ResourceDimension; 5] = [
+const PINNED_DIMENSIONS: [ResourceDimension; 6] = [
     ResourceDimension::Fuel,
     ResourceDimension::AnswerRows,
     ResourceDimension::IntermediateCells,
     ResourceDimension::ScratchBytes,
     ResourceDimension::RemoteRequests,
+    ResourceDimension::UdfDepth,
 ];
 
-/// The floor on the zero/boundary/over-bound matrix: one of each band for each of the five
-/// numeric dimensions (15), an injected deterministic deadline (3), the property-function
+/// The floor on the zero/boundary/over-bound matrix: one of each band for each of the six
+/// numeric dimensions (18), an injected deterministic deadline (3), the property-function
 /// charge points' joint fuel lane (3), and the three relation lanes that exist to take that
 /// joint lane apart — invocation-isolating, row-isolating, and the parallel drive, a
 /// boundary and an over-bound each (6) — plus the two aggregate lanes that isolate
@@ -185,7 +187,7 @@ const PINNED_DIMENSIONS: [ResourceDimension; 5] = [
 /// `aggregate-custom-scratch-bytes-*`, whose 1200-row single implicit group crosses the
 /// within-group chunk threshold and bands the custom accumulator's declared
 /// `ScratchBytes` state bound — a boundary and an over-bound each (4).
-const REQUIRED_BAND_CASES: usize = 35;
+const REQUIRED_BAND_CASES: usize = 38;
 
 /// The driving-row count above which the evaluator's chunk drivers fork.
 ///
@@ -299,6 +301,8 @@ enum Source {
     /// The registered custom aggregate from [`registered_custom_aggregate`], wired through
     /// `QueryOptions::aggregates` rather than through an injected graph-pattern seam.
     Aggregate,
+    /// Two nested SPARQL-bodied functions registered by the native harness.
+    UserFunction,
 }
 
 impl Source {
@@ -308,6 +312,7 @@ impl Source {
             "http" => Self::Http,
             "relation" => Self::Relation,
             "aggregate" => Self::Aggregate,
+            "user-function" => Self::UserFunction,
             other => panic!("manifest.tsv line {line}: unknown source {other:?}"),
         }
     }
@@ -318,6 +323,7 @@ impl Source {
             Self::Http => "http",
             Self::Aggregate => "aggregate",
             Self::Relation => "relation",
+            Self::UserFunction => "user-function",
         }
     }
 }
@@ -1058,6 +1064,7 @@ fn governors_for(case: &Case) -> Configured {
             ResourceDimension::IntermediateCells => governors.with_max_intermediate_cells(amount),
             ResourceDimension::ScratchBytes => governors.with_max_scratch_bytes(amount),
             ResourceDimension::RemoteRequests => governors.with_max_remote_requests(amount),
+            ResourceDimension::UdfDepth => governors.with_max_udf_depth(amount),
             other => panic!(
                 "{} sets {}, which is not caller-settable",
                 case.name,
@@ -1088,6 +1095,37 @@ fn governors_for(case: &Case) -> Configured {
         flag,
         deadline,
     }
+}
+
+/// The depth fixture reaches two SPARQL body frames, without a host callback.
+fn registered_depth_functions(
+    engine: &NativeSparqlEngine,
+) -> purrdf_sparql_eval::BoundFunctionRegistry {
+    let mut functions = purrdf_sparql_eval::UserFunctionRegistry::EMPTY;
+    for (iri, body) in [
+        (
+            "http://example.org/governor/leaf",
+            "SELECT (1 AS ?value) WHERE {}",
+        ),
+        (
+            "http://example.org/governor/outer",
+            "SELECT (<http://example.org/governor/leaf>() AS ?value) WHERE {}",
+        ),
+    ] {
+        functions.insert(
+            iri,
+            purrdf_sparql_eval::UserFunction {
+                params: Vec::new(),
+                required: 0,
+                body: Arc::from(body),
+                kind: purrdf_sparql_eval::UserFnBody::Select,
+                return_constraint: purrdf_sparql_eval::user_fn::TypeConstraint::default(),
+            },
+        );
+    }
+    engine
+        .bind_functions(functions, purrdf_sparql_eval::ExtensionEnv::empty())
+        .expect("the depth fixture bodies bind in the native environment")
 }
 
 /// Evaluate `case` under `configured`, with the transport wired as `spec` says.
@@ -1128,7 +1166,7 @@ fn observe(
                 &dataset,
                 request,
                 &source,
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
                 &configured.governors,
             )
         }
@@ -1153,7 +1191,7 @@ fn observe(
             engine.query_governed(
                 &dataset,
                 request,
-                QueryOptions::new().with_env(
+                &QueryOptions::new().with_env(
                     &purrdf_sparql_eval::ExtensionEnv::over_relations(registry.clone())
                         .expect("the harness declarations read cleanly"),
                 ),
@@ -1167,17 +1205,26 @@ fn observe(
             engine.query_governed(
                 &dataset,
                 request,
-                QueryOptions::new().with_env(
+                &QueryOptions::new().with_env(
                     &purrdf_sparql_eval::ExtensionEnv::over_aggregates(registry)
                         .expect("the harness declarations read cleanly"),
                 ),
                 &configured.governors,
             )
         }
+        Source::UserFunction => {
+            let functions = registered_depth_functions(&engine);
+            engine.query_governed(
+                &dataset,
+                request,
+                &QueryOptions::new().with_functions(&functions),
+                &configured.governors,
+            )
+        }
         Source::Dataset => engine.query_governed(
             &dataset,
             request,
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &configured.governors,
         ),
     }
@@ -1222,8 +1269,8 @@ fn metered(
     let observation = observe(case, &configured, spec, relation_spec);
     assert_eq!(
         observation.outcome, "complete",
-        "{}: the measuring run must complete — METERED bounds nothing, so a trip means the \
-         case has no derivable boundary at all",
+        "{}: the measuring run must complete under METERED and its default UDF depth, or \
+         the case has no derivable boundary",
         case.name
     );
     let stop_polls = if case.deadline_polls.is_some() {
@@ -1279,7 +1326,7 @@ fn charge_decomposition(case: &Case, spec: RelationSpec) -> String {
             &dataset,
             &query,
             None,
-            QueryOptions::new().with_env(
+            &QueryOptions::new().with_env(
                 &purrdf_sparql_eval::ExtensionEnv::over_relations(registry.clone())
                     .expect("the harness declarations read cleanly"),
             ),
@@ -1321,7 +1368,7 @@ fn charge_decomposition_custom_aggregate(case: &Case) -> String {
             &dataset,
             &query,
             None,
-            QueryOptions::new().with_env(
+            &QueryOptions::new().with_env(
                 &purrdf_sparql_eval::ExtensionEnv::over_aggregates(registry)
                     .expect("the harness declarations read cleanly"),
             ),
@@ -1888,10 +1935,63 @@ fn rewrite_table(path: &Path, rows: &BTreeMap<String, String>) {
 // The tests
 // ---------------------------------------------------------------------------
 
+/// Seed the new dimension only through the existing corpus regeneration entry.
+/// Ceilings, outcomes and receipts remain products of the measuring run.
+fn seed_udf_depth_cases() {
+    let root = corpus_root();
+    std::fs::write(
+        root.join("cases/udf-depth.ttl"),
+        "# Empty data for the nested SPARQL function fixture.\n",
+    )
+    .expect("write the UDF depth dataset fixture");
+    std::fs::write(
+        root.join("cases/udf-depth.rq"),
+        "SELECT (<http://example.org/governor/outer>() AS ?value) WHERE {}\n",
+    )
+    .expect("write the UDF depth query fixture");
+    let path = root.join("manifest.tsv");
+    let existing =
+        std::fs::read_to_string(&path).expect("read corpus manifest before regeneration");
+    let (header, rest) = existing
+        .split_once('\n')
+        .expect("the manifest has a comment header");
+    assert!(
+        header.starts_with("# purrdf-sparql-governors profile v"),
+        "unexpected corpus identity header"
+    );
+    let rest = rest
+        .replace(
+            "#   source     none | http | relation | aggregate\n",
+            "#   source     none | http | relation | aggregate | user-function\n",
+        )
+        .replace("remote-requests);", "remote-requests, udf-depth);");
+    let mut manifest = format!(
+        "# purrdf-sparql-governors profile v{} — normative vector manifest.\n{}",
+        purrdf_sparql_eval::GOVERNOR_PROFILE_VERSION,
+        rest
+    );
+    if !manifest.ends_with('\n') {
+        manifest.push('\n');
+    }
+    for band in ["zero", "boundary", "over-bound"] {
+        let name = format!("udf-depth-{band}");
+        if !existing
+            .lines()
+            .any(|line| line.split('\t').next() == Some(name.as_str()))
+        {
+            writeln!(manifest, "{name}\tcases/udf-depth.ttl\tcases/udf-depth.rq\tuser-function\tudf-depth=?\t{band}\t?").expect("append the depth band seed");
+        }
+    }
+    std::fs::write(path, manifest).expect("write seeded corpus manifest");
+}
+
 /// Every case reaches its pinned outcome, hands back its pinned rows under its pinned
 /// certificate, and spends exactly what the corpus says it spends.
 #[test]
 fn the_corpus_matches_its_pinned_expectations() {
+    if regenerating(UPDATE_ENV) {
+        seed_udf_depth_cases();
+    }
     let cases = load_manifest();
     let specs = load_transport();
     let relations = load_relations();
@@ -2999,7 +3099,7 @@ fn node_ledger(
                 &dataset,
                 &query,
                 None,
-                QueryOptions::new().with_remote(Some(&source)),
+                &QueryOptions::new().with_remote(Some(&source)),
             )
         }
         Source::Relation => {
@@ -3018,7 +3118,7 @@ fn node_ledger(
                 &dataset,
                 &query,
                 None,
-                QueryOptions::new().with_env(
+                &QueryOptions::new().with_env(
                     &purrdf_sparql_eval::ExtensionEnv::over_relations(registry)
                         .expect("the harness declarations read cleanly"),
                 ),
@@ -3028,11 +3128,20 @@ fn node_ledger(
             &dataset,
             &query,
             None,
-            QueryOptions::new().with_env(
+            &QueryOptions::new().with_env(
                 &purrdf_sparql_eval::ExtensionEnv::over_aggregates(registered_custom_aggregate())
                     .expect("the harness declarations read cleanly"),
             ),
         ),
+        Source::UserFunction => {
+            let functions = registered_depth_functions(&engine);
+            engine.explain_query_with_options(
+                &dataset,
+                &query,
+                None,
+                &QueryOptions::new().with_functions(&functions),
+            )
+        }
         Source::Dataset => engine.explain_query(&dataset, &query, None),
     }
     .unwrap_or_else(|error| panic!("{} must explain: {error}", case.name));

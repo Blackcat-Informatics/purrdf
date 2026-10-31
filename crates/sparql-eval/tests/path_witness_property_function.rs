@@ -190,7 +190,7 @@ fn run(
             base_iri: None,
             substitutions: &[],
         },
-        QueryOptions::new().with_env(registry),
+        &QueryOptions::new().with_env(registry),
     )?;
     let SparqlResult::Solutions {
         variables, rows, ..
@@ -1558,7 +1558,7 @@ fn a23_a_small_graph_is_not_refused_by_a_ceiling_far_above_its_true_cost() {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::new().with_env(&registry),
+            &QueryOptions::new().with_env(&registry),
             &QueryGovernors::UNBOUNDED.with_max_intermediate_cells(1_000),
         )
         .expect("a refusal would be an outcome, not an error");
@@ -1608,7 +1608,7 @@ fn a23b_a_ceiling_below_the_true_cost_still_refuses_at_admission() {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::new().with_env(&registry),
+            &QueryOptions::new().with_env(&registry),
             &QueryGovernors::UNBOUNDED.with_max_intermediate_cells(10),
         )
         .expect("a refusal is an outcome, not an error");

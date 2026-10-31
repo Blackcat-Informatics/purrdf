@@ -280,7 +280,7 @@ fn run(variant: Variant, body: &str) -> Outcome {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::new().with_env(&env),
+            &QueryOptions::new().with_env(&env),
         )
         .map(|result| {
             let SparqlResult::Solutions { rows, .. } = result else {
@@ -616,7 +616,7 @@ fn a_prepared_parameter_reaches_the_correlated_call_on_every_run() {
         for shape in SHAPES {
             let text = format!("SELECT ?q ?out WHERE {{ {} }}", shape.body(kind));
             let mut execution = engine
-                .prepare_execution(&text, None, &["q"], options)
+                .prepare_execution(&text, None, &["q"], &options)
                 .unwrap_or_else(|diagnostic| panic!("{text} prepares: {diagnostic}"));
             let slot = execution.slot("q").expect("declared");
             for name in ["alpha", "beta", "gamma", "alpha"] {
@@ -628,7 +628,7 @@ fn a_prepared_parameter_reaches_the_correlated_call_on_every_run() {
                     .bind(slot, kind.term(name))
                     .expect("the value door binds every term kind");
                 let mut answered = engine
-                    .execute(&mut execution, &*data, options, |outcome| match outcome {
+                    .execute(&mut execution, &*data, &options, |outcome| match outcome {
                         InternedOutcome::Solutions(solutions) => solutions
                             .rows()
                             .iter()

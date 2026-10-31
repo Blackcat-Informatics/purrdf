@@ -41,7 +41,7 @@ fn directional_constants_datatype_and_substitutions_agree_with_the_store() {
             );
             let prepared = engine.prepare_query(&query, None).unwrap();
             let result = engine
-                .query_prepared(&dataset, &prepared, &[], QueryOptions::EMPTY)
+                .query_prepared(&dataset, &prepared, &[], &QueryOptions::EMPTY)
                 .unwrap();
             assert!(
                 matches!(result, SparqlResult::Boolean(true)),
@@ -49,7 +49,7 @@ fn directional_constants_datatype_and_substitutions_agree_with_the_store() {
             );
             let substitutions = [("value".into(), dataset.term_value(o))];
             let result = engine
-                .query_prepared(&dataset, &bound, &substitutions, QueryOptions::EMPTY)
+                .query_prepared(&dataset, &bound, &substitutions, &QueryOptions::EMPTY)
                 .unwrap();
             assert!(matches!(result, SparqlResult::Boolean(true)), "{result:?}");
         }

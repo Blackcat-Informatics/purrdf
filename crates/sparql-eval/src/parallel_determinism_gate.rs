@@ -745,7 +745,7 @@ fn property_function_paths_are_byte_identical_across_the_corpus() {
                         base_iri: None,
                         substitutions: &[],
                     },
-                    crate::engine::QueryOptions {
+                    &crate::engine::QueryOptions {
                         env: &crate::extension_env::ExtensionEnv::over_relations(registry.clone())
                             .expect("the fixture declarations read cleanly"),
                         ..crate::engine::QueryOptions::EMPTY
@@ -905,7 +905,7 @@ SELECT (AGG(<https://example.org/agg/listCollector>, ?n) AS ?names) WHERE {
                     base_iri: None,
                     substitutions: &[],
                 },
-                crate::engine::QueryOptions {
+                &crate::engine::QueryOptions {
                     env: &crate::extension_env::ExtensionEnv::over_aggregates(registry.clone())
                         .expect("the fixture declarations read cleanly"),
                     ..crate::engine::QueryOptions::EMPTY

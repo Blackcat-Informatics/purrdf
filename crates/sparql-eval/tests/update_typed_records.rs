@@ -41,7 +41,7 @@ fn apply(
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::new().with_graph_existence(mode),
+            &QueryOptions::new().with_graph_existence(mode),
         )
         .expect("production UPDATE succeeds");
 }
@@ -219,7 +219,7 @@ fn transfers_charge_physical_attempts_even_when_add_deduplicates() {
                 .update_governed(
                     &mut measured,
                     request(&query),
-                    QueryOptions::new().with_graph_existence(mode),
+                    &QueryOptions::new().with_graph_existence(mode),
                     &QueryGovernors::METERED,
                 )
                 .unwrap();
@@ -239,7 +239,7 @@ fn transfers_charge_physical_attempts_even_when_add_deduplicates() {
                     .update_governed(
                         &mut ds,
                         request(&query),
-                        QueryOptions::new().with_graph_existence(mode),
+                        &QueryOptions::new().with_graph_existence(mode),
                         &QueryGovernors::UNBOUNDED.with_fuel(limit),
                     )
                     .unwrap();
@@ -445,7 +445,7 @@ fn load_avoids_unused_suppressed_and_composite_only_destination_blanks() {
             .unwrap();
         b.push_quad(subject, p, lit, None).unwrap();
         let mut ds = b.freeze().unwrap();
-        engine.update_with_options(&mut ds, request("DELETE WHERE { ?s <https://example.org/p> <https://example.org/o> }; LOAD <https://example.org/doc>"), QueryOptions::new().with_graph_existence(mode).with_bnode_mint_prefix(Some("chosen_"))).unwrap();
+        engine.update_with_options(&mut ds, request("DELETE WHERE { ?s <https://example.org/p> <https://example.org/o> }; LOAD <https://example.org/doc>"), &QueryOptions::new().with_graph_existence(mode).with_bnode_mint_prefix(Some("chosen_"))).unwrap();
         let source = ds
             .quads()
             .find(|q| matches!(ds.resolve(q.s), purrdf_core::TermRef::Blank { .. }))
@@ -458,7 +458,7 @@ fn load_avoids_unused_suppressed_and_composite_only_destination_blanks() {
             .update_with_options(
                 &mut empty,
                 request("LOAD <https://example.org/doc>"),
-                QueryOptions::new()
+                &QueryOptions::new()
                     .with_graph_existence(mode)
                     .with_bnode_mint_prefix(Some("chosen_")),
             )
@@ -482,7 +482,7 @@ fn load_preserves_physical_roles_and_charges_each_original_record() {
             .update_governed(
                 &mut measured,
                 request(text),
-                QueryOptions::new().with_graph_existence(mode),
+                &QueryOptions::new().with_graph_existence(mode),
                 &QueryGovernors::METERED,
             )
             .unwrap();
@@ -510,7 +510,7 @@ fn load_preserves_physical_roles_and_charges_each_original_record() {
                 .update_governed(
                     &mut ds,
                     request(text),
-                    QueryOptions::new().with_graph_existence(mode),
+                    &QueryOptions::new().with_graph_existence(mode),
                     &QueryGovernors::UNBOUNDED.with_fuel(limit),
                 )
                 .unwrap();
@@ -537,7 +537,7 @@ fn load_charges_original_physical_records_when_destination_deduplicates() {
             .update_governed(
                 &mut ds,
                 request("LOAD <https://example.org/doc>; LOAD <https://example.org/doc>"),
-                QueryOptions::new().with_graph_existence(mode),
+                &QueryOptions::new().with_graph_existence(mode),
                 &QueryGovernors::METERED,
             )
             .unwrap();

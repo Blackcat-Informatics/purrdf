@@ -1373,7 +1373,7 @@ impl<D: DatasetView + Sync> DatasetExclusion<'_, D> {
             .execute_read_witnessed_admitted(
                 execution,
                 self.dataset,
-                options,
+                &options,
                 self.scoped.as_ref().map(|scoped| scoped.source),
                 &self.operation,
                 visit,
@@ -2284,7 +2284,7 @@ fn execute_bound<'d, D: DatasetView + Sync, C: CompiledRead>(
             unit.sparql()
         };
         let prepared =
-            match engine.prepare_query_admitted(&sparql, None, options(), &scope_workspace) {
+            match engine.prepare_query_admitted(&sparql, None, &options(), &scope_workspace) {
                 Ok(prepared) => prepared,
                 Err(purrdf_sparql_eval::EvaluationFailure::Evaluation(error))
                     if scoped.is_some() || error.is_native_storage_failure() =>
@@ -2350,7 +2350,7 @@ fn execute_bound<'d, D: DatasetView + Sync, C: CompiledRead>(
                                         &lookup.text,
                                         None,
                                         &[lookup.parameter.as_str()],
-                                        options(),
+                                        &options(),
                                         &scope_workspace,
                                     )
                                     .map(|execution| {
@@ -2410,12 +2410,12 @@ fn execute_bound<'d, D: DatasetView + Sync, C: CompiledRead>(
                 if let (Some(input), Some(scope)) = (scoped.as_ref(), candidate_scope.as_ref()) {
                     engine.open_call_cursor_evidence(
                         &prepared,
-                        options().with_candidate_scope(scope),
+                        &options().with_candidate_scope(scope),
                         &scope_workspace,
                         input.source,
                     )
                 } else {
-                    engine.open_call_cursor_admitted(&prepared, options(), &scope_workspace)
+                    engine.open_call_cursor_admitted(&prepared, &options(), &scope_workspace)
                 }
                 .and_then(|cursor| {
                     CandidateColumns::locate(
@@ -2559,7 +2559,7 @@ fn execute_bound<'d, D: DatasetView + Sync, C: CompiledRead>(
         if let (Some(input), Some(scope)) = (scoped.as_mut(), candidate_scope.as_ref()) {
             let query_options = options().with_candidate_scope(scope);
             let mut execution = engine
-                .prepare_execution_admitted(&sparql, None, &[], query_options, &scope_workspace)
+                .prepare_execution_admitted(&sparql, None, &[], &query_options, &scope_workspace)
                 .map_err(|error| match error {
                     purrdf_sparql_eval::EvaluationFailure::Evaluation(error) => {
                         ExecutionError::NativeFailure(error)
@@ -2572,7 +2572,7 @@ fn execute_bound<'d, D: DatasetView + Sync, C: CompiledRead>(
                 .execute_read_witnessed_admitted(
                     &mut execution,
                     dataset,
-                    query_options,
+                    &query_options,
                     Some(input.source),
                     operation,
                     |outcome| {
@@ -2727,7 +2727,7 @@ fn execute_bound<'d, D: DatasetView + Sync, C: CompiledRead>(
             &sparql,
             None,
             &[],
-            options(),
+            &options(),
             &scope_workspace,
         ) {
             Ok(execution) => execution,
@@ -2752,7 +2752,7 @@ fn execute_bound<'d, D: DatasetView + Sync, C: CompiledRead>(
         let outcome = engine.execute_read_governed_admitted(
             &mut execution,
             dataset,
-            options(),
+            &options(),
             &QueryGovernors::UNBOUNDED,
             operation,
             |outcome| match outcome {

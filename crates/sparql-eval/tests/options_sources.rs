@@ -176,7 +176,7 @@ impl GraphResolver for FixedDocument {
 fn update(
     engine: &NativeSparqlEngine,
     update: &str,
-    options: QueryOptions<'_, '_>,
+    options: &QueryOptions<'_, '_>,
 ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     let mut store = local();
     engine.update_with_options(&mut store, request(update), options)?;
@@ -191,7 +191,7 @@ fn options_remote_joins_remote_rows() {
         .query_with_options_view(
             &*local(),
             request(&join_query(false)),
-            QueryOptions::new().with_remote(Some(&resolver)),
+            &QueryOptions::new().with_remote(Some(&resolver)),
         )
         .expect("the federated join evaluates");
     assert_eq!(rows(&federated), joined());
@@ -205,7 +205,7 @@ fn options_remote_joins_remote_rows() {
         .query_with_options_view(
             &*local(),
             request(&join_query(true)),
-            QueryOptions::new().with_remote(Some(&unreachable)),
+            &QueryOptions::new().with_remote(Some(&unreachable)),
         )
         .expect("SERVICE SILENT over an endpoint that fails is the join identity");
     let identity = BTreeSet::from([(Some(ex("a")), None), (Some(ex("b")), None)]);
@@ -215,11 +215,11 @@ fn options_remote_joins_remote_rows() {
     // With no source at all the invocation cannot succeed either: `SERVICE SILENT` is
     // the join identity again, and without `SILENT` the same request is an error.
     let sourceless = engine
-        .query_with_options_view(&*local(), request(&join_query(true)), QueryOptions::EMPTY)
+        .query_with_options_view(&*local(), request(&join_query(true)), &QueryOptions::EMPTY)
         .expect("SERVICE SILENT without a source is the join identity");
     assert_eq!(rows(&sourceless), identity);
     let err = engine
-        .query_with_options_view(&*local(), request(&join_query(false)), QueryOptions::EMPTY)
+        .query_with_options_view(&*local(), request(&join_query(false)), &QueryOptions::EMPTY)
         .expect_err("SERVICE without a source is an error");
     assert_eq!(
         err.message,
@@ -238,7 +238,7 @@ fn options_remote_matches_query_with_source() {
         .query_with_options_view(
             &*local(),
             request(&join_query(false)),
-            QueryOptions::new().with_remote(Some(&resolver)),
+            &QueryOptions::new().with_remote(Some(&resolver)),
         )
         .expect("the options spelling evaluates");
     let through_source = engine
@@ -246,7 +246,7 @@ fn options_remote_matches_query_with_source() {
             &local(),
             request(&join_query(false)),
             &resolver,
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
         )
         .expect("the source spelling evaluates");
     assert_eq!(rows(&through_options), joined());
@@ -260,7 +260,7 @@ fn options_remote_matches_query_with_source() {
             &local(),
             request(&join_query(false)),
             &resolver,
-            QueryOptions::new().with_remote(Some(&empty)),
+            &QueryOptions::new().with_remote(Some(&empty)),
         )
         .expect("the explicit source answers");
     assert_eq!(rows(&explicit_wins), joined());
@@ -271,7 +271,7 @@ fn options_remote_matches_query_with_source() {
         .query_with_options_view(
             &*local(),
             request(&join_query(false)),
-            QueryOptions::new().with_remote(Some(&empty)),
+            &QueryOptions::new().with_remote(Some(&empty)),
         )
         .expect_err("a resolver with no endpoint cannot answer a non-SILENT SERVICE");
     assert!(
@@ -290,7 +290,7 @@ fn options_remote_reaches_the_governed_entry() {
         .query_governed(
             &local(),
             request(&join_query(false)),
-            options,
+            &options,
             &QueryGovernors::METERED,
         )
         .expect("the governed federated join evaluates");
@@ -313,7 +313,7 @@ fn options_remote_reaches_the_governed_entry() {
         .query_governed(
             &local(),
             request(&join_query(false)),
-            options,
+            &options,
             &QueryGovernors::UNBOUNDED.with_max_remote_requests(0),
         )
         .expect("a trip is an outcome, not an error");
@@ -333,7 +333,7 @@ fn update_where_federates_through_options_remote() {
     let store = update(
         &NativeSparqlEngine::new(),
         &federating_insert(false),
-        QueryOptions::new().with_remote(Some(&resolver)),
+        &QueryOptions::new().with_remote(Some(&resolver)),
     )
     .expect("the federated INSERT applies");
     assert_eq!(quads(&store), federated_triples());
@@ -342,7 +342,7 @@ fn update_where_federates_through_options_remote() {
 #[test]
 fn update_where_service_silent_without_a_source_inserts_nothing() {
     let engine = NativeSparqlEngine::new();
-    let store = update(&engine, &federating_insert(true), QueryOptions::EMPTY)
+    let store = update(&engine, &federating_insert(true), &QueryOptions::EMPTY)
         .expect("SERVICE SILENT without a source is the join identity");
     assert_eq!(quads(&store), local_triples());
 
@@ -353,7 +353,7 @@ fn update_where_service_silent_without_a_source_inserts_nothing() {
         .update_governed(
             &mut governed,
             request(&federating_insert(true)),
-            QueryOptions::EMPTY,
+            &QueryOptions::EMPTY,
             &QueryGovernors::METERED,
         )
         .expect("applies");
@@ -371,7 +371,7 @@ fn update_where_service_silent_without_a_source_inserts_nothing() {
     let federated = update(
         &engine,
         &federating_insert(true),
-        QueryOptions::new().with_remote(Some(&resolver)),
+        &QueryOptions::new().with_remote(Some(&resolver)),
     )
     .expect("the federated SILENT INSERT applies");
     assert_eq!(quads(&federated), federated_triples());
@@ -383,7 +383,7 @@ fn update_where_service_without_a_source_is_a_hard_error() {
     let err = update(
         &NativeSparqlEngine::new(),
         &federating_insert(false),
-        QueryOptions::EMPTY,
+        &QueryOptions::EMPTY,
     )
     .expect_err("a non-SILENT SERVICE with no source cannot be answered");
     assert_eq!(err.code, "native-sparql-service-unconfigured");
@@ -407,7 +407,7 @@ fn update_governed_where_federation_is_governed() {
         .update_governed(
             &mut store,
             request(&federating_insert(false)),
-            options,
+            &options,
             &QueryGovernors::UNBOUNDED.with_max_remote_requests(0),
         )
         .expect("a trip is an outcome, not an error");
@@ -431,7 +431,7 @@ fn update_governed_where_federation_is_governed() {
         .update_governed(
             &mut applied,
             request(&federating_insert(false)),
-            options,
+            &options,
             &QueryGovernors::UNBOUNDED,
         )
         .expect("the ungoverned-ceiling run applies");
@@ -448,7 +448,7 @@ fn options_load_resolves_without_an_engine_resolver() {
     let store = update(
         &engine,
         &load,
-        QueryOptions::new().with_load(Some(&document)),
+        &QueryOptions::new().with_load(Some(&document)),
     )
     .expect("LOAD resolves through the request's source");
     let mut expected = local_triples();
@@ -457,7 +457,7 @@ fn options_load_resolves_without_an_engine_resolver() {
 
     // Neighbour: the same engine and request with no source at all is the documented
     // hard error, so the inserted quad above came from `options.load`.
-    let err = update(&engine, &load, QueryOptions::EMPTY)
+    let err = update(&engine, &load, &QueryOptions::EMPTY)
         .expect_err("LOAD with neither resolver cannot fetch");
     assert_eq!(err.code, "native-sparql-load-no-resolver");
 }
@@ -473,7 +473,7 @@ fn options_load_overrides_the_engine_resolver() {
     let overridden = update(
         &engine,
         &load,
-        QueryOptions::new().with_load(Some(&per_request)),
+        &QueryOptions::new().with_load(Some(&per_request)),
     )
     .expect("LOAD resolves through the request's source");
     let mut expected = local_triples();
@@ -482,7 +482,7 @@ fn options_load_overrides_the_engine_resolver() {
 
     // Neighbour: without `options.load` the engine's own resolver still answers, and
     // its document is a different quad.
-    let fallback = update(&engine, &load, QueryOptions::EMPTY)
+    let fallback = update(&engine, &load, &QueryOptions::EMPTY)
         .expect("LOAD falls back to the engine's resolver");
     let mut expected = local_triples();
     expected.insert(triple("engineS", "engineP", "engineO"));

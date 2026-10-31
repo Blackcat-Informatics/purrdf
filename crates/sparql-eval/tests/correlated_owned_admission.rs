@@ -97,7 +97,7 @@ fn all_public_forms_and_routes_share_native_correlated_scopes_and_owned_outputs(
             .prepare_query(query, None)
             .expect("original admitted syntax");
         let expected = engine
-            .query_prepared(&resident, &prepared, &[], QueryOptions::EMPTY)
+            .query_prepared(&resident, &prepared, &[], &QueryOptions::EMPTY)
             .expect("independent resident production result");
         for route in 0..4 {
             let source = open_with_evidence(&image, CEILING, 2, 16_384);
@@ -110,13 +110,13 @@ fn all_public_forms_and_routes_share_native_correlated_scopes_and_owned_outputs(
             let found = match route {
                 0 => {
                     engine
-                        .query_fallible_view(&source, request(), QueryOptions::EMPTY)
+                        .query_fallible_view(&source, request(), &QueryOptions::EMPTY)
                         .expect("complete direct correlated entry")
                         .result
                 }
                 1 => {
                     engine
-                        .query_prepared_fallible_view(&source, &prepared, &[], QueryOptions::EMPTY)
+                        .query_prepared_fallible_view(&source, &prepared, &[], &QueryOptions::EMPTY)
                         .expect("complete prepared correlated entry")
                         .result
                 }
@@ -125,7 +125,7 @@ fn all_public_forms_and_routes_share_native_correlated_scopes_and_owned_outputs(
                         .query_governed_fallible_view(
                             &source,
                             request(),
-                            QueryOptions::EMPTY,
+                            &QueryOptions::EMPTY,
                             &QueryGovernors::METERED,
                         )
                         .expect("complete governed correlated entry")
@@ -137,7 +137,7 @@ fn all_public_forms_and_routes_share_native_correlated_scopes_and_owned_outputs(
                             &source,
                             &prepared,
                             &[],
-                            QueryOptions::EMPTY,
+                            &QueryOptions::EMPTY,
                             &QueryGovernors::METERED,
                         )
                         .expect("complete prepared governed correlated entry")
@@ -201,7 +201,7 @@ fn service_public_forms_direct_prepared_and_governed_price_the_real_native_produ
         let engine = NativeSparqlEngine::new();
         let prepared = engine.prepare_query(query, None).unwrap();
         let expected = engine
-            .query_prepared(&resident, &prepared, &[], options)
+            .query_prepared(&resident, &prepared, &[], &options)
             .unwrap();
         for route in 0..4 {
             let source = open_with_evidence(&image, CEILING, 2, 16_384);
@@ -214,13 +214,13 @@ fn service_public_forms_direct_prepared_and_governed_price_the_real_native_produ
             let result = match route {
                 0 => {
                     engine
-                        .query_fallible_view(&source, request(), options)
+                        .query_fallible_view(&source, request(), &options)
                         .unwrap()
                         .result
                 }
                 1 => {
                     engine
-                        .query_prepared_fallible_view(&source, &prepared, &[], options)
+                        .query_prepared_fallible_view(&source, &prepared, &[], &options)
                         .unwrap()
                         .result
                 }
@@ -229,7 +229,7 @@ fn service_public_forms_direct_prepared_and_governed_price_the_real_native_produ
                         .query_governed_fallible_view(
                             &source,
                             request(),
-                            options,
+                            &options,
                             &QueryGovernors::METERED,
                         )
                         .unwrap()
@@ -241,7 +241,7 @@ fn service_public_forms_direct_prepared_and_governed_price_the_real_native_produ
                             &source,
                             &prepared,
                             &[],
-                            options,
+                            &options,
                             &QueryGovernors::METERED,
                         )
                         .unwrap()
@@ -310,7 +310,7 @@ fn http_native_decode_and_blank_ingest_preserve_duplicates_and_physical_refusal_
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::EMPTY.with_remote(Some(&remote)),
+            &QueryOptions::EMPTY.with_remote(Some(&remote)),
         )
         .unwrap()
         .result;
@@ -335,7 +335,7 @@ fn http_native_decode_and_blank_ingest_preserve_duplicates_and_physical_refusal_
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions::EMPTY.with_remote(Some(&remote)),
+            &QueryOptions::EMPTY.with_remote(Some(&remote)),
         )
         .expect_err("physical layout refusal is never an invocation failure SILENT can swallow");
     assert!(matches!(

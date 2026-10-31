@@ -211,7 +211,7 @@ pub mod gts {
 ///         "SELECT ?o WHERE { ?this <https://example.org/p> ?o }",
 ///         None,
 ///         &["this"],
-///         QueryOptions::EMPTY,
+///         &QueryOptions::EMPTY,
 ///     )
 ///     .expect("prepare");
 /// assert_eq!(execution.parameters().len(), 1);
@@ -840,7 +840,7 @@ mod tests {
         let complete = sparql::NativeSparqlEngine::new().query_fallible_view(&view, SparqlRequest {
             query: "ASK { <https://example.org/value> <https://example.org/p> <https://example.org/value> }",
             base_iri: None, substitutions: &[],
-        }, sparql::QueryOptions::EMPTY).expect("root fallible stack consumer");
+        }, &sparql::QueryOptions::EMPTY).expect("root fallible stack consumer");
         assert_eq!(complete.result.boolean(), Some(true));
         assert_eq!(
             complete.evidence.requested_origins,

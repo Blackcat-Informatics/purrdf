@@ -115,13 +115,13 @@ fn matrix(snapshot: &PagedStackSnapshot, oracle: &RdfDataset, queries: &[&str]) 
         for prepared_entry in [false, true] {
             let view = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
             let complete = if prepared_entry {
-                engine.query_prepared_fallible_view(&view, &prepared, &[], QueryOptions::EMPTY)
+                engine.query_prepared_fallible_view(&view, &prepared, &[], &QueryOptions::EMPTY)
             } else {
-                engine.query_fallible_view(&view, request(&text), QueryOptions::EMPTY)
+                engine.query_fallible_view(&view, request(&text), &QueryOptions::EMPTY)
             }
             .unwrap_or_else(|e| panic!("layered consumer failed: {e:?}: {text}"));
             let expected = engine
-                .query_prepared_view(oracle, &prepared, &[], QueryOptions::EMPTY)
+                .query_prepared_view(oracle, &prepared, &[], &QueryOptions::EMPTY)
                 .expect("independent eager input query");
             assert_same_result(complete.result, expected, &text);
             assert!(matches!(
@@ -207,7 +207,7 @@ fn chronological_layers_match_eager_bags_for_every_consumer_family() {
     let removed = stack.snapshot().unwrap();
     let removed_oracle = eager(values.clone(), &[iri("empty")]);
     matrix(&removed, &removed_oracle, QUERIES);
-    assert_eq!(NativeSparqlEngine::new().query_fallible_view(&removed.query_view(PagedQueryLimits::UNBOUNDED), request("ASK { <http://example.org/alice> <http://example.org/knows> <http://example.org/bob> }"), QueryOptions::EMPTY).unwrap().result.boolean(), Some(false));
+    assert_eq!(NativeSparqlEngine::new().query_fallible_view(&removed.query_view(PagedQueryLimits::UNBOUNDED), request("ASK { <http://example.org/alice> <http://example.org/knows> <http://example.org/bob> }"), &QueryOptions::EMPTY).unwrap().result.boolean(), Some(false));
     assert_eq!(
         stack.insert(repeated.clone()).unwrap(),
         values.insert(repeated)
@@ -229,7 +229,7 @@ fn chronological_layers_match_eager_bags_for_every_consumer_family() {
             .query_fallible_view(
                 &head.query_view(PagedQueryLimits::UNBOUNDED),
                 request("SELECT ?s ?o WHERE { ?s <http://example.org/knows> ?o }"),
-                QueryOptions::EMPTY,
+                &QueryOptions::EMPTY,
             )
             .unwrap()
             .result,
@@ -346,7 +346,7 @@ fn generated_mutations_and_retained_snapshots_keep_query_bags_and_page_identity(
         let snapshot = stack.snapshot().unwrap();
         let oracle = eager(values.clone(), &[]);
         matrix(&snapshot, &oracle, &queries);
-        let (_, path_rows) = solutions(NativeSparqlEngine::new().query_fallible_view(&snapshot.query_view(PagedQueryLimits::UNBOUNDED), request("SELECT ?o WHERE { <http://example.org/anchor> <http://example.org/knows>+ ?o }"), QueryOptions::EMPTY).unwrap().result);
+        let (_, path_rows) = solutions(NativeSparqlEngine::new().query_fallible_view(&snapshot.query_view(PagedQueryLimits::UNBOUNDED), request("SELECT ?o WHERE { <http://example.org/anchor> <http://example.org/knows>+ ?o }"), &QueryOptions::EMPTY).unwrap().result);
         assert_eq!(
             path_rows,
             vec![vec![Some(iri("anchor"))]],
@@ -502,7 +502,7 @@ fn typed_rdf_values_and_graph_scoped_retractions_match_explicit_eager_tables() {
         "CONSTRUCT { ?s ?p ?o } WHERE { GRAPH ex:g { ?s ?p ?o } }",
     ];
     matrix(&before, &expected, &queries);
-    let (_, rows) = solutions(NativeSparqlEngine::new().query_fallible_view(&before.query_view(PagedQueryLimits::UNBOUNDED), request("SELECT ?o WHERE { GRAPH <http://example.org/g> { <http://example.org/r> <http://example.org/note> ?o } }"), QueryOptions::EMPTY).unwrap().result);
+    let (_, rows) = solutions(NativeSparqlEngine::new().query_fallible_view(&before.query_view(PagedQueryLimits::UNBOUNDED), request("SELECT ?o WHERE { GRAPH <http://example.org/g> { <http://example.org/r> <http://example.org/note> ?o } }"), &QueryOptions::EMPTY).unwrap().result);
     assert_eq!(
         rows,
         vec![vec![Some(note.o.clone())]],
@@ -784,7 +784,7 @@ fn aggregate_admission_and_cache_receipts_are_exact_at_the_public_boundary() {
     let query = "SELECT ?s ?p ?o WHERE { ?s ?p ?o } ORDER BY ?s ?p ?o";
     let unbounded = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
     let complete = engine
-        .query_fallible_view(&unbounded, request(query), QueryOptions::EMPTY)
+        .query_fallible_view(&unbounded, request(query), &QueryOptions::EMPTY)
         .unwrap();
     assert_eq!(solutions(complete.result).1.len(), 3);
     let receipt = complete.evidence;
@@ -814,7 +814,7 @@ fn aggregate_admission_and_cache_receipts_are_exact_at_the_public_boundary() {
     );
     let prepared = engine.prepare_query(query, None).unwrap();
     let reread = engine
-        .query_prepared_fallible_view(&unbounded, &prepared, &[], QueryOptions::EMPTY)
+        .query_prepared_fallible_view(&unbounded, &prepared, &[], &QueryOptions::EMPTY)
         .unwrap();
     assert_eq!(*reread.evidence, *receipt);
     assert_eq!(
@@ -828,7 +828,7 @@ fn aggregate_admission_and_cache_receipts_are_exact_at_the_public_boundary() {
     let exact = snapshot.query_view(PagedQueryLimits::new(3, receipt.pages.consumed_bytes));
     assert_eq!(
         *engine
-            .query_fallible_view(&exact, request(query), QueryOptions::EMPTY)
+            .query_fallible_view(&exact, request(query), &QueryOptions::EMPTY)
             .unwrap()
             .evidence,
         *receipt
@@ -843,7 +843,7 @@ fn aggregate_admission_and_cache_receipts_are_exact_at_the_public_boundary() {
         let view = snapshot.query_view(limits);
         let (error, evidence) = operational(
             engine
-                .query_fallible_view(&view, request(query), QueryOptions::EMPTY)
+                .query_fallible_view(&view, request(query), &QueryOptions::EMPTY)
                 .expect_err("one refused page prevents publication"),
         );
         assert!(matches!(
@@ -900,7 +900,7 @@ fn source_faults_are_operational_sticky_and_refuse_compacted_artifacts() {
                 .query_fallible_view(
                     &view,
                     request("SELECT * WHERE { ?s ?p ?o }"),
-                    QueryOptions::EMPTY,
+                    &QueryOptions::EMPTY,
                 )
                 .expect_err("failure after head cannot publish head"),
         );
@@ -933,7 +933,7 @@ fn source_faults_are_operational_sticky_and_refuse_compacted_artifacts() {
         let prepared = engine.prepare_query("SELECT * WHERE {}", None).unwrap();
         let (sticky, sticky_evidence) = operational(
             engine
-                .query_prepared_fallible_view(&view, &prepared, &[], QueryOptions::EMPTY)
+                .query_prepared_fallible_view(&view, &prepared, &[], &QueryOptions::EMPTY)
                 .expect_err("constant query cannot escape the failure latch"),
         );
         assert_eq!(sticky, error);
@@ -985,10 +985,10 @@ fn constants_and_head_queries_check_skipped_and_zero_page_source_descriptors() {
                 let prepared = engine.prepare_query(query, None).unwrap();
                 for error in [
                     engine
-                        .query_fallible_view(&view, request(query), QueryOptions::EMPTY)
+                        .query_fallible_view(&view, request(query), &QueryOptions::EMPTY)
                         .unwrap_err(),
                     engine
-                        .query_prepared_fallible_view(&view, &prepared, &[], QueryOptions::EMPTY)
+                        .query_prepared_fallible_view(&view, &prepared, &[], &QueryOptions::EMPTY)
                         .unwrap_err(),
                 ] {
                     let (root, evidence) = operational(error);
@@ -1062,7 +1062,7 @@ fn delayed_drift_at_the_last_checkpoint_refuses_cached_guarded_results_and_fold(
                 0 => assert_eq!(
                     solutions(
                         engine
-                            .query_fallible_view(&view, request(text), QueryOptions::EMPTY)
+                            .query_fallible_view(&view, request(text), &QueryOptions::EMPTY)
                             .unwrap()
                             .result
                     )
@@ -1077,7 +1077,7 @@ fn delayed_drift_at_the_last_checkpoint_refuses_cached_guarded_results_and_fold(
                                 &view,
                                 &prepared,
                                 &[],
-                                QueryOptions::EMPTY
+                                &QueryOptions::EMPTY
                             )
                             .unwrap()
                             .result
@@ -1114,7 +1114,7 @@ fn delayed_drift_at_the_last_checkpoint_refuses_cached_guarded_results_and_fold(
                 0 => {
                     operational(
                         engine
-                            .query_fallible_view(&view, request(text), QueryOptions::EMPTY)
+                            .query_fallible_view(&view, request(text), &QueryOptions::EMPTY)
                             .expect_err("final drift must refuse ordinary publication"),
                     )
                     .0
@@ -1126,7 +1126,7 @@ fn delayed_drift_at_the_last_checkpoint_refuses_cached_guarded_results_and_fold(
                                 &view,
                                 &prepared,
                                 &[],
-                                QueryOptions::EMPTY,
+                                &QueryOptions::EMPTY,
                             )
                             .expect_err("final drift must refuse prepared publication"),
                     )

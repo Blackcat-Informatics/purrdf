@@ -3,9 +3,9 @@
 
 # `purrdf-sparql-governors` — SPARQL Execution Governor Profile
 
-English | [简体中文（profile v22）](SPARQL-GOVERNOR-PROFILE.zh-Hans.md)
+English | [简体中文（profile v23）](SPARQL-GOVERNOR-PROFILE.zh-Hans.md)
 
-**Profile identifier:** `purrdf-sparql-governors` &nbsp;·&nbsp; **Profile version:** 22
+**Profile identifier:** `purrdf-sparql-governors` &nbsp;·&nbsp; **Profile version:** 23
 &nbsp;·&nbsp; **Editor:** Patrick Audley, Blackcat Informatics® Inc.
 
 Every value in this document is readable from the library rather than only from
@@ -42,7 +42,7 @@ Stated first, because it is the fact a consumer is most likely to over-read.
 | `intermediate-cells` (the cardinality / cell ceiling) | **yes** |
 | `scratch-bytes` | yes — a function of the same fixed inputs |
 | `remote-requests` | yes — a function of the same fixed inputs |
-| `udf-depth` | yes — a fixed build ceiling, not caller-settable |
+| `udf-depth` | yes — maximum logical invocation depth under the supplied policy |
 | **the wall deadline** | **NO. No determinism is claimed for it.** |
 
 "Deterministic" here means: the same query over the same data under the same
@@ -91,13 +91,13 @@ answer":
   exhausted budget for a query that could not have been answered at all would hand
   a caller a partial answer to a question that has none.
 
-An **ungoverned** query and `QueryGovernors::UNBOUNDED` take a direct evaluator path
-before any governor stop probe, counter, certificate ledger, or output re-wrap. The
-report-only `governed_eval` benchmark measures that path against the
-`UNBOUNDED` carrier; no timing equivalence is asserted. `QueryGovernors::METERED` is
-the opposite trade — every counter engaged at a ceiling nothing can reach — and is
-the intended way to *size* a budget: run under it, read the evidence off the
-completed result, choose the real ceilings from the numbers.
+An **ungoverned** query uses the caller's `QueryOptions` depth policy, which
+defaults to 32. `QueryGovernors::UNBOUNDED` declines accounting and removes the
+logical UDF depth limit. `QueryGovernors::METERED` engages every counter and
+retains the default depth limit of 32 while leaving the other dimensions without
+reachable ceilings. Use a caller-selected larger depth or remove that limit
+explicitly when measuring deeper recursion. Read the completed result's evidence
+to choose real ceilings; no timing equivalence is asserted between these paths.
 
 ## 3. The governed dimensions
 
@@ -112,7 +112,7 @@ a breaking change rather than a cosmetic edit.
 | `intermediate-cells` | the largest single intermediate bag, in `rows × columns` | **max** | yes |
 | `scratch-bytes` | computed-term arenas, identity reservations and explicitly charged retained aggregate buffers/state | sum | yes |
 | `remote-requests` | requests issued to a federated endpoint | sum | yes |
-| `udf-depth` | nesting depth of user-defined function invocation | **max** | **no** — fixed at 32 |
+| `udf-depth` | nesting depth of user-defined function invocation | **max** | yes — defaults to 32; explicitly removable |
 | `pages` | distinct pages a demand-paging operation may admit | sum | via `PagedQueryLimits` |
 | `bytes` | provider-reported byte charges of admitted pages | sum | via `PagedQueryLimits` |
 
@@ -123,9 +123,15 @@ catastrophic cross product, which is the failure it exists to stop. `udf-depth` 
 a *depth*: a query calling a function a thousand times at depth one has reached
 depth one, not depth one thousand.
 
-`udf-depth` is deliberately not caller-settable. It is a stack-recursion guard, and
-a caller-relaxable recursion bound is not a bound. It stays in force on every
-execution, governed or not, and appears here only so its consumption is *reported*.
+`udf-depth` is an inclusive logical invocation limit. Ordinary query options and
+`METERED` default to 32: depth 32 is admitted and depth 33 is refused. Rust callers
+select a finite limit with `with_max_udf_depth` or remove it with
+`without_udf_depth_limit`. The shared host decoder accepts `max_udf_depth` and
+`unlimited_udf_depth`; supplying both is a typed conflict. `no_ceiling` removes
+the depth limit with the other resource ceilings and rejects a simultaneous finite
+depth. The evaluator retains suspended UDF work on the heap; removing the logical
+limit does not remove memory admission, cancellation or physical stack checks at
+host callbacks.
 
 ### 3.1 `answer-rows` is an operational cap, never `LIMIT`
 
@@ -536,7 +542,7 @@ next and produce an intermittent, essentially undiscoverable bug.
 | Constant | Value / how to read it |
 |---|---|
 | `GOVERNOR_PROFILE_ID` | `purrdf-sparql-governors` |
-| `GOVERNOR_PROFILE_VERSION` | `22` |
+| `GOVERNOR_PROFILE_VERSION` | `23` |
 | `GOVERNOR_PROFILE_DIGEST` | derived — see below |
 | `STOP_POLL_FUEL` | `4093` |
 
@@ -553,7 +559,7 @@ no entry encodes two ways and no two distinct schedules encode alike. A consumer
 therefore recompute it from this document alone:
 
 ```sh
-{ printf 'purrdf-sparql-governors\n22\n'
+{ printf 'purrdf-sparql-governors\n23\n'
   printf '%s\t1\n' algebra-node-entry committed-output-row bgp-candidate-quad \
     path-frontier-expansion row-expression-evaluation user-function-invocation \
     remote-request-issued remote-row-ingested update-mutated-quad \
@@ -605,7 +611,7 @@ green.
 
 The wall-deadline smoke case is the deliberate exception: it has only the outcome
 discriminant because rows and spend depend on elapsed time. Across the corpus there
-are 54 cases total, of which 46 form zero, boundary, or over-bound lanes and the
+are 57 cases total, of which 49 form zero, boundary, or over-bound lanes and the
 remaining 8 are transport, relation, charge-seam, `EXISTS`-evidence, and wall-clock
 cases.
 
@@ -698,7 +704,7 @@ increment it. That restraint is what makes the number worth pinning.
 | 10 | fuel schedule byte-identical; each scratch arena charges its own retention independently of aggregate buffers/state and child arenas, so an unrelated scratch charge cannot hide later computed values. Concrete identity registration, fresh blank mints and stateful child reservation copies checkpoint scratch growth immediately. Incomplete expression/template/list/SERVICE output is withheld and staged UPDATE publication is aborted on a trip. Scratch consumption and the point at which a scratch ceiling trips can move |
 | 11 | fuel schedule byte-identical; eligible positive operands of ordinary joins receive incoming bindings, replacing independent-relation work with indexed candidate visits and carried rows. OPTIONAL evaluates its positive right operand per driver occurrence, moving node-entry counts and row-charge order; eligible correlated EXISTS/NOT EXISTS uses native restrictions and the first-witness definition path, moving candidate and existence-evidence charges. Carried columns change intermediate-cell widths, and admission forecasts the seeded plan with relation-local join domains. Complete answers keep their scope and bag multiplicity; fuel totals and budget-cut points can move |
 | 12 | fuel schedule and query charges byte-identical; governed UPDATE polls before each bulk named-graph declaration withdrawal and after freezing its private branch before publication. Metadata-only work and the final publication boundary can observe a stop earlier, while declarations remain distinct from charged quad mutations |
-| **13** | The schedule is unchanged; what `row-expression-evaluation` counts and when a scratch ceiling trips move, because `xsd:integer` and `xsd:decimal` became exact at every size: an operation on a value past machine words runs on the arbitrary-precision tower, where one product of two million-digit integers is billions of limb operations, and a value of one-digit coefficient can have a million-digit rendering (squaring `0.1` doubles its scale). Priced by one `row-expression-evaluation` like any expression, a chain of squarings could run until memory ran out under every ceiling. Every tower operation — arithmetic, comparison, unary functions, casts, the rendering of a result, `SUM`/`AVG`/`MIN`/`MAX`/`ORDER BY` and the statistical aggregates over such values, and any division under a non-default policy — now charges `row-expression-evaluation` once per base-`1e9` limb operation of its own cost bound, computed from the operand sizes alone, and admits its working bytes against the scratch-byte ceiling (refused when they would not fit beside everything already minted; not added to the running total), before it runs. Machine-word operands charge nothing extra, so a query whose numbers fit machine words buys exactly the execution it bought under v12. The charges reach the governor in evaluation order on every host: a governed `FILTER`, `BIND`, `GROUP BY` or `OPTIONAL` filter can fork under fuel/scratch ceilings when no other caller-set ceiling prevents it, each worker records every charge its rows, groups or left rows make from inside their evaluation (fuel, explicit scratch, transient working sets and the arena's growth, each admitted against the headroom at the fork), and the ordered commit makes them again in source order on the evaluation's own context, counting the workers' mints into its arena as it goes. Trips, consumption and answers are therefore those of the loops run in order (as the wasm32 build runs them) at every thread count, and as there a trip inside an expression withholds the operator's output. A caller's fuel or scratch ceiling selects small blocks its workers take in input order; the workers share one running total of their spend, minted bytes included, and every worker stops once that total passes the headroom, the commit then tripping where the in-order loop does or finishing the loop in order from the first item a worker stopped at, so what a loop holds past its ceiling is about one headroom plus each worker's unreported sharing interval and row in flight. Stop-only and unlimited metering use normal chunks with the same ordered accounting. Cell accounting and forecast admission remain engaged even when the common row-ceiling helper discards a bound whose outer solution-vector layout is unrepresentable. Reachable cell limits keep bounded sequential production; bookkeeping-only cells permit eligible native and CLI `--fuel` OPTIONAL filters to fork, with fallible output reservation and ordered concatenation. Historically, on 4,400 rows of 3,125-digit integers raised to the 32nd power (about 1.75 MB of scratch per row; 67 MB to load the data), peak memory is 130, 231 and 284 MB on 1, 8 and 32 threads under a 100,000,000-byte ceiling, and 438, 505 and 536 MB under a 400,000,000-byte one. A forked loop of v12 dropped the terms its workers minted and did not keep (a query's constants, intermediate values), so it charged less scratch than the same loop run in order: `SELECT (UCASE("abc") AS ?u) {}` charges 148 bytes (74 under v12) and the `concat` corpus cases 465 (353), `exists-inner-counters` charges 153 (76), and a custom aggregate's scratch over-bound certifies the in-order fold's (empty) prefix |
+| **13** | The schedule is unchanged; what `row-expression-evaluation` counts and when a scratch ceiling trips move, because `xsd:integer` and `xsd:decimal` became exact at every size: an operation on a value past machine words runs on the arbitrary-precision tower, where one product of two million-digit integers is billions of limb operations, and a value of one-digit coefficient can have a million-digit rendering (squaring `0.1` doubles its scale). Priced by one `row-expression-evaluation` like any expression, a chain of squarings could run until memory ran out under every ceiling. Every tower operation — arithmetic, comparison, unary functions, casts, the rendering of a result, `SUM`/`AVG`/`MIN`/`MAX`/`ORDER BY` and the statistical aggregates over such values, and any division under a non-default policy — now charges `row-expression-evaluation` once per base-`1e9` limb operation of its own cost bound, computed from the operand sizes alone, and admits its working bytes against the scratch-byte ceiling (refused when they would not fit beside everything already minted; not added to the running total), before it runs. Machine-word operands charge nothing extra, so a query whose numbers fit machine words buys exactly the execution it bought under v12. The charges reach the governor in evaluation order on every host: a governed `FILTER`, `BIND`, `GROUP BY` or `OPTIONAL` filter can fork under fuel/scratch ceilings when no other caller-set ceiling prevents it, each worker records every charge its rows, groups or left rows make from inside their evaluation (fuel, explicit scratch, transient working sets and the arena's growth, each admitted against the headroom at the fork), and the ordered commit makes them again in source order on the evaluation's own context, counting the workers' mints into its arena as it goes. Trips, consumption and answers are therefore those of the loops run in order (as the `wasm32` build runs them) at every thread count, and as there a trip inside an expression withholds the operator's output. A caller's fuel or scratch ceiling selects small blocks its workers take in input order; the workers share one running total of their spend, minted bytes included, and every worker stops once that total passes the headroom, the commit then tripping where the in-order loop does or finishing the loop in order from the first item a worker stopped at, so what a loop holds past its ceiling is about one headroom plus each worker's unreported sharing interval and row in flight. Stop-only and unlimited metering use normal chunks with the same ordered accounting. Cell accounting and forecast admission remain engaged even when the common row-ceiling helper discards a bound whose outer solution-vector layout is unrepresentable. Reachable cell limits keep bounded sequential production; bookkeeping-only cells permit eligible native and CLI `--fuel` OPTIONAL filters to fork, with fallible output reservation and ordered concatenation. Historically, on 4,400 rows of 3,125-digit integers raised to the 32nd power (about 1.75 MB of scratch per row; 67 MB to load the data), peak memory is 130, 231 and 284 MB on 1, 8 and 32 threads under a 100,000,000-byte ceiling, and 438, 505 and 536 MB under a 400,000,000-byte one. A forked loop of v12 dropped the terms its workers minted and did not keep (a query's constants, intermediate values), so it charged less scratch than the same loop run in order: `SELECT (UCASE("abc") AS ?u) {}` charges 148 bytes (74 under v12) and the `concat` corpus cases 465 (353), `exists-inner-counters` charges 153 (76), and a custom aggregate's scratch over-bound certifies the in-order fold's (empty) prefix |
 | **14** | The schedule is unchanged. Exact arithmetic uses the workspace's shared binary `u64` integer engine. Numeric costs account for eight-byte limbs, multiplication and division working storage, and the decimal parsing/rendering base conversions. Admission reads constant-time binary size bounds; an uncertain decimal digit bound cannot trigger an exact-exponent shortcut. Machine-word dispatch and its inline `i128` operations remain unchanged. Remeasure arbitrary-precision fuel and scratch ceilings against the regenerated corpus. |
 | **15** | The schedule is unchanged. Evidence-bearing `EXISTS`/`NOT EXISTS` retains the original body and every alternative witness rather than using the ordinary definition path's synthetic first-witness `Slice`; node/output charges follow the actual body. |
 | **16** | Appends `native-function-work`. A native extension kernel admits its physical storage and charges its documented internal work chunks through the same caller's governor, polling between chunks. The previous seventeen labels retain their order and unit costs. Queries without these native calls retain their schedule. Remeasure ceilings for the selected kernel and profile. |
@@ -708,6 +714,7 @@ increment it. That restraint is what makes the number worth pinning.
 | **20** | The schedule is unchanged. Snapshot-bound predicate/class counts, positional distinct domains and structural statement statistics guide dynamic-programming and greedy join ordering. Chronological stores distinguish conservative physical bounds from exact effective counts. Changed orders move candidate, intermediate and scratch charges; remeasure ceilings against representative queries even when complete answers are unchanged. |
 | **21** | The schedule is unchanged. A decimal an operator, function or aggregate computes is rendered with a decimal point and a fractional digit (`4.0`), and `SECONDS` returns the seconds field of the lexical form with its leading zero (`05.5`, `00`). The longer text moves scratch charges and pinned costs; remeasure scratch ceilings even when numeric values are unchanged. |
 | **22** | The schedule is unchanged. `SECONDS` copies the seconds field of its argument's lexical form as written (`05.500`) instead of rendering the parsed value, so it charges the bytes of that field and no decimal rendering work. Unary plus returns its operand term as written and charges nothing. The render charge of a computed whole decimal wider than the inline representation prices its `.0`, two bytes more than before. Remeasure fuel and scratch ceilings even when answers are unchanged. |
+| **23** | Charge labels and prices are unchanged. Logical UDF depth is caller-settable: ordinary queries and `METERED` default to 32; `UNBOUNDED` or explicit removal eliminates that limit. Suspended functions and operators retain admitted continuations on the heap. Remeasure scratch and truncation boundaries against the regenerated corpus, and explicitly select a larger or unlimited depth when measuring deep recursion. |
 
 Version **15** keeps the charge schedule unchanged. Evidence-bearing
 `EXISTS`/`NOT EXISTS` evaluates the original body, retaining every alternative
@@ -725,7 +732,7 @@ ceilings and stop cut points.
 A version bump is not a drop-in upgrade, and the list is short because each item is
 a thing a pinned number can silently stop meaning:
 
-1. **Re-read `GOVERNOR_PROFILE_VERSION`** and confirm it now reads `22` — the version
+1. **Re-read `GOVERNOR_PROFILE_VERSION`** and confirm it now reads `23` — the version
    this section describes, and the one every other step below re-verifies against —
    then **re-read `GOVERNOR_PROFILE_DIGEST`** and confirm it matches the schedule you
    intend to price against. If the digest moved but the version did not, the build is

@@ -377,7 +377,7 @@ fn run_with_registry(
         .query_with_options_view(
             &**ds,
             request(&text),
-            QueryOptions::new().with_env(registry),
+            &QueryOptions::new().with_env(registry),
         )
         .unwrap_or_else(|e| panic!("query failed: {e:?}\nquery: {text}"))
 }

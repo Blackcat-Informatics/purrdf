@@ -81,7 +81,7 @@ fn graphs_after(update: &str) -> Vec<String> {
         .update_with_options(
             &mut ds,
             request(&text),
-            QueryOptions::EMPTY.with_graph_existence(purrdf_core::GraphExistenceMode::Implicit),
+            &QueryOptions::EMPTY.with_graph_existence(purrdf_core::GraphExistenceMode::Implicit),
         )
         .expect("update");
     let mut frozen: Vec<String> = ds
@@ -103,7 +103,7 @@ fn graphs_after(update: &str) -> Vec<String> {
         .update_with_options(
             &mut within,
             request(&text),
-            QueryOptions::EMPTY.with_graph_existence(purrdf_core::GraphExistenceMode::Implicit),
+            &QueryOptions::EMPTY.with_graph_existence(purrdf_core::GraphExistenceMode::Implicit),
         )
         .expect("update");
     let seen = select_names(
@@ -129,7 +129,7 @@ fn graphs_after(update: &str) -> Vec<String> {
         .update_with_options(
             &mut constant,
             request(&text),
-            QueryOptions::EMPTY.with_graph_existence(purrdf_core::GraphExistenceMode::Implicit),
+            &QueryOptions::EMPTY.with_graph_existence(purrdf_core::GraphExistenceMode::Implicit),
         )
         .expect("update");
     let hits = select_names(
@@ -160,7 +160,7 @@ fn default_quads_after(update: &str) -> usize {
         .update_with_options(
             &mut ds,
             request(&text),
-            QueryOptions::EMPTY.with_graph_existence(purrdf_core::GraphExistenceMode::Implicit),
+            &QueryOptions::EMPTY.with_graph_existence(purrdf_core::GraphExistenceMode::Implicit),
         )
         .expect("update");
     ds.quads().filter(|q| q.g.is_none()).count()

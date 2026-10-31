@@ -84,7 +84,7 @@ fn eval_case(
     .map_err(|e| format!("extension environment: {e}"))?;
     let options = QueryOptions::new().with_env(&env);
     engine
-        .query_with_source(dataset, request, remote, options)
+        .query_with_source(dataset, request, remote, &options)
         .map_err(|e| format!("evaluate {}: {e}", case.iri))
 }
 

@@ -306,11 +306,15 @@ ownership, and all limits. Complete examples are in
 - `QueryEngine.queryGoverned(dataset, sparql, options?)` /
   `updateGoverned(dataset, sparql, options?)` — the same evaluator under caller-supplied
   execution governors: `fuel`, `deadlineMs`, `maxAnswers`, `maxIntermediateCells`,
-  `maxScratchBytes`, `maxRemoteRequests`, and a `CancellationToken`. Every ceiling is
+  `maxScratchBytes`, `maxRemoteRequests`, `maxUdfDepth`, `unlimitedUdfDepth`, and a
+  `CancellationToken`. Every ceiling is
   inclusive, and `0` is a valid ceiling that trips on the first charged unit of work.
   Omitted resource caps use the engine's `METERED` baseline: every dimension is
-  accounted for without a reachable cap. Set `noCeiling: true` to remove resource
-  caps and accounting explicitly. It refuses any simultaneous resource cap;
+  accounted for, with a default logical UDF depth limit of 32. Set `maxUdfDepth`
+  to a finite limit, or `unlimitedUdfDepth: true` to remove that limit. Supplying
+  both is a typed conflict. Set `noCeiling: true` to remove resource caps,
+  including UDF depth, and accounting explicitly. It refuses any simultaneous
+  finite resource cap;
   `deadlineMs`, cancellation and asynchronous `signal` still work. `false` keeps
   the metered baseline. This boolean is accepted by every governed twin, including
   entailment and negotiated asynchronous queries; ungoverned calls refuse it.

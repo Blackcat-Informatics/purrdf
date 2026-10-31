@@ -106,13 +106,13 @@ fn bounded_matrix(query: &str, mut check: impl FnMut(&RetainedSparqlResult)) {
         let result = match entry {
             0 => {
                 engine
-                    .query_fallible_view(&source, request(), QueryOptions::EMPTY)
+                    .query_fallible_view(&source, request(), &QueryOptions::EMPTY)
                     .unwrap()
                     .result
             }
             1 => {
                 engine
-                    .query_prepared_fallible_view(&source, &prepared, &[], QueryOptions::EMPTY)
+                    .query_prepared_fallible_view(&source, &prepared, &[], &QueryOptions::EMPTY)
                     .unwrap()
                     .result
             }
@@ -121,7 +121,7 @@ fn bounded_matrix(query: &str, mut check: impl FnMut(&RetainedSparqlResult)) {
                     .query_governed_fallible_view(
                         &source,
                         request(),
-                        QueryOptions::EMPTY,
+                        &QueryOptions::EMPTY,
                         &QueryGovernors::METERED,
                     )
                     .unwrap()
@@ -133,7 +133,7 @@ fn bounded_matrix(query: &str, mut check: impl FnMut(&RetainedSparqlResult)) {
                         &source,
                         &prepared,
                         &[],
-                        QueryOptions::EMPTY,
+                        &QueryOptions::EMPTY,
                         &QueryGovernors::METERED,
                     )
                     .unwrap()
