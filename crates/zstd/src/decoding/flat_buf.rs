@@ -14,7 +14,7 @@
 //! whole `DecodeBuffer` surface collapses to a growing `Vec<u8>` plus a
 //! logical head index for streamed drains. Skipping the ring buffer's
 //! wrap-dispatch on every push/repeat/drain is the win this module is
-//! targeted at — see backlog item #132.
+//! targeted at.
 //!
 //! Selected at compile time via `DecodeBuffer<FlatBuf>` (generic
 //! [`BufferBackend`](super::buffer_backend::BufferBackend)

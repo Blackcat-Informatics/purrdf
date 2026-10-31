@@ -95,7 +95,7 @@ pub(crate) const DFAST_REBASE_GUARD_BAND: u32 = 1u32 << 30;
 // (upstream `kStepIncr`, zstd_double_fast.c:131). A smaller value accelerates
 // the scan faster and skips source positions upstream still inserts, which
 // drops the short matches upstream finds at a block start — so the
-// `#167`-disabled path must use the upstream 8 to stay byte-identical.
+// Search-disabled path must use the upstream 8 to stay byte-identical.
 pub(crate) const DFAST_SKIP_SEARCH_STRENGTH: usize = 8;
 pub(crate) const DFAST_SKIP_STEP_GROWTH_INTERVAL: usize = 1 << DFAST_SKIP_SEARCH_STRENGTH;
 pub(crate) const DFAST_INCOMPRESSIBLE_SKIP_STEP: usize = 16;
@@ -249,7 +249,7 @@ pub struct MatchGeneratorDriver {
     pub(crate) parse: super::strategy::ParseMode,
 
     /// Fine-grained per-knob overrides from the public
-    /// [`super::parameters::CompressionParameters`] surface (#27).
+    /// [`super::parameters::CompressionParameters`] surface.
     /// `None` (or an all-`None` [`super::parameters::ParamOverrides`])
     /// keeps the resolved level geometry byte-identical to plain
     /// level-based compression. Applied in [`Matcher::reset`] after the
@@ -294,7 +294,7 @@ pub struct MatchGeneratorDriver {
     reset_dict_attach_ok: bool,
     // Hint-resolved matcher shape from the last `reset`: the [`LevelParams`], the
     // active backend's applied Dfast/Row hash-table width (`0` for HC/Fast), the
-    // Fast attach-vs-copy mode, and the active LDM override (#27). Combined with
+    // Fast attach-vs-copy mode, and the active LDM override. Combined with
     // the frame's level into the [`PrimedKey`] that keys the primed snapshot, so
     // it is only restored into a reset that resolved the identical matcher AND
     // LDM configuration. `None` before the first `reset`.
@@ -371,7 +371,7 @@ struct PrimedKey {
     params: LevelParams,
     table_bits: usize,
     fast_attach: bool,
-    /// Fine-grained LDM override (#27) active at capture time. The
+    /// Fine-grained LDM override active at capture time. The
     /// snapshot's cloned `storage` carries `BtMatcher::ldm_producer`,
     /// which is configured from this override; restoring a snapshot
     /// captured under a different LDM configuration (enable flip or
@@ -478,7 +478,7 @@ impl MatchGeneratorDriver {
         resolve_level_params(level, source_size)
     }
 
-    /// Install the public-parameter per-knob overrides (#27) applied at
+    /// Install the public-parameter per-knob overrides applied at
     /// the next [`Matcher::reset`]. `None` (or an all-`None` set) restores
     /// plain level-based geometry. Persists across resets until changed.
     pub(crate) fn set_param_overrides(
@@ -930,7 +930,7 @@ impl Matcher for MatchGeneratorDriver {
     /// is active (the caller short-circuits on `dict_active`), so this answers
     /// "could the dict compress this otherwise-incompressible-looking block?".
     /// The Simple (Fast) backend samples its dict table precisely
-    /// ([`FastKernelMatcher::block_samples_match_dict`]); the other backends
+    /// (`FastKernelMatcher::block_samples_match_dict`); the other backends
     /// (Dfast / Row / HashChain / BT) have their own dict structures and no cheap
     /// probe here, so they answer CONSERVATIVELY `true`: without a probe they
     /// cannot tell whether the dict compresses an incompressible-LOOKING block,
@@ -990,7 +990,7 @@ impl Matcher for MatchGeneratorDriver {
         // synthetic pairing applies to exactly this `reset()`, and a later
         // reset on the same driver falls back to the level's real config.
 
-        // Public-parameter overrides (#27): apply the per-knob set on top
+        // Public-parameter overrides: apply the per-knob set on top
         // of the level-resolved params. A strategy override re-routes the
         // backend, so this must precede `next_backend` selection. The
         // all-`None` case is skipped so default level geometry stays
@@ -1044,7 +1044,7 @@ impl Matcher for MatchGeneratorDriver {
             // `cdict_table_logs` only ever downsizes, so it never exceeds the base
             // level geometry, while the eviction `window_log` stays source-derived so
             // the dictionary bytes remain referenceable. Active public-parameter
-            // overrides (#27) are applied to the base too, so a strategy override
+            // overrides are applied to the base too, so a strategy override
             // that routes onto HashChain/BinaryTree still gets dict-tier sizing and
             // explicit hash/chain overrides feed through as the geometry ceiling.
             let mut base_params = Self::level_params(level, None);
@@ -1132,7 +1132,7 @@ impl Matcher for MatchGeneratorDriver {
             // override is range-validated to `ZSTD_HASHLOG_MIN = 6` at the
             // parameter API, so the value is always >= 6 here.
             //
-            // A public `chain_log` override (#27) is dropped by the RowHash
+            // A public `chain_log` override is dropped by the RowHash
             // override arm (Row has no chain table), but once this frame falls
             // back to HC the chain table is live and must honour it — mirror
             // the native HC dict path, which feeds the override-applied
@@ -1484,7 +1484,7 @@ impl Matcher for MatchGeneratorDriver {
                 }
             }
         }
-        // LDM wiring (#27): attach (or clear) the long-distance-match
+        // LDM wiring: attach (or clear) the long-distance-match
         // producer on the optimal (BT) backend. LDM is the only
         // back-reference path that crosses the regular window, so it
         // only has a home on the `BtMatcher`; non-BT strategies drop the
@@ -1665,12 +1665,11 @@ impl Matcher for MatchGeneratorDriver {
                 // eviction (so this `pre - post` delta correctly
                 // feeds the dictionary-budget retire flow). See
                 // `FastKernelMatcher::accept_data` for the
-                // commit-time-visibility rationale (closes #216
-                // CodeRabbit review #5 / Copilot review #1: without
+                // commit-time-visibility rationale: without
                 // eager eviction, the delta was always 0 and the
                 // dict budget never retired, leaving max_window_size
                 // inflated post-dict-prime → matcher could emit
-                // offsets exceeding the frame header's window).
+                // offsets exceeding the frame header's window.
                 evicted_bytes += pre.saturating_sub(post);
             }
             MatcherStorage::Dfast(m) => {

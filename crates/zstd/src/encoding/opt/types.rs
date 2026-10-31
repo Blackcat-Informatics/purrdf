@@ -5,7 +5,7 @@
 )]
 //! Plain-data types used by the optimal-parser DP and traceback.
 //!
-//! Extracted from `match_generator.rs` as part of #111 Phase 1
+//! Shared with `match_generator.rs`
 //! (structural split). Names, fields, derives, and `Default` impls are
 //! preserved; the only intentional internal-API change is the
 //! `pub(crate)` visibility on each item so the remaining methods on

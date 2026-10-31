@@ -13,7 +13,7 @@
 //! v1.5.7. The 256-entry permutation table [`GEAR_TAB`] is reproduced
 //! verbatim from `lib/compress/zstd_ldm_geartab.h` so split points
 //! computed from any byte stream match the upstream zstd bit-for-bit — a
-//! prerequisite for the ratio-parity goal of #111 Phase 5.
+//! prerequisite for compression-ratio parity.
 //!
 //! # Algorithm
 //!

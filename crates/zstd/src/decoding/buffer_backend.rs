@@ -20,8 +20,7 @@
 //! [`super::decode_buffer::DecodeBuffer<B>`] and cascades through
 //! `DecoderScratch<B>` to the block-level decode functions. The
 //! compiler monomorphises each backend independently and erases the
-//! wrap-checking code path entirely on the flat side — see backlog
-//! item #132. An earlier attempt with a runtime `enum BufferStorage`
+//! wrap-checking code path entirely on the flat side. A runtime `enum BufferStorage`
 //! paid match-dispatch overhead in every push/repeat and measured a
 //! +43–58 % regression on small-frame decompress benchmarks, so the
 //! compile-time generic shape is load-bearing.
@@ -203,8 +202,7 @@ pub(crate) trait BufferBackend: Sized {
 
     /// AVX2-tier variant of [`Self::exec_sequence_inline`]. Same
     /// contract but the **no-overlap match-copy** path (`offset >= 32`)
-    /// emits 32-byte ymm stores via `wildcopy_no_overlap_avx2`. Issue
-    /// #279 round 3 Phase 4: invoked only from
+    /// emits 32-byte ymm stores via `wildcopy_no_overlap_avx2`. Invoked only from
     /// `execute_one_sequence_pipelined_avx2` which is itself
     /// `#[target_feature(enable = "avx2,bmi2")]`.
     ///
@@ -263,7 +261,8 @@ pub(crate) trait BufferBackend: Sized {
     /// match-copy macro `exec_sequence_avx2_inline!` (which expands the
     /// AVX2 `ZSTD_execSequence` body textually at the sequence-loop call
     /// site so it fuses into the per-tier monolith — `#[target_feature]`
-    /// functions cannot be `#[inline(always)]`, rust#145574). Only valid
+    /// functions cannot be `#[inline(always)]`
+    /// ([compiler restriction](https://github.com/rust-lang/rust/issues/145574)). Only valid
     /// when [`Self::SUPPORTS_INLINE_SEQUENCE_EXEC`]; the linear backends
     /// (`UserSliceBackend`, `FlatBuf`) override, `RingBuffer` never reaches
     /// it (gated, wrap-aware fallback).

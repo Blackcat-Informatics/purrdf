@@ -65,7 +65,7 @@
 //! user slice) and one anonymous-page allocation cycle per frame.
 //! On `level_-7_fast/decodecorpus-z000033/rust_stream` the
 //! direct-write path measured -20.33% vs the FlatBuf+drain path on
-//! i9-9900K — see #244 for the flamegraph.
+//! `i9-9900K`.
 //!
 //! Selected at compile time via `DecodeBuffer<UserSliceBackend<'a>>`
 //! (generic [`BufferBackend`](super::buffer_backend::BufferBackend)
@@ -452,7 +452,7 @@ impl<'a> BufferBackend for UserSliceBackend<'a> {
     }
 
     /// AVX2-tier override of [`BufferBackend::exec_sequence_inline_avx2`].
-    /// Issue #279 round 3 Phase 4: divergent only at the
+    /// Divergent only at the
     /// match-copy no-overlap path with `offset >= 32`, where the
     /// SSE2 16-byte `wildcopy_no_overlap` is replaced by the 32-byte
     /// ymm `wildcopy_no_overlap_avx2`. The mid-offset range `16..=31`

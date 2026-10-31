@@ -163,7 +163,7 @@ impl FSETable {
     /// arithmetic were already built during table construction and
     /// previously discarded — now they live on the FSETable
     /// ([`SymbolTT`] + [`Self::state_table_flat`]) and `next_state` is
-    /// pure arithmetic + one array load. See #164.
+    /// pure arithmetic + one array load.
     #[inline]
     pub(crate) fn next_state(&self, symbol: u8, idx: usize) -> State {
         // Upstream zstd formulas, transliterated:
@@ -333,9 +333,8 @@ pub(super) struct SymbolStates {
 }
 
 // SymbolStates::get (the old linear-scan next-state lookup) was
-// replaced by [`FSETable::next_state`]'s O(1) upstream zstd arithmetic in
-// #164. The legacy per-symbol `Vec<State>` storage was dropped in
-// #110: production no longer materializes any per-state vector; upstream zstd
+// replaced by [`FSETable::next_state`]'s O(1) upstream zstd arithmetic.
+// Production no longer materializes any per-state vector; upstream zstd
 // `FSE_buildCTable_wksp` only ever stores `nextStateTable` (here
 // [`FSETable::state_table_flat`]) + `symbolTT` (here
 // [`FSETable::symbol_tt`]). Everything else — start state,
@@ -353,8 +352,7 @@ pub(crate) struct State {
     /// [`FSETable::next_state`] for parity with the old
     /// `Vec<State>` storage and consumed by the BTreeSet dedup in the
     /// table builder (`build_table_from_probabilities`); not read on
-    /// the encode hot path (the linear-search consumer was retired in
-    /// #164).
+    /// the encode hot path, which uses constant-time arithmetic.
     #[allow(dead_code)]
     pub(crate) last_index: usize,
     /// Index of this state in the decoding table

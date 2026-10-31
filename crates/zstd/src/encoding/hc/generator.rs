@@ -84,7 +84,7 @@ pub(crate) struct HcMatchGenerator {
 }
 
 // Plain-data types relocated to [`crate::encoding::opt::types`] and
-// [`crate::encoding::opt::ldm`] by #111 Phase 1. The use statements at
+// [`crate::encoding::opt::ldm`]. The use statements at
 // the top of this file bring them back into scope so the existing
 // methods on `HcMatchGenerator` compile unchanged.
 
@@ -1142,7 +1142,7 @@ impl HcMatchGenerator {
         }
     }
 
-    /// Install (or clear) the long-distance-match producer (#27). Only
+    /// Install (or clear) the long-distance-match producer. Only
     /// the BT backend owns an `ldm_producer` slot; on the HC (lazy)
     /// backend the producer is dropped because there is no optimal-parser
     /// candidate buffer to seed. Call after [`Self::reset`].

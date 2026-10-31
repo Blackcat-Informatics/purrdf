@@ -28,8 +28,8 @@ pub(crate) fn do_offset_history(offset_value: u32, lit_len: u32, scratch: &mut [
     do_offset_history_repcode(offset_value, lit_len, scratch)
 }
 
-// Previously `#[cold]+#[inline(never)]`; round-1 findings on issue
-// #279 attributed 15.42% of decoder mispredicts to this function with
+// Previously `#[cold]+#[inline(never)]`; profiling
+// attributed 15.42% of decoder mispredicts to this function with
 // 27.80% on the `pushq %rax` fn entry — call/ret BTB pressure from
 // the never-inlined boundary. `#[inline(never)]` was dropped first,
 // keeping `#[cold]` to preserve out-of-line layout for low-entropy

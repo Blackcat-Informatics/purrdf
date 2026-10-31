@@ -73,7 +73,7 @@ pub(crate) unsafe fn common_prefix_len_ptr(lhs: *const u8, rhs: *const u8, max: 
     // common case on BT-tree node compares, where each node extends the seed by
     // only a short run — returns on one 8-byte read + count-trailing-zeros,
     // skipping the vector load. Longer matches fall through to the vector loop.
-    let chunk = core::mem::size_of::<usize>();
+    let chunk = size_of::<usize>();
     if chunk <= max {
         let lhs_word = unsafe { core::ptr::read_unaligned(lhs.cast::<usize>()) };
         let rhs_word = unsafe { core::ptr::read_unaligned(rhs.cast::<usize>()) };

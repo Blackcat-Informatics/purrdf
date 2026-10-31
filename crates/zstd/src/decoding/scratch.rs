@@ -27,8 +27,7 @@ use crate::blocks::sequence_section::{
 /// storage backend ([`BufferBackend`]). Default `RingBuffer` keeps
 /// the historical API; `DecoderScratch<FlatBuf>` is instantiated by
 /// [`super::frame_decoder::FrameDecoder`] (via `DecoderScratchKind`)
-/// when the frame's `Single_Segment_flag` is set — see backlog item
-/// #132.
+/// when the frame's `Single_Segment_flag` is set.
 pub(crate) struct DecoderScratch<B: BufferBackend = RingBuffer> {
     /// The decoder used for Huffman blocks.
     pub huf: HuffmanScratch,

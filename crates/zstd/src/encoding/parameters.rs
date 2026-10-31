@@ -8,7 +8,7 @@
     reason = "Inherited codec API; source identity and modifications are documented in PROVENANCE.md"
 )]
 //! Fine-grained compression parameters — the drop-in equivalent of C
-//! zstd's advanced `ZSTD_CCtx_setParameter` surface (#27).
+//! zstd's advanced `ZSTD_CCtx_setParameter` surface.
 //!
 //! [`CompressionLevel`](crate::encoding::CompressionLevel) selects a
 //! whole tuning preset in one knob. This module exposes the individual

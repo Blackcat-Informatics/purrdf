@@ -17,8 +17,7 @@
 //! reading a flat `Vec<u8>` history with a `Vec<u32>` hash table
 //! indexed by `hash_ptr<MLS>` (multiply-shift over the first MLS
 //! bytes). Replaces the legacy SuffixStore-based MatchGenerator
-//! that lived here through #111 Phase 1c and was removed in
-//! #198 phase 1b.
+//! previously used here.
 
 pub(crate) mod fast_kernel;
 pub(crate) mod fast_matcher;

@@ -34,7 +34,7 @@ macro_rules! ktrace {
 /// bytes when no matches are found, so incompressible regions skip
 /// ahead faster than the linear 1-byte advance.
 ///
-/// Issue #220 fix: previously had `SEARCH_STRENGTH = 6` (`K_STEP_INCR
+/// Previously used `SEARCH_STRENGTH = 6` (`K_STEP_INCR
 /// = 32`), causing our step doubling to fire 4× more frequently than
 /// upstream zstd — by ip0=1280 our step was ~40 while upstream zstd's was 12. This
 /// drove the +7.43% ratio gap on decodecorpus-z000033 at Level(1)

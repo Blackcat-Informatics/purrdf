@@ -305,7 +305,7 @@ pub(crate) fn decode_and_execute_sequences<'fse, B: super::buffer_backend::Buffe
             // available. The per-tier trampoline lives in its own
             // module (`seq_decoder_bmi2`) so future BMI2-specific
             // divergence can be applied without touching the other
-            // kernels — see #279 round 3.
+            // kernels.
             unsafe {
                 super::seq_decoder_bmi2::decode_and_execute_sequences_bmi2::<B>(
                     section,
@@ -360,8 +360,7 @@ pub(crate) fn decode_and_execute_sequences<'fse, B: super::buffer_backend::Buffe
 // Per-tier x86 trampolines (`decode_and_execute_sequences_{bmi2,avx2,vbmi2}`)
 // live in `seq_decoder_bmi2.rs` / `seq_decoder_avx2.rs` /
 // `seq_decoder_vbmi2.rs`. Each owns its `#[target_feature]` attribute
-// and is called from the dispatch matcher above. See issue #279
-// round 3 for the per-kernel architecture rationale.
+// and is called from the dispatch matcher above.
 
 // `dead_code` on x86_64 production: the per-kernel monoliths bypass
 // this shared body. Live on aarch64 (Neon/Sve dispatch arms) and on
@@ -1158,7 +1157,6 @@ pub(crate) fn execute_one_sequence_pipelined<B: super::buffer_backend::BufferBac
 /// exactly one site: the match-copy inline path routes to
 /// `BufferBackend::exec_sequence_inline_avx2` (32-byte ymm wildcopy on
 /// the no-overlap match path) instead of the SSE2 16-byte default.
-/// Issue #279 round 3 Phase 4.
 ///
 /// # Safety
 /// Caller MUST be in `#[target_feature(enable = "avx2,bmi2")]` scope
@@ -1600,8 +1598,7 @@ const LITERALS_LENGTH_DEFAULT_DISTRIBUTION: [i32; 36] = [
 // per axis plus several `Vec::resize` round-trips, while the symbol
 // stream itself is only a few hundred bytes.
 //
-// Flamegraph on `small-4k-log-lines/c_stream/pure_rust` (i9, post
-// PR #263 merge) showed 66.72% of decode time in
+// Flamegraph on `small-4k-log-lines/c_stream/pure_rust` (`i9`) showed 66.72% of decode time in
 // `FSETable::build_decoding_table`, all of it inside the Predefined
 // branches.
 //

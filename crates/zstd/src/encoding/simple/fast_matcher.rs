@@ -1078,7 +1078,7 @@ impl FastKernelMatcher {
         // = 1` when window_low is 0 (block 0 / pre-eviction blocks).
         // For later blocks (window_low >= 1) the two values coincide.
         //
-        // This SPLIT is the upstream zstd-parity fix for issue #220: using
+        // This SPLIT preserves upstream zstd parity: using
         // `prefix_start_index = 1` for the prologue's max_rep gave
         // `max_rep = 0` at ip0=1, zeroing upstream zstd's default
         // `rep_offset1 = 1` and disabling rep-at-ip2 for the entire

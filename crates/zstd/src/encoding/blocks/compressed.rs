@@ -607,7 +607,7 @@ fn encode_block_parts_with_sequence_scratch<M: Matcher>(
         // Single-pass histogram of ll/ml/of codes across all sequences.
         // Previously did three separate `sequences.iter().map(...)`
         // passes; folded into one loop here saves the per-element
-        // closure overhead (profile #220 round 3: `Map::fold` +
+        // closure overhead (profiling: `Map::fold` +
         // `call_mut` accounted for ~5% of total bench CPU).
         let mut ll_counts = [0usize; 256];
         let mut ml_counts = [0usize; 256];

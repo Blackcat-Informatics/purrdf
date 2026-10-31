@@ -439,7 +439,7 @@ pub enum DecodeBufferError {
     BackendOverflow,
     /// Repeat-side match copy would write past the writable tail of
     /// a fixed-capacity backend (`UserSliceBackend`). Surfaced by
-    /// [`super::decode_buffer::DecodeBuffer::repeat`] / `_lookahead`
+    /// `DecodeBuffer::repeat` / `_lookahead`
     /// when the new `BufferBackend::try_reserve` rejects the
     /// pre-write capacity check — keeping the safe public decode
     /// APIs error-returning instead of panicking via the per-call

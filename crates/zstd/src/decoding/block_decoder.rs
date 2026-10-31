@@ -271,7 +271,7 @@ impl BlockDecoder {
     ///   `decodecorpus-z000033` this `block_content_buffer` traffic
     ///   was the largest single contributor to the
     ///   `__memmove_avx_unaligned_erms` + `exc_page_fault` flame
-    ///   on the post-#244 baseline (~30% of decode time combined).
+    ///   in the measured baseline (~30% of decode time combined).
     pub(crate) fn decompress_block_inplace<W: Workspace>(
         &mut self,
         header: &BlockHeader,

@@ -82,7 +82,7 @@ impl LdmParams {
     /// caller-seeded) parameter set: fill every zero-valued knob from
     /// `window_log` / `strategy`, leaving non-zero fields untouched.
     ///
-    /// This is the path the public-parameter LDM overrides (#27) use:
+    /// This is the path the public-parameter LDM overrides use:
     /// the caller seeds the knobs it wants to pin (the rest stay zero),
     /// and `derive` completes the set with upstream zstd cross-field
     /// consistency (e.g. `hash_rate_log = window_log - hash_log` when a

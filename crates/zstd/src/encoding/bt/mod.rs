@@ -93,7 +93,7 @@ pub(crate) struct BtMatcher {
     /// every `CompressionLevel` preset leaves this field as
     /// `None`, matching upstream `libzstd.so.1` where
     /// `ZSTD_compress(..., level)` never enables LDM. The
-    /// opt-in surface (Rust parameter API, see #27) builds an
+    /// opt-in surface (Rust parameter API) builds an
     /// `LdmProducer` from caller-supplied params and assigns it
     /// here at frame setup time; `prepare_ldm_candidates` only
     /// consumes the field, it does not construct it. See
@@ -397,8 +397,7 @@ impl BtMatcher {
     /// long-distance match candidates here when `enableLdm ==
     /// ZSTD_ps_enable`. The default Rust encoder still keeps LDM
     /// disabled (`ldm_producer = None`); when an external caller
-    /// opts in (#18 Phase 5 wiring — see #27 for the parameter
-    /// surface), the producer is delegated to via
+    /// opts in through the parameter surface, the producer is delegated to via
     /// [`LdmProducer::generate_into`].
     ///
     /// While `ldm_producer.is_none()` the behaviour matches the
@@ -406,7 +405,7 @@ impl BtMatcher {
     /// so cross-frame carry-over is impossible if a producer is
     /// activated mid-session.
     ///
-    /// # Coordinate convention (PR #139 review feedback)
+    /// # Coordinate convention
     ///
     /// The producer operates entirely in **absolute stream
     /// coordinates** (so its bucket-table entries remain valid
@@ -634,8 +633,8 @@ impl BtMatcher {
     pub(crate) fn add_price_delta(price: u32, add: u32, delta: i32) -> u32 {
         #[cfg(debug_assertions)]
         {
-            let sum = price as i64 + add as i64 + delta as i64;
-            debug_assert!((0..=u32::MAX as i64).contains(&sum));
+            let sum = i64::from(price) + i64::from(add) + i64::from(delta);
+            debug_assert!((0..=i64::from(u32::MAX)).contains(&sum));
         }
         price.wrapping_add(add).wrapping_add_signed(delta)
     }

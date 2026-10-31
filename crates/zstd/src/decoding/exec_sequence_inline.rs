@@ -83,7 +83,8 @@ pub(crate) unsafe fn exec_sequence_bounded_copy(
 /// Textual expansion of the AVX2 `ZSTD_execSequence` body at the call
 /// site, fusing the match-copy into a per-tier sequence monolith. A
 /// `#[target_feature(avx2)]` function cannot be `#[inline(always)]`
-/// (rust#145574), so the [`BufferBackend::exec_sequence_inline_avx2`]
+/// ([compiler restriction](https://github.com/rust-lang/rust/issues/145574)),
+/// so the [`BufferBackend::exec_sequence_inline_avx2`]
 /// trait method stays a real CALL on the hot path; expanding the body via
 /// a macro removes that boundary (the reference `decompressSequences_bmi2`
 /// is one inlined monolith). Backend access goes through the inlinable
@@ -269,7 +270,7 @@ pub(crate) mod x86 {
 
     /// AVX2-tier `ZSTD_copy16`-equivalent: 32-byte ymm load/store. Used
     /// by the AVX2-scoped wildcopy variant below. Caller must be in
-    /// target_feature(avx2) scope. Issue #279 round 3 Phase 4.
+    /// target_feature(avx2) scope.
     ///
     /// # Safety
     /// `dst` and `src` must each be valid for 32 bytes; regions
@@ -289,7 +290,7 @@ pub(crate) mod x86 {
     /// up to 31 bytes past `dst + length`. Same caller contract as
     /// [`wildcopy_no_overlap`] but doubled stride; AVX2 / WILDCOPY_OVERLENGTH
     /// slack must accommodate ≥ 31 byte tail overshoot at the
-    /// destination. Issue #279 round 3 Phase 4.
+    /// destination.
     ///
     /// # Safety
     /// Same as [`wildcopy_no_overlap`] plus caller in

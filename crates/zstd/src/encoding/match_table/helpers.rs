@@ -8,9 +8,8 @@
     reason = "Inherited codec API; source identity and modifications are documented in PROVENANCE.md"
 )]
 //! Shared helpers and constants consumed by every match finder (Simple
-//! / Dfast / Row / Hc). Extracted from `match_generator.rs` as part of
-//! #111 Phase 1b so later commits can move each matcher into its own
-//! module without duplicating these primitives.
+//! / Dfast / Row / Hc). Matchers use their own modules without
+//! duplicating these primitives.
 //!
 //! Phase 1c additionally hosts `common_prefix_len` and the shared
 //! match-finder constants (`MIN_MATCH_LEN`, `FAST_HASH_FILL_STEP`,

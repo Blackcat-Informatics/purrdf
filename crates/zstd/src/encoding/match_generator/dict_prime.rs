@@ -85,8 +85,7 @@ impl MatchGeneratorDriver {
                 // tracks drift after dict priming — kernel emits
                 // repcode matches against stale FAST_INITIAL_REP
                 // while the wire encoder uses the primed history,
-                // producing divergent wire encoding (Copilot review
-                // #15 on #216).
+                // producing divergent wire encoding.
                 self.simple_mut().prime_offset_history(offset_hist);
             }
             super::super::strategy::BackendTag::Dfast => {

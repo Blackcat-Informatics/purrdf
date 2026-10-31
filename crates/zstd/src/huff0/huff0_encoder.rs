@@ -288,7 +288,7 @@ impl<V: AsMut<Vec<u8>>> HuffmanEncoder<'_, '_, V> {
             // fallback (which uses it directly to write nibbles). Without
             // this, the raw fallback would call back into `weights()` and
             // recompute the slice — a measurable hotspot for small /
-            // low-cardinality tables (#170 review thread).
+            // low-cardinality tables.
             let weights = self.weights();
             let weights = &weights[..weights.len() - 1];
             if let Some(fse_description) = self
@@ -470,7 +470,7 @@ impl HuffmanTable {
         Self::build_from_counts(&counts[..=max_symbol])
     }
 
-    /// Build the literals Huffman table, running the #167 table-log search
+    /// Build the literals Huffman table, running the table-log search
     /// only when `use_search` is set; otherwise take the cheap single-build
     /// (the upstream non-optimalDepth path). The caller gates `use_search` by
     /// strategy and source size (see `CompressState::huf_optimal_search`).
@@ -492,7 +492,7 @@ impl HuffmanTable {
             return Self::build_from_weights(&build_limited_weights(counts, 11));
         }
         // Measurement-only: force the cheap single-build path (the upstream
-        // non-optimalDepth path) so a bench harness can compare #167 on/off
+        // non-optimalDepth path) so a bench harness can compare search on/off
         // ratio and speed across levels from one build. Off in every shipping
         // build (gated behind `bench_internals`).
 
@@ -518,11 +518,11 @@ impl HuffmanTable {
         // entropy estimate of the weight description, no FSE encode.
         // Upstream zstd `HUF_writeCTable_wksp` picks the smaller of FSE / raw
         // serializations; the proxy mirrors that decision analytically.
-        // Empirically (#167 validation sweep across the compare_ffi
+        // Empirically (a validation sweep across the compare_ffi
         // matrix) the proxy preserves the `(table_log → total_size)`
         // minimum vs the exact `try_table_description_size` — so
         // selection is identical while the per-candidate FSE-encode
-        // cost is gone. Issue: #167.
+        // cost is gone.
         //
         // Stack-allocated `weights_u8` buffer (256 B — counts.len() max
         // = 256) absorbs the per-candidate `Vec<usize> → &[u8]`
@@ -787,7 +787,7 @@ impl HuffmanTable {
 /// a full FSE-encode of the weight stream against a freshly-built FSE
 /// table just to count bytes. For a 7-iteration `min_table_log..=11`
 /// search that is 7× FSE encode + 7× FSE table build per block — ~31 %
-/// inclusive on the 4 KiB profile (#167). This proxy reproduces the
+/// inclusive on the 4 KiB profile. This proxy reproduces the
 /// upstream zstd `HUF_writeCTable_wksp` decision (FSE vs raw nibble) without
 /// touching the FSE encoder.
 ///

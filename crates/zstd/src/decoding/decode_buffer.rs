@@ -33,8 +33,7 @@ use crate::decoding::errors::DecodeBufferError;
 ///   `DecoderScratchKind`) when the frame's `Single_Segment_flag`
 ///   is set. The compiler emits a separate monomorphisation per
 ///   backend so wrap dispatch is eliminated entirely on the flat
-///   side at compile time rather than branched at runtime — see
-///   backlog item #132.
+///   side at compile time rather than branched at runtime.
 pub(crate) struct DecodeBuffer<B: BufferBackend = RingBuffer> {
     buffer: B,
     // No dictionary reference is stored: an out-of-window match reads the

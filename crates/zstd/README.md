@@ -16,8 +16,8 @@ Native decoder errors retain their original fields and causes. Borrowed
 or cloning diagnostic buffers.
 
 See [PROVENANCE.md](PROVENANCE.md) for the imported source identity and local
-changes, and [NOTICE](NOTICE) for upstream attribution.
+changes, and the package's `NOTICE` file for upstream attribution.
 
 ## License
 
-Apache License, Version 2.0. See [LICENSE](LICENSE).
+Apache License, Version 2.0. See the package's `LICENSE` file.

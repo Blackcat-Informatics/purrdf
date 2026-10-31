@@ -224,8 +224,7 @@ pub(crate) unsafe fn copy_bytes_overshooting(
 
 /// AVX2-tier wildcopy variant: same shape as [`copy_bytes_overshooting`]
 /// but the chunked-SIMD path goes DIRECT to `copy_avx2` (32-byte
-/// chunks) without consulting `detect_x86_caps()`. Issue #279 round 3
-/// Phase 4: when called from inside a target_feature(avx2,bmi2)-scoped
+/// chunks) without consulting `detect_x86_caps()`. When called from inside a target_feature(avx2,bmi2)-scoped
 /// caller, the inlined `copy_avx2` body emits `_mm256_storeu_si256`
 /// ymm stores directly; the runtime dispatch branch + cached-OnceLock
 /// load that `copy_bytes_overshooting` paid per call is gone.
@@ -243,11 +242,10 @@ pub(crate) unsafe fn copy_bytes_overshooting(
 ///
 /// # Status
 /// Currently unused in production: the AVX2 match-copy inline path
-/// in PR #285 routes through `BufferBackend::exec_sequence_inline_avx2`
+/// routes through `BufferBackend::exec_sequence_inline_avx2`
 /// which uses the 32-byte wildcopy helpers in
 /// `exec_sequence_inline::x86` directly. This standalone variant is
-/// the bottom-layer building block for the next iteration
-/// (`perf/#279-r4-1c-avx2-layered-chain`) — it will be wired into the
+/// a bottom-layer building block for a
 /// per-tier `repeat_in_chunks_avx2` for the RingBuffer / FlatBuf
 /// (non-inline) backend paths. Keep the function until that work
 /// lands; remove if the layered-chain experiment ends up not retained.
@@ -390,11 +388,12 @@ unsafe fn single_op_copy_16(src: *const u8, dst: *mut u8, len: usize) {
 }
 
 #[inline(always)]
-fn debug_assert_eq_copy(_src: (*const u8, usize), _dst: (*mut u8, usize), _len: usize) {
+fn debug_assert_eq_copy(src: (*const u8, usize), dst: (*mut u8, usize), len: usize) {
+    let _ = (src, dst, len);
     #[cfg(debug_assertions)]
     unsafe {
-        let s = core::slice::from_raw_parts(_src.0, _len);
-        let d = core::slice::from_raw_parts(_dst.0, _len);
+        let s = core::slice::from_raw_parts(src.0, len);
+        let d = core::slice::from_raw_parts(dst.0, len);
         debug_assert_eq!(s, d);
     }
 }

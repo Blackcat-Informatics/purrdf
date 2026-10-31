@@ -10,13 +10,13 @@
 //! match window) and weaves them into candidate selection via
 //! `ldm_process_match_candidate`.
 //!
-//! Extracted from `match_generator.rs` as part of #111 Phase 1
+//! Shared with `match_generator.rs`
 //! (structural split). Names, fields, and derives are preserved;
 //! visibility was opened to `pub(crate)` so `match_generator` can
 //! import the relocated items through `super::opt::ldm::*`. The
 //! matcher methods that operate on these types remain on
 //! `HcMatchGenerator` for now. The actual LDM *matcher* (gear hash +
-//! bucket table) is scoped for #111 Phase 5 (implements #18).
+//! bucket table) lives in `super::super::ldm`.
 
 /// One raw LDM sequence: `lit_length` literal bytes followed by a back
 /// reference of `match_length` bytes at the given `offset`.

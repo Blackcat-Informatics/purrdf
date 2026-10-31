@@ -119,7 +119,7 @@ pub struct FrameDecoder {
     shared_dicts: BTreeMap<u32, DictionaryHandle>,
     #[cfg(not(target_has_atomic = "ptr"))]
     shared_dicts: (),
-    /// `ZSTD_f_zstd1_magicless` — when true, [`init`] / [`reset`]
+    /// `ZSTD_f_zstd1_magicless` — when true, [`init`](Self::init) / [`reset`](Self::reset)
     /// expect frames without the 4-byte magic number prefix.
     /// Default false (standard zstd format).
     magicless: bool,
@@ -183,7 +183,7 @@ impl DecoderScratchKind {
         // `decode_blocks` both call `DecoderScratchKind::reserve_buffer`
         // before any block writes), so multi-block frames pay one
         // amortised grow instead of repeated `reserve_amortized` steps
-        // per block. Issue #279 round 2.
+        // per block.
         let s = DecoderScratch::<RingBuffer>::new(window_size);
         Self::Ring(s)
     }
@@ -609,7 +609,7 @@ impl FrameDecoder {
 
     /// Enable or disable magicless frame format
     /// (`ZSTD_f_zstd1_magicless`). When set to `true`, subsequent
-    /// [`init`] / [`reset`] calls expect the frame header to begin
+    /// [`init`](Self::init) / [`reset`](Self::reset) calls expect the frame header to begin
     /// directly with the frame-header descriptor — no 4-byte magic
     /// number prefix. Default false. Must match the encoder's
     /// magicless setting; the format is unambiguous only when the
@@ -1658,7 +1658,7 @@ impl FrameDecoder {
 
     /// Default-feature decode_all_impl: no visitor parameter so the
     /// no-lsm build's call surface and codegen are byte-identical to
-    /// the pre-#172 implementation. Compiles only when `lsm` is OFF.
+    /// the original implementation. Compiles only when `lsm` is OFF.
 
     fn decode_all_impl(
         &mut self,

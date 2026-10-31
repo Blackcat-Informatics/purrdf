@@ -61,7 +61,7 @@ pub(crate) mod incompressible;
 pub(crate) mod match_generator;
 pub(crate) mod util;
 
-// `#111` encoder architecture rewrite. `cost_model`, `opt`,
+// Encoder architecture: `cost_model`, `opt`,
 // `strategy`, `dfast`, `row`, and `simple` host the relocated
 // cost-model types, the optimal-parser plain-data types, the
 // const-generic [`strategy::Strategy`] trait + per-level [`strategy::
@@ -254,7 +254,7 @@ pub const fn compress_bound(src_size: usize) -> usize {
 }
 
 /// Compress a byte slice into a fresh `Vec<u8>` using fine-grained
-/// [`CompressionParameters`] (#27) instead of a bare
+/// [`CompressionParameters`] instead of a bare
 /// [`CompressionLevel`].
 ///
 /// One-shot wrapper over [`FrameCompressor::set_parameters`] +

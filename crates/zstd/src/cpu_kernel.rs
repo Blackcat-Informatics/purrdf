@@ -15,14 +15,14 @@
 //! propagated through the inner pipeline as a generic parameter so
 //! leaf hot-path code monomorphises against the chosen kernel.
 //!
-//! See issue #247 for the architecture rationale: per-subsystem
+//! Architecture rationale: per-subsystem
 //! dispatch scatters the choice across HUF / FSE / SIMD-copy
 //! independently and pays the cost N times per call. Lifting the
 //! dispatch to the outermost feasible call site collapses it to one
 //! detect there; the inner leaf-hot-path ops then route through
 //! `K::method` calls on the chosen kernel zero-sized type.
 //!
-//! Current wiring (as of #247 Part 2): the only active dispatch site
+//! Current wiring: the only active dispatch site
 //! is `decoding::literals_section_decoder::decompress_literals`,
 //! which `match`es `detect_cpu_kernel()` and routes into per-K
 //! `decompress_literals_*` `#[target_feature]` wrappers. The full
@@ -342,7 +342,7 @@ impl CpuKernelTag {
 
 /// Name of the CPU kernel tier this process selected for the entropy /
 /// sequence hot paths: decode (literals + FSE sequence decode) and encode
-/// (entropy) share this dispatch (see #247). Returned as a stable lowercase
+/// (entropy) share this dispatch. Returned as a stable lowercase
 /// string for diagnostics and benchmark/dashboard reporting; the value is
 /// what the runtime CPU-feature detection (or compile-time `target_feature`
 /// on `no_std`) actually resolves to on this machine, so a dashboard can

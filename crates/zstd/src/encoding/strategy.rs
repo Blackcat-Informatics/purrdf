@@ -3,7 +3,7 @@
     missing_debug_implementations,
     reason = "Inherited codec API; source identity and modifications are documented in PROVENANCE.md"
 )]
-//! Encoder strategy types — Phase 3 of #111.
+//! Encoder strategy types.
 //!
 //! Every per-position branch the encoder used to dispatch at runtime
 //! (lazy / optimal split, BT walker on/off, hash3 short-match probe,

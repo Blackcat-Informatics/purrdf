@@ -13,9 +13,9 @@
 //!   `ZSTD_initStats_ultra`)
 //! - LDM integration (`optLdm_processMatchCandidate` parity hooks);
 //!   the actual LDM matcher (gear hash + bucket table) lands as a
-//!   dedicated `super::ldm` module during #111 Phase 5 (implements #18).
+//!   dedicated `super::ldm` module.
 //!
-//! Phase 1 of #111 extracts the plain-data types into [`types`] and the
+//! Plain-data types live in [`types`] and the
 //! LDM integration data types into [`ldm`]. DP method bodies stay on
 //! `HcMatchGenerator` for now — they migrate when the per-strategy split
 //! lands.

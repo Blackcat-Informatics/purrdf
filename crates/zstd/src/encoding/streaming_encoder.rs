@@ -63,7 +63,7 @@ pub struct StreamingEncoder<W: Write, M: Matcher = MatchGeneratorDriver> {
     content_size_flag: bool,
     bytes_consumed: u64,
     /// Effective strategy tag when a public-parameter
-    /// [`Strategy`](crate::encoding::Strategy) override (#27) is active, mirroring
+    /// [`Strategy`](crate::encoding::Strategy) override is active, mirroring
     /// [`FrameCompressor`](crate::encoding::FrameCompressor)'s field. `Some`
     /// survives frame start so the literal-compression gates run the same
     /// strategy the matcher does; `None` keeps the level-derived tag.
@@ -107,10 +107,11 @@ impl<W: Write> StreamingEncoder<W, MatchGeneratorDriver> {
         )
     }
 
-    /// Configure fine-grained compression parameters (#27): resets the level to
+    /// Configure fine-grained compression parameters: resets the level to
     /// the parameters' level and installs the per-knob overrides (window / hash
     /// / chain / search logs, strategy, long-distance matching) applied at the
-    /// next frame. Mirrors [`FrameCompressor::set_parameters`]. Must be called
+    /// next frame. Mirrors
+    /// [`FrameCompressor::set_parameters`](crate::encoding::FrameCompressor::set_parameters). Must be called
     /// before the first [`write`](Write::write). Only the built-in
     /// `MatchGeneratorDriver` exposes the override knobs, so this lives on the
     /// default-matcher impl.
@@ -322,7 +323,8 @@ impl<W: Write, M: Matcher> StreamingEncoder<W, M> {
 
     /// Whether the frame header records the dictionary ID when a dictionary
     /// is attached (upstream `ZSTD_c_dictIDFlag` semantics; default `true`).
-    /// Mirrors [`FrameCompressor::set_dictionary_id_flag`]. Decoders can still
+    /// Mirrors
+    /// [`FrameCompressor::set_dictionary_id_flag`](crate::encoding::FrameCompressor::set_dictionary_id_flag). Decoders can still
     /// decode such frames by supplying the dictionary explicitly.
     pub fn set_dictionary_id_flag(&mut self, emit: bool) -> Result<(), Error> {
         self.ensure_open()?;
@@ -580,7 +582,7 @@ impl<W: Write, M: Matcher> StreamingEncoder<W, M> {
         // in `encoding::blocks::compressed`) see the correct strategy for
         // every frame. Mirrors `FrameCompressor::compress` and keeps both
         // entry points byte-equivalent at the gate level. A public-parameter
-        // strategy override (#27) wins over the level's derived tag so the
+        // strategy override wins over the level's derived tag so the
         // gates see the strategy the matcher actually runs.
         self.state.strategy_tag = self.strategy_override.unwrap_or_else(|| {
             crate::encoding::strategy::StrategyTag::for_compression_level(self.compression_level)

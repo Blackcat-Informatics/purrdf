@@ -21,9 +21,8 @@
 //!
 //! Aggregate [`LdmProducer`] holds the rolling-hash state, the
 //! bucket table, and the per-call scratch buffers. The downstream
-//! consumer (`bt::ldm_sequences`) was plumbed during Phase 1
-//! (#119) — Phase 5 swaps the `prepare_ldm_candidates` no-op stub
-//! for a real producer that fills that buffer.
+//! consumer (`bt::ldm_sequences`) reads the candidates supplied by
+//! `prepare_ldm_candidates`.
 //!
 //! # Activation policy (distro-grade parity)
 //!
@@ -36,12 +35,10 @@
 //! * upstream — `ZSTD_CCtx_setParameter(cctx,
 //!   ZSTD_c_enableLongDistanceMatching, ZSTD_ps_enable)`;
 //! * `zstd` CLI — `zstd --long[=N]`;
-//! * Rust port (this crate) — the Phase-5 surface ships an
+//! * Rust port (this crate) — an
 //!   `ldm_producer: Option<LdmProducer>` field on `BtMatcher` that
-//!   stays `None` by default. The forthcoming parameter-API issue
-//!   (#27) plugs into that field; the C ABI work in #126 / #127
-//!   wires `ZSTD_c_enableLongDistanceMatching` through the same
-//!   surface.
+//!   stays `None` by default. Explicit caller parameters control
+//!   the long-distance-matching opt-in.
 //!
 //! Therefore the `level22_sequences_match_upstream zstd_on_corpus_proxy`
 //! ratio gate continues to compare two LDM-OFF outputs (ours vs
@@ -54,12 +51,10 @@
 //!   table reproduced verbatim in [`gear_hash::GEAR_TAB`] to preserve
 //!   byte-for-byte split-point compatibility.
 
-// Phase 5 of #111 ships the full LDM producer (gear hash + params
-// + bucket table + verify/extend search + aggregate driver) in
-// two commits. By distro-parity design (see the module docs
+// The LDM producer contains the gear hash, parameters, bucket table,
+// verify/extend search and aggregate driver. By distro-parity design (see the module docs
 // above), no `CompressionLevel` preset activates the producer —
-// `BtMatcher::ldm_producer` stays `None` until #27 (Rust
-// parameter API) or #126/#127 (C ABI) plug the user opt-in.
+// `BtMatcher::ldm_producer` stays `None` without explicit caller opt-in.
 // Several `pub(crate)` accessors (`LDM_HASHLOG_MIN/MAX`,
 // `params::bounded`, `bucket_mask`) are therefore reachable only
 // via the unit test suite until the parameter API lands; the

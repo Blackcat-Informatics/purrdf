@@ -366,8 +366,7 @@ pub(crate) mod exec_sequence_inline;
 // backend selected via `DecodeBuffer<FlatBuf>`. `FrameDecoder`'s
 // `DecoderScratchKind` picks it when the frame header has
 // `Single_Segment_flag` set; the ring backend remains the default
-// for multi-segment frames. See backlog item #132 for the wiring
-// rationale.
+// for multi-segment frames.
 pub(crate) mod flat_buf;
 pub(crate) mod frame;
 pub(crate) mod literals_section_decoder;

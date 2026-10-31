@@ -22,14 +22,14 @@
 //! handling. The per-DP-iteration hot path (`bit_weight` /
 //! `frac_weight`, `*_price` helpers, `update_stats`, `set_base_prices`,
 //! `downscale_stats`, `scale_stats`) already runs on raw `+`/`-`/`*`
-//! arithmetic guarded by `debug_assert!` (cleaned up in PR #110). The
+//! arithmetic guarded by `debug_assert!`. The
 //! init paths (`rescale_freqs` literal histogram build,
 //! `HC_BLOCKSIZE_MAX.saturating_sub(1)` fallback in `lit_length_price`)
 //! keep the original `saturating_*` defensiveness; folding that
 //! cleanup into the same patch would conflate a behaviour-preserving
 //! split with a performance tweak.
 //!
-//! Extracted from `match_generator.rs` as part of #111 Phase 1
+//! Shared with `match_generator.rs`
 //! (structural split). No behaviour change — types, constants, and
 //! method names are identical to the pre-extraction monolith.
 

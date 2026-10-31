@@ -400,7 +400,7 @@ impl<'s, K: CpuKernel> BitReaderReversed<'s, K> {
     /// in `#[target_feature(enable = "bmi2")]` scope, so `_bzhi_u64`
     /// inlines as a single `bzhi` instruction at the caller site
     /// instead of crossing the `mask_lower_bits_bmi2_impl` CALL
-    /// boundary (the issue documented in #279 round 3).
+    /// boundary.
     ///
     /// Use from any caller that is itself `#[target_feature(bmi2)]`-
     /// scoped and has verified the runtime CPU supports BMI2.

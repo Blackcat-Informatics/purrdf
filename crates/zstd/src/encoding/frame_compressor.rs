@@ -147,7 +147,7 @@ pub struct FrameCompressor<
     hasher: XxHash64,
 
     /// Effective strategy tag when a public-parameter
-    /// [`Strategy`](crate::encoding::Strategy) override (#27) is active.
+    /// [`Strategy`](crate::encoding::Strategy) override is active.
     /// `Some` overrides the level-derived `state.strategy_tag` so the
     /// literal-compression gates and dict-attach cutoff see the strategy
     /// the matcher actually runs, not the base level's. `None` keeps the
@@ -648,7 +648,7 @@ pub(crate) struct CompressState<M: Matcher> {
     /// encoder constructor) plumb this explicitly. Tests that build
     /// `CompressState` by hand must also supply a value.
     pub(crate) strategy_tag: crate::encoding::strategy::StrategyTag,
-    /// Whether the HUF literal table build runs the #167 table-log search
+    /// Whether the HUF literal table build runs the table-log search
     /// (`true`) or the cheap single-build (`false`). The search is a clean
     /// ratio win over upstream zstd but costs ~1.5 us per literal section —
     /// negligible on large inputs, ~20% on small ones. The Fast and DoubleFast
@@ -670,7 +670,7 @@ pub(crate) struct CompressState<M: Matcher> {
     pub(crate) literal_compression_disabled: bool,
 }
 
-/// Whether the HUF literal build should run the #167 table-log search for a
+/// Whether the HUF literal build should run the table-log search for a
 /// frame of `source_size` bytes (see [`CompressState::huf_optimal_search`]).
 /// Upstream gates the optimal-depth tableLog probe to
 /// `HUF_OPTIMAL_DEPTH_THRESHOLD = ZSTD_btultra` (huf.h:117): only btultra /
@@ -948,7 +948,7 @@ impl<R: Read, W: Write> FrameCompressor<R, W, MatchGeneratorDriver> {
         }
     }
 
-    /// Configure fine-grained compression parameters (#27).
+    /// Configure fine-grained compression parameters.
     ///
     /// Resets the base [`CompressionLevel`](crate::encoding::CompressionLevel)
     /// to the parameters' level and installs the per-knob overrides
@@ -1093,7 +1093,7 @@ impl<R: Read, W: Write> FrameCompressor<R, W, MatchGeneratorDriver> {
     /// independent, self-describing frames (each carrying its own header,
     /// blocks, and checksum, decodable in isolation, with no cross-frame
     /// match history). Every call resets the per-frame state via
-    /// [`Self::prepare_frame`]: only the allocations are kept, so the
+    /// `prepare_frame`: only the allocations are kept, so the
     /// dominant per-frame setup cost (table allocation + dictionary prime)
     /// is paid once instead of N times. Passing the same `out` buffer each
     /// call additionally reuses the output allocation, matching C's
@@ -1468,8 +1468,8 @@ impl<R: Read, W: Write, M: Matcher> FrameCompressor<R, W, M> {
     ///
     /// To avoid endlessly encoding from a potentially endless source (like a network socket) you can use the
     /// [Read::take] function
-    /// Per-frame setup values resolved by [`Self::prepare_frame`] and
-    /// consumed by the block loop + [`Self::finish_frame`]. Lets the
+    /// Per-frame setup values resolved by `prepare_frame` and
+    /// consumed by the block loop + `finish_frame`. Lets the
     /// owned `compress()` and the borrowed one-shot path share the exact
     /// same reset / dict-prime / entropy-seed setup and frame tail.
     pub fn compress(&mut self) {
@@ -1544,7 +1544,7 @@ impl<R: Read, W: Write, M: Matcher> FrameCompressor<R, W, M> {
         // strategy for the next frame. Frame-by-frame level changes go
         // through this same `compress()` entry point, so re-syncing here
         // covers level switches without touching the matcher dispatch.
-        // A public-parameter strategy override (#27) wins over the level's
+        // A public-parameter strategy override wins over the level's
         // derived tag so the literal-compression gates and dict-attach cutoff
         // below see the strategy the matcher actually runs. Otherwise resolve
         // the strategy SIZE-ADAPTIVELY through the same path the matcher's reset

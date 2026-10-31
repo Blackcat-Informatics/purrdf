@@ -18,7 +18,7 @@
 //! an 8-byte long hash — feed an adaptive sparse search that bails out
 //! when consecutive misses suggest an incompressible region.
 //!
-//! Extracted from `match_generator.rs` as part of #111 Phase 1b
+//! Shared with `match_generator.rs`
 //! (structural split). Mechanical move — names, fields, method bodies,
 //! constants, and the `#[inline]` annotations are preserved; the
 //! visibility on the relocated items was opened to `pub(crate)` so
@@ -368,8 +368,7 @@ impl DfastMatchGenerator {
     }
 
     pub(crate) fn reset(&mut self) {
-        // Floor-advance reset (issue #337 technique, completing it for the
-        // dfast backend — `MatchTable` already does this). Instead of
+        // Floor-advance reset, also used by `MatchTable`. Instead of
         // zeroing the long/short tables every frame (a memset proportional
         // to table size, ~25% of a small reused-context dfast frame),
         // advance the absolute-position floor past the previous frame's

@@ -24,9 +24,8 @@
 //! through it, BT mode lays out pairs of pointers per node — and that
 //! interpretation is the matcher's concern, not the table's.
 //!
-//! Extracted from `HcMatchGenerator` in #111 Phase 1d Stage 1 so the
-//! follow-up stages can pull the HC and BT matchers into their own
-//! modules without dragging this shared storage around as a forest of
+//! Shared by the HC and BT matchers so their
+//! modules do not need to duplicate this storage as a forest of
 //! `&mut Vec<u32>` arguments.
 
 use alloc::collections::VecDeque;
