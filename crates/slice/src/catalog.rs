@@ -725,10 +725,24 @@ ex:subject ex:predicate ex:object .
         std::fs::write(&ttl_path, turtle_bytes).expect("write the Turtle artifact");
         std::fs::write(&nt_path, nt_bytes).expect("write the N-Triples artifact");
 
-        let digest_ttl = compute_semantic_digest(turtle_bytes, &ttl_path)
-            .expect("Turtle semantic digest must not fail");
-        let digest_nt = compute_semantic_digest(nt_bytes, &nt_path)
-            .expect("N-Triples semantic digest must not fail");
+        let digest_ttl = compute_semantic_digest(
+            turtle_bytes,
+            &ttl_path,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("Turtle semantic digest must not fail");
+        let digest_nt = compute_semantic_digest(
+            nt_bytes,
+            &nt_path,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("N-Triples semantic digest must not fail");
 
         assert!(
             !digest_ttl.is_empty(),
@@ -754,8 +768,15 @@ ex:subject ex:predicate ex:object .
         let relative = b"<> <https://example.org/declares> <thing> .\n";
         std::fs::write(&path, relative).expect("write the artifact");
 
-        let digest = compute_semantic_digest(relative, &path)
-            .expect("a relative-IRI artifact resolves under its own retrieval IRI");
+        let digest = compute_semantic_digest(
+            relative,
+            &path,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("a relative-IRI artifact resolves under its own retrieval IRI");
         assert_ne!(digest, "");
 
         // The digest is of the RESOLVED graph: writing the same document with the
@@ -770,8 +791,15 @@ ex:subject ex:predicate ex:object .
         std::fs::write(&expanded_path, &expanded).expect("write the expanded artifact");
         assert_eq!(
             digest,
-            compute_semantic_digest(expanded.as_bytes(), &expanded_path)
-                .expect("absolute artifact digests"),
+            compute_semantic_digest(
+                expanded.as_bytes(),
+                &expanded_path,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .expect("absolute artifact digests"),
             "the relative form must denote exactly what the resolved form denotes"
         );
     }
@@ -787,7 +815,15 @@ ex:subject ex:predicate ex:object .
             let dir = purrdf_testkit::TempDir::for_unit_test().expect("tempdir");
             let path = dir.path().join(name);
             std::fs::write(&path, absolute).expect("write");
-            compute_semantic_digest(absolute, &path).expect("digest")
+            compute_semantic_digest(
+                absolute,
+                &path,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .expect("digest")
         };
         assert_eq!(digest_at("one.ttl"), digest_at("two.ttl"));
     }

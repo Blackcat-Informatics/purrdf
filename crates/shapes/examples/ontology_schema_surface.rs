@@ -69,18 +69,24 @@ ex:resentMessageId a owl:DatatypeProperty ;
     .map_err(|errors| std::io::Error::other(errors.join("\n")))?;
     let namespaces = Namespaces::new("ex", &[("ex".to_owned(), EX.to_owned())])?;
 
-    let shaped = compile_schema(&SchemaCompileRequest::new(
-        &shapes,
-        &namespaces,
-        ontology.as_ref(),
-        SchemaSurfaceMode::ShapedOnly,
-    ))?;
-    let complete = compile_schema(&SchemaCompileRequest::new(
-        &shapes,
-        &namespaces,
-        ontology.as_ref(),
-        SchemaSurfaceMode::OntologyComplete,
-    ))?;
+    let shaped = compile_schema(
+        &SchemaCompileRequest::new(
+            &shapes,
+            &namespaces,
+            ontology.as_ref(),
+            SchemaSurfaceMode::ShapedOnly,
+        ),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )?;
+    let complete = compile_schema(
+        &SchemaCompileRequest::new(
+            &shapes,
+            &namespaces,
+            ontology.as_ref(),
+            SchemaSurfaceMode::OntologyComplete,
+        ),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )?;
     let shaped_defs = definition_keys(&shaped.compiled.schema_json)?;
     let complete_defs = definition_keys(&complete.compiled.schema_json)?;
     println!("shaped-only definitions: {shaped_defs:?}");

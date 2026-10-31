@@ -824,14 +824,16 @@ pub fn compose(
 /// use purrdf_gts::cose::composite;
 /// use purrdf_gts::verify::SignatureKeyring;
 /// use purrdf_gts::writer::RandomnessProvider;
+/// use purrdf_rdf::CanonicalizationControl;
 /// use purrdf_rdf::gts_certify::{CertifyError, compact_and_certify, verify_compaction};
 /// fn certify<P: RandomnessProvider>(source: &[u8], key: composite::SigningKey,
-///     provider: P, keys: &impl SignatureKeyring) -> Result<bool, CertifyError> {
+///     provider: P, keys: &impl SignatureKeyring,
+///     control: &mut CanonicalizationControl<'_>) -> Result<bool, CertifyError> {
 ///     let (pack, certificate) = compact_and_certify(source, DictPlan::undicted(),
 ///         "2026-01-01T00:00:00Z", false,
-///         CompositePackaging::new(key, "pack-key".into(), provider))?;
+///         CompositePackaging::new(key, "pack-key".into(), provider), control)?;
 ///     assert_eq!(certificate.packaging_kids, ["pack-key"]);
-///     Ok(verify_compaction(source, &pack, keys)?.all_ok())
+///     Ok(verify_compaction(source, &pack, keys, control)?.all_ok())
 /// }
 /// ```
 pub fn compact_and_certify<S: PackagingSigner>(

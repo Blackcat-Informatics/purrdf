@@ -144,6 +144,10 @@ fn public_dataset_views_preserve_source_identity_and_causal_verification() {
                 &Question::Consistency,
                 Some(answer.certificate()),
                 &context,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
             )
             .unwrap();
         let captured = proof
@@ -211,6 +215,10 @@ fn current_clash_preserves_public_service_certificate_and_verification() {
             &Question::Consistency,
             Some(recorded.certificate()),
             &context,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
         )
         .unwrap();
     assert!(
@@ -313,6 +321,10 @@ fn current_clash_checks_fresh_refutation_assumptions_without_a_source_name() {
             &Question::ClassSatisfiability { class: term("A") },
             Some(result.certificate()),
             &context,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
         )
         .unwrap();
     let proofs: Vec<_> = result
@@ -451,6 +463,10 @@ fn current_clash_borrows_the_independent_prepared_consumer() {
                     &Question::Consistency,
                     Some(answer.certificate()),
                     &owned,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
                 )
                 .unwrap();
             for _ in 0..3 {
@@ -475,7 +491,11 @@ fn current_clash_borrows_the_independent_prepared_consumer() {
                     &other,
                     &Question::Consistency,
                     Some(answer.certificate()),
-                    &later
+                    &later,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
                 )
                 .is_err()
         );

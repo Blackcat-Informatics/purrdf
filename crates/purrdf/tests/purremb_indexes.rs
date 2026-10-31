@@ -225,6 +225,7 @@ fn inline_coarse_and_full_indexes_bind_exact_prefixes() {
         ExternalScope::Source(context.source.source_exact_digest()),
         &context.source_bytes,
         &binding_contract(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
     .expect("certified metadata binding");
     let coarse = DerivedIndex::new(
@@ -257,7 +258,12 @@ fn inline_coarse_and_full_indexes_bind_exact_prefixes() {
     assert_eq!(dimensions, vec![2, 4]);
 
     let binding = view.external_bindings().next().expect("metadata binding");
-    verify_external_pack(binding, &context.source_bytes).expect("external pack certification");
+    verify_external_pack(
+        binding,
+        &context.source_bytes,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("external pack certification");
     assert!(verify_external_artifact(binding, b"wrong").is_err());
 }
 
@@ -394,6 +400,7 @@ fn every_stale_index_coordinate_and_contract_guard_is_rejected() {
         ExternalScope::Source(context.source.source_exact_digest()),
         &context.source_bytes,
         &binding_contract(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
     .expect("certified metadata binding");
     let mut guarded = guard(IndexUseRole::Generic, Some(certified.id()));

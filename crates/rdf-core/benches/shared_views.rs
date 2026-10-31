@@ -451,7 +451,10 @@ fn carrier_shapes() -> Vec<CarrierShape> {
 /// The flat carrier is deliberately ledger-free and keeps no `ViewWork`, so the
 /// union's cost is counted here in the same units the view carrier reports: one
 /// freeze per stage, and the rows the union replayed as copies.
-fn run_flat(shape: &CarrierShape) -> Observation {
+fn run_flat(
+    shape: &CarrierShape,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Observation {
     let mut carrier = PipelineBundle::new(
         Arc::clone(&shape.base),
         RdfLookaside::default(),
@@ -462,12 +465,12 @@ fn run_flat(shape: &CarrierShape) -> Observation {
     let mut freezes = 0usize;
     for (index, (graph, quads)) in shape.stages.iter().enumerate() {
         carrier
-            .accumulate_named_graph(graph.as_str(), quads, Stage(index))
+            .accumulate_named_graph(graph.as_str(), quads, Stage(index), control)
             .expect("a contained contribution folds into the flat carrier");
         copies = copies.saturating_add(carrier.dataset().rdf_row_count());
         freezes += 1;
     }
-    black_box(carrier.pipeline_root().unwrap());
+    black_box(carrier.pipeline_root(control).unwrap());
     for _ in 0..shape.consumers {
         let reader = PipelineBundle::<Stage>::new(
             Arc::clone(&shape.base),
@@ -476,7 +479,7 @@ fn run_flat(shape: &CarrierShape) -> Observation {
             DatasetProvenance::new(),
         );
         for graph in [CARRIER_G1, CARRIER_G2] {
-            black_box(reader.graph_digest(graph).unwrap());
+            black_box(reader.graph_digest(graph, control).unwrap());
         }
     }
     let retained = carrier.dataset().rdf_payload_bytes();
@@ -493,7 +496,11 @@ fn run_flat(shape: &CarrierShape) -> Observation {
 /// The VIEW carrier: every stage is a `CompositeDatasetView::extend`, copying no
 /// row. Each variant gets its OWN ledger so the retention figures belong to this
 /// run and nothing else.
-fn run_view(shape: &CarrierShape, limits: ViewLimits) -> Observation {
+fn run_view(
+    shape: &CarrierShape,
+    limits: ViewLimits,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Observation {
     let ledger = RetentionLedger::new();
     let mut carrier = PipelineViewBundle::<Stage>::from_dataset(
         &shape.base,
@@ -506,12 +513,12 @@ fn run_view(shape: &CarrierShape, limits: ViewLimits) -> Observation {
     .expect("the base composes within the shape's ceilings");
     for (index, (graph, quads)) in shape.stages.iter().enumerate() {
         carrier
-            .accumulate_named_graph(graph.as_str(), quads, Stage(index))
+            .accumulate_named_graph(graph.as_str(), quads, Stage(index), control)
             .expect("a contained contribution appends to the view carrier");
     }
     black_box(
         carrier
-            .pipeline_root()
+            .pipeline_root(control)
             .expect("the composed carrier's root canonicalizes"),
     );
     for _ in 0..shape.consumers {
@@ -527,7 +534,7 @@ fn run_view(shape: &CarrierShape, limits: ViewLimits) -> Observation {
         for graph in [CARRIER_G1, CARRIER_G2] {
             black_box(
                 reader
-                    .graph_digest(graph)
+                    .graph_digest(graph, control)
                     .expect("a base leaf canonicalizes for the second reader"),
             );
         }
@@ -538,7 +545,11 @@ fn run_view(shape: &CarrierShape, limits: ViewLimits) -> Observation {
 /// The DELTA carrier: the same stage plan, but the composed root is a delta
 /// snapshot over the base rather than the frozen base itself, so the delta read
 /// path is in every canonicalization.
-fn run_delta(shape: &CarrierShape, limits: ViewLimits) -> Observation {
+fn run_delta(
+    shape: &CarrierShape,
+    limits: ViewLimits,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Observation {
     let ledger = RetentionLedger::new();
     let mut carrier = PipelineViewBundle::<Stage>::from_delta(
         &shape.delta,
@@ -551,12 +562,12 @@ fn run_delta(shape: &CarrierShape, limits: ViewLimits) -> Observation {
     .expect("the delta composes within the shape's ceilings");
     for (index, (graph, quads)) in shape.stages.iter().enumerate() {
         carrier
-            .accumulate_named_graph(graph.as_str(), quads, Stage(index))
+            .accumulate_named_graph(graph.as_str(), quads, Stage(index), control)
             .expect("a contained contribution appends to the delta carrier");
     }
     black_box(
         carrier
-            .pipeline_root()
+            .pipeline_root(control)
             .expect("the delta carrier's root canonicalizes"),
     );
     for _ in 0..shape.consumers {
@@ -572,7 +583,7 @@ fn run_delta(shape: &CarrierShape, limits: ViewLimits) -> Observation {
         for graph in [CARRIER_G1, CARRIER_G2] {
             black_box(
                 reader
-                    .graph_digest(graph)
+                    .graph_digest(graph, control)
                     .expect("a base leaf canonicalizes through the delta"),
             );
         }
@@ -601,28 +612,74 @@ fn carrier_propagation(c: &mut Bench) {
     // separate, plainly-measured record that always emits — `--test` included.
     for shape in &shapes {
         let start = Instant::now();
-        let observed = run_flat(shape);
+        let observed = run_flat(
+            shape,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        );
         observe(shape.name, "flat", start.elapsed(), observed);
 
         let start = Instant::now();
-        let observed = run_view(shape, limits);
+        let observed = run_view(
+            shape,
+            limits,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        );
         observe(shape.name, "view", start.elapsed(), observed);
 
         let start = Instant::now();
-        let observed = run_delta(shape, limits);
+        let observed = run_delta(
+            shape,
+            limits,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        );
         observe(shape.name, "delta", start.elapsed(), observed);
     }
 
     let mut group = c.benchmark_group("carrier_propagation");
     for shape in &shapes {
         group.bench_function(BenchmarkId::new("flat", shape.name), |b| {
-            b.iter(|| black_box(run_flat(shape)));
+            b.iter(|| {
+                black_box(run_flat(
+                    shape,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
+                ))
+            });
         });
         group.bench_function(BenchmarkId::new("view", shape.name), |b| {
-            b.iter(|| black_box(run_view(shape, limits)));
+            b.iter(|| {
+                black_box(run_view(
+                    shape,
+                    limits,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
+                ))
+            });
         });
         group.bench_function(BenchmarkId::new("delta", shape.name), |b| {
-            b.iter(|| black_box(run_delta(shape, limits)));
+            b.iter(|| {
+                black_box(run_delta(
+                    shape,
+                    limits,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
+                ))
+            });
         });
     }
     group.finish();

@@ -239,7 +239,7 @@ fn entail_with<E: From<ShapesError>>(
 /// let data = "<http://example.org/alice> \
 ///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Person> .\n";
 ///
-/// let nt = entail_to_ntriples_string(shapes, None, data, &[]).expect("entailment produced");
+/// let nt = entail_to_ntriples_string(shapes, None, data, &[], &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None)).expect("entailment produced");
 /// assert!(nt.contains("<http://example.org/adult>"));
 /// ```
 pub fn entail_to_ntriples_string(

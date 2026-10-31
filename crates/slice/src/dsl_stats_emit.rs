@@ -157,7 +157,15 @@ mod tests {
         // blackcatinformatics purrdf namespace, so this cross-check must use it
         // (pure fixtures elsewhere use example.org).
         let vocab = SliceVocab::for_namespace("https://blackcatinformatics.ca/gmeow/");
-        let got = emit_dsl_stats(&root, &vocab).expect("emit dsl stats");
+        let got = emit_dsl_stats(
+            &root,
+            &vocab,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("emit dsl stats");
         let committed_path = root
             .join("generated")
             .join("mappings")

@@ -97,9 +97,16 @@ fn recorded_stop_preserves_complete_decisions_and_proof_identity() {
         .unwrap()
         .consistency();
         let signal = Arc::new(Signal::after(usize::MAX));
-        let mut reasoner =
-            Reasoner::with_proofs_and_stop(&dataset, SchemaPreparationBudget::default(), signal)
-                .unwrap();
+        let mut reasoner = Reasoner::with_proofs_and_stop(
+            &dataset,
+            SchemaPreparationBudget::default(),
+            signal.clone(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                Some(signal.as_ref()),
+            ),
+        )
+        .unwrap();
         assert!(reasoner.records_proofs());
         reasoner.prepare(&Question::Consistency).unwrap();
         let result = reasoner.consistency();
@@ -121,11 +128,21 @@ fn recorded_stop_preserves_complete_decisions_and_proof_identity() {
                 &Question::Consistency,
                 Some(result.certificate()),
                 &context,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
             )
             .unwrap();
         assert_eq!(
-            purrdf_entail::try_ontology_identity_with_stop(&dataset, &Signal::after(usize::MAX))
-                .unwrap(),
+            purrdf_entail::try_ontology_identity(
+                &dataset,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    Some(&Signal::after(usize::MAX))
+                )
+            )
+            .unwrap(),
             purrdf_entail::try_ontology_identity(
                 &dataset,
                 &mut purrdf_core::CanonicalizationControl::new(
@@ -140,13 +157,18 @@ fn recorded_stop_preserves_complete_decisions_and_proof_identity() {
 
 /// Pre-cancelled recording is an execution stop, not malformed input or false.
 fn recorded_stop_refuses_before_identity_preparation() {
+    let signal = Arc::new(Signal::after(0));
     assert!(matches!(
         Reasoner::with_proofs_and_stop(
             &taxonomy(false),
             SchemaPreparationBudget::default(),
-            Arc::new(Signal::after(0)),
+            signal.clone(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                Some(signal.as_ref())
+            ),
         ),
-        Err(EntailError::Stopped)
+        Err(EntailError::Canonicalization(CanonError::Stopped))
     ));
 }
 
@@ -154,13 +176,25 @@ fn recorded_stop_refuses_before_identity_preparation() {
 fn recorded_stop_retains_the_signal_after_identity() {
     let dataset = taxonomy(false);
     let counter = Signal::after(usize::MAX);
-    purrdf_entail::try_ontology_identity_with_stop(&dataset, &counter).unwrap();
+    purrdf_entail::try_ontology_identity(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            Some(&counter),
+        ),
+    )
+    .unwrap();
     let polls = counter.calls.load(Ordering::Relaxed);
+    let signal = Arc::new(Signal::after(polls));
     assert!(matches!(
         Reasoner::with_proofs_and_stop(
             &dataset,
             SchemaPreparationBudget::default(),
-            Arc::new(Signal::after(polls)),
+            signal.clone(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                Some(signal.as_ref())
+            ),
         ),
         Err(EntailError::Stopped)
     ));
@@ -182,7 +216,13 @@ fn recorded_stop_covers_identity_digest_streaming() {
     let canonical_polls = counter.calls.load(Ordering::Relaxed);
     let signal = Signal::after(canonical_polls + 1);
     assert!(matches!(
-        purrdf_entail::try_ontology_identity_with_stop(&dataset, &signal),
+        purrdf_entail::try_ontology_identity(
+            &dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                Some(&signal)
+            )
+        ),
         Err(CanonError::Stopped)
     ));
     assert!(signal.calls.load(Ordering::Relaxed) > canonical_polls + 1);
@@ -196,6 +236,10 @@ fn recorded_stop_reports_cancelled_search_without_a_semantic_verdict() {
         &dataset,
         SchemaPreparationBudget::default(),
         signal.clone(),
+        &mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            Some(signal.as_ref()),
+        ),
     )
     .unwrap();
     reasoner.prepare(&Question::Consistency).unwrap();
@@ -211,6 +255,10 @@ fn recorded_stop_reports_cancelled_search_without_a_semantic_verdict() {
             &Question::Consistency,
             Some(result.certificate()),
             &reasoner.proof_context().unwrap(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
         )
         .unwrap();
 }
@@ -228,9 +276,17 @@ fn recorded_stop_preserves_preparation_budget_selection() {
         &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
     .unwrap();
-    let controlled =
-        Reasoner::with_proofs_and_stop(&dataset, budget, Arc::new(Signal::after(usize::MAX)))
-            .unwrap();
+    let signal = Arc::new(Signal::after(usize::MAX));
+    let controlled = Reasoner::with_proofs_and_stop(
+        &dataset,
+        budget,
+        signal.clone(),
+        &mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            Some(signal.as_ref()),
+        ),
+    )
+    .unwrap();
     assert_eq!(controlled.schema_preparation(), plain.schema_preparation());
     assert!(controlled.schema_preparation().obstruction.is_some());
     assert_eq!(*controlled.consistency().answer(), Verdict::Unknown);
@@ -248,18 +304,27 @@ fn recorded_stop_covers_every_preparation_poll() {
         &dataset,
         SchemaPreparationBudget::default(),
         counter.clone(),
+        &mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            Some(counter.as_ref()),
+        ),
     )
     .unwrap();
     let polls = counter.calls.load(Ordering::Relaxed);
     for cancel_at in 0..polls {
+        let signal = Arc::new(Signal::after(cancel_at));
         assert!(
             matches!(
                 Reasoner::with_proofs_and_stop(
                     &dataset,
                     SchemaPreparationBudget::default(),
-                    Arc::new(Signal::after(cancel_at)),
+                    signal.clone(),
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        Some(signal.as_ref())
+                    ),
                 ),
-                Err(EntailError::Stopped)
+                Err(EntailError::Stopped | EntailError::Canonicalization(CanonError::Stopped))
             ),
             "preparation published after cancellation at poll {cancel_at}/{polls}"
         );

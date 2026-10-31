@@ -755,14 +755,17 @@ mod tests {
 
     #[test]
     fn facade_exposes_ontology_schema_compilation_contract() {
-        let _: fn(&SchemaCompileRequest<'_>) -> Result<SchemaCompilation, SchemaCompileError> =
-            compile_schema;
+        let _: fn(
+            &SchemaCompileRequest<'_>,
+            &mut CanonicalizationControl<'_>,
+        ) -> Result<SchemaCompilation, SchemaCompileError> = compile_schema;
         let mode = SchemaSurfaceMode::OntologyComplete;
         assert!(matches!(mode, SchemaSurfaceMode::OntologyComplete));
         let _: Option<SchemaCoverageReport> = None;
         let _: Option<SchemaCompilationKey> = None;
         let _: fn(
             &SchemaCompileRequest<'_>,
+            &mut CanonicalizationControl<'_>,
         )
             -> Result<(SchemaCompilation, SchemaClassExpressionReport), SchemaCompileError> =
             compile_schema_with_class_expressions;
@@ -805,10 +808,7 @@ mod tests {
         let empty = RdfDatasetBuilder::new().freeze().expect("empty dataset");
         let pack = PackBuilder::build_bytes(
             &empty,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
         )
         .expect("pack empty dataset");
         let restored = restore_pack(&pack).expect("restore empty dataset");
@@ -823,10 +823,7 @@ mod tests {
         let base = canonical_paged_seal(
             restored.as_ref(),
             page_rows,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
         )
         .expect("empty paged base");
         let mut stack = PagedStack::new(vec![Arc::new(base)]).expect("root stack API");
@@ -851,7 +848,11 @@ mod tests {
         );
         assert_eq!(
             snapshot
-                .compact(PagedQueryLimits::UNBOUNDED, page_rows)
+                .compact(
+                    PagedQueryLimits::UNBOUNDED,
+                    page_rows,
+                    &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+                )
                 .expect("root canonical fold")
                 .page_count(),
             1

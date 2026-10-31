@@ -3294,8 +3294,16 @@ fn flat_and_view_carriers_agree_on_every_identity_they_publish() {
     let view = view_carrier(&base, &ledger);
 
     assert_eq!(
-        flat.digest().unwrap(),
-        view.digest().unwrap(),
+        flat.digest(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None
+        ))
+        .unwrap(),
+        view.digest(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None
+        ))
+        .unwrap(),
         "bundle digest"
     );
 
@@ -3308,20 +3316,56 @@ fn flat_and_view_carriers_agree_on_every_identity_they_publish() {
     assert_eq!(graphs, view.named_graph_iris());
     for graph in &graphs {
         assert_eq!(
-            flat.graph_digest(graph).unwrap(),
-            view.graph_digest(graph).unwrap(),
+            flat.graph_digest(
+                graph,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap(),
+            view.graph_digest(
+                graph,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap(),
             "per-graph digest of <{graph}>"
         );
     }
     // Absence is an empty subgraph on both carriers, never an error.
     assert_eq!(
-        flat.graph_digest(CABSENT).unwrap(),
-        view.graph_digest(CABSENT).unwrap()
+        flat.graph_digest(
+            CABSENT,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap(),
+        view.graph_digest(
+            CABSENT,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
     );
 
     assert_eq!(
-        flat.pipeline_root().unwrap(),
-        view.pipeline_root().unwrap(),
+        flat.pipeline_root(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None
+        ))
+        .unwrap(),
+        view.pipeline_root(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None
+        ))
+        .unwrap(),
         "root"
     );
 
@@ -3329,14 +3373,53 @@ fn flat_and_view_carriers_agree_on_every_identity_they_publish() {
     // declaration-only graph is genuinely empty, and the root is a DIFFERENT identity
     // from the digest rather than the same bytes under another name.
     assert_ne!(
-        flat.graph_digest(CG1).unwrap(),
-        flat.graph_digest(CG2).unwrap()
+        flat.graph_digest(
+            CG1,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap(),
+        flat.graph_digest(
+            CG2,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
     );
     assert_eq!(
-        flat.graph_digest(CDECLARED).unwrap(),
-        flat.graph_digest(CABSENT).unwrap()
+        flat.graph_digest(
+            CDECLARED,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap(),
+        flat.graph_digest(
+            CABSENT,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
     );
-    assert_ne!(flat.digest().unwrap(), flat.pipeline_root().unwrap());
+    assert_ne!(
+        flat.digest(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None
+        ))
+        .unwrap(),
+        flat.pipeline_root(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None
+        ))
+        .unwrap()
+    );
     assert!(
         try_canonicalize_graph_view(
             &*base,
@@ -3367,41 +3450,145 @@ fn accumulating_blank_bearing_graphs_leaves_every_pin_verified_on_both_carriers(
 
     // <g1> is the graph with the scoped blanks, the triple term and the statement
     // layer. Pin it on both carriers.
-    let pinned = flat.graph_digest(CG1).unwrap();
-    assert_eq!(pinned, view.graph_digest(CG1).unwrap());
-    flat.pin_handle(CG1, Note("g1"), pinned).unwrap();
-    view.pin_handle(CG1, Note("g1"), pinned).unwrap();
+    let pinned = flat
+        .graph_digest(
+            CG1,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
+    assert_eq!(
+        pinned,
+        view.graph_digest(
+            CG1,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+    );
+    flat.pin_handle(
+        CG1,
+        Note("g1"),
+        pinned,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
+    view.pin_handle(
+        CG1,
+        Note("g1"),
+        pinned,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
 
     let contribution = contained_contribution(CG3);
-    flat.accumulate_named_graph(CG3, &contribution, Note("g3"))
-        .expect("flat accumulate must not disturb the pinned graph");
-    view.accumulate_named_graph(CG3, &contribution, Note("g3"))
-        .expect("view accumulate must not disturb the pinned graph");
+    flat.accumulate_named_graph(
+        CG3,
+        &contribution,
+        Note("g3"),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("flat accumulate must not disturb the pinned graph");
+    view.accumulate_named_graph(
+        CG3,
+        &contribution,
+        Note("g3"),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("view accumulate must not disturb the pinned graph");
 
     assert_eq!(flat.handle(CG1).unwrap().content_digest, pinned);
     assert_eq!(view.handle(CG1).unwrap().content_digest, pinned);
     assert_eq!(
-        flat.graph_digest(CG1).unwrap(),
+        flat.graph_digest(
+            CG1,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap(),
         pinned,
         "the pin still verifies (flat)"
     );
     assert_eq!(
-        view.graph_digest(CG1).unwrap(),
+        view.graph_digest(
+            CG1,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap(),
         pinned,
         "the pin still verifies (view)"
     );
 
     // The contribution genuinely landed, identically, on both carriers.
     assert_eq!(
-        flat.graph_digest(CG3).unwrap(),
-        view.graph_digest(CG3).unwrap()
+        flat.graph_digest(
+            CG3,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap(),
+        view.graph_digest(
+            CG3,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
     );
     assert_ne!(
-        flat.graph_digest(CG3).unwrap(),
-        flat.graph_digest(CABSENT).unwrap()
+        flat.graph_digest(
+            CG3,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap(),
+        flat.graph_digest(
+            CABSENT,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
     );
-    assert_eq!(flat.digest().unwrap(), view.digest().unwrap());
-    assert_eq!(flat.pipeline_root().unwrap(), view.pipeline_root().unwrap());
+    assert_eq!(
+        flat.digest(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None
+        ))
+        .unwrap(),
+        view.digest(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None
+        ))
+        .unwrap()
+    );
+    assert_eq!(
+        flat.pipeline_root(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None
+        ))
+        .unwrap(),
+        view.pipeline_root(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None
+        ))
+        .unwrap()
+    );
 }
 
 /// Reseating the per-graph memo rather than clearing a SHARED one: a clone taken
@@ -3415,46 +3602,131 @@ fn a_clone_taken_before_accumulate_reads_its_own_content_on_both_carriers() {
     let mut flat = flat_carrier(&base);
     let mut view = view_carrier(&base, &ledger);
 
-    let before = flat.graph_digest(CG2).unwrap();
-    assert_eq!(before, view.graph_digest(CG2).unwrap());
+    let before = flat
+        .graph_digest(
+            CG2,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
+    assert_eq!(
+        before,
+        view.graph_digest(
+            CG2,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+    );
     let flat_snapshot = flat.clone();
     let view_snapshot = view.clone();
 
     // Accumulate INTO the graph that was already read, so the two contents differ.
     let contribution = contained_contribution(CG2);
-    flat.accumulate_named_graph(CG2, &contribution, Note("grown"))
-        .unwrap();
-    view.accumulate_named_graph(CG2, &contribution, Note("grown"))
-        .unwrap();
+    flat.accumulate_named_graph(
+        CG2,
+        &contribution,
+        Note("grown"),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
+    view.accumulate_named_graph(
+        CG2,
+        &contribution,
+        Note("grown"),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
 
     assert_ne!(
-        flat.graph_digest(CG2).unwrap(),
+        flat.graph_digest(
+            CG2,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap(),
         before,
         "the fixture must actually move <g2>, or the test proves nothing"
     );
     assert_eq!(
-        flat.graph_digest(CG2).unwrap(),
-        view.graph_digest(CG2).unwrap()
+        flat.graph_digest(
+            CG2,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap(),
+        view.graph_digest(
+            CG2,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
     );
 
     assert_eq!(
-        flat_snapshot.graph_digest(CG2).unwrap(),
+        flat_snapshot
+            .graph_digest(
+                CG2,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap(),
         before,
         "the pre-accumulate flat clone answers for its own content"
     );
     assert_eq!(
-        view_snapshot.graph_digest(CG2).unwrap(),
+        view_snapshot
+            .graph_digest(
+                CG2,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap(),
         before,
         "the pre-accumulate view clone answers for its own content"
     );
     assert_eq!(
-        flat_snapshot.digest().unwrap(),
-        view_snapshot.digest().unwrap(),
+        flat_snapshot
+            .digest(&mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            ))
+            .unwrap(),
+        view_snapshot
+            .digest(&mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            ))
+            .unwrap(),
         "and the two clones still agree with each other"
     );
     assert_eq!(
-        flat_snapshot.digest().unwrap(),
-        flat_carrier(&base).digest().unwrap()
+        flat_snapshot
+            .digest(&mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            ))
+            .unwrap(),
+        flat_carrier(&base)
+            .digest(&mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            ))
+            .unwrap()
     );
 }
 
@@ -3481,14 +3753,40 @@ fn a_contribution_reaching_outside_its_graph_is_refused_by_both_carriers() {
 
     let mut flat = flat_carrier(&base);
     let mut view = view_carrier(&base, &ledger);
-    let flat_before = flat.digest().unwrap();
-    let view_before = view.digest().unwrap();
+    let flat_before = flat
+        .digest(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None,
+        ))
+        .unwrap();
+    let view_before = view
+        .digest(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None,
+        ))
+        .unwrap();
 
     let flat_err = flat
-        .accumulate_named_graph(CG3, &straying, Note("x"))
+        .accumulate_named_graph(
+            CG3,
+            &straying,
+            Note("x"),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
         .expect_err("the flat carrier must refuse a straying contribution");
     let view_err = view
-        .accumulate_named_graph(CG3, &straying, Note("x"))
+        .accumulate_named_graph(
+            CG3,
+            &straying,
+            Note("x"),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
         .expect_err("the view carrier must refuse a straying contribution");
     for err in [&flat_err, &view_err] {
         assert!(
@@ -3504,21 +3802,64 @@ fn a_contribution_reaching_outside_its_graph_is_refused_by_both_carriers() {
         );
     }
     assert_eq!(
-        flat.digest().unwrap(),
+        flat.digest(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None
+        ))
+        .unwrap(),
         flat_before,
         "a refusal folds nothing"
     );
-    assert_eq!(view.digest().unwrap(), view_before);
+    assert_eq!(
+        view.digest(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None
+        ))
+        .unwrap(),
+        view_before
+    );
     assert!(flat.handle(CG3).is_none() && view.handle(CG3).is_none());
 
     // The twin that IS contained still folds, on both carriers, to the same identity.
     let contained = contained_contribution(CG3);
-    flat.accumulate_named_graph(CG3, &contained, Note("ok"))
-        .expect("the contained twin must still be admitted (flat)");
-    view.accumulate_named_graph(CG3, &contained, Note("ok"))
-        .expect("the contained twin must still be admitted (view)");
-    assert_eq!(flat.digest().unwrap(), view.digest().unwrap());
-    assert_eq!(flat.pipeline_root().unwrap(), view.pipeline_root().unwrap());
+    flat.accumulate_named_graph(
+        CG3,
+        &contained,
+        Note("ok"),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("the contained twin must still be admitted (flat)");
+    view.accumulate_named_graph(
+        CG3,
+        &contained,
+        Note("ok"),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("the contained twin must still be admitted (view)");
+    assert_eq!(
+        flat.digest(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None
+        ))
+        .unwrap(),
+        view.digest(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None
+        ))
+        .unwrap()
+    );
+    assert_eq!(
+        flat.pipeline_root(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None
+        ))
+        .unwrap(),
+        view.pipeline_root(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None
+        ))
+        .unwrap()
+    );
 }
 
 /// Exact invalidation: an accumulation re-canonicalizes exactly the graph it
@@ -3531,8 +3872,24 @@ fn accumulate_on_the_view_carrier_recomputes_only_the_graph_it_touched() {
     let ledger = RetentionLedger::new();
     let mut view = view_carrier(&base, &ledger);
 
-    let g1 = view.graph_digest(CG1).unwrap();
-    let g2 = view.graph_digest(CG2).unwrap();
+    let g1 = view
+        .graph_digest(
+            CG1,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
+    let g2 = view
+        .graph_digest(
+            CG2,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
     let before = view.digest_work();
     assert_eq!(
         before,
@@ -3543,8 +3900,13 @@ fn accumulate_on_the_view_carrier_recomputes_only_the_graph_it_touched() {
         "two graphs read, two canonicalizations"
     );
 
-    view.accumulate_named_graph(CG3, &contained_contribution(CG3), Note("g3"))
-        .unwrap();
+    view.accumulate_named_graph(
+        CG3,
+        &contained_contribution(CG3),
+        Note("g3"),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
 
     let after = view.digest_work();
     assert_eq!(
@@ -3554,8 +3916,28 @@ fn accumulate_on_the_view_carrier_recomputes_only_the_graph_it_touched() {
     );
 
     // The untouched leaves are served, not recomputed.
-    assert_eq!(view.graph_digest(CG1).unwrap(), g1);
-    assert_eq!(view.graph_digest(CG2).unwrap(), g2);
+    assert_eq!(
+        view.graph_digest(
+            CG1,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap(),
+        g1
+    );
+    assert_eq!(
+        view.graph_digest(
+            CG2,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap(),
+        g2
+    );
     let served = view.digest_work();
     assert_eq!(
         served.graph_canonicalizations, after.graph_canonicalizations,
@@ -3568,7 +3950,18 @@ fn accumulate_on_the_view_carrier_recomputes_only_the_graph_it_touched() {
     let hits_before = ledger.snapshot().memo_hits;
     let second = view_carrier(&base, &ledger);
     assert_eq!(second.digest_work(), BundleDigestWork::default());
-    assert_eq!(second.graph_digest(CG1).unwrap(), g1);
+    assert_eq!(
+        second
+            .graph_digest(
+                CG1,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap(),
+        g1
+    );
     assert_eq!(
         ledger.snapshot().memo_hits,
         hits_before + 1,
@@ -3590,30 +3983,106 @@ fn the_pipeline_root_moves_with_one_leaf_and_stands_still_otherwise() {
     let mut view = view_carrier(&base, &ledger);
     let mut flat = flat_carrier(&base);
 
-    let root_before = view.pipeline_root().unwrap();
-    assert_eq!(root_before, flat.pipeline_root().unwrap());
+    let root_before = view
+        .pipeline_root(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None,
+        ))
+        .unwrap();
+    assert_eq!(
+        root_before,
+        flat.pipeline_root(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None
+        ))
+        .unwrap()
+    );
     // Reading it twice does not move it.
-    assert_eq!(view.pipeline_root().unwrap(), root_before);
+    assert_eq!(
+        view.pipeline_root(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None
+        ))
+        .unwrap(),
+        root_before
+    );
 
-    let g1 = view.graph_digest(CG1).unwrap();
-    let g2 = view.graph_digest(CG2).unwrap();
+    let g1 = view
+        .graph_digest(
+            CG1,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
+    let g2 = view
+        .graph_digest(
+            CG2,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
     let work_before = view.digest_work();
 
     let contribution = contained_contribution(CG3);
-    view.accumulate_named_graph(CG3, &contribution, Note("g3"))
-        .unwrap();
-    flat.accumulate_named_graph(CG3, &contribution, Note("g3"))
-        .unwrap();
+    view.accumulate_named_graph(
+        CG3,
+        &contribution,
+        Note("g3"),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
+    flat.accumulate_named_graph(
+        CG3,
+        &contribution,
+        Note("g3"),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
 
-    let root_after = view.pipeline_root().unwrap();
+    let root_after = view
+        .pipeline_root(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None,
+        ))
+        .unwrap();
     assert_ne!(root_after, root_before, "a new leaf must move the root");
     assert_eq!(
         root_after,
-        flat.pipeline_root().unwrap(),
+        flat.pipeline_root(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None
+        ))
+        .unwrap(),
         "on both carriers alike"
     );
-    assert_eq!(view.graph_digest(CG1).unwrap(), g1, "untouched leaf");
-    assert_eq!(view.graph_digest(CG2).unwrap(), g2, "untouched leaf");
+    assert_eq!(
+        view.graph_digest(
+            CG1,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap(),
+        g1,
+        "untouched leaf"
+    );
+    assert_eq!(
+        view.graph_digest(
+            CG2,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap(),
+        g2,
+        "untouched leaf"
+    );
     assert_eq!(
         view.digest_work().graph_canonicalizations,
         work_before.graph_canonicalizations + 1,
@@ -3650,16 +4119,34 @@ fn cumulative_admission_refuses_an_oversized_append_and_admits_its_twin() {
     };
 
     let mut tight = build(total - 1);
-    let before = tight.digest().unwrap();
+    let before = tight
+        .digest(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None,
+        ))
+        .unwrap();
     let err = tight
-        .accumulate_named_graph(CG3, &contribution, Note("x"))
+        .accumulate_named_graph(
+            CG3,
+            &contribution,
+            Note("x"),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
         .expect_err("a cumulative breach must hard-fail");
     assert!(
         matches!(err, PipelineBundleError::AdmissionBreach(_)),
         "{err}"
     );
     assert_eq!(
-        tight.digest().unwrap(),
+        tight
+            .digest(&mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            ))
+            .unwrap(),
         before,
         "a refused append publishes nothing"
     );
@@ -3667,7 +4154,15 @@ fn cumulative_admission_refuses_an_oversized_append_and_admits_its_twin() {
 
     let mut roomy = build(total);
     roomy
-        .accumulate_named_graph(CG3, &contribution, Note("ok"))
+        .accumulate_named_graph(
+            CG3,
+            &contribution,
+            Note("ok"),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
         .expect("the adequately-sized twin must be admitted");
     assert!(roomy.handle(CG3).is_some());
 }
@@ -3716,15 +4211,51 @@ fn content_equal_views_with_different_fingerprints_publish_equal_identities() {
     };
     let a = carrier(once);
     let b = carrier(twice);
-    assert_eq!(a.digest().unwrap(), b.digest().unwrap());
+    assert_eq!(
+        a.digest(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None
+        ))
+        .unwrap(),
+        b.digest(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None
+        ))
+        .unwrap()
+    );
     assert_eq!(a.named_graph_iris(), b.named_graph_iris());
     for graph in a.named_graph_iris() {
         assert_eq!(
-            a.graph_digest(&graph).unwrap(),
-            b.graph_digest(&graph).unwrap()
+            a.graph_digest(
+                &graph,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap(),
+            b.graph_digest(
+                &graph,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
         );
     }
-    assert_eq!(a.pipeline_root().unwrap(), b.pipeline_root().unwrap());
+    assert_eq!(
+        a.pipeline_root(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None
+        ))
+        .unwrap(),
+        b.pipeline_root(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None
+        ))
+        .unwrap()
+    );
 }
 
 /// Carrier fidelity in BOTH directions: every lookaside resource, blob, provenance
@@ -3736,12 +4267,50 @@ fn converting_between_carriers_carries_every_sidecar_handle_and_identity() {
     let base = carrier_fixture();
     let ledger = RetentionLedger::new();
     let mut flat = flat_carrier(&base);
-    let d1 = flat.graph_digest(CG1).unwrap();
-    let d2 = flat.graph_digest(CG2).unwrap();
-    flat.pin_handle(CG1, Note("g1"), d1).unwrap();
-    flat.pin_handle(CG2, Note("g2"), d2).unwrap();
-    let flat_digest = flat.digest().unwrap();
-    let flat_root = flat.pipeline_root().unwrap();
+    let d1 = flat
+        .graph_digest(
+            CG1,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
+    let d2 = flat
+        .graph_digest(
+            CG2,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
+    flat.pin_handle(
+        CG1,
+        Note("g1"),
+        d1,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
+    flat.pin_handle(
+        CG2,
+        Note("g2"),
+        d2,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
+    let flat_digest = flat
+        .digest(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None,
+        ))
+        .unwrap();
+    let flat_root = flat
+        .pipeline_root(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None,
+        ))
+        .unwrap();
 
     let assert_loadout = |lookaside: &RdfLookaside,
                           blobs: &ContentStore,
@@ -3795,11 +4364,32 @@ fn converting_between_carriers_carries_every_sidecar_handle_and_identity() {
         "to_view_bundle",
     );
     assert_eq!(view.handles(), flat.handles(), "typed handles travel");
-    assert_eq!(view.digest().unwrap(), flat_digest);
-    assert_eq!(view.pipeline_root().unwrap(), flat_root);
+    assert_eq!(
+        view.digest(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None
+        ))
+        .unwrap(),
+        flat_digest
+    );
+    assert_eq!(
+        view.pipeline_root(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None
+        ))
+        .unwrap(),
+        flat_root
+    );
     for (graph, entry) in view.handles() {
         assert_eq!(
-            view.graph_digest(graph).unwrap(),
+            view.graph_digest(
+                graph,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap(),
             entry.content_digest,
             "the handle over <{graph}> still validates against its pin"
         );
@@ -3810,13 +4400,29 @@ fn converting_between_carriers_carries_every_sidecar_handle_and_identity() {
         .clone()
         .into_view_bundle(&ledger, ViewLimits::default())
         .expect("by-value conversion");
-    assert_eq!(moved.digest().unwrap(), flat_digest);
+    assert_eq!(
+        moved
+            .digest(&mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            ))
+            .unwrap(),
+        flat_digest
+    );
     assert_eq!(moved.handles(), flat.handles());
 
     // One accumulate on the view carrier: the sidecars and pins are unmoved by it.
     let mut grown = view;
     grown
-        .accumulate_named_graph(CG3, &contained_contribution(CG3), Note("g3"))
+        .accumulate_named_graph(
+            CG3,
+            &contained_contribution(CG3),
+            Note("g3"),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
         .expect("accumulate on the converted carrier");
     assert_loadout(
         grown.lookaside(),
@@ -3828,12 +4434,26 @@ fn converting_between_carriers_carries_every_sidecar_handle_and_identity() {
     assert_eq!(grown.handle(CG2).unwrap().content_digest, d2);
     assert_eq!(grown.handle(CG3).unwrap().payload, Note("g3"));
     for (graph, entry) in grown.handles() {
-        assert_eq!(grown.graph_digest(graph).unwrap(), entry.content_digest);
+        assert_eq!(
+            grown
+                .graph_digest(
+                    graph,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
+                )
+                .unwrap(),
+            entry.content_digest
+        );
     }
 
     // The reverse conversion exists and is checked in the same terms.
     let back = grown
-        .to_flat_bundle()
+        .to_flat_bundle(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None,
+        ))
         .expect("conversion back to the flat carrier");
     assert_loadout(
         back.lookaside(),
@@ -3842,22 +4462,76 @@ fn converting_between_carriers_carries_every_sidecar_handle_and_identity() {
         "to_flat_bundle",
     );
     assert_eq!(back.handles(), grown.handles());
-    assert_eq!(back.digest().unwrap(), grown.digest().unwrap());
     assert_eq!(
-        back.pipeline_root().unwrap(),
-        grown.pipeline_root().unwrap()
+        back.digest(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None
+        ))
+        .unwrap(),
+        grown
+            .digest(&mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            ))
+            .unwrap()
+    );
+    assert_eq!(
+        back.pipeline_root(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None
+        ))
+        .unwrap(),
+        grown
+            .pipeline_root(&mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            ))
+            .unwrap()
     );
     for (graph, entry) in back.handles() {
-        assert_eq!(back.graph_digest(graph).unwrap(), entry.content_digest);
+        assert_eq!(
+            back.graph_digest(
+                graph,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap(),
+            entry.content_digest
+        );
     }
     // A round trip that ends where it started.
     let round = back
         .to_view_bundle(&ledger, ViewLimits::default())
         .expect("round trip");
-    assert_eq!(round.digest().unwrap(), grown.digest().unwrap());
     assert_eq!(
-        round.pipeline_root().unwrap(),
-        grown.pipeline_root().unwrap()
+        round
+            .digest(&mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            ))
+            .unwrap(),
+        grown
+            .digest(&mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            ))
+            .unwrap()
+    );
+    assert_eq!(
+        round
+            .pipeline_root(&mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            ))
+            .unwrap(),
+        grown
+            .pipeline_root(&mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            ))
+            .unwrap()
     );
 }
 
@@ -3882,10 +4556,31 @@ fn a_delta_rides_the_view_carrier_without_compaction() {
     // The delta's effective content is the base's, so the identities agree with the
     // flat carrier's.
     let flat = flat_carrier(&base);
-    assert_eq!(carrier.digest().unwrap(), flat.digest().unwrap());
     assert_eq!(
-        carrier.pipeline_root().unwrap(),
-        flat.pipeline_root().unwrap()
+        carrier
+            .digest(&mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            ))
+            .unwrap(),
+        flat.digest(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None
+        ))
+        .unwrap()
+    );
+    assert_eq!(
+        carrier
+            .pipeline_root(&mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            ))
+            .unwrap(),
+        flat.pipeline_root(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None
+        ))
+        .unwrap()
     );
     assert_eq!(carrier.named_graph_iris(), flat.named_graph_iris());
 
@@ -4104,8 +4799,18 @@ fn an_undersized_budget_refuses_the_view_carrier_and_admits_its_adequate_twin() 
         "the declaration-only graph survives the tightest budget that admits at all"
     );
     assert_eq!(
-        admitted.digest().unwrap(),
-        flat_carrier(&base).digest().unwrap(),
+        admitted
+            .digest(&mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            ))
+            .unwrap(),
+        flat_carrier(&base)
+            .digest(&mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            ))
+            .unwrap(),
         "and it publishes the flat carrier's identity"
     );
     assert_eq!(ledger.snapshot().distinct_owners, 1);
@@ -4132,21 +4837,80 @@ fn a_refused_accumulation_leaves_both_carriers_exactly_as_it_found_them() {
 
     // Pin <g1> on both carriers — the graph with the scoped blanks, the triple term
     // and the statement layer.
-    let pinned = flat.graph_digest(CG1).unwrap();
-    assert_eq!(pinned, view.graph_digest(CG1).unwrap());
-    flat.pin_handle(CG1, Note("g1"), pinned).unwrap();
-    view.pin_handle(CG1, Note("g1"), pinned).unwrap();
+    let pinned = flat
+        .graph_digest(
+            CG1,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
+    assert_eq!(
+        pinned,
+        view.graph_digest(
+            CG1,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+    );
+    flat.pin_handle(
+        CG1,
+        Note("g1"),
+        pinned,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
+    view.pin_handle(
+        CG1,
+        Note("g1"),
+        pinned,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
 
     // Everything the refusal must leave exactly where it found it.
     let leaves = flat.named_graph_iris();
     let leaf_digests: Vec<ContentDigest> = leaves
         .iter()
-        .map(|g| flat.graph_digest(g).unwrap())
+        .map(|g| {
+            flat.graph_digest(
+                g,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .unwrap()
+        })
         .collect();
-    let flat_digest = flat.digest().unwrap();
-    let flat_root = flat.pipeline_root().unwrap();
-    let view_digest = view.digest().unwrap();
-    let view_root = view.pipeline_root().unwrap();
+    let flat_digest = flat
+        .digest(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None,
+        ))
+        .unwrap();
+    let flat_root = flat
+        .pipeline_root(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None,
+        ))
+        .unwrap();
+    let view_digest = view
+        .digest(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None,
+        ))
+        .unwrap();
+    let view_root = view
+        .pipeline_root(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None,
+        ))
+        .unwrap();
     let ledger_before = ledger.snapshot();
     assert_eq!(
         view.named_graph_iris(),
@@ -4157,10 +4921,26 @@ fn a_refused_accumulation_leaves_both_carriers_exactly_as_it_found_them() {
     // Folding MORE rows into the pinned graph shifts its digest → HARD fail on both.
     let disturbing = contained_contribution(CG1);
     for err in [
-        flat.accumulate_named_graph(CG1, &disturbing, Note("x"))
-            .expect_err("the flat carrier must refuse a pin-disturbing contribution"),
-        view.accumulate_named_graph(CG1, &disturbing, Note("x"))
-            .expect_err("the view carrier must refuse a pin-disturbing contribution"),
+        flat.accumulate_named_graph(
+            CG1,
+            &disturbing,
+            Note("x"),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect_err("the flat carrier must refuse a pin-disturbing contribution"),
+        view.accumulate_named_graph(
+            CG1,
+            &disturbing,
+            Note("x"),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect_err("the view carrier must refuse a pin-disturbing contribution"),
     ] {
         assert!(
             matches!(
@@ -4171,23 +4951,69 @@ fn a_refused_accumulation_leaves_both_carriers_exactly_as_it_found_them() {
         );
     }
 
-    assert_eq!(flat.digest().unwrap(), flat_digest, "flat bundle digest");
     assert_eq!(
-        flat.pipeline_root().unwrap(),
+        flat.digest(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None
+        ))
+        .unwrap(),
+        flat_digest,
+        "flat bundle digest"
+    );
+    assert_eq!(
+        flat.pipeline_root(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None
+        ))
+        .unwrap(),
         flat_root,
         "flat pipeline root"
     );
-    assert_eq!(view.digest().unwrap(), view_digest, "view bundle digest");
     assert_eq!(
-        view.pipeline_root().unwrap(),
+        view.digest(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None
+        ))
+        .unwrap(),
+        view_digest,
+        "view bundle digest"
+    );
+    assert_eq!(
+        view.pipeline_root(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None
+        ))
+        .unwrap(),
         view_root,
         "view pipeline root"
     );
     assert_eq!(flat.named_graph_iris(), leaves, "flat leaf set");
     assert_eq!(view.named_graph_iris(), leaves, "view leaf set");
     for (graph, before) in leaves.iter().zip(&leaf_digests) {
-        assert_eq!(flat.graph_digest(graph).unwrap(), *before, "flat <{graph}>");
-        assert_eq!(view.graph_digest(graph).unwrap(), *before, "view <{graph}>");
+        assert_eq!(
+            flat.graph_digest(
+                graph,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap(),
+            *before,
+            "flat <{graph}>"
+        );
+        assert_eq!(
+            view.graph_digest(
+                graph,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap(),
+            *before,
+            "view <{graph}>"
+        );
     }
     assert_eq!(flat.handle(CG1).unwrap().content_digest, pinned);
     assert_eq!(view.handle(CG1).unwrap().content_digest, pinned);
@@ -4203,30 +5029,104 @@ fn a_refused_accumulation_leaves_both_carriers_exactly_as_it_found_them() {
     // that leaves the pin alone. The refusal was about that contribution, not about
     // a carrier poisoned by having tried.
     let elsewhere = contained_contribution(CG3);
-    flat.accumulate_named_graph(CG3, &elsewhere, Note("g3"))
-        .expect("the undisturbing twin must still be admitted (flat)");
-    view.accumulate_named_graph(CG3, &elsewhere, Note("g3"))
-        .expect("the undisturbing twin must still be admitted (view)");
+    flat.accumulate_named_graph(
+        CG3,
+        &elsewhere,
+        Note("g3"),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("the undisturbing twin must still be admitted (flat)");
+    view.accumulate_named_graph(
+        CG3,
+        &elsewhere,
+        Note("g3"),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("the undisturbing twin must still be admitted (view)");
     assert_eq!(
-        flat.graph_digest(CG1).unwrap(),
+        flat.graph_digest(
+            CG1,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap(),
         pinned,
         "the pin still verifies (flat)"
     );
     assert_eq!(
-        view.graph_digest(CG1).unwrap(),
+        view.graph_digest(
+            CG1,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap(),
         pinned,
         "the pin still verifies (view)"
     );
     assert_eq!(
-        flat.graph_digest(CG3).unwrap(),
-        view.graph_digest(CG3).unwrap()
+        flat.graph_digest(
+            CG3,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap(),
+        view.graph_digest(
+            CG3,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
     );
     assert_ne!(
-        flat.graph_digest(CG3).unwrap(),
-        flat.graph_digest(CABSENT).unwrap()
+        flat.graph_digest(
+            CG3,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap(),
+        flat.graph_digest(
+            CABSENT,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
     );
-    assert_eq!(flat.digest().unwrap(), view.digest().unwrap());
-    assert_eq!(flat.pipeline_root().unwrap(), view.pipeline_root().unwrap());
+    assert_eq!(
+        flat.digest(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None
+        ))
+        .unwrap(),
+        view.digest(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None
+        ))
+        .unwrap()
+    );
+    assert_eq!(
+        flat.pipeline_root(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None
+        ))
+        .unwrap(),
+        view.pipeline_root(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None
+        ))
+        .unwrap()
+    );
     assert_eq!(
         ledger.snapshot().distinct_owners,
         2,

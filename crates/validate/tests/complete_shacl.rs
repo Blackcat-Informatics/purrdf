@@ -293,7 +293,15 @@ fn dated_some_value_discards_ordinary_query_failures_but_retains_resource_refusa
 fn shared_product_doors_apply_the_current_bundle_before_source_admission() {
     let shapes = Arc::new(purrdf_shapes::engine::parse_shapes(SHAPES, None).unwrap());
     let prepared = PreparedShapes::new(shapes);
-    let bytes = prepared.to_product(&ShapesProfile::CORE).unwrap();
+    let bytes = prepared
+        .to_product(
+            &ShapesProfile::CORE,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
     let identity = *purrdf_shapes::product::ShapesProduct::open(&bytes)
         .unwrap()
         .declared_identity()

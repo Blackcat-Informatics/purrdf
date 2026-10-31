@@ -36,9 +36,14 @@ fn embedding_attachment_failures_keep_original_pack_causes_after_input_drop() {
         &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
     .unwrap_err();
-    let external: SourceAttachmentError = purrdf::bind_external_pack(scope, &bytes, &contract)
-        .unwrap_err()
-        .into();
+    let external: SourceAttachmentError = purrdf::bind_external_pack(
+        scope,
+        &bytes,
+        &contract,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap_err()
+    .into();
     drop(bytes);
     drop(dataset);
     drop(contract);

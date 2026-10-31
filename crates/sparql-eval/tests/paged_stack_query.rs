@@ -184,10 +184,26 @@ fn chronological_layers_match_eager_bags_for_every_consumer_family() {
     ] {
         assert_eq!(stack.insert(new.clone()).unwrap(), values.insert(new));
     }
-    stack.seal_head(bound(2)).unwrap();
+    stack
+        .seal_head(
+            bound(2),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
     assert_eq!(stack.remove(&repeated).unwrap(), values.remove(&repeated));
     assert_eq!(stack.remove(&implicit).unwrap(), values.remove(&implicit));
-    stack.seal_head(bound(1)).unwrap();
+    stack
+        .seal_head(
+            bound(1),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
     let removed = stack.snapshot().unwrap();
     let removed_oracle = eager(values.clone(), &[iri("empty")]);
     matrix(&removed, &removed_oracle, QUERIES);
@@ -223,7 +239,15 @@ fn chronological_layers_match_eager_bags_for_every_consumer_family() {
         4,
         "nonempty set: repeated physical rows count once"
     );
-    stack.seal_head(bound(3)).unwrap();
+    stack
+        .seal_head(
+            bound(3),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
     matrix(&stack.snapshot().unwrap(), &oracle, QUERIES);
     matrix(&original, &original_oracle, QUERIES);
     matrix(&removed, &removed_oracle, QUERIES);
@@ -239,7 +263,14 @@ fn chronological_layers_match_eager_bags_for_every_consumer_family() {
         .unwrap();
         for retained in [&head, &stack.snapshot().unwrap()] {
             let folded = retained
-                .compact(PagedQueryLimits::UNBOUNDED, bound(n))
+                .compact(
+                    PagedQueryLimits::UNBOUNDED,
+                    bound(n),
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
+                )
                 .unwrap();
             assert_eq!(carrier_pages(&folded), carrier_pages(&expected));
         }
@@ -248,14 +279,29 @@ fn chronological_layers_match_eager_bags_for_every_consumer_family() {
         stack.remove(&delta_graph_row).unwrap(),
         values.remove(&delta_graph_row)
     );
-    stack.seal_head(bound(1)).unwrap();
+    stack
+        .seal_head(
+            bound(1),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
     let withdrawn = stack.snapshot().unwrap();
     let withdrawn_oracle = eager(values, &[iri("empty"), iri("deltaEmpty")]);
     matrix(&withdrawn, &withdrawn_oracle, QUERIES);
     assert_eq!(
         carrier_pages(
             &withdrawn
-                .compact(PagedQueryLimits::UNBOUNDED, bound(2))
+                .compact(
+                    PagedQueryLimits::UNBOUNDED,
+                    bound(2),
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
+                )
                 .unwrap()
         ),
         carrier_pages(
@@ -308,7 +354,15 @@ fn generated_mutations_and_retained_snapshots_keep_query_bags_and_page_identity(
         );
         if step % 7 == 0 {
             snapshots.push((snapshot, oracle));
-            stack.seal_head(bound(1 + step % 3)).unwrap();
+            stack
+                .seal_head(
+                    bound(1 + step % 3),
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
+                )
+                .unwrap();
         }
     }
     for (snapshot, oracle) in snapshots {
@@ -318,7 +372,14 @@ fn generated_mutations_and_retained_snapshots_keep_query_bags_and_page_identity(
             assert_eq!(
                 carrier_pages(
                     &snapshot
-                        .compact(PagedQueryLimits::UNBOUNDED, bound(n))
+                        .compact(
+                            PagedQueryLimits::UNBOUNDED,
+                            bound(n),
+                            &mut purrdf_core::CanonicalizationControl::new(
+                                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                                None
+                            )
+                        )
                         .unwrap()
                 ),
                 carrier_pages(
@@ -338,7 +399,15 @@ fn generated_mutations_and_retained_snapshots_keep_query_bags_and_page_identity(
     let only = edge("deleted", "knows", iri("gone"));
     let mut empty = PagedStack::new(vec![seal(eager([only.clone()], &[]))]).unwrap();
     empty.remove(&only).unwrap();
-    empty.seal_head(bound(1)).unwrap();
+    empty
+        .seal_head(
+            bound(1),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
     matrix(
         &empty.snapshot().unwrap(),
         &purrdf_core::term_fixture::empty_dataset(),
@@ -347,7 +416,14 @@ fn generated_mutations_and_retained_snapshots_keep_query_bags_and_page_identity(
     assert_eq!(
         carrier_pages(
             &empty
-                .compact(PagedQueryLimits::UNBOUNDED, bound(2))
+                .compact(
+                    PagedQueryLimits::UNBOUNDED,
+                    bound(2),
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
+                )
                 .unwrap()
         ),
         [] as [Vec<u8>; 0]
@@ -433,7 +509,15 @@ fn typed_rdf_values_and_graph_scoped_retractions_match_explicit_eager_tables() {
         "directional value is published intact"
     );
     stack.remove(&declaration).unwrap();
-    stack.seal_head(bound(1)).unwrap();
+    stack
+        .seal_head(
+            bound(1),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
     let after = stack.snapshot().unwrap();
     let expected_after = eager(ordinary.iter().cloned().chain([note.clone()]), &[]);
     matrix(&after, &expected_after, &queries);
@@ -443,7 +527,14 @@ fn typed_rdf_values_and_graph_scoped_retractions_match_explicit_eager_tables() {
             assert_eq!(
                 carrier_pages(
                     &snapshot
-                        .compact(PagedQueryLimits::UNBOUNDED, bound(n))
+                        .compact(
+                            PagedQueryLimits::UNBOUNDED,
+                            bound(n),
+                            &mut purrdf_core::CanonicalizationControl::new(
+                                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                                None
+                            )
+                        )
                         .unwrap()
                 ),
                 carrier_pages(
@@ -480,7 +571,15 @@ fn typed_rdf_values_and_graph_scoped_retractions_match_explicit_eager_tables() {
         .unwrap();
     let restored_oracle = restored_builder.freeze().unwrap();
     let restored_head = stack.snapshot().unwrap();
-    stack.seal_head(bound(1)).unwrap();
+    stack
+        .seal_head(
+            bound(1),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
     let restored_sealed = stack.snapshot().unwrap();
     for snapshot in [&restored_head, &restored_sealed] {
         let view = snapshot.query_view(PagedQueryLimits::UNBOUNDED);
@@ -496,7 +595,14 @@ fn typed_rdf_values_and_graph_scoped_retractions_match_explicit_eager_tables() {
             assert_eq!(
                 carrier_pages(
                     &snapshot
-                        .compact(PagedQueryLimits::UNBOUNDED, bound(n))
+                        .compact(
+                            PagedQueryLimits::UNBOUNDED,
+                            bound(n),
+                            &mut purrdf_core::CanonicalizationControl::new(
+                                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                                None
+                            )
+                        )
                         .unwrap()
                 ),
                 carrier_pages(
@@ -559,7 +665,14 @@ fn native_primary_and_virtual_reifier_overlap_reaches_the_same_consumer_bag() {
     assert_eq!(
         carrier_pages(
             &snapshot
-                .compact(PagedQueryLimits::UNBOUNDED, bound(1))
+                .compact(
+                    PagedQueryLimits::UNBOUNDED,
+                    bound(1),
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
+                )
                 .unwrap()
         ),
         carrier_pages(
@@ -749,7 +862,16 @@ fn aggregate_admission_and_cache_receipts_are_exact_at_the_public_boundary() {
             "rejected source is never materialized"
         );
         assert!(
-            snapshot.compact(limits, bound(1)).is_err(),
+            snapshot
+                .compact(
+                    limits,
+                    bound(1),
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
+                )
+                .is_err(),
             "no partially folded artifact"
         );
     }
@@ -818,7 +940,14 @@ fn source_faults_are_operational_sticky_and_refuse_compacted_artifacts() {
         assert_eq!(sticky_evidence, evidence);
         assert!(
             snapshot
-                .compact(PagedQueryLimits::UNBOUNDED, bound(1))
+                .compact(
+                    PagedQueryLimits::UNBOUNDED,
+                    bound(1),
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
+                )
                 .is_err()
         );
     }
@@ -885,7 +1014,14 @@ fn constants_and_head_queries_check_skipped_and_zero_page_source_descriptors() {
             );
             assert!(
                 snapshot
-                    .compact(PagedQueryLimits::UNBOUNDED, bound(1))
+                    .compact(
+                        PagedQueryLimits::UNBOUNDED,
+                        bound(1),
+                        &mut purrdf_core::CanonicalizationControl::new(
+                            purrdf_core::RDFC_V2_CORPUS_POLICY,
+                            None
+                        )
+                    )
                     .is_err()
             );
         }

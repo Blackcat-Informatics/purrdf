@@ -307,7 +307,7 @@ impl RegimeClosure {
 ///     <http://example.org/x> \
 ///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/A> .\n";
 ///
-/// let closed = materialize_to_nquads_string("rdfs", data, "").expect("rdfs closure");
+/// let closed = materialize_to_nquads_string("rdfs", data, "", &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None)).expect("rdfs closure");
 /// // rdfs9 re-types the instance.
 /// assert!(closed.nquads().contains(
 ///     "<http://example.org/x> \
@@ -2803,7 +2803,7 @@ impl ReasonerSession {
 ///
 /// let data = "<http://example.org/x> \
 ///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/A> .\n";
-/// let decided = consistency_to_string(data, &[], &[], 0, 0).expect("reverse-maps");
+/// let decided = consistency_to_string(data, &[], &[], 0, 0, &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None)).expect("reverse-maps");
 /// assert_eq!(decided.answer(), "consistency true\n");
 /// // The certificate is never optional and never claims more than it decided: `decided`
 /// // is reported here only because the boundary list beside it is, in fact, empty.
@@ -2820,11 +2820,11 @@ impl ReasonerSession {
 /// let lib = "<http://example.org/A> \
 ///     <http://www.w3.org/2002/07/owl#disjointWith> <http://example.org/B> .\n";
 /// let with_import = consistency_to_string(
-///     importing, &[("http://example.org/lib", lib)], &[], 0, 0,
+///     importing, &[("http://example.org/lib", lib)], &[], 0, 0, &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None)
 /// ).expect("decides");
 /// assert_eq!(with_import.answer(), "consistency false\n");
 /// // …and without the document the question is refused, never answered over less.
-/// assert!(consistency_to_string(importing, &[], &[], 0, 0).is_err());
+/// assert!(consistency_to_string(importing, &[], &[], 0, 0, &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None)).is_err());
 /// ```
 pub fn consistency_to_string(
     document: &str,
@@ -2953,7 +2953,7 @@ pub fn instances_to_string(
 /// // Not asserted, and entailed.
 /// let asked = "<http://example.org/tom> \
 ///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Animal> .\n";
-/// let decided = entails_to_string(data, asked, 0, 0).expect("decides");
+/// let decided = entails_to_string(data, asked, 0, 0, &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None)).expect("decides");
 /// assert!(decided.answer().starts_with("entails true\n"));
 /// assert!(decided.answer().contains("\naxiom ClassAssertion\n"));
 /// ```
@@ -3173,7 +3173,7 @@ fn parse_module_method(name: &str) -> Result<ModuleMethod, String> {
 ///      <http://example.org/Fish> <{sub}> <http://example.org/Animal> .\n"
 /// );
 /// let asked = format!("<http://example.org/Cat> <{sub}> <http://example.org/Animal> .\n");
-/// let why = justify_to_string(&data, &asked).expect("entailed");
+/// let why = justify_to_string(&data, &asked, &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None)).expect("entailed");
 /// // The chain, and NOT the sibling.
 /// assert_eq!(why.answer().lines().count(), 2);
 /// assert!(why.certificate().contains("\nsufficient true\n"));
@@ -4498,7 +4498,7 @@ impl ReasonerSession {
 ///
 /// let data = "<http://example.org/Cat> \
 ///     <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Animal> .\n";
-/// let proved = prove_to_string(data, "consistency", "", 0, 0).expect("decides");
+/// let proved = prove_to_string(data, "consistency", "", 0, 0, &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None)).expect("decides");
 /// assert_eq!(proved.answer(), "consistency true\n");
 /// assert!(proved.proof_document().starts_with("purrdf-dl-proof 1\n"));
 /// assert!(proved.proof_document().contains("\navailability recorded\n"));
@@ -4510,7 +4510,7 @@ impl ReasonerSession {
 ///     "",
 ///     proved.answer(),
 ///     proved.certificate(),
-///     proved.proof_document(),
+///     proved.proof_document(), &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None)
 /// )
 /// .expect("a genuine proof checks");
 /// assert!(checked.starts_with("purrdf-dl-proof-check 1\n"));

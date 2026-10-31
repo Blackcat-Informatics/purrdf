@@ -95,8 +95,15 @@ fn an_ordinary_ontology_decides_far_inside_its_step_budget() {
          triples:\n{document}"
     );
 
-    let answer = purrdf_validate::regime::consistency_to_string(&document, &[], &[], 0, 0)
-        .expect("the ontology reverse-maps");
+    let answer = purrdf_validate::regime::consistency_to_string(
+        &document,
+        &[],
+        &[],
+        0,
+        0,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("the ontology reverse-maps");
     assert_eq!(
         answer.answer(),
         "consistency true\n",
