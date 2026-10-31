@@ -599,6 +599,9 @@ pub fn try_canonical_sha256_view<D: DatasetView>(
     canonical_sha256_view(view, hash, control, CanonOutput::Sha256Digest).map(|(_, digest)| digest)
 }
 
+/// The document and digest produced within one canonical search boundary.
+type CanonicalDigestResult<I, E> = Result<(Canonicalized<I>, ContentDigest), CanonError<E>>;
+
 /// Return the overlay canonical document and its SHA-256 identity from one search.
 /// Both outputs are completed within the original source checkpoint and stop boundary.
 ///
@@ -608,7 +611,7 @@ pub fn try_canonicalize_sha256_view<D: DatasetView>(
     view: &D,
     hash: CanonHash,
     control: &mut CanonicalizationControl<'_>,
-) -> Result<(Canonicalized<D::Id>, ContentDigest), CanonError<D::ReadError>> {
+) -> CanonicalDigestResult<D::Id, D::ReadError> {
     canonical_sha256_view(view, hash, control, CanonOutput::DocumentSha256Digest)
 }
 
@@ -617,7 +620,7 @@ fn canonical_sha256_view<D: DatasetView>(
     hash: CanonHash,
     control: &mut CanonicalizationControl<'_>,
     output: CanonOutput,
-) -> Result<(Canonicalized<D::Id>, ContentDigest), CanonError<D::ReadError>> {
+) -> CanonicalDigestResult<D::Id, D::ReadError> {
     control.run(
         SearchConfiguration::rdfc(hash, CanonPresentation::Overlay, None, output),
         |run| {
@@ -2196,8 +2199,8 @@ impl purrdf_hash::error::StructuredError for BudgetExceeded {
     purrdf_hash::error_visit! {
         @record self { blank_count, limit, work } => "canonical-budget-exceeded" {
             "blank_count" => Unsigned(self.blank_count as u128),
-            "limit" => Unsigned(self.limit as u128),
-            "charged_work" => Unsigned(self.work.total() as u128),
+            "limit" => Unsigned(u128::from(self.limit)),
+            "charged_work" => Unsigned(u128::from(self.work.total())),
         }
     }
 }
@@ -2600,7 +2603,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         self.run.check_stop().map_err(|_| CanonError::Stopped)
     }
 
-    fn charge_search(&mut self, event: SearchEvent) -> Result<(), CanonError> {
+    fn charge_search(&self, event: SearchEvent) -> Result<(), CanonError> {
         self.run.charge(event).map_err(|failure| match failure {
             SearchRefusal::Stopped => CanonError::Stopped,
             SearchRefusal::CounterCapacity => CanonError::CounterCapacity,
@@ -2724,7 +2727,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
 
     /// Hash N-Degree Quads (RDFC-1.0 §4.8): the gossip-path permutation search.
     fn hash_n_degree(
-        &mut self,
+        &self,
         identifier: D::Id,
         issuer: IdIssuer<D::Id>,
     ) -> Result<(HashHex, IdIssuer<D::Id>), CanonError> {
@@ -2847,7 +2850,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
 
     /// Enter §4.8 once. Work and stop checks have the same order at every depth.
     fn n_degree_frame(
-        &mut self,
+        &self,
         identifier: D::Id,
         issuer: IdIssuer<D::Id>,
     ) -> Result<NDegreeFrame<D::Id>, CanonError> {
@@ -6220,7 +6223,7 @@ mod tests {
             &mut zero,
         )
         .unwrap();
-        assert!(empty.nquads.is_empty());
+        assert_eq!(empty.nquads, "");
         assert_eq!(zero.receipts()[0].phase, CanonPhase::Output);
         assert_eq!(zero.receipts()[0].work.total(), 0);
         let no_rows = RdfDatasetBuilder::new().freeze().unwrap();

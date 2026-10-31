@@ -34,7 +34,7 @@ pub(super) fn dataset(rows: &[RdfQuad]) -> Arc<RdfDataset> {
     builder(rows).freeze().unwrap()
 }
 
-fn roundtrip(catalog: &FnoCatalog, control: &mut crate::CanonicalizationControl) {
+fn roundtrip(catalog: &FnoCatalog, control: &mut crate::CanonicalizationControl<'_>) {
     let source = dataset(&to_quads(catalog));
     let read = FnoCatalog::from_dataset(&source, &catalog.as_input().ontology_iri).unwrap();
     assert_eq!(&read, catalog);
