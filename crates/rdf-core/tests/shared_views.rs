@@ -1643,11 +1643,11 @@ fn canonical_identity_is_byte_equal_over_flat_composite_and_delta_views() {
     // The blank COUNT is a view-id property and must agree too — it is the
     // pre-reject the isomorphism oracle leans on.
     for count in [
-        blank_count_view(&independent),
-        blank_count_view(&shared),
-        blank_count_view(&delta),
+        blank_count_view(&independent).unwrap(),
+        blank_count_view(&shared).unwrap(),
+        blank_count_view(&delta).unwrap(),
     ] {
-        assert_eq!(count, blank_count_view(&*flat));
+        assert_eq!(count, blank_count_view(&*flat).unwrap());
     }
 
     // Admission answers on a view, and answers BOTH ways: the clean view is
@@ -1748,7 +1748,10 @@ fn cross_type_isomorphism_compares_a_composite_against_a_flat_dataset() {
         )
         .unwrap()
     );
-    assert_eq!(blank_count_view(&doubled), 2 * blank_count_view(&*flat));
+    assert_eq!(
+        blank_count_view(&doubled).unwrap(),
+        2 * blank_count_view(&*flat).unwrap()
+    );
 
     // … and it IS isomorphic to the flat dataset built by appending the source
     // twice — which is the same statement about co-reference from the other side:
@@ -2445,8 +2448,8 @@ fn appending_a_co_referent_source_over_a_standardized_scope_still_matches_from_s
     // Co-reference was not silently granted: the two occurrences stay two.
     assert_eq!(appended.quads().count(), 2);
     assert_eq!(
-        blank_count_view(&appended),
-        2 * blank_count_view(&*complete_source())
+        blank_count_view(&appended).unwrap(),
+        2 * blank_count_view(&*complete_source()).unwrap()
     );
 }
 
@@ -2609,7 +2612,10 @@ fn a_delta_co_refers_with_its_base_while_a_third_source_stays_standardized_apart
         mixed_bytes, alone,
         "the independent source must not collapse"
     );
-    assert_eq!(blank_count_view(&mixed), 2 * blank_count_view(&*base));
+    assert_eq!(
+        blank_count_view(&mixed).unwrap(),
+        2 * blank_count_view(&*base).unwrap()
+    );
     assert_probes(&mixed);
 
     // Declaring that third source co-referent too collapses the composite back to
@@ -5410,7 +5416,10 @@ fn a_selection_places_binds_and_retains_like_any_other_source() {
         .nquads(),
         "a shared selection adds no occurrence its source did not already have"
     );
-    assert_eq!(blank_count_view(&rejoined), blank_count_view(&*source));
+    assert_eq!(
+        blank_count_view(&rejoined).unwrap(),
+        blank_count_view(&*source).unwrap()
+    );
 
     // INDEPENDENT binding standardizes the WHOLE selection apart instead, so
     // the same rows become a second, distinct set of occurrences.
@@ -5426,7 +5435,7 @@ fn a_selection_places_binds_and_retains_like_any_other_source() {
         apart.quads().count() > rejoined.quads().count(),
         "standardizing the selection apart cannot collapse it onto the source"
     );
-    assert!(blank_count_view(&apart) > blank_count_view(&*source));
+    assert!(blank_count_view(&apart).unwrap() > blank_count_view(&*source).unwrap());
 
     // OWNERSHIP: the selection RETAINS the composite's own sources rather than
     // copying them, so admission charges exactly the bases the composite

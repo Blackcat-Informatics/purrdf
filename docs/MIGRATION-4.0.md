@@ -52,6 +52,14 @@ conversions to the Core type. Code that only matches
 `QueryIndexAllocationError::StatementHistogram(_)` needs no payload-type change.
 The ordinal-array `Permutation` variant retains its existing storage error.
 
+## Fallible blank-node counts
+
+`blank_count` and `blank_count_view` now return `Result<usize, CanonError>`.
+`try_blank_count_view` returns `Result<u64, CanonError<D::ReadError>>`.
+Propagate the result with `?` or handle source, scratch admission and storage
+failures before using the count. Traversal buffers and the distinct ID table
+now use the source's scratch admission, preserving its original refusal.
+
 ## Declared retrieval ranks
 
 `RankedDeclaration` now requires `rank_source: RankSource`. Existing native

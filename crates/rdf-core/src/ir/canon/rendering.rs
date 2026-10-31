@@ -35,12 +35,18 @@ impl<R: WorkspaceReservation> ScratchGrant<R> {
         operation: impl FnOnce(&mut Memory<'_, Self>) -> Result<T, CanonError<R::Error>>,
     ) -> Result<T, CanonError<R::Error>> {
         let result = Memory::new(&mut self).try_scope(operation);
-        result.map_err(|error| match (error, self.failure.take()) {
+        result.map_err(|error| self.restore(error))
+    }
+
+    /// Restore a callback's original provider refusal before crossing another
+    /// scratch scope whose cleanup may have its own refusal.
+    pub(super) fn restore(&mut self, error: CanonError<R::Error>) -> CanonError<R::Error> {
+        match (error, self.failure.take()) {
             (CanonError::Storage(StorageError::AdmissionFailed), Some(cause)) => {
                 CanonError::Read(cause)
             }
             (error, _) => error,
-        })
+        }
     }
 }
 
