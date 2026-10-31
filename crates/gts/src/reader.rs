@@ -495,8 +495,8 @@ struct Folder<'g, 's, 'k> {
     // legacy `rf`-only quoted-triple term, which is checked once the segment is
     // fully folded (see `report_ambiguous_reifiers`).
     rebound_reifiers: Vec<(usize, u64)>,
-    // Anchors, first bindings and recorded rows by reifier id, kept in step
-    // with `g.terms` and `g.reifiers` so a `reifies` row never scans either.
+    // Anchors and first bindings by reifier id, plus distinct rows only when
+    // materializing `g.reifiers`, so a `reifies` row never scans either table.
     reifier_index: ReifierIndex,
 }
 
@@ -1059,7 +1059,8 @@ impl Folder<'_, '_, '_> {
                 );
                 continue;
             }
-            self.reifier_index.record(self.g, (rid, triple, gslot));
+            self.reifier_index
+                .record(self.g, (rid, triple, gslot), self.materialize);
             self.with_sink(|segment_index, sink| sink.reifier(segment_index, (rid, triple, gslot)));
         }
     }
