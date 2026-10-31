@@ -2786,29 +2786,6 @@ impl CliRegime {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_requested_document_flag_is_refused_and_absent_ones_pass() {
-        let refuse = |ledger: &LedgerTarget, jsonld: Option<&JsonLdSerializeOptions>| {
-            refuse_document_flags(ledger, jsonld, "no ledger here", "no JSON-LD here")
-                .map_err(|error| error.to_string())
-        };
-        assert_eq!(refuse(&LedgerTarget::Silent, None), Ok(()));
-        assert_eq!(
-            refuse(&LedgerTarget::Stderr, None),
-            Err("no ledger here".to_owned())
-        );
-        let options = JsonLdSerializeOptions::expanded();
-        assert_eq!(
-            refuse(&LedgerTarget::Silent, Some(&options)),
-            Err("no JSON-LD here".to_owned())
-        );
-    }
-}
-
 impl Cli {
     /// Known input, import, artifact and report paths, before any canonical operation starts.
     pub(crate) fn canonical_paths(&self) -> Vec<PathBuf> {
@@ -3124,5 +3101,28 @@ impl Cli {
             Command::GlobSet { .. } => {}
         }
         paths
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_requested_document_flag_is_refused_and_absent_ones_pass() {
+        let refuse = |ledger: &LedgerTarget, jsonld: Option<&JsonLdSerializeOptions>| {
+            refuse_document_flags(ledger, jsonld, "no ledger here", "no JSON-LD here")
+                .map_err(|error| error.to_string())
+        };
+        assert_eq!(refuse(&LedgerTarget::Silent, None), Ok(()));
+        assert_eq!(
+            refuse(&LedgerTarget::Stderr, None),
+            Err("no ledger here".to_owned())
+        );
+        let options = JsonLdSerializeOptions::expanded();
+        assert_eq!(
+            refuse(&LedgerTarget::Silent, Some(&options)),
+            Err("no JSON-LD here".to_owned())
+        );
     }
 }
