@@ -1356,6 +1356,40 @@ fingerprints = []
 names = []
 
 [[job]]
+id = "lattice-ntt-and-codec"
+summary = "Shared fixed 256-coefficient field transforms and bit packing for the two native lattice primitives"
+home = "purrdf_gts::lattice::Lattice"
+entry_points = ["purrdf_gts::lattice::pack", "purrdf_gts::lattice::unpack"]
+spec = "FIPS 203 Algorithms 5–6 and 9–10 and FIPS 204 Algorithms 16–19 and 41–42; only the ML-KEM-1024 incomplete quadratic transform and ML-DSA-65 complete transform are instantiated"
+vectors = ["crates/gts/tests/mlkem1024/keyGen.txt", "crates/gts/tests/mlkem1024/encapsulation.txt", "crates/gts/tests/mlkem1024/decapsulation.txt", "crates/gts/tests/mldsa65/keyGen.txt", "crates/gts/tests/mldsa65/sigGen.txt", "crates/gts/tests/mldsa65/sigVer.txt"]
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = []
+
+[[job]]
+id = "mlkem1024"
+summary = "Native ML-KEM-1024 seed expansion, caller-randomized encapsulation and implicit-rejection decapsulation"
+home = "purrdf_gts::mlkem1024::DecapsulationKey"
+entry_points = ["purrdf_gts::mlkem1024::EncapsulationKey", "purrdf_gts::mlkem1024::Ciphertext", "purrdf_gts::mlkem1024::SharedSecret"]
+spec = "FIPS 203 Algorithms 5–18 and the exact input checks in sections 7.2–7.3, with caller-provided d, z and m and the ML-KEM-1024 parameter set only"
+vectors = ["crates/gts/tests/mlkem1024/keyGen.txt", "crates/gts/tests/mlkem1024/encapsulation.txt", "crates/gts/tests/mlkem1024/decapsulation.txt", "crates/gts/tests/mlkem1024/decapsulationKeyCheck.txt", "crates/gts/tests/mlkem1024/encapsulationKeyCheck.txt"]
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = []
+
+[[job]]
 id = "cose-composite-mldsa65-ed25519"
 summary = "Pinned ML-DSA-65/Ed25519 composite representative, keys and both-component authentication"
 home = "purrdf_gts::cose::composite::SigningKey"
