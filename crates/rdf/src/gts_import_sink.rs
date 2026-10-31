@@ -577,6 +577,8 @@ fn sink_term_error(diagnostic: RdfDiagnostic, segment_index: u64, gts_id: usize)
 }
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
 
     #[test]
@@ -865,16 +867,16 @@ mod tests {
         let mut resolver = SegmentResolver::new(RecordingSink::new());
 
         // Segment 0: term 0 = ex:s, term 1 = ex:p, term 2 = _:b1, quad (s p b1).
-        resolver.term(0, 0, &iri_term("http://example.org/s"));
-        resolver.term(0, 1, &iri_term("http://example.org/p"));
-        resolver.term(0, 2, &blank_term("b1"));
+        resolver.term(0, 0, Arc::new(iri_term("http://example.org/s")));
+        resolver.term(0, 1, Arc::new(iri_term("http://example.org/p")));
+        resolver.term(0, 2, Arc::new(blank_term("b1")));
         resolver.quad(0, (0, 1, 2, None));
 
         // Segment 1: term 0 = ex:s (same IRI value), term 1 = ex:p2, term 2 = _:b1
         // (SAME label, DIFFERENT node), quad (s p2 b1).
-        resolver.term(1, 0, &iri_term("http://example.org/s"));
-        resolver.term(1, 1, &iri_term("http://example.org/p2"));
-        resolver.term(1, 2, &blank_term("b1"));
+        resolver.term(1, 0, Arc::new(iri_term("http://example.org/s")));
+        resolver.term(1, 1, Arc::new(iri_term("http://example.org/p2")));
+        resolver.term(1, 2, Arc::new(blank_term("b1")));
         resolver.quad(1, (0, 1, 2, None));
 
         let (mut resolver, error) = finish_direct(resolver);
@@ -922,8 +924,8 @@ mod tests {
     #[test]
     fn gate2_unknown_term_reference_is_err_direct() {
         let mut resolver = SegmentResolver::new(SinkImporter::new());
-        resolver.term(0, 0, &iri_term("http://example.org/s"));
-        resolver.term(0, 1, &iri_term("http://example.org/p"));
+        resolver.term(0, 0, Arc::new(iri_term("http://example.org/s")));
+        resolver.term(0, 1, Arc::new(iri_term("http://example.org/p")));
         // Object id 9 was never introduced.
         resolver.quad(0, (0, 1, 9, None));
         let (_resolver, error) = finish_direct(resolver);
@@ -982,12 +984,12 @@ mod tests {
     #[test]
     fn directional_literal_lexical_lang_survive_sink_path() {
         let mut resolver = SegmentResolver::new(RecordingSink::new());
-        resolver.term(0, 0, &iri_term("http://example.org/s"));
-        resolver.term(0, 1, &iri_term("http://example.org/p"));
+        resolver.term(0, 0, Arc::new(iri_term("http://example.org/s")));
+        resolver.term(0, 1, Arc::new(iri_term("http://example.org/p")));
         resolver.term(
             0,
             2,
-            &Term {
+            Arc::new(Term {
                 kind: TermKind::Literal,
                 value: Some("Bonjour".to_owned()),
                 datatype: None,
@@ -995,7 +997,7 @@ mod tests {
                 direction: None,
                 reifier: None,
                 triple: None,
-            },
+            }),
         );
         resolver.quad(0, (0, 1, 2, None));
         let (mut resolver, error) = finish_direct(resolver);
@@ -1035,12 +1037,12 @@ mod tests {
     #[test]
     fn directional_literal_rtl_survives_sink_path() {
         let mut resolver = SegmentResolver::new(RecordingSink::new());
-        resolver.term(0, 0, &iri_term("http://example.org/s"));
-        resolver.term(0, 1, &iri_term("http://example.org/p"));
+        resolver.term(0, 0, Arc::new(iri_term("http://example.org/s")));
+        resolver.term(0, 1, Arc::new(iri_term("http://example.org/p")));
         resolver.term(
             0,
             2,
-            &Term {
+            Arc::new(Term {
                 kind: TermKind::Literal,
                 value: Some("مرحبا".to_owned()),
                 datatype: None,
@@ -1048,7 +1050,7 @@ mod tests {
                 direction: Some("rtl".to_owned()),
                 reifier: None,
                 triple: None,
-            },
+            }),
         );
         resolver.quad(0, (0, 1, 2, None));
         let (mut resolver, error) = finish_direct(resolver);
@@ -1084,16 +1086,16 @@ mod tests {
         let mut resolver = SegmentResolver::new(RecordingSink::new());
         // Inner triple (ex:a ex:p ex:b) reified by reifier r0; outer triple
         // (ex:a ex:asserts <<inner>>) reified by reifier r1.
-        resolver.term(0, 0, &iri_term("http://example.org/a"));
-        resolver.term(0, 1, &iri_term("http://example.org/p"));
-        resolver.term(0, 2, &iri_term("http://example.org/b"));
-        resolver.term(0, 3, &iri_term("http://example.org/r0"));
+        resolver.term(0, 0, Arc::new(iri_term("http://example.org/a")));
+        resolver.term(0, 1, Arc::new(iri_term("http://example.org/p")));
+        resolver.term(0, 2, Arc::new(iri_term("http://example.org/b")));
+        resolver.term(0, 3, Arc::new(iri_term("http://example.org/r0")));
         resolver.reifier(0, (3, (0, 1, 2), None));
         // Inner triple TERM bound to reifier r0 (gts id 3).
         resolver.term(
             0,
             4,
-            &Term {
+            Arc::new(Term {
                 kind: TermKind::Triple,
                 value: None,
                 datatype: None,
@@ -1101,15 +1103,15 @@ mod tests {
                 direction: None,
                 reifier: Some(3),
                 triple: None,
-            },
+            }),
         );
-        resolver.term(0, 5, &iri_term("http://example.org/asserts"));
-        resolver.term(0, 6, &iri_term("http://example.org/r1"));
+        resolver.term(0, 5, Arc::new(iri_term("http://example.org/asserts")));
+        resolver.term(0, 6, Arc::new(iri_term("http://example.org/r1")));
         resolver.reifier(0, (6, (0, 5, 4), None));
         resolver.term(
             0,
             7,
-            &Term {
+            Arc::new(Term {
                 kind: TermKind::Triple,
                 value: None,
                 datatype: None,
@@ -1117,7 +1119,7 @@ mod tests {
                 direction: None,
                 reifier: Some(6),
                 triple: None,
-            },
+            }),
         );
         resolver.quad(0, (0, 5, 7, None));
         let (mut resolver, error) = finish_direct(resolver);
@@ -1140,11 +1142,11 @@ mod tests {
     #[test]
     fn multiple_reifiers_for_one_triple_survive_sink_path() {
         let mut resolver = SegmentResolver::new(SinkImporter::new());
-        resolver.term(0, 0, &iri_term("http://example.org/s"));
-        resolver.term(0, 1, &iri_term("http://example.org/p"));
-        resolver.term(0, 2, &iri_term("http://example.org/o"));
-        resolver.term(0, 3, &iri_term("http://example.org/r1"));
-        resolver.term(0, 4, &iri_term("http://example.org/r2"));
+        resolver.term(0, 0, Arc::new(iri_term("http://example.org/s")));
+        resolver.term(0, 1, Arc::new(iri_term("http://example.org/p")));
+        resolver.term(0, 2, Arc::new(iri_term("http://example.org/o")));
+        resolver.term(0, 3, Arc::new(iri_term("http://example.org/r1")));
+        resolver.term(0, 4, Arc::new(iri_term("http://example.org/r2")));
         resolver.reifier(0, (3, (0, 1, 2), None));
         resolver.reifier(0, (4, (0, 1, 2), None));
         let (mut resolver, error) = finish_direct(resolver);
@@ -1295,7 +1297,9 @@ mod tests {
                 assert_eq!(iri_of(p), "http://example.org/b");
                 assert_eq!(iri_of(o), "http://example.org/c");
             }
-            other => panic!("outer triple object must be the inner triple, got {other:?}"),
+            other => {
+                panic!("outer triple object must be the inner triple, got {other:?}")
+            }
         }
     }
 
@@ -1306,13 +1310,13 @@ mod tests {
     #[test]
     fn dangling_reifier_binding_is_err_after_all_events() {
         let mut resolver = SegmentResolver::new(SinkImporter::new());
-        resolver.term(0, 0, &iri_term("http://example.org/s"));
-        resolver.term(0, 1, &iri_term("http://example.org/asserts"));
+        resolver.term(0, 0, Arc::new(iri_term("http://example.org/s")));
+        resolver.term(0, 1, Arc::new(iri_term("http://example.org/asserts")));
         // Triple term bound to reifier id 99, which NO `reifies` event ever supplies.
         resolver.term(
             0,
             2,
-            &Term {
+            Arc::new(Term {
                 kind: TermKind::Triple,
                 value: None,
                 datatype: None,
@@ -1320,7 +1324,7 @@ mod tests {
                 direction: None,
                 reifier: Some(99),
                 triple: None,
-            },
+            }),
         );
         resolver.quad(0, (0, 1, 2, None));
         let (_resolver, error) = finish_direct(resolver);

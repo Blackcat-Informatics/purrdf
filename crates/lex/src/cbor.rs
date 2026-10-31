@@ -58,16 +58,20 @@ mod decode;
 mod encode;
 pub mod head;
 mod value;
+mod value_ref;
 
 pub use decode::{
-    DecodeError, DecodeErrorKind, DecodedSequence, Limits, SequenceError, decode,
-    decode_deterministic, decode_prefix, decode_sequence, decode_sequence_checked, read_from,
+    BorrowedChildren, BorrowedEntries, BorrowedItem, DecodeError, DecodeErrorKind, DecodedSequence,
+    EncodedItem, Limits, SequenceError, borrowed_prefix, decode, decode_deterministic,
+    decode_prefix, decode_sequence, decode_sequence_checked, read_encoded_from, read_from,
 };
 pub use encode::{
-    canonical, canonical_into, encode, encode_into, encoded_len, write, write_canonical,
-    write_canonical_map,
+    WriteError, canonical, canonical_into, encode, encode_into, encoded_len, write,
+    write_canonical, write_canonical_borrowed_map, write_canonical_map,
 };
 pub use value::{Integer, IntegerRangeError, Value, map_get};
 
 #[cfg(test)]
 mod tests;
+
+pub use value_ref::{ArrayRef, Entries, MapRef, ValueRef, Values};

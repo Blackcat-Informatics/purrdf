@@ -33,6 +33,7 @@ use crate::mmr;
 use crate::model::{Graph, Quad, ReifierRow, Suppression, Term, TermKind};
 use crate::reader::{read, read_file_segments};
 use crate::stream;
+use crate::term_table::TermsRef;
 use crate::wire::{blake3_256, digest_label, digest_str, map_get};
 use crate::writer::{self, FrameOptions, Writer, WriterOptions};
 
@@ -514,8 +515,12 @@ fn check_utc_timestamp(timestamp: &str) -> Result<(), TimestampError> {
 impl ProvenanceSubjects {
     /// Observe one validated quad in its owning segment's term table.
     pub fn observe(&mut self, g: &Graph, s: usize, p: usize, o: usize) {
-        let predicate = g.terms.get(p).and_then(Term::iri_value);
-        let class = g.terms.get(o).and_then(Term::iri_value);
+        self.observe_terms(TermsRef::Owned(&g.terms), s, p, o);
+    }
+
+    pub(crate) fn observe_terms(&mut self, terms: TermsRef<'_>, s: usize, p: usize, o: usize) {
+        let predicate = terms.get(p).and_then(Term::iri_value);
+        let class = terms.get(o).and_then(Term::iri_value);
         let state = self.subjects.entry(s).or_insert((0, 0b111, 0));
         for (index, &(name, allowed)) in PROVENANCE_SHAPES.iter().enumerate() {
             let bit = 1 << index;
@@ -526,10 +531,7 @@ impl ProvenanceSubjects {
                 state.1 &= !bit;
             }
         }
-        if g.terms
-            .get(s)
-            .is_none_or(|term| term.kind != TermKind::Bnode)
-        {
+        if terms.get(s).is_none_or(|term| term.kind != TermKind::Bnode) {
             state.1 &= !1;
         }
         let field = match predicate {
@@ -538,7 +540,7 @@ impl ProvenanceSubjects {
             Some(stream::SOURCE_HEAD) => 4,
             _ => return,
         };
-        let Some(object) = g.terms.get(o) else {
+        let Some(object) = terms.get(o) else {
             state.1 &= !1;
             return;
         };
@@ -548,7 +550,7 @@ impl ProvenanceSubjects {
             && object.direction.is_none()
             && object
                 .datatype
-                .is_none_or(|id| iri_is(g, id, crate::model::XSD_STRING));
+                .is_none_or(|id| iri_is(terms, id, crate::model::XSD_STRING));
         let valid = match field {
             1 => string,
             2 => {
@@ -557,7 +559,7 @@ impl ProvenanceSubjects {
                     && object.direction.is_none()
                     && object
                         .datatype
-                        .is_some_and(|id| iri_is(g, id, XSD_DATETIME))
+                        .is_some_and(|id| iri_is(terms, id, XSD_DATETIME))
                     && object
                         .value
                         .as_deref()
@@ -628,8 +630,8 @@ pub(crate) fn packaging_role(
     streamable && frame_type == "index" && provenance.has_compaction()
 }
 
-fn iri_is(g: &Graph, id: usize, value: &str) -> bool {
-    g.terms.get(id).and_then(Term::iri_value) == Some(value)
+fn iri_is(terms: TermsRef<'_>, id: usize, value: &str) -> bool {
+    terms.get(id).and_then(Term::iri_value) == Some(value)
 }
 
 fn literal_fields<'a>(
@@ -639,7 +641,7 @@ fn literal_fields<'a>(
 ) -> Result<Vec<&'a str>, CompactRefusedError> {
     g.quads
         .iter()
-        .filter(|&&(s, p, _, _)| s == node && iri_is(g, p, predicate))
+        .filter(|&&(s, p, _, _)| s == node && iri_is(TermsRef::Owned(&g.terms), p, predicate))
         .map(|&(_, _, o, _)| {
             g.terms
                 .get(o)
@@ -746,7 +748,10 @@ fn carried_detached_pairs(g: &Graph) -> Result<Vec<DetachedSignaturePair>, Compa
     let mut nodes: Vec<usize> = g
         .quads
         .iter()
-        .filter(|&&(_, p, o, _)| iri_is(g, p, RDF_TYPE) && iri_is(g, o, stream::DETACHED_SIGNATURE))
+        .filter(|&&(_, p, o, _)| {
+            iri_is(TermsRef::Owned(&g.terms), p, RDF_TYPE)
+                && iri_is(TermsRef::Owned(&g.terms), o, stream::DETACHED_SIGNATURE)
+        })
         .map(|&(s, _, _, _)| s)
         .collect();
     nodes.sort_unstable();
