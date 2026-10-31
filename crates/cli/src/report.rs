@@ -430,7 +430,7 @@ mod tests {
             Materialization::OwlRl,
             &MaterializeLimits::default(),
             &ReportTarget::File(path.clone()),
-            &mut canonical,
+            &canonical,
         );
         let error = canonical.finish(result).expect_err("cax-dw refuses");
         assert!(error.to_string().contains("cax-dw"), "{error}");
