@@ -34,6 +34,7 @@ name = "purrdf_sparql_eval"
 # The geometry kernel is independent of evaluator and language bindings.
 purrdf-geo-kernel = { workspace = true }
 # The IR + DatasetView read trait + SparqlEngine seam, in TermId space.
+# Shared native tables retain explicit fixed hashes and store each value once.
 purrdf-core = { workspace = true }
 purrdf-lex = { workspace = true }
 # The query algebra this crate evaluates (parser + GraphPattern/Expression AST).
@@ -77,9 +78,6 @@ purrdf-iri = { workspace = true }
 # rayon compiles cleanly on wasm32-unknown-unknown and degrades to inline-sequential
 # execution there (same pattern as purrdf-rdf's chunk-parallel text parse).
 rayon = { workspace = true }
-# Store-once computed-term interning: the value vector owns each term exactly once
-# and the raw table stores only dense ScratchIds.
-hashbrown = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # OS entropy for the RAND()/UUID()/STRUUID() seed on native targets. Target-gated

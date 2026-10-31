@@ -293,16 +293,22 @@
       "source_checksum": "2eecf2d5dc9b66b732b97707a0210906b1d30523eb773193ab777c0c84b3e8d5"
     },
     {
-      "id": "hashbrown-0.17.1",
+      "id": "hashbrown-native-table",
       "license": "MIT OR Apache-2.0",
       "notices": [
-        "dependencies/hashbrown-0.17.1/LICENSE-APACHE",
-        "dependencies/hashbrown-0.17.1/LICENSE-MIT"
+        "third-party/hashbrown-native-table/0-MIT.txt",
+        "third-party/hashbrown-native-table/1-Apache-2.0.txt",
+        "third-party/hashbrown-native-table/2-NOTICE"
       ],
-      "repository": "https://github.com/rust-lang/hashbrown",
-      "scope": "resolved normal/build input, including target-specific alternatives",
-      "source": "registry+https://github.com/rust-lang/crates.io-index",
-      "source_checksum": "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
+      "paths": [
+        "crates/rdf-core/src/hash/table/**"
+      ],
+      "provenance": [
+        "crates/rdf-core/src/hash/table/PROVENANCE.md",
+        "crates/rdf-core/src/hash/table/UPSTREAM-SHA256.json"
+      ],
+      "scope": "modified inherited native table engine; original copyright and dual grant retained, local modifications attributed under the same grant",
+      "source": "https://crates.io/crates/hashbrown/0.17.1"
     },
     {
       "id": "hybrid-array-0.4.15",
@@ -836,7 +842,7 @@
     "LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
     "LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
     "LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c",
-    "NOTICE.txt": "c72a572a2cd59420e21137d96ea5d52d615cf2b2a7addbd4590880d8f8b5b9b9",
+    "NOTICE.txt": "be56402645425bffdccf06199cd850911d267f2627c81cddec7347676bc9e5d3",
     "dependencies/aead-0.6.1/LICENSE-APACHE": "b1cf9a3333ca78152b859012cd4a804156e5243e9ca20ad1df7327ba5ea7405c",
     "dependencies/aead-0.6.1/LICENSE-MIT": "33b32a251d445c5c03a634e64c53314c55540fc367fabdd45d9b6c8f260c028c",
     "dependencies/aes-0.9.3/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
@@ -883,8 +889,6 @@
     "dependencies/getrandom-0.4.3/LICENSE-MIT": "523a42c25d245dde9c015f882cec7f4555aad883382a6cf19b4b7d9b2cd5419b",
     "dependencies/ghash-0.6.0/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
     "dependencies/ghash-0.6.0/LICENSE-MIT": "b8c6939380a400f53e11923d50fcc4dd2fa1ba8339fd9d04cda38a0251b6c9b0",
-    "dependencies/hashbrown-0.17.1/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
-    "dependencies/hashbrown-0.17.1/LICENSE-MIT": "ff8f68cb076caf8cefe7a6430d4ac086ce6af2ca8ce2c4e5a2004d4552ef52a2",
     "dependencies/hybrid-array-0.4.15/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
     "dependencies/hybrid-array-0.4.15/LICENSE-MIT": "70c9d40f1f9545c3f133b8a67206e89da850f6468eed072281bb3701514114a9",
     "dependencies/inout-0.2.5/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
@@ -946,6 +950,9 @@
     "dependencies/windows-sys-0.61.2/license-mit": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
     "third-party/csvw/0-W3C-document-license.html": "1ce63a482b3fe34cf19bab6846d179f7b5a5e0fdf1e995c43031962591713d55",
     "third-party/csvw/1-LICENSE.md": "e7b710c5c57e14969bfc5ea371f0859769e11016cd9d99e6c6f6def9dddb535a",
+    "third-party/hashbrown-native-table/0-MIT.txt": "ff8f68cb076caf8cefe7a6430d4ac086ce6af2ca8ce2c4e5a2004d4552ef52a2",
+    "third-party/hashbrown-native-table/1-Apache-2.0.txt": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+    "third-party/hashbrown-native-table/2-NOTICE": "1523147a6efc4f8c0a660994a10465c2918c3b2c2dd243b3403f6b860b136a4d",
     "third-party/jsonld-w3c/0-W3C-software-document-2015.html": "6ab846deec0c5554a4885b57737bf0455b189ae518f6786adb53d1983c14a400",
     "third-party/jsonld-w3c/1-W3C-test-suites-policy.html": "b8d1539633763dc7ed352de1280f0d384d94d3585750888a9b5118732443a143",
     "third-party/jsonld-w3c/2-W3C-test-suite-license.html": "1793e0e5a4682134a11aa5d1a943b692e809b05dd4defcbc8dd1fb317817134d",

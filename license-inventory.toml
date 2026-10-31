@@ -327,3 +327,12 @@ scope = "Complete unmodified English conformance DATA only; the independent pros
 paths = ["crates/text/tests/stemming_vectors/voc.txt", "crates/text/tests/stemming_vectors/output.txt"]
 notices = ["crates/text/tests/stemming_vectors/LICENSES/Snowball-data-BSD-3-Clause.txt"]
 provenance = ["crates/text/tests/stemming_vectors/PROVENANCE.md"]
+
+[[material]]
+id = "hashbrown-native-table"
+license = "MIT OR Apache-2.0"
+source = "https://crates.io/crates/hashbrown/0.17.1"
+scope = "modified inherited native table engine; original copyright and dual grant retained, local modifications attributed under the same grant"
+paths = ["crates/rdf-core/src/hash/table/**"]
+notices = ["crates/rdf-core/src/hash/table/LICENSES/MIT.txt", "crates/rdf-core/src/hash/table/LICENSES/Apache-2.0.txt", "crates/rdf-core/src/hash/table/NOTICE"]
+provenance = ["crates/rdf-core/src/hash/table/PROVENANCE.md", "crates/rdf-core/src/hash/table/UPSTREAM-SHA256.json"]

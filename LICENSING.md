@@ -274,3 +274,14 @@ Agreement may be required before substantial contributions are merged. See
 
 > Copyright © 2026 Blackcat Informatics® Inc. All rights reserved, except as
 > expressly granted under the licenses above.
+
+## Inherited native hash table engine
+
+`crates/rdf-core/src/hash/table/` contains modified source derived from
+`hashbrown` 0.17.1. Original material retains Amanieu d’Antras’s copyright and
+its MIT OR Apache-2.0 grant. Local changes to inherited engine files are
+explicitly attributed in their central `NOTICE` under that same dual grant;
+new wrapper and regression code retains its own first-party source headers.
+The original license texts, modification notice and source provenance accompany
+Core source and generated recipient notices through `license-inventory.toml`.
+This inherited engine is not relabeled under the first-party three-license offer.

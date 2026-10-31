@@ -47,7 +47,7 @@ pub(crate) enum JoinKey<I: ViewTermId = TermId> {
 }
 
 pub(crate) struct JoinIndex<I: ViewTermId> {
-    entries: hashbrown::HashTable<(JoinKey<I>, crate::AdmittedVec<usize>)>,
+    entries: purrdf_core::hash::table::HashTable<(JoinKey<I>, crate::AdmittedVec<usize>)>,
     _allocation: crate::WorkspaceAllocation,
 }
 impl<I: ViewTermId> JoinIndex<I> {
@@ -2088,7 +2088,7 @@ pub(crate) fn build_index<I: ViewTermId>(
     .ok_or(EvalError::WorkspaceBoundOverflow)?;
     let allocation =
         workspace.charge(u64::try_from(bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
-    let mut keyed = hashbrown::HashTable::new();
+    let mut keyed = purrdf_core::hash::table::HashTable::new();
     keyed
         .try_reserve(
             r.rows.len(),

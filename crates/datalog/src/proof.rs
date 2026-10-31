@@ -73,7 +73,7 @@ use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use hashbrown::HashTable;
+use purrdf_core::hash::table::HashTable;
 
 use crate::clause::{ClauseAtom, ClauseTerm, DlClause, HeadForm};
 use crate::guard::GuardOperation;

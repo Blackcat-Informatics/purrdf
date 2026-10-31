@@ -12,6 +12,15 @@ This inventory preserves notices for the source material and resolved
 build inputs described below. Platform alternatives and build inputs
 need not occur in every compiled binary. Test data is source-only.
 
+hashbrown-native-table: MIT OR Apache-2.0
+Scope: modified inherited native table engine; original copyright and dual grant retained, local modifications attributed under the same grant
+Source: https://crates.io/crates/hashbrown/0.17.1
+Evidence: crates/rdf-core/src/hash/table/PROVENANCE.md
+Evidence: crates/rdf-core/src/hash/table/UPSTREAM-SHA256.json
+Notice: third-party/hashbrown-native-table/0-MIT.txt
+Notice: third-party/hashbrown-native-table/1-Apache-2.0.txt
+Notice: third-party/hashbrown-native-table/2-NOTICE
+
 unicode: Unicode-3.0
 Scope: generated and vendored Unicode data; terms apply in addition to the first-party grant
 Source: https://www.unicode.org/Public/17.0.0/ucd/
