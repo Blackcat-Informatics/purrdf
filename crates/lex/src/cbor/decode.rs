@@ -1006,89 +1006,6 @@ fn decode_sequence_with<E>(
     (items, None)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn stream_refuses_invalid_read_counts_and_counter_overflow() {
-        struct InvalidRead;
-        impl Read for InvalidRead {
-            fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
-                Ok(usize::MAX)
-            }
-        }
-        let error = read_from(&mut InvalidRead, Limits::DEFAULT).unwrap_err();
-        assert!(matches!(
-            error.kind(),
-            DecodeErrorKind::ReadCount {
-                actual: usize::MAX,
-                maximum: 1
-            }
-        ));
-        // Counter state is positioned directly; no huge stream is executed.
-        let mut cursor = io::Cursor::new([0]);
-        let mut stream = Stream {
-            reader: &mut cursor,
-            pos: usize::MAX,
-        };
-        assert!(matches!(
-            stream.byte().unwrap_err().kind(),
-            DecodeErrorKind::OffsetOverflow {
-                position: usize::MAX,
-                additional: 1
-            }
-        ));
-        assert_eq!(stream.pos, usize::MAX);
-        let mut cursor = io::Cursor::new([7]);
-        let mut stream = Stream {
-            reader: &mut cursor,
-            pos: usize::MAX,
-        };
-        assert!(matches!(
-            stream.take(1, &mut Vec::new()).unwrap_err().kind(),
-            DecodeErrorKind::OffsetOverflow {
-                position: usize::MAX,
-                additional: 1
-            }
-        ));
-        assert_eq!(stream.pos, usize::MAX);
-    }
-
-    #[test]
-    fn native_causes_preserve_decode_and_success_result_layouts() {
-        #[expect(
-            dead_code,
-            reason = "the former representations are frozen layout witnesses only"
-        )]
-        enum FormerKind {
-            Truncated,
-            Malformed(&'static str),
-            InvalidUtf8,
-            Depth { limit: usize },
-            TooLong,
-            NotDeterministic(&'static str),
-            Trailing,
-            Io(io::ErrorKind),
-        }
-        #[expect(
-            dead_code,
-            reason = "the former representation is a frozen layout witness only"
-        )]
-        struct FormerError {
-            kind: FormerKind,
-            offset: usize,
-        }
-        assert_eq!(size_of::<DecodeErrorKind>(), size_of::<FormerKind>());
-        assert_eq!(size_of::<DecodeError>(), size_of::<FormerError>());
-        assert_eq!(
-            size_of::<Result<Value, DecodeError>>(),
-            size_of::<Result<Value, FormerError>>()
-        );
-        assert!(size_of::<DecodedSequence>() <= size_of::<(Vec<(usize, Value)>, Option<usize>)>());
-    }
-}
-
 /// An immutable source-backed CBOR item validated by the shared decoder.
 #[derive(Clone, Copy, Debug)]
 pub struct BorrowedItem<'a> {
@@ -1424,5 +1341,88 @@ impl EncodedItem {
     /// Preserves the original CBOR inspection refusal.
     pub fn decode(&self) -> Result<Value, DecodeError> {
         decode(&self.encoded, self.limits)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stream_refuses_invalid_read_counts_and_counter_overflow() {
+        struct InvalidRead;
+        impl Read for InvalidRead {
+            fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+                Ok(usize::MAX)
+            }
+        }
+        let error = read_from(&mut InvalidRead, Limits::DEFAULT).unwrap_err();
+        assert!(matches!(
+            error.kind(),
+            DecodeErrorKind::ReadCount {
+                actual: usize::MAX,
+                maximum: 1
+            }
+        ));
+        // Counter state is positioned directly; no huge stream is executed.
+        let mut cursor = io::Cursor::new([0]);
+        let mut stream = Stream {
+            reader: &mut cursor,
+            pos: usize::MAX,
+        };
+        assert!(matches!(
+            stream.byte().unwrap_err().kind(),
+            DecodeErrorKind::OffsetOverflow {
+                position: usize::MAX,
+                additional: 1
+            }
+        ));
+        assert_eq!(stream.pos, usize::MAX);
+        let mut cursor = io::Cursor::new([7]);
+        let mut stream = Stream {
+            reader: &mut cursor,
+            pos: usize::MAX,
+        };
+        assert!(matches!(
+            stream.take(1, &mut Vec::new()).unwrap_err().kind(),
+            DecodeErrorKind::OffsetOverflow {
+                position: usize::MAX,
+                additional: 1
+            }
+        ));
+        assert_eq!(stream.pos, usize::MAX);
+    }
+
+    #[test]
+    fn native_causes_preserve_decode_and_success_result_layouts() {
+        #[expect(
+            dead_code,
+            reason = "the former representations are frozen layout witnesses only"
+        )]
+        enum FormerKind {
+            Truncated,
+            Malformed(&'static str),
+            InvalidUtf8,
+            Depth { limit: usize },
+            TooLong,
+            NotDeterministic(&'static str),
+            Trailing,
+            Io(io::ErrorKind),
+        }
+        #[expect(
+            dead_code,
+            reason = "the former representation is a frozen layout witness only"
+        )]
+        struct FormerError {
+            kind: FormerKind,
+            offset: usize,
+        }
+        assert_eq!(size_of::<DecodeErrorKind>(), size_of::<FormerKind>());
+        assert_eq!(size_of::<DecodeError>(), size_of::<FormerError>());
+        assert_eq!(
+            size_of::<Result<Value, DecodeError>>(),
+            size_of::<Result<Value, FormerError>>()
+        );
+        assert!(size_of::<DecodedSequence>() <= size_of::<(Vec<(usize, Value)>, Option<usize>)>());
     }
 }
