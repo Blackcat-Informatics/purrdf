@@ -568,7 +568,7 @@ therefore recompute it from this document alone:
     exists-probe-answered exists-definition-answered \
     exists-inner-solutions-consumed property-function-work native-function-work
 } | sha256sum
-# a1c8cc382893eba81e02ef816982aa52be2612bb1e1295d6a719bf0e1abef44b
+# 2dd729d6a77c5e3aaa9dddb57a77dd77a7dee20a5696e9d1f5ae4a971d2a1c1d
 ```
 
 SHA-256 through the `sha2` crate, which is pure software with no entropy source, so

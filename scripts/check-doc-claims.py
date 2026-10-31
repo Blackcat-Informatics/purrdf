@@ -3367,7 +3367,7 @@ def shacl12_claims(matrix: dict[str, tuple[int, int]]) -> list[Claim]:
         Claim(
             "the root README's SHACL 1.2 scoreboard row",
             _README,
-            r"\| SHACL 1\.2 \| W3C shacl12-test-suite \(`vectors/shacl12/`\) \| "
+            r"\| SHACL 1\.2 \| W3C `shacl12-test-suite` \(`vectors/shacl12/`\) \| "
             r"\*\*(?P<passed>\d+) / (?P<total>\d+)\*\* pass · "
             r"(?P<ledgered>\d+) ledgered expected failures, (?P<spec>\d+) "
             r"spec-contradicted \(`hasLang-example`\); (?P<unlisted>\d+) unlisted vendored files "
