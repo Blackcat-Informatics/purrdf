@@ -227,9 +227,12 @@ impl Dictionary {
         workspace: &WorkspaceCapability,
     ) -> Result<DictionaryMatches<P>, EvalError> {
         if self.0.analyzer != index.analyzer_fingerprint() {
-            return Err(purrdf_sparql_eval::NativeDiagnostic::error(
+            return Err(purrdf_sparql_eval::RetainedNativeFailure::error(
                 purrdf_sparql_eval::NativeDiagnosticKind::Config,
-                "dictionary analyzer differs from index analyzer",
+                crate::configuration::ConfigurationRefusal::DictionaryAnalyzer {
+                    expected: index.analyzer_fingerprint(),
+                    actual: self.0.analyzer,
+                },
                 workspace,
             ));
         }

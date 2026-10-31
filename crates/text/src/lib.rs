@@ -112,6 +112,7 @@ pub use dictionary_relation::PhraseOccurrenceRelation;
 mod error;
 mod query_workspace;
 pub use query_workspace::CapacityFailure;
+mod configuration;
 mod corpus;
 mod fixed;
 mod index;

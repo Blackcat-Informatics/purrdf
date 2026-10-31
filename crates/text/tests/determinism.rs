@@ -953,7 +953,7 @@ fn no_source_file_mentions_a_float_width() {
     // is scanned, rather than passing the count while never being read.
     assert_eq!(
         sources.len(),
-        34,
+        35,
         "expected to scan every module of the crate, scanned {sources:?}"
     );
     assert_eq!(

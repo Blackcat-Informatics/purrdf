@@ -212,7 +212,7 @@ pub enum TextError {
     ///
     /// Field parameters and predicate routing are validated by the immutable
     /// [`crate::RankingProfile`], whose identity carries every scoring choice.
-    Config(String),
+    Config(purrdf_sparql_eval::RetainedNativeFailure),
     /// Strict HTML character-reference parse errors with original source ranges.
     Html(purrdf_sparql_eval::RetainedNativeFailure),
 
@@ -246,15 +246,17 @@ pub enum TextError {
 
 purrdf_lex::constructors! {
     impl TextError {
-        /// Construct a [`TextError::Config`] from any displayable message.
-        pub fn config(what) -> Self::Config;
-
         /// Construct a [`TextError::Data`] from any displayable message.
         pub fn data(what) -> Self::Data;
     }
 }
 
 impl TextError {
+    /// Retain an explicit caller-provided configuration message.
+    pub fn config(what: impl core::fmt::Display) -> Self {
+        crate::configuration::ConfigurationRefusal::CallerMessage(what.to_string()).into_error()
+    }
+
     /// Retain ordered HTML-reference diagnostics under resident admission.
     pub fn html(diagnostics: Vec<purrdf_lex::html::Diagnostic>) -> Self {
         Self::html_in(
@@ -305,7 +307,9 @@ impl core::fmt::Display for TextError {
             Self::Substring(refusal) => core::fmt::Display::fmt(refusal, f),
             Self::Phonetic(refusal) => core::fmt::Display::fmt(refusal, f),
             Self::Html(failure) => core::fmt::Display::fmt(failure.cause(), f),
-            Self::Config(msg) => write!(f, "invalid text-index configuration: {msg}"),
+            Self::Config(failure) => {
+                write!(f, "invalid text-index configuration: {}", failure.cause())
+            }
             Self::Data(msg) => write!(f, "text-index input error: {msg}"),
             Self::SourceRead(failure) => {
                 write!(f, "text-index source read error: {}", failure.cause())
@@ -323,6 +327,7 @@ purrdf_hash::error_sources!(
     Diagnostic,
     RetainedDiagnostic,
     Html,
+    Config,
     SourceRead,
     Substring,
     Phonetic,
@@ -337,7 +342,7 @@ impl purrdf_hash::error::StructuredError for TextError {
         RetainedDiagnostic(cause) => "text-retained-diagnostic" { "cause" => Cause(cause) },
         Substring(cause) => "text-substring" { "cause" => Cause(cause) },
         Phonetic(cause) => "text-phonetic" { "cause" => Cause(cause) },
-        Config(message) => "text-config" { "message" => Text(message) },
+        Config(cause) => "text-config" { "cause" => Cause(cause) },
         Html(cause) => "text-html" { "cause" => Cause(cause) },
         Data(message) => "text-data" { "message" => Text(message) },
         SourceRead(cause) => "text-source-read" { "cause" => Cause(cause) },
@@ -357,8 +362,7 @@ impl From<TextError> for purrdf_sparql_eval::EvalError {
     /// The mapping is decided here and nowhere else:
     ///
     /// * [`TextError::Config`] is the caller's evaluation configuration, which
-    ///   is exactly what [`EvalError::Config`](purrdf_sparql_eval::EvalError::Config)
-    ///   names;
+    ///   retains the native Config classification through evaluator conversion.
     /// * [`TextError::Data`] is the dataset failing to answer a well-formed
     ///   question, which is
     ///   [`EvalError::Data`](purrdf_sparql_eval::EvalError::Data);
@@ -376,7 +380,7 @@ impl From<TextError> for purrdf_sparql_eval::EvalError {
             TextError::Substring(refusal) => Self::data(refusal.to_string()),
             TextError::Phonetic(refusal) => Self::data(refusal.to_string()),
             TextError::Html(failure) => Self::RetainedNativeFailure(failure),
-            TextError::Config(msg) => Self::config(msg),
+            TextError::Config(failure) => Self::RetainedNativeFailure(failure),
             TextError::Data(msg) => Self::data(msg),
             TextError::SourceRead(failure) => Self::RetainedNativeFailure(failure),
             TextError::Overflow(failure)
@@ -654,11 +658,15 @@ mod tests {
 
     #[test]
     fn each_constructor_builds_its_own_variant() {
-        assert_eq!(
-            TextError::config("x"),
-            TextError::Config("x".to_owned()),
-            "config() must build Config"
-        );
+        let configured = TextError::config("x");
+        let captured = purrdf_testkit::error_capture::Capture::read(&configured)
+            .child("cause")
+            .child("cause");
+        assert_eq!(captured.code, "text-config-caller-message");
+        assert!(matches!(
+            captured.field("message"),
+            purrdf_hash::error::ErrorValue::Text("x")
+        ));
         assert_eq!(
             TextError::data("x"),
             TextError::Data("x".to_owned()),
@@ -694,8 +702,8 @@ mod tests {
     fn conversion_maps_config_and_data_to_their_namesakes() {
         let config: EvalError = TextError::config("no IRI").into();
         assert!(
-            matches!(config, EvalError::Config(_)),
-            "Config must map to EvalError::Config, got {config:?}"
+            matches!(&config, EvalError::RetainedNativeFailure(failure) if failure.kind() == purrdf_sparql_eval::NativeDiagnosticKind::Config),
+            "Config must retain its classification, got {config:?}"
         );
 
         let data: EvalError = TextError::data("absent predicate").into();

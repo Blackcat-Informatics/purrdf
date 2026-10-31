@@ -15,6 +15,7 @@
 //! analysis perform no filesystem or network access.
 
 use crate::TextError;
+use crate::configuration::ConfigurationRefusal;
 use crate::query_workspace::{admitted, overflow};
 use crate::unicode::{self, SegmentationScript};
 use purrdf_hash::Domain;
@@ -71,21 +72,35 @@ impl Dictionary {
         let mut size = 0usize;
         for (input, cost) in entries {
             if canonical.len() >= MAX_ENTRIES {
-                return Err(invalid("dictionary entry count exceeds its bound"));
+                return Err(ConfigurationRefusal::DictionaryEntries {
+                    entries: canonical.len(),
+                }
+                .into_error());
             }
             let word = Self::canonical_key(&input)?;
-            size = size
-                .checked_add(word.len())
-                .ok_or_else(|| invalid("dictionary size overflow"))?;
+            size = size.checked_add(word.len()).ok_or_else(|| {
+                ConfigurationRefusal::DictionarySize {
+                    current: size,
+                    added: word.len(),
+                }
+                .into_error()
+            })?;
             if size > MAX_ARENA_BYTES {
-                return Err(invalid("dictionary arena exceeds its byte bound"));
+                return Err(ConfigurationRefusal::DictionaryArena { bytes: size }.into_error());
             }
             canonical.push((word, cost));
         }
         canonical.sort_unstable();
         canonical.dedup();
-        if canonical.windows(2).any(|pair| pair[0].0 == pair[1].0) {
-            return Err(invalid("canonical dictionary key has conflicting costs"));
+        if let Some(at) = canonical.windows(2).position(|pair| pair[0].0 == pair[1].0) {
+            let second = canonical[at + 1].1;
+            let (word, first) = canonical.swap_remove(at);
+            return Err(ConfigurationRefusal::DictionaryCosts {
+                word,
+                first,
+                second,
+            }
+            .into_error());
         }
         let mut arena = String::with_capacity(size);
         let mut offsets = Vec::with_capacity(canonical.len() + 1);
@@ -109,10 +124,16 @@ impl Dictionary {
     /// Nonlexical/empty entries, forbidden controls, separators or length bounds.
     pub fn canonical_key(input: &str) -> Result<String, TextError> {
         if input.len() > MAX_WORD_SCALARS * 4 {
-            return Err(invalid("dictionary input exceeds its byte bound"));
+            return Err(ConfigurationRefusal::DictionaryInput { bytes: input.len() }.into_error());
         }
-        if unicode::grapheme_bounds(input).any(|(_, text)| unicode::is_emoji_grapheme(text)) {
-            return Err(invalid("dictionary entries cannot contain protected emoji"));
+        if let Some((start, text)) =
+            unicode::grapheme_bounds(input).find(|(_, text)| unicode::is_emoji_grapheme(text))
+        {
+            return Err(ConfigurationRefusal::DictionaryEmoji {
+                start,
+                end: start + text.len(),
+            }
+            .into_error());
         }
         let mut word = String::with_capacity(input.len());
         unicode::analysis_form(input, &mut word);
@@ -123,9 +144,7 @@ impl Dictionary {
                 .chars()
                 .any(|c| unicode::is_lexical_separator(c) || unicode::is_default_ignorable(c))
         {
-            return Err(invalid(
-                "dictionary key must be lexical, bounded and contain no separators or non-internal controls",
-            ));
+            return Err(ConfigurationRefusal::DictionaryKey { key: word }.into_error());
         }
         Ok(word)
     }
@@ -491,7 +510,4 @@ fn neighbor_letter(text: &str, forward: bool) -> bool {
         text.chars().rev().find(significant)
     }
     .is_some_and(unicode::is_letter)
-}
-fn invalid(message: &str) -> TextError {
-    TextError::config(message)
 }

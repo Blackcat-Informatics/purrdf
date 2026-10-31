@@ -1015,16 +1015,10 @@ impl<P: CorpusProfile> TextSearchRelation<P> {
         // documents, whose answer is the empty one and whose rank column
         // therefore cannot be out of order. See the doc comment above.
         if partitions > 1 {
-            return Err(TextError::config(format!(
-                "this index holds {partitions} partitions, and a rank is computed within one \
-                 partition: the rows of a multi-partition answer are emitted partition-major, so \
-                 they open with {partitions} rows of rank 1 and one subject may appear in more \
-                 than one of them. No ranked ordering can be declared over that, and declaring \
-                 one anyway would hand a consumer positions it would fuse as though they were a \
-                 ranking. Build the index over a single partition — GraphSelector::Named or \
-                 GraphSelector::Default over a corpus in one language — or write the declaration \
-                 by hand with the claim the host can actually stand behind."
-            )));
+            return Err(
+                crate::configuration::ConfigurationRefusal::MultiplePartitions { partitions }
+                    .into_error(),
+            );
         }
         Ok(RankedDeclaration {
             stratum,
@@ -2476,11 +2470,7 @@ where
     D::ReadError: purrdf_hash::error::StructuredError,
 {
     if config != index.config() {
-        return Err(TextError::config(
-            "the configuration supplied to verify_binding is not the one this index was built \
-             under; the two would digest different rows, so the comparison would answer a \
-             different question than the one asked",
-        ));
+        return Err(index.config().binding_mismatch(config));
     }
 
     let expected = index.source_fingerprint();
@@ -2812,8 +2802,11 @@ mod tests {
             .expect_err("three partitions have no one ranked order");
         match error {
             TextError::Config(message) => {
-                assert!(message.contains("rank is computed within one"), "{message}");
-                assert!(message.contains("GraphSelector"), "{message}");
+                assert!(
+                    message.to_string().contains("rank is computed within one"),
+                    "{message}"
+                );
+                assert!(message.to_string().contains("GraphSelector"), "{message}");
             }
             other => panic!("expected a configuration refusal, got {other:?}"),
         }

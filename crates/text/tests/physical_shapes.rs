@@ -42,6 +42,7 @@ purrdf_testkit::harness_main!(
     graph_free_corpus_keys_ranking_and_query,
     graph_free_rdf12_partitions_and_named_refusal,
     source_read_providers_keep_native_fields_after_disposal,
+    dictionary_mismatch_retains_original_query_admission,
 );
 
 fn source_read_providers_keep_native_fields_after_disposal() {
@@ -139,6 +140,177 @@ fn source_read_providers_keep_native_fields_after_disposal() {
             assert_eq!(fields.code, "paged-query-page-budget-exceeded");
             assert!(matches!(fields.field("page"), ErrorValue::Unsigned(0)));
             assert!(matches!(fields.field("limit"), ErrorValue::Unsigned(0)));
+        }
+    }
+}
+
+/// Exercise the native dictionary guard under the capability issued by a real query.
+struct DictionaryMismatchProbe {
+    dictionary: purrdf_text::dictionary::Dictionary,
+    index: std::sync::Arc<purrdf_text::TextIndex>,
+    failure: std::sync::Arc<std::sync::Mutex<Option<purrdf_sparql_eval::EvalError>>>,
+    exhaust: Option<std::sync::Arc<dyn Fn() -> u64 + Send + Sync>>,
+}
+impl purrdf_sparql_eval::shapes::ShapeProvider for DictionaryMismatchProbe {
+    fn offer(
+        &self,
+        request: purrdf_sparql_eval::shapes::ShapeRequest<'_>,
+        workspace: &purrdf_sparql_eval::WorkspaceCapability,
+    ) -> Result<Option<purrdf_sparql_eval::shapes::ShapeOffer>, purrdf_sparql_eval::EvalError> {
+        if !matches!(
+            request.pattern,
+            purrdf_sparql_algebra::GraphPattern::Values { .. }
+        ) {
+            return Ok(None);
+        }
+        assert!(workspace.is_bounded());
+        let held = self.exhaust.as_ref().map(|remaining| {
+            let mut held = workspace.charge(0).unwrap();
+            held.resize(remaining()).unwrap();
+            held
+        });
+        let error = self
+            .dictionary
+            .scan(self.index.clone(), None, workspace)
+            .unwrap_err();
+        if held.is_some() {
+            assert!(
+                matches!(error, purrdf_sparql_eval::EvalError::WorkspaceStopped),
+                "original workspace refusal: {error:?}"
+            );
+            return Err(error);
+        }
+        *self.failure.lock().unwrap() = Some(error);
+        Ok(None)
+    }
+}
+
+fn dictionary_mismatch_retains_original_query_admission() {
+    use purrdf_core::{SegmentedReadLimits, SparqlRequest, TermValue};
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_sparql_eval::shapes::ShapeRegistry;
+    use purrdf_sparql_eval::{
+        EvalError, ExtensionEnv, NativeDiagnosticKind, NativeSparqlEngine,
+        PropertyFunctionRegistry, QueryOptions, WorkspaceCapability,
+    };
+    use purrdf_testkit::error_capture::Capture;
+    use purrdf_text::dictionary::{Dictionary, DictionaryEntry};
+    use purrdf_text::{Analyzer, AnalyzerProfile, GraphSelector, TextIndex, TextIndexConfig};
+    use std::sync::{Arc, Mutex};
+
+    let fixture =
+        shape_cases::Fixture::text(&[("urn:document".into(), "river".into(), None, false)]);
+    let expected = fixture.index.analyzer_fingerprint();
+    let config = TextIndexConfig::new(
+        vec![TermValue::iri(shape_cases::NOTE)],
+        GraphSelector::Any,
+        Analyzer::with_profile(
+            AnalyzerProfile::new(256)
+                .unwrap()
+                .with_segmentation(purrdf_text::Segmentation::EmptyLexicon),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let other = TextIndex::from_dataset(&*fixture.dataset, &config).unwrap();
+    let actual = other.analyzer_fingerprint();
+    assert_ne!(expected, actual);
+    let identity = TermValue::iri("urn:entry");
+    let dictionary = Dictionary::compile(
+        &other,
+        &[DictionaryEntry {
+            identity: &identity,
+            phrase: "river",
+            payload: &[],
+        }],
+        &WorkspaceCapability::resident(),
+    )
+    .unwrap();
+    drop(other);
+    let image = shape_cases::segmented(&fixture.dataset);
+    let limit = 32_000_000;
+    for exhaust in [false, true] {
+        let source = Arc::new(
+            image
+                .open_session(SegmentedReadLimits::new(limit, 2, 16_384, 20_000_000, 8))
+                .unwrap(),
+        );
+        let live = || {
+            source.evidence().live_bytes()
+                - source.evidence().unpinned_cache_bytes()
+                - source.evidence().bookkeeping_bytes()
+        };
+        let baseline = live();
+        let account = source.clone();
+        let remaining: Arc<dyn Fn() -> u64 + Send + Sync> = Arc::new(move || {
+            let evidence = account.evidence();
+            // Usable capacity includes cache bytes the source can evict.
+            limit - evidence.live_bytes() + evidence.unpinned_cache_bytes()
+        });
+        let failure = Arc::new(Mutex::new(None));
+        let mut shapes = ShapeRegistry::new();
+        shapes.register(
+            "dictionary-mismatch",
+            Arc::new(DictionaryMismatchProbe {
+                dictionary: dictionary.clone(),
+                index: fixture.index.clone(),
+                failure: failure.clone(),
+                exhaust: exhaust.then_some(remaining),
+            }),
+        );
+        let env = ExtensionEnv::over_relations(PropertyFunctionRegistry::new())
+            .unwrap()
+            .with_shapes(shapes);
+        let result = NativeSparqlEngine::new().query_fallible_view(
+            &*source,
+            SparqlRequest {
+                query: "SELECT ?x WHERE { VALUES ?x { 1 } }",
+                base_iri: None,
+                substitutions: &[],
+            },
+            &QueryOptions::new().with_env(&env),
+        );
+        if exhaust {
+            assert!(
+                matches!(
+                    result,
+                    Err(purrdf_sparql_eval::FallibleSparqlError::Operational {
+                        error: purrdf_core::SegmentedError::Residency {
+                            limit: 32_000_000,
+                            ..
+                        },
+                        ..
+                    })
+                ),
+                "original admission refusal: {result:?}"
+            );
+        } else {
+            drop(result.unwrap());
+            drop(env);
+            let error = failure.lock().unwrap().take().unwrap();
+            let EvalError::RetainedNativeFailure(owner) = &error else {
+                panic!("retained Config owner");
+            };
+            assert_eq!(owner.kind(), NativeDiagnosticKind::Config);
+            let retained_bytes = live() - baseline;
+            assert!(retained_bytes > 0);
+            let buffer = Vec::with_capacity(4);
+            let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+            let cloned = error.clone();
+            let EvalError::RetainedNativeFailure(clone) = &cloned else {
+                unreachable!()
+            };
+            assert!(std::ptr::eq(owner.cause(), clone.cause()));
+            let fields = Capture::read_with_buffer(clone.cause(), buffer);
+            assert!(
+                matches!(fields.field("expected"), ErrorValue::Bytes(value) if value == expected)
+            );
+            assert!(matches!(fields.field("actual"), ErrorValue::Bytes(value) if value == actual));
+            assert_eq!(window.close().allocations, 0);
+            drop(error);
+            assert_eq!(live(), baseline + retained_bytes);
+            drop(cloned);
+            assert_eq!(live(), baseline);
         }
     }
 }

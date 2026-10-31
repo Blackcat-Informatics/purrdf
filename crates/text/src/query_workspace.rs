@@ -136,9 +136,6 @@ pub(crate) fn query_error(
     if !workspace.is_bounded() {
         return Ok(match kind {
             purrdf_sparql_eval::NativeDiagnosticKind::Data => TextError::data(message.to_string()),
-            purrdf_sparql_eval::NativeDiagnosticKind::Config => {
-                TextError::config(message.to_string())
-            }
             _ => TextError::Diagnostic(admitted(purrdf_sparql_eval::NativeDiagnostic::render(
                 kind, message, workspace,
             ))?),

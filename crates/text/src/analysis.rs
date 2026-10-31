@@ -189,17 +189,23 @@ impl Analyzer {
         let dictionary = match profile.segmentation() {
             Segmentation::EmptyLexicon => {
                 if !artifacts.is_empty() {
-                    return Err(TextError::config(
-                        "empty lexicon profile refuses artifact bytes",
-                    ));
+                    return Err(
+                        crate::configuration::ConfigurationRefusal::EmptyLexiconArtifacts {
+                            count: artifacts.len(),
+                        }
+                        .into_error(),
+                    );
                 }
                 None
             }
             Segmentation::Dictionary(dictionary) => {
                 if !artifacts.is_empty() {
-                    return Err(TextError::config(
-                        "caller dictionary profile refuses baseline artifacts",
-                    ));
+                    return Err(
+                        crate::configuration::ConfigurationRefusal::CallerDictionaryArtifacts {
+                            count: artifacts.len(),
+                        }
+                        .into_error(),
+                    );
                 }
                 let entries = dictionary
                     .weighted_entries()
@@ -218,10 +224,20 @@ impl Analyzer {
                     let hash = *purrdf_hash::blake3::hash(bytes).as_bytes();
                     let identity = purrdf_hash::hex::encode(&hash);
                     let Some(at) = expected.iter().position(|&id| id == identity) else {
-                        return Err(TextError::config("unexpected baseline artifact identity"));
+                        return Err(
+                            crate::configuration::ConfigurationRefusal::UnexpectedBaseline {
+                                identity: hash,
+                            }
+                            .into_error(),
+                        );
                     };
                     if std::mem::replace(&mut seen[at], true) {
-                        return Err(TextError::config("duplicate baseline artifact"));
+                        return Err(
+                            crate::configuration::ConfigurationRefusal::DuplicateBaseline {
+                                identity: hash,
+                            }
+                            .into_error(),
+                        );
                     }
                     let dictionary = Dictionary::from_artifact(hash, bytes)?;
                     for (word, cost) in dictionary.weighted_entries() {
@@ -234,9 +250,12 @@ impl Analyzer {
                     }
                 }
                 if !seen.into_iter().all(|present| present) {
-                    return Err(TextError::config(
-                        "standard analysis requires all five full baseline artifacts",
-                    ));
+                    return Err(
+                        crate::configuration::ConfigurationRefusal::MissingBaselines {
+                            present: seen,
+                        }
+                        .into_error(),
+                    );
                 }
                 Some(Arc::new(Dictionary::with_costs(entries)?))
             }
