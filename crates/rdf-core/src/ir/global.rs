@@ -29,7 +29,7 @@ use std::num::NonZeroU64;
 use std::ops::ControlFlow;
 use std::sync::OnceLock;
 
-use hashbrown::HashTable;
+use crate::hash::table::HashTable;
 use purrdf_iri::IriReadError;
 use purrdf_lex::allocation::{CapacityError, CapacitySpace, StorageError};
 

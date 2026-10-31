@@ -215,6 +215,11 @@ constructor whose whole body is one conversion is declared through
 enum variant through `purrdf_lex::variant_from!` (`Variant(A, B) as convert`
 for a variant that holds a rendering of its sources).
 
+* `purrdf_core::hash::table`: the shared native explicit-hash table engine,
+  fixed-key maps, entries and iterators. Controlled operations admit actual
+  probe groups and transactional replacement while preserving original entries
+  on refusal. The inherited engine retains its original grants and provenance.
+
 ### Removed external packages
 
 The native homes above replace these packages, and
@@ -236,6 +241,7 @@ direct dependency, in `BANNED_DIRECT_ONLY`):
   `is-terminal`, `hermit-abi`, `cast`, `num-traits`, `autocfg`, `itertools`,
   `oorandom`, `tinytemplate`, `walkdir`, `same-file`, `winapi-util`) —
   `purrdf_testkit::bench`.
+* Native hash tables: `hashbrown` — `purrdf_core::hash::table`.
 * Byte search: `memchr` — `purrdf_lex::scan::find_byte`/`find_byte2`.
   `regex` is built without its `perf-literal` prefilter, so neither `memchr`
   nor `aho-corasick` is compiled into any build; Cargo keeps both in

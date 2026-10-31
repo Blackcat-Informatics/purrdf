@@ -1,0 +1,19 @@
+Hashbrown native table engine
+
+Original source: hashbrown 0.17.1, https://github.com/rust-lang/hashbrown
+Copyright (c) 2016 Amanieu d'Antras
+Original grant: MIT OR Apache-2.0, retained without alteration.
+The original license texts are in LICENSES/MIT.txt and LICENSES/Apache-2.0.txt.
+
+Modifications Copyright (c) 2026 Blackcat Informatics Inc.
+Modifications to inherited engine files are also offered under MIT OR Apache-2.0.
+These files are modified inherited source, not unchanged upstream source.
+All inherited Rust files identify this notice in their opening source header.
+
+Changes to inherited files: fix the upstream allocator/integration profile in
+source, use the existing workspace fixed-key default without a hasher dependency,
+retain target-selected kernels, relocate module and documentation paths,
+exclude dependency-heavy upstream test modules, and integrate native governed
+work and transactional allocation with the shared Core table engine.
+New wrapper and regression code carries its own first-party source headers.
+UPSTREAM-SHA256.json records hashes of the original upstream source files.

@@ -6,7 +6,7 @@ name = "purrdf-core"
 description = "PurRDF RDF 1.2 kernel: model, diagnostics, IR, store traits, and event ingestion"
 version.workspace = true
 edition.workspace = true
-license = "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0"
+license = "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0 AND (MIT OR Apache-2.0)"
 repository.workspace = true
 homepage.workspace = true
 documentation = "https://docs.rs/purrdf-core"
@@ -67,10 +67,6 @@ purrdf-hash = { workspace = true }
 # encoder's loop. A leaf over `purrdf-hash` only, with no edge back to the
 # core, and wasm-clean.
 purrdf-deflate = { workspace = true }
-# Raw `HashTable` for the store-once builder interner/dedup: each term/
-# row is owned ONCE by its `Vec`, the table holds only indices. (`HashTable` was
-# introduced in hashbrown 0.14.2; the workspace tracks 0.17.)
-hashbrown = { workspace = true }
 # Content-addressed blob digest for the content store. Same version as the
 # sibling kernel crates (logic/validate/slice). Default features (std) re-enabled;
 # the workspace-level entry is default-features = false for the wasm-clean eval path.

@@ -1,0 +1,24 @@
+{
+  "package": "hashbrown",
+  "version": "0.17.1",
+  "crate_sha256": "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a",
+  "files": {
+    "alloc.rs": "7ffdd9a84787cb1f93b31184c32733649324faf500bcc3012197ee91353c9ac7",
+    "macros.rs": "4c949a8c44e457c4f04f0b55d5c1e0214b52a6ed2951f265af0113b0d2adb015",
+    "raw.rs": "0c8ad353ba95817e72b0a8fea48fa2599099ea3def374f254ab6402a9c468d22",
+    "table.rs": "9d37739758f9df08d23c3ab792d29547b04bfd29b08900407a0d2b8ecd26cda9",
+    "map.rs": "b79497ce537ffc5ed4f8f3399434b9216c01e7927fdc434fee190e9e9ce2abb0",
+    "set.rs": "71485eb08e622a7aeb1978817233f0e9c75f4daec87d2d6fa6eba6e0aaf80f2f",
+    "util.rs": "02546d6e681f833405b8a15ef9bc8d3e80b1ef3bce65caf70d8e16cbadf4a410",
+    "scopeguard.rs": "aa557686a2090eee1da25e960a4461d3750725065a4a1266b80a2eadfec38b2a",
+    "hasher.rs": "939bc4f8c9e2d7e7ace266a8c121360ab4b44ad0540cdee06951e0197d96bc3c",
+    "control/bitmask.rs": "5aaa52db03d2d17fe85fed67aa2bdc4ea376a0bf0e18010576e794b502d44689",
+    "control/mod.rs": "83fede19e9c5a26fd2c7372e6cf92547d32ade4cd69fde8a0eaaeb1be6ddc2ba",
+    "control/tag.rs": "691dc7aa8d720e6df59a82ac11d66c72802ffffc684620c8ff29523352aefd13",
+    "control/group/generic.rs": "5d244fc9f9cd05ab8b92954452b43d8c321452d0dfa8816c2b1ce539fbb3270b",
+    "control/group/mod.rs": "32150c3ac5bd4197ce122fea5b45ec1047c1e5227a4ba940aef6ceab2c00f54b",
+    "control/group/neon.rs": "bd8366684d86f456b9880940bbc72d7aabfb642d88a7bdd90de66ef7f643fae5",
+    "control/group/sse2.rs": "53d7d09c72332232b4562aa7dfabf18e5f57c5009a672b2cfac7193ef468b349",
+    "lib.rs": "23de74f311e3584574b39041df306b0cbb9ecb700ed33fba1e02ba9d26f70a23"
+  }
+}

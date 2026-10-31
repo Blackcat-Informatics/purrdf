@@ -478,7 +478,7 @@ fn eval_forced(
 /// and CONSTRUCT/DESCRIBE compare canonical N-Quads (RDFC-1.0 blank-node
 /// canonicalization; `TermId`s from the two independently-evaluated queries
 /// are never expected to match, only the abstract graph they denote).
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 enum Comparable {
     Solutions {
         variables: Vec<String>,
@@ -486,8 +486,30 @@ enum Comparable {
     },
     Boolean(bool),
     Graph {
-        nquads: String,
+        canonical: purrdf_core::Canonicalized,
     },
+}
+
+impl PartialEq for Comparable {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Self::Solutions {
+                    variables: left_variables,
+                    rows: left_rows,
+                },
+                Self::Solutions {
+                    variables: right_variables,
+                    rows: right_rows,
+                },
+            ) => left_variables == right_variables && left_rows == right_rows,
+            (Self::Boolean(left), Self::Boolean(right)) => left == right,
+            (Self::Graph { canonical: left }, Self::Graph { canonical: right }) => {
+                left.nquads() == right.nquads()
+            }
+            _ => false,
+        }
+    }
 }
 
 fn comparable(
@@ -503,7 +525,7 @@ fn comparable(
         },
         SparqlResult::Boolean(b) => Comparable::Boolean(*b),
         SparqlResult::Graph(ds) => Comparable::Graph {
-            nquads: try_canonicalize(ds, control).unwrap().nquads(),
+            canonical: try_canonicalize(ds, control).unwrap(),
         },
     }
 }

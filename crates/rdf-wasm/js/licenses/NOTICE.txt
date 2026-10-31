@@ -157,11 +157,14 @@ Source: registry+https://github.com/rust-lang/crates.io-index
 Notice: dependencies/ghash-0.6.0/LICENSE-APACHE
 Notice: dependencies/ghash-0.6.0/LICENSE-MIT
 
-hashbrown-0.17.1: MIT OR Apache-2.0
-Scope: resolved normal/build input, including target-specific alternatives
-Source: registry+https://github.com/rust-lang/crates.io-index
-Notice: dependencies/hashbrown-0.17.1/LICENSE-APACHE
-Notice: dependencies/hashbrown-0.17.1/LICENSE-MIT
+hashbrown-native-table: MIT OR Apache-2.0
+Scope: modified inherited native table engine; original copyright and dual grant retained, local modifications attributed under the same grant
+Source: https://crates.io/crates/hashbrown/0.17.1
+Evidence: crates/rdf-core/src/hash/table/PROVENANCE.md
+Evidence: crates/rdf-core/src/hash/table/UPSTREAM-SHA256.json
+Notice: third-party/hashbrown-native-table/0-MIT.txt
+Notice: third-party/hashbrown-native-table/1-Apache-2.0.txt
+Notice: third-party/hashbrown-native-table/2-NOTICE
 
 hybrid-array-0.4.15: MIT OR Apache-2.0
 Scope: resolved normal/build input, including target-specific alternatives

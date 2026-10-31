@@ -369,14 +369,15 @@ fn sh_order_is_order_independent_over_the_closure() {
         "ex:S a sh:NodeShape ; sh:targetClass ex:Person ;\n\
            sh:rule [ a sh:TripleRule ; sh:order 1 ; sh:subject sh:this ; sh:predicate ex:a ; sh:object ex:x ] ;\n\
            sh:rule [ a sh:TripleRule ; sh:order 2 ; sh:subject sh:this ; sh:predicate ex:b ; sh:object ex:y ] .",
-    ).nquads();
+    );
     let swapped = entail(
         "ex:S a sh:NodeShape ; sh:targetClass ex:Person ;\n\
            sh:rule [ a sh:TripleRule ; sh:order 2 ; sh:subject sh:this ; sh:predicate ex:a ; sh:object ex:x ] ;\n\
            sh:rule [ a sh:TripleRule ; sh:order 1 ; sh:subject sh:this ; sh:predicate ex:b ; sh:object ex:y ] .",
-    ).nquads();
+    );
     assert_eq!(
-        forward, swapped,
+        forward.nquads(),
+        swapped.nquads(),
         "swapping sh:order must not change the fixpoint closure"
     );
 }

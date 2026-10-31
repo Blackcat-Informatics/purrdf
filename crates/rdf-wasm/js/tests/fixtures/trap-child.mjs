@@ -1,16 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Child process for the trap-poisoning test. Run with
-// `--wasm-stack-switching-stack-size=32`: V8 runs every JSPI-promised call on a
-// secondary native stack of that many KiB (984 by default), while synchronous calls keep
-// the full main stack. The evaluator recurses once per nested `OPTIONAL`, and 50 of them
-// are far inside the host-stack budget it admits (284 nested graph patterns, budgeted
-// against V8's default stack), so both lanes admit the query; evaluating it needs more
-// than 32 KiB of native stack, so the asynchronous run overflows V8's stack — a genuine
-// `RangeError` trap out of the promising call — while the synchronous run of the very
-// same query, on the full main stack, answers it. (Measured on the shipped artifact: 20
-// nested `OPTIONAL`s still answer on the 32 KiB stack, and 50 overflow it.)
+// Child process for actual trap poisoning during asynchronous SERVICE handling.
+// The existing armed raw trap export raises WebAssembly.RuntimeError; the bridge
+// observes its broken gate and abandons both the active and independently parked jobs.
 //
 // Before the trap, the same objects serve every lane through jobs that finish, jobs
 // whose host rejects and jobs whose host reports a typed failure — none of which may
@@ -29,6 +22,7 @@ import { enumerateSurface, settle, settleSync } from "./poisoned-surface.mjs";
 const { DataFactory, Dataset, QueryEngine, ready, version } = purrdf;
 
 await ready();
+const raw = await init();
 
 const EX = "http://example.org/";
 const data = Dataset.parse(`<${EX}a> <${EX}p> <${EX}o> .\n`, "nquads");
@@ -38,15 +32,9 @@ const extra = factory.quad(factory.namedNode(`${EX}e`), factory.namedNode(`${EX}
 const SHALLOW = `SELECT ?s WHERE { ?s <${EX}p> ?o }`;
 const SERVICE_QUERY = `SELECT ?x WHERE { SERVICE <${EX}sparql> { ?s ?p ?x } }`;
 
-/** `depth` nested `OPTIONAL`s, each matching the triple the level above matched. */
-function nestedOptional(depth) {
-  return `SELECT ?s WHERE { ?s <${EX}p> ?o ${`OPTIONAL { ?s <${EX}p> ?o `.repeat(depth)}${"}".repeat(depth)} }`;
-}
-const TOO_DEEP = nestedOptional(50);
-
 const report = {};
 
-// Before the trap: an ordinary asynchronous query answers on the small secondary stack.
+// Before the trap: an ordinary asynchronous query answers on its job's region.
 report.asyncBefore = await settle(() => engine.queryAsync(data, SHALLOW));
 // A job whose host rejects (its SERVICE invocation fails as the host's fault, reported
 // under the host-fault code without the handler's words) and one whose host reports a
@@ -71,12 +59,6 @@ report.syncBefore = await settle(() => engine.query(data, SHALLOW));
 report.asyncAfterFaults = await settle(() => engine.queryAsync(data, SHALLOW));
 report.newEngineBefore = await settle(() => new QueryEngine().query(Dataset.parse(`<${EX}c> <${EX}p> <${EX}o> .\n`, "nquads"), SHALLOW));
 report.sizeBefore = settleSync(() => data.size);
-// The synchronous lane's stack context is its own after those jobs: the query that traps
-// on a job's 32 KiB native stack answers on the main stack — twice, so the first run
-// poisoned nothing — never a stack exhaustion read off a job's freed region.
-report.syncDeep = await settle(() => engine.select(data, TOO_DEEP));
-report.syncDeepAgain = await settle(() => engine.select(data, TOO_DEEP));
-
 // A job in flight — suspended on a SERVICE the host never answers — when another traps.
 let serviceAsked;
 const asked = new Promise((resolve) => {
@@ -92,8 +74,13 @@ const inFlight = settle(() =>
 );
 await asked;
 
-// The trap.
-report.trapped = await settle(() => engine.queryAsync(data, TOO_DEEP));
+// A distinct endpoint prevents sharing the independently parked job's exchange.
+report.trapped = await settle(() => engine.queryAsync(data, SERVICE_QUERY.replace("sparql>", "trap>"), {
+  resolveService: () => {
+    globalThis.__purrdfArmTestTrap = true;
+    return raw.__purrdf_test_trap();
+  },
+}));
 report.inFlight = await inFlight;
 
 // Every later call refuses: asynchronous ones and `ready()` with the poison; synchronous
@@ -102,7 +89,6 @@ report.inFlight = await inFlight;
 report.asyncAfter = await settle(() => engine.queryAsync(data, SHALLOW));
 report.updateAfter = await settle(() => engine.updateAsync(data, `INSERT DATA { <${EX}d> <${EX}p> <${EX}o> }`).then(result => result.dataset));
 report.syncAfter = settleSync(() => engine.query(data, SHALLOW));
-report.syncDeepAfter = settleSync(() => engine.query(data, TOO_DEEP));
 report.sizeAfter = settleSync(() => data.size);
 report.addAfter = settleSync(() => data.add(extra));
 report.iterateAfter = settleSync(() => [...data]);
@@ -118,8 +104,7 @@ report.readyAfter = await settle(() => ready());
 report.freeAfter = settleSync(() => data.free());
 report.disposeAfter =
   typeof engine[Symbol.dispose] === "function" ? settleSync(() => engine[Symbol.dispose]()) : { settled: "absent" };
-// The gate's globals: the trapped run's entry never returned, and the flag is set.
-const raw = await init();
+// The trap export never returned; the bridge has marked the instance poisoned.
 report.gateAfter = {
   poisoned: raw.purrdf_poisoned.value,
   balanced: raw.purrdf_active.value - raw.purrdf_parked.value === raw.purrdf_outbound.value,

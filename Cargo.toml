@@ -143,10 +143,6 @@ clap = { version = "4", features = ["derive"] }
 # OS entropy for the SPARQL RAND()/UUID()/STRUUID() seed on native targets (see
 # crates/sparql-eval's target-gated dependency section).
 getrandom = "0.4"
-# Only the raw `HashTable` is used; every caller supplies its own fixed-key hash
-# (`purrdf_hash::fixed::FixedHasher`),
-# so the default hasher (foldhash) and allocator-api2 stay OFF.
-hashbrown = { version = "0.17", default-features = false }
 # The C library bindings behind the CLI's immutable-input authority on Linux:
 # `mmap`/`munmap` for the read-only pack mapping, and `memfd_create` + `fcntl`
 # `F_ADD_SEALS`/`F_GET_SEALS` for the sealed snapshot (see

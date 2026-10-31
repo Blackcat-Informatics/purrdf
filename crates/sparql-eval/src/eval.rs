@@ -2466,7 +2466,9 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     }
 
     /// Whether a governed loop whose items charge from inside their own evaluation may
-    /// fork: unless the caller set a ceiling other than fuel and scratch bytes. The
+    /// fork: unless the caller set a loop-wide ceiling other than fuel and scratch
+    /// bytes. Logical UDF depth remains enforced at call entry; the fork sites'
+    /// separate registry checks exclude SPARQL and expression-bodied calls. The
     /// loop's ordered commit ([`crate::row_checkpoint::commit_items`]) charges what its
     /// items charged — their fuel, their scratch, the terms it re-interns for them — in
     /// item order, and a dimension only metered
@@ -2495,6 +2497,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
                     dimension,
                     purrdf_core::ResourceDimension::Fuel
                         | purrdf_core::ResourceDimension::ScratchBytes
+                        | purrdf_core::ResourceDimension::UdfDepth
                 )
             })
             .all(|dimension| state.caller_ceiling(dimension).is_none())
@@ -6166,9 +6169,7 @@ fn run_ordinary<'a, 'd, D: DatasetView + Sync>(
                     }
                 }
                 let after = match current_pattern {
-                    GraphPattern::Join { left, right }
-                        if !runner.ctx.positive_region(current_pattern).unwrap_or(false) =>
-                    {
+                    GraphPattern::Join { left, right } => {
                         let lift = crate::governor::lift::Lift::at_admitted(
                             current_pattern,
                             &runner.ctx.growth,
@@ -6195,10 +6196,7 @@ fn run_ordinary<'a, 'd, D: DatasetView + Sync>(
                             lift: lift.detach(),
                         })
                     }),
-                    GraphPattern::Union { arms }
-                        if !arms.is_empty()
-                            && !runner.ctx.positive_region(current_pattern).unwrap_or(false) =>
-                    {
+                    GraphPattern::Union { arms } if !arms.is_empty() => {
                         crate::governor::lift::Lift::at_admitted(
                             current_pattern,
                             &runner.ctx.growth,
@@ -8490,6 +8488,10 @@ fn dispatch_node<D: DatasetView + Sync>(
         } => Ok(Evaluated::Complete(crate::modifier::eval_values(
             variables, bindings, ctx,
         )?)),
+        GraphPattern::Union { arms } if arms.is_empty() => {
+            let lift = crate::governor::lift::Lift::at_admitted(pattern, &ctx.growth)?;
+            Ok(lift.finish(crate::binop::concat_union(std::iter::empty(), ctx)?))
+        }
         GraphPattern::Service {
             name,
             inner,

@@ -1257,6 +1257,14 @@ mod tests {
         type TermGuard<'a> = TermRef<'a>;
         type ProbePlan = ();
 
+        fn reserve_owned_workspace(
+            &self,
+        ) -> Option<Result<purrdf_core::OwnedWorkspaceReservation<Self::ReadError>, Self::ReadError>>
+        {
+            // Reads fail independently; this resident fixture admits retained payloads.
+            Some(Ok(purrdf_core::NoopReservation::owned()))
+        }
+
         fn read_error(&self) -> Option<Self::ReadError> {
             self.failed.get().then(|| Arc::clone(&self.cause))
         }
