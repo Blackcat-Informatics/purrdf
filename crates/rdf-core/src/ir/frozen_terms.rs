@@ -7,8 +7,8 @@ use super::dataset::TermRef;
 use super::term::{BlankScope, InternedTerm, TermId, TermValue, arena_str};
 use crate::content_id::{Blake3ContentId, ContentIdScheme};
 use crate::hash::FastHasher;
+use crate::hash::table::HashTable;
 use crate::{RdfLiteral, RdfTextDirection};
-use hashbrown::HashTable;
 use std::collections::HashMap;
 
 /// Moved from the validated interner, never reconstructed from unchecked IDs.

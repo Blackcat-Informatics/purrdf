@@ -927,21 +927,26 @@ impl<T> AdmittedVec<T> {
 /// Returned references borrow the table; replacement moves each entry once.
 #[derive(Debug)]
 pub struct AdmittedMap<K, V> {
-    entries: hashbrown::HashTable<(K, V)>,
+    entries: purrdf_core::hash::table::HashTable<(K, V)>,
     allocation: Option<WorkspaceAllocation>,
 }
 
 impl<K, V> Default for AdmittedMap<K, V> {
     fn default() -> Self {
         Self {
-            entries: hashbrown::HashTable::new(),
+            entries: purrdf_core::hash::table::HashTable::new(),
             allocation: None,
         }
     }
 }
 
 impl<K, V> AdmittedMap<K, V> {
-    pub(crate) fn into_parts(self) -> (hashbrown::HashTable<(K, V)>, Option<WorkspaceAllocation>) {
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        purrdf_core::hash::table::HashTable<(K, V)>,
+        Option<WorkspaceAllocation>,
+    ) {
         (self.entries, self.allocation)
     }
 }
@@ -1101,7 +1106,7 @@ impl<K: Eq + std::hash::Hash, V> AdmittedMap<K, V> {
                 .ok_or(EvalError::WorkspaceBoundOverflow)?;
             let allocation = workspace
                 .charge(u64::try_from(bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
-            let mut entries = hashbrown::HashTable::new();
+            let mut entries = purrdf_core::hash::table::HashTable::new();
             entries
                 .try_reserve(capacity, |entry: &(K, V)| {
                     purrdf_hash::fixed::hash_one(&entry.0)

@@ -24,7 +24,7 @@
 
 use std::hash::{BuildHasher, Hash};
 
-use hashbrown::HashTable;
+use purrdf_core::hash::table::HashTable;
 use purrdf_lex::allocation::{Memory, Resident, StorageError};
 
 /// A DL role: a named object property, or its inverse.

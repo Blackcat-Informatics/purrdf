@@ -20,7 +20,7 @@ use purrdf_core::{TermId, ViewTermId};
 use purrdf_sparql_algebra::Variable;
 
 use crate::scratch::SolutionTerm;
-use hashbrown::HashTable;
+use purrdf_core::hash::table::HashTable;
 
 /// The ordered, shared variable schema of a [`SolutionSeq`].
 ///

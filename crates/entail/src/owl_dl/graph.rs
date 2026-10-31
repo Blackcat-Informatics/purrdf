@@ -747,7 +747,7 @@ pub(crate) type Achievers = std::rc::Rc<[(u32, bool)]>;
 /// address on a 32-bit target.
 #[derive(Default)]
 pub(crate) struct AchieverCache {
-    closures: hashbrown::HashMap<Role, Achievers, purrdf_core::FastHasher>,
+    closures: purrdf_core::hash::table::HashMap<Role, Achievers, purrdf_core::FastHasher>,
 }
 
 impl AchieverCache {

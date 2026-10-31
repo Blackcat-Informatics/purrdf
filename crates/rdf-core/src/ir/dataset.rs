@@ -28,7 +28,7 @@ use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::{Arc, OnceLock};
 
-use hashbrown::HashTable;
+use crate::hash::table::HashTable;
 
 use crate::backend::DatasetHandle;
 use crate::content_id::{Blake3ContentId, ContentIdScheme};
@@ -72,7 +72,7 @@ pub enum QueryIndexAllocationError {
     /// Ordinal array allocation failed.
     Permutation(purrdf_lex::allocation::StorageError),
     /// The statement graph histogram table allocation failed.
-    StatementHistogram(hashbrown::TryReserveError),
+    StatementHistogram(crate::hash::table::TryReserveError),
 }
 
 impl std::fmt::Display for QueryIndexAllocationError {
@@ -1177,7 +1177,7 @@ impl RdfDataset {
     /// cardinality once prevents any allocating insertion in the fill pass.
     fn try_statement_graph_rows(
         &self,
-    ) -> Result<&HashTable<(TermId, usize)>, hashbrown::TryReserveError> {
+    ) -> Result<&HashTable<(TermId, usize)>, crate::hash::table::TryReserveError> {
         if let Some(rows) = self.statement_graph_rows.get() {
             return Ok(rows);
         }

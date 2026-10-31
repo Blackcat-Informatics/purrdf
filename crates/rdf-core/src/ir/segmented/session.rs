@@ -4,10 +4,10 @@
 //! Sparse, authenticated block admission with exact bounded evidence and live pins.
 
 use crate::dataset_view::lock_read_state;
+use crate::hash::table::HashTable;
 use crate::hash::{
     hash_of, hash_table_allocation_bound, hash_table_retained_bound, reserve_table_with_memory,
 };
-use hashbrown::HashTable;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::dataset_view::{
@@ -368,42 +368,39 @@ impl State {
     fn reserve_buffer(&mut self, buffer: ReaderBuffer) -> Result<(), SegmentedError> {
         loop {
             // Memory checks the old/new replacement overlap. Also plan the
-            // final cache-plus-block layout before allocating: reclaiming one
-            // slot can avoid growth altogether, especially beside pinned blocks.
+            // final cache-plus-block layout before allocating. Native tombstone
+            // reclamation can still require growth after a cache slot is freed.
             let refusal = if let ReaderBuffer::Cache {
                 block_charge,
                 dictionary_entries,
             } = buffer
             {
-                let required = self
-                    .cache
-                    .len()
-                    .checked_add(1)
-                    .ok_or(StorageError::SizeOverflow)?;
-                let next = hash_table_allocation_bound::<CacheEntry>(required)
-                    .ok_or(StorageError::SizeOverflow)?;
                 let old =
                     hash_table_retained_bound(&self.cache).ok_or(StorageError::SizeOverflow)?;
-                let mut increase = if required > self.cache.capacity() {
-                    next.saturating_sub(old)
+                let mut increase = if let Some(capacity) = self
+                    .cache
+                    .capacity_for_reserve(1)
+                    .map_err(|_| StorageError::SizeOverflow)?
+                {
+                    hash_table_allocation_bound::<CacheEntry>(capacity)
+                        .ok_or(StorageError::SizeOverflow)?
+                        .saturating_sub(old)
                 } else {
                     0
                 };
-                if dictionary_entries != 0 {
-                    let required = self
+                if dictionary_entries != 0
+                    && let Some(capacity) = self
                         .dictionary_positions
-                        .len()
-                        .checked_add(dictionary_entries)
+                        .capacity_for_reserve(dictionary_entries)
+                        .map_err(|_| StorageError::SizeOverflow)?
+                {
+                    let next = hash_table_allocation_bound::<DictionaryPosition>(capacity)
                         .ok_or(StorageError::SizeOverflow)?;
-                    if required > self.dictionary_positions.capacity() {
-                        let next = hash_table_allocation_bound::<DictionaryPosition>(required)
-                            .ok_or(StorageError::SizeOverflow)?;
-                        let old = hash_table_retained_bound(&self.dictionary_positions)
-                            .ok_or(StorageError::SizeOverflow)?;
-                        increase = increase
-                            .checked_add(next.saturating_sub(old))
-                            .ok_or(StorageError::SizeOverflow)?;
-                    }
+                    let old = hash_table_retained_bound(&self.dictionary_positions)
+                        .ok_or(StorageError::SizeOverflow)?;
+                    increase = increase
+                        .checked_add(next.saturating_sub(old))
+                        .ok_or(StorageError::SizeOverflow)?;
                 }
                 let increase = u64::try_from(increase).map_err(|_| StorageError::SizeOverflow)?;
                 let budget = &self.storage.reservation.budget;
@@ -2672,12 +2669,10 @@ mod operation_tests {
                 );
                 offset += 1;
             }
-            // Replaying the sole unpinned header gives the request ledger spare
-            // capacity while restoring the full cache array and its pinned neighbors.
-            assert!(lock_read_state(&session.state).evict_one().unwrap());
-            drop(session.block(0).unwrap());
+            // Reserve request-ledger room directly below. Evicting and replaying
+            // the header here can legitimately grow a native tombstoned table.
             let header_pin = pin_header.then(|| session.block(0).unwrap());
-            let (old_layout, next_layout) = {
+            let (old_layout, next_layout, replacement_layout, header_charge) = {
                 let mut state = lock_read_state(&session.state);
                 let shape = (state.cache.len(), state.cache.capacity());
                 let required_requests = state.requests.len() + 32;
@@ -2692,45 +2687,79 @@ mod operation_tests {
                 assert!(request_room > 8);
                 let positions = hash_table_retained_bound(&state.dictionary_positions).unwrap();
                 // These aligned four-ID fixture pages occupy one bucket each.
-                let required = state.dictionary_positions.len() + 1;
-                let next_positions = if required > state.dictionary_positions.capacity() {
-                    hash_table_allocation_bound::<DictionaryPosition>(required).unwrap()
-                } else {
-                    positions
-                };
+                let next_positions = state
+                    .dictionary_positions
+                    .capacity_for_reserve(1)
+                    .unwrap()
+                    .map_or(positions, |capacity| {
+                        hash_table_allocation_bound::<DictionaryPosition>(capacity).unwrap()
+                    });
+                assert_eq!(next_positions, positions);
+                let next_cache = state.cache.capacity_for_reserve(1).unwrap().unwrap();
+                let replacement = hash_table_allocation_bound::<CacheEntry>(next_cache).unwrap();
+                let header_charge = state
+                    .cache
+                    .iter()
+                    .find(|entry| entry.key.slot == 0)
+                    .unwrap()
+                    .block
+                    .retained_charge();
                 (
                     hash_table_retained_bound(&state.cache).unwrap() + positions,
-                    hash_table_allocation_bound::<CacheEntry>(state.cache.len() + 1).unwrap()
-                        + next_positions,
+                    replacement + next_positions,
+                    u64::try_from(replacement).unwrap(),
+                    header_charge,
                 )
             };
             let records = u64::from(session.header.records_per_block);
-            let charge = u64::from(session.receipt.block_bytes) * (records + 1)
-                + records
-                    * u64::try_from(size_of::<(GlobalTermId, core::ops::Range<usize>)>()).unwrap()
-                + u64::try_from(size_of::<CachedBlock>() + 64).unwrap();
+            let block_bytes = usize::try_from(session.receipt.block_bytes).unwrap();
+            let target =
+                usize::try_from(session.header.dictionary.first + offset).unwrap() * block_bytes;
+            let page = &image.bytes()[target..target + block_bytes];
+            let decoded_bound = u64::from(session.receipt.block_bytes) * records;
+            let charge = u64::from(session.receipt.block_bytes)
+                + u64::try_from(size_of::<CachedBlock>() + 64).unwrap()
+                + format::decode_memory_bytes(
+                    page,
+                    session.header.records_per_block,
+                    decoded_bound,
+                )
+                .unwrap()
+                + format::decode_scratch_bytes(
+                    page,
+                    session.header.records_per_block,
+                    decoded_bound,
+                )
+                .unwrap();
             let before = session.evidence();
-            let headroom = charge
-                + if pin_header {
-                    u64::try_from(next_layout - old_layout).unwrap()
-                } else {
-                    0
-                };
+            let headroom = if pin_header {
+                // Fund both the complete replacement overlap and the final
+                // cache plus actual pending payload, whichever peaks higher.
+                replacement_layout.max(charge + u64::try_from(next_layout - old_layout).unwrap())
+            } else {
+                assert!(charge + header_charge < replacement_layout);
+                charge
+            };
             let held = session
                 .reserve_workspace(CEILING - before.live_bytes() - headroom)
                 .unwrap();
-            drop(
-                session
-                    .block(session.header.dictionary.first + offset)
-                    .unwrap(),
-            );
-            if pin_header {
+            let result = session.block(session.header.dictionary.first + offset);
+            let refusal = if pin_header {
+                drop(result.unwrap());
                 assert_eq!(session.evidence().evictions(), before.evictions());
+                None
             } else {
+                let error = result.unwrap_err();
+                assert!(matches!(error, SegmentedError::Residency { .. }));
                 assert!(session.evidence().evictions() > before.evictions());
-            }
+                // One evicted header does not fund a complete transactional
+                // replacement while its original buckets remain live. Refuse
+                // before reading or allocating the incoming dictionary block.
+                assert_eq!(session.evidence().request_count(), before.request_count());
+                Some(error)
+            };
             assert!(session.evidence().peak_bytes() <= CEILING);
-            assert_eq!(session.read_error(), None);
+            assert_eq!(session.read_error(), refusal);
             assert_eq!(
                 {
                     let state = lock_read_state(&session.state);

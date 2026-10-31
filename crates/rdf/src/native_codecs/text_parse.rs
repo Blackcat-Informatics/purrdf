@@ -2434,7 +2434,7 @@ fn atom_matches(
 /// exclusively from `terms` push order.
 struct Interner {
     /// Index table over the atom rows of `terms` (store-once dedup).
-    atoms: hashbrown::HashTable<u32>,
+    atoms: purrdf_core::hash::table::HashTable<u32>,
     /// Structural dedup for triple terms; the key is three term ids (no strings).
     triples: crate::FastMap<SerTriple3, usize>,
     terms: Vec<SerTerm>,
@@ -2443,7 +2443,7 @@ struct Interner {
 impl Interner {
     fn new() -> Self {
         Self {
-            atoms: hashbrown::HashTable::new(),
+            atoms: purrdf_core::hash::table::HashTable::new(),
             triples: crate::FastMap::default(),
             terms: Vec::new(),
         }

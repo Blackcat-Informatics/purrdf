@@ -297,12 +297,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hashbrown"
-version = "0.17.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
-
-[[package]]
 name = "heck"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -542,7 +536,6 @@ dependencies = [
 name = "purrdf-core"
 version = "3.0.1"
 dependencies = [
- "hashbrown",
  "purrdf-alloc-probe",
  "purrdf-cdt",
  "purrdf-deflate",
@@ -562,7 +555,6 @@ dependencies = [
 name = "purrdf-datalog"
 version = "3.0.1"
 dependencies = [
- "hashbrown",
  "purrdf-alloc-probe",
  "purrdf-core",
  "purrdf-hash",
@@ -594,7 +586,6 @@ dependencies = [
 name = "purrdf-entail"
 version = "3.0.1"
 dependencies = [
- "hashbrown",
  "purrdf-alloc-probe",
  "purrdf-core",
  "purrdf-datalog",
@@ -811,7 +802,6 @@ dependencies = [
 name = "purrdf-rdf"
 version = "3.0.1"
 dependencies = [
- "hashbrown",
  "proc-macro2",
  "purrdf-alloc-probe",
  "purrdf-cdt",
@@ -953,7 +943,6 @@ name = "purrdf-sparql-eval"
 version = "3.0.1"
 dependencies = [
  "getrandom",
- "hashbrown",
  "purrdf-alloc-probe",
  "purrdf-cdt",
  "purrdf-core",
