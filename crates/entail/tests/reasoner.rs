@@ -2219,6 +2219,120 @@ fn a_finite_tagged_enumeration_cannot_supply_two_distinct_qualified_values() {
 }
 
 #[test]
+fn query_only_roles_preserve_source_support_boundaries_and_proof_replay() {
+    use purrdf_entail::{Construct, Question};
+    use purrdf_iri::vocab::owl::{TOP_DATA_PROPERTY, TOP_OBJECT_PROPERTY};
+    for (role, bounded) in [(TOP_DATA_PROPERTY, true), ("http://example.org/p", false)] {
+        for mentioned in [false, true] {
+            let input = ds(&if mentioned {
+                vec![
+                    typed(N::V(role), N::V(DATATYPE_PROPERTY)),
+                    (N::E("C"), N::V(SUB_CLASS), N::B("restriction")),
+                    typed(N::B("restriction"), N::V(RESTRICTION)),
+                    (N::B("restriction"), N::V(ON_PROPERTY), N::V(role)),
+                    (N::B("restriction"), N::V(ALL_VALUES), N::V(XSD_STRING)),
+                ]
+            } else {
+                Vec::new()
+            });
+            let property = TermValue::Iri(role.to_owned());
+            let mut control =
+                purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            for axiom in [
+                DlAxiom::ObjectPropertyAssertion {
+                    subject: iri("a"),
+                    property: property.clone(),
+                    object: iri("b"),
+                },
+                DlAxiom::SubObjectPropertyOf {
+                    sub: iri("q"),
+                    sup: property.clone(),
+                },
+            ] {
+                let mut producer = Reasoner::with_proofs(&input, &mut control).unwrap();
+                let answer = producer.entails(&axiom).unwrap();
+                assert_eq!(
+                    answer.certificate().completeness() == DlCompleteness::Decided,
+                    !bounded
+                );
+                assert_eq!(
+                    answer
+                        .certificate()
+                        .boundaries()
+                        .iter()
+                        .any(|b| { b.construct() == Construct::BuiltinRole }),
+                    bounded
+                );
+                let question = Question::AxiomEntailment {
+                    axiom: Box::new(axiom),
+                };
+                let mut consumer = Reasoner::with_proofs(&input, &mut control).unwrap();
+                consumer.prepare(&question).unwrap();
+                let replay = answer
+                    .proof()
+                    .unwrap()
+                    .verify(
+                        &input,
+                        &question,
+                        Some(answer.certificate()),
+                        &consumer.proof_context().unwrap(),
+                        &mut control,
+                    )
+                    .unwrap();
+                assert_eq!(replay.runs(), replay.replayed());
+                assert_eq!(
+                    producer.consistency().certificate().completeness() == DlCompleteness::Decided,
+                    !(bounded && mentioned)
+                );
+            }
+            for (s, p, o) in [
+                (
+                    QNode::Var("s".to_owned()),
+                    QNode::Term(property.clone()),
+                    QNode::Var("o".to_owned()),
+                ),
+                (
+                    QNode::Term(property),
+                    QNode::Term(TermValue::Iri(purrdf_iri::vocab::rdfs::DOMAIN.to_owned())),
+                    QNode::Var("c".to_owned()),
+                ),
+            ] {
+                let (_, report) =
+                    purrdf_entail::materialize_dl_reported(&input, &[QTriple { s, p, o }]).unwrap();
+                assert_eq!(
+                    report.completeness() == purrdf_entail::Completeness::Exact,
+                    !bounded
+                );
+                assert_eq!(
+                    report
+                        .boundaries()
+                        .iter()
+                        .any(|b| { b.construct() == Construct::BuiltinRole }),
+                    bounded
+                );
+            }
+        }
+    }
+    let input = ds(&[typed(N::E("a"), N::V(THING)), typed(N::E("b"), N::V(THING))]);
+    let (augmented, report) = purrdf_entail::materialize_dl_reported(
+        &input,
+        &[pattern(var("s"), TOP_OBJECT_PROPERTY, var("o"))],
+    )
+    .unwrap();
+    assert_eq!(report.completeness(), purrdf_entail::Completeness::Exact);
+    for subject in ["a", "b"] {
+        for object in ["a", "b"] {
+            assert!(holds(
+                &augmented,
+                &ex(subject),
+                TOP_OBJECT_PROPERTY,
+                &ex(object)
+            ));
+        }
+    }
+}
+
+#[test]
 fn bottom_roles_are_empty_through_assertions_subroles_and_restrictions() {
     use purrdf_entail::proof_source::{ResolvedAxiomSource, ResolvedTerm};
     use purrdf_entail::{Question, ServiceProof};

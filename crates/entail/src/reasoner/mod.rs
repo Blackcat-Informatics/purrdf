@@ -766,7 +766,17 @@ impl Reasoner {
         answer: T,
         bind: impl FnOnce() -> (Question, Vec<Claim>),
     ) -> Certified<T> {
-        let certificate = session.certificate(&self.boundaries);
+        Self::seal_with_boundaries(session, answer, &self.boundaries, bind)
+    }
+
+    /// A query's unsupported operands qualify that answer, not later unrelated services.
+    fn seal_with_boundaries<T>(
+        session: Session<'_>,
+        answer: T,
+        boundaries: &BTreeSet<Construct>,
+        bind: impl FnOnce() -> (Question, Vec<Claim>),
+    ) -> Certified<T> {
+        let certificate = session.certificate(boundaries);
         let proof = session.proof(&certificate, bind);
         Certified::new(answer, certificate, proof)
     }
@@ -943,7 +953,7 @@ impl Reasoner {
     /// [`EntailError::Unsatisfiable`] if the ontology has no model, in which case every
     /// axiom is entailed and the answer would be worthless.
     pub fn entails(&mut self, axiom: &DlAxiom) -> Result<Certified<Verdict>, EntailError> {
-        let plan = self.plan(axiom)?;
+        let (plan, boundaries) = self.plan(axiom)?;
         let (mut session, usable) = self.open()?;
         let mut runs = Vec::new();
         let answer = if usable {
@@ -952,20 +962,25 @@ impl Reasoner {
             Verdict::Unknown
         };
         session.check_storage()?;
-        Ok(self.seal(session, answer, || {
-            (
-                Question::AxiomEntailment {
-                    axiom: Box::new(axiom.clone()),
-                },
-                vec![refutation_claim(
-                    ClaimSubject::Axiom {
+        Ok(Self::seal_with_boundaries(
+            session,
+            answer,
+            &boundaries,
+            || {
+                (
+                    Question::AxiomEntailment {
                         axiom: Box::new(axiom.clone()),
                     },
-                    answer,
-                    &runs,
-                )],
-            )
-        }))
+                    vec![refutation_claim(
+                        ClaimSubject::Axiom {
+                            axiom: Box::new(axiom.clone()),
+                        },
+                        answer,
+                        &runs,
+                    )],
+                )
+            },
+        ))
     }
 
     /// Intern everything `axiom` needs and reduce it to the refutation(s) that decide it.
@@ -973,8 +988,9 @@ impl Reasoner {
     /// Separated from [`Reasoner::entails`] because interning needs `&mut self` while the
     /// session borrows `&self`, and because it puts every axiom's encoding in one readable
     /// place instead of spreading eight of them through a borrow-juggling function.
-    fn plan(&mut self, axiom: &DlAxiom) -> Result<Refutation, EntailError> {
-        Ok(match axiom {
+    fn plan(&mut self, axiom: &DlAxiom) -> Result<(Refutation, BTreeSet<Construct>), EntailError> {
+        let mut boundaries = self.boundaries.clone();
+        let refutation = match axiom {
             DlAxiom::SubClassOf { sub, sup } => {
                 let sub = self.concept_of(sub)?;
                 let sup = self.concept_of(sup)?;
@@ -1006,6 +1022,7 @@ impl Reasoner {
                 let subject = self.term_of(subject);
                 let property = self.term_of(property);
                 let object = self.term_of(object);
+                parser::record_role_support(&self.kb.interner, &mut boundaries, [property]);
                 // Query-only empty roles have the same native law as source roles.
                 parser::constrain_bottom_roles(&mut self.kb, [property]);
                 let negated_reach = self.negated(reaches(property, object))?;
@@ -1040,6 +1057,7 @@ impl Reasoner {
             DlAxiom::SubObjectPropertyOf { sub, sup } => {
                 let sub = self.term_of(sub);
                 let sup = self.term_of(sup);
+                parser::record_role_support(&self.kb.interner, &mut boundaries, [sub, sup]);
                 parser::constrain_bottom_roles(&mut self.kb, [sub, sup]);
                 let x = self.fresh.mint(&mut self.kb.interner);
                 let y = self.fresh.mint(&mut self.kb.interner);
@@ -1051,7 +1069,8 @@ impl Reasoner {
                     negated_reach,
                 }
             }
-        })
+        };
+        Ok((refutation, boundaries))
     }
 
     /// Intern `concept` and finalize the complete blocking closure, returning its id.

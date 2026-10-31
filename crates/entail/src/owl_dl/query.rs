@@ -84,10 +84,11 @@ use crate::EntailError;
 use crate::engine::copy_into;
 use crate::interner::{Interner, intern_into};
 use crate::owl_dl::concept::{Concept, Role};
+use crate::owl_dl::constructs::{is_reserved, is_role_denotation};
 use crate::owl_dl::data::DataRangeTable;
 use crate::owl_dl::graph::Assumptions;
 use crate::owl_dl::parser::{
-    CeExtractor, TripleIndex, Vocab, constrain_bottom_roles, index_insert,
+    CeExtractor, TripleIndex, Vocab, constrain_bottom_roles, index_insert, record_role_support,
 };
 use crate::owl_dl::saturate::{Taxonomy, saturate};
 use crate::owl_dl::{Kb, class_concept, hyper};
@@ -311,6 +312,25 @@ pub fn materialize_dl_reported_until<D: DatasetView>(
     kb.query_syntax = query_syntax;
     let mut boundaries = kb.boundaries().clone();
     boundaries.extend(query_boundaries);
+    record_role_support(
+        &kb.interner,
+        &mut boundaries,
+        resolved.iter().flat_map(|&(subject, predicate, _)| {
+            [
+                predicate.filter(|&id| {
+                    matches!(kb.interner.value(id), TermValue::Iri(iri)
+                        if is_role_denotation(iri))
+                }),
+                if predicate == Some(v.domain) || predicate == Some(v.range) {
+                    subject
+                } else {
+                    None
+                },
+            ]
+            .into_iter()
+            .flatten()
+        }),
+    );
     // A data range the query itself wrote lands in the knowledge base's own table, so one the
     // decision procedure cannot decide exactly raises the boundary here for the same reason
     // one written in the data raises it in the reverse mapping.
@@ -584,9 +604,9 @@ struct QueriedRole {
 /// Query-directed on purpose: deciding `KB ⊨ p(a, b)` costs one tableau run per ordered
 /// pair, so ranging over every property of the ontology would make the augmentation
 /// quadratic in data the caller never asked about. The properties here are the ones the
-/// BGP actually mentions, minus the reserved vocabulary (`rdf:type`, `rdfs:subClassOf`,
-/// `owl:sameAs`, `rdfs:domain` and `rdfs:range` have their own injections, and no other
-/// reserved term denotes a DL role).
+/// BGP actually mentions. Structural predicates (`rdf:type`, `rdfs:subClassOf`,
+/// `owl:sameAs`, `rdfs:domain` and `rdfs:range`) have their own injections;
+/// reserved terms that denote roles use the same role injection as user properties.
 ///
 /// Targets are the named individuals PLUS the objects of asserted role assertions, which
 /// is what brings a data property's LITERAL values into range: `p ⊑ q` with `a p "cat"`
@@ -616,7 +636,7 @@ fn intern_queried_roles(
             continue;
         }
         if let TermValue::Iri(iri) = kb.interner.value(predicate)
-            && !crate::owl_dl::constructs::is_reserved(iri)
+            && (!is_reserved(iri) || is_role_denotation(iri))
         {
             properties.insert(predicate);
         }
