@@ -2560,6 +2560,12 @@ struct GraphAccumulator {
     interner: Interner,
     /// Reifier bindings in encounter order.
     reifiers: Vec<(usize, SerTriple3)>,
+    /// The statement-reifier bindings already in `reifiers`, so a rebind is found by
+    /// lookup rather than by scanning every binding recorded so far, which made a
+    /// document of `n` reifiers cost `O(n^2)`. A triple term's self-binding (pushed by
+    /// [`Interner::node`]) never needs to be here: its key is a triple term's id, which no
+    /// statement reifier (an IRI or blank node) can share.
+    bound: crate::FastSet<(usize, SerTriple3)>,
     /// Base quads in statement order.
     quads: Vec<(usize, usize, usize, Option<usize>)>,
 }
@@ -2569,6 +2575,7 @@ impl GraphAccumulator {
         Self {
             interner: Interner::new(),
             reifiers: Vec::new(),
+            bound: crate::FastSet::default(),
             quads: Vec::new(),
         }
     }
@@ -2590,7 +2597,7 @@ impl GraphAccumulator {
             let ss = self.interner.node(ts, &mut self.reifiers);
             let pp = self.interner.node(tp, &mut self.reifiers);
             let oo = self.interner.node(to, &mut self.reifiers);
-            set_reifier(&mut self.reifiers, rid, (ss, pp, oo));
+            set_reifier(&mut self.reifiers, &mut self.bound, rid, (ss, pp, oo));
             return Ok(());
         }
 
@@ -2733,11 +2740,15 @@ impl LineStreamParser {
 /// is kept. This does not make a quoted-triple TERM ambiguous: a triple term in
 /// this model is SELF-reifying (its binding is keyed by its own term id), so it
 /// never shares a key with a statement reifier.
-fn set_reifier(reifiers: &mut Vec<(usize, SerTriple3)>, rid: usize, spo: SerTriple3) {
-    if !reifiers
-        .iter()
-        .any(|&(r, existing)| r == rid && existing == spo)
-    {
+///
+/// `bound` holds every binding this has pushed, so the idempotence check is one lookup.
+fn set_reifier(
+    reifiers: &mut Vec<(usize, SerTriple3)>,
+    bound: &mut crate::FastSet<(usize, SerTriple3)>,
+    rid: usize,
+    spo: SerTriple3,
+) {
+    if bound.insert((rid, spo)) {
         reifiers.push((rid, spo));
     }
 }
@@ -2746,6 +2757,35 @@ fn set_reifier(reifiers: &mut Vec<(usize, SerTriple3)>, rid: usize, spo: SerTrip
 mod tests {
     use super::*;
     use purrdf_iri::BaseIri;
+
+    /// INVARIANT: a reifier rebound to the SAME triple is one binding, and a reifier
+    /// bound to two different triples keeps both (`rdf:reifies` is not functional), in
+    /// encounter order. The rebind check is a set lookup, so this pins that the lookup
+    /// decides exactly what the scan it replaced decided.
+    #[test]
+    fn a_reifier_rebound_identically_binds_once_and_differently_binds_twice() {
+        let mut parser =
+            LineStreamParser::new(NativeRdfFormat::NTriples, BaseScope::empty()).unwrap();
+        let reifies = "<http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies>";
+        let first =
+            format!("<http://e/r> {reifies} <<( <http://e/s> <http://e/p> <http://e/o1> )>> .");
+        let second =
+            format!("<http://e/r> {reifies} <<( <http://e/s> <http://e/p> <http://e/o2> )>> .");
+        for line in [&first, &first, &second, &first] {
+            parser.push_line(line).unwrap();
+        }
+        let graph = parser.finish();
+        let objects: Vec<Option<&str>> = graph
+            .reifiers
+            .iter()
+            .map(|(_, (_, _, object), _)| graph.terms[*object].value.as_deref())
+            .collect();
+        assert_eq!(objects, [Some("http://e/o1"), Some("http://e/o2")]);
+        assert!(
+            graph.quads.is_empty(),
+            "the shorthand binds a reifier and asserts no quad"
+        );
+    }
 
     #[test]
     fn streamed_line_locations_cross_u32_and_refuse_terminal_overflow() {

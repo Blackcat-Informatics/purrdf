@@ -61,6 +61,40 @@ fn bench_parse_nquads(c: &mut Bench) {
     group.finish();
 }
 
+/// N-Triples whose every row is the `rdf:reifies` shorthand binding a fresh reifier, at
+/// two sizes. Each binding is checked against those already recorded, so the cost per
+/// row must not grow with the row count: compare the two sizes' throughput.
+fn reifier_fixture(rows: usize) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(rows * 160);
+    for idx in 0..rows {
+        let _ = writeln!(
+            out,
+            "<https://example.org/r{idx}> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> \
+             <<( <https://example.org/s{idx}> <https://example.org/p> \"{idx}\" )>> ."
+        );
+    }
+    out
+}
+
+fn bench_parse_reifier_shorthand(c: &mut Bench) {
+    let mut group = c.benchmark_group("native_codecs_parse_reifiers");
+    group.sample_size(10);
+    for rows in [ROWS, LARGE_ROWS] {
+        let text = reifier_fixture(rows);
+        group.throughput(Throughput::Bytes(text.len() as u64));
+        group.bench_with_input(BenchmarkId::from_parameter(rows), &text, |bencher, text| {
+            bencher.iter(|| {
+                let dataset =
+                    parse_dataset(black_box(text.as_bytes()), "application/n-triples", None)
+                        .expect("parse");
+                black_box(dataset);
+            });
+        });
+    }
+    group.finish();
+}
+
 /// Chunk-parallel vs forced-sequential N-Quads parse over the SAME large fixture.
 /// `parse_dataset` auto-selects the parallel path above the 1 MiB threshold;
 /// `parse_dataset_forced_sequential` (bench-only, `#[doc(hidden)]`) pins the
@@ -637,6 +671,7 @@ bench_group!(
     bench_parse_nquads_parallel_vs_sequential,
     bench_parse_nquads_streamed_vs_buffered,
     bench_parse_nquads_span_tracking,
+    bench_parse_reifier_shorthand,
     bench_serialize_nquads,
     bench_serialize_formats,
     bench_parse_turtle_collections,
