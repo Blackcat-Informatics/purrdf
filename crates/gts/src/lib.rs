@@ -97,6 +97,7 @@ mod rfc3339;
 pub mod segment_decode;
 pub mod stream;
 pub mod tar;
+mod term_table;
 pub mod transport;
 pub mod ulid;
 pub mod verify;

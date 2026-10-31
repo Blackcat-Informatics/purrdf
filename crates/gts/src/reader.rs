@@ -16,6 +16,9 @@ use std::collections::BTreeMap;
 
 use crate::{FastMap, FastSet};
 use std::io::Read;
+use std::sync::Arc;
+
+use crate::term_table::TermsRef;
 
 mod fold_error;
 use fold_error::FoldError;
@@ -336,8 +339,10 @@ pub struct BlobRefusal<'a> {
 pub trait StreamingSink {
     /// Per-frame provenance, fired once per frame before its rows are processed.
     fn frame(&mut self, _ctx: FrameContext<'_>) {}
-    /// Accepted term row.
-    fn term(&mut self, _segment_index: u64, _term_id: usize, _term: &Term) {}
+    /// Accepted term row, shared with the reader's segment validation table.
+    /// The reader releases its owner after segment validation; a sink may keep
+    /// this handle without copying the term's strings.
+    fn term(&mut self, _segment_index: u64, _term_id: usize, _term: Arc<Term>) {}
     /// Accepted quad row.
     fn quad(&mut self, _segment_index: u64, _quad: Quad) {}
     /// Accepted reifier row.
@@ -483,6 +488,8 @@ fn absorb_segment_result(result: &mut StreamingReadResult, segment: &Graph) {
 /// Mutable fold state; one per segment (and shared by the snapshot handler).
 struct Folder<'g, 's, 'k> {
     g: &'g mut Graph,
+    // Present only for streaming folds; materialized folds write Graph::terms.
+    shared_terms: Option<&'g mut Vec<Arc<Term>>>,
     sink: Option<&'s mut dyn StreamingSink>,
     content_key: Option<&'k ContentKeyResolver<'k>>,
     segment_index: u64,
@@ -511,6 +518,13 @@ struct Folder<'g, 's, 'k> {
 }
 
 impl Folder<'_, '_, '_> {
+    fn terms(&self) -> TermsRef<'_> {
+        match self.shared_terms.as_deref() {
+            Some(terms) => TermsRef::Shared(terms),
+            None => TermsRef::Owned(&self.g.terms),
+        }
+    }
+
     /// Report the ONE shape a multi-bound reifier id can still break: a
     /// quoted-triple term that carries no `tt` of its own and resolves its
     /// components through that id, so the file asks for a single term with two
@@ -524,8 +538,9 @@ impl Folder<'_, '_, '_> {
         let ambiguous: Vec<(usize, u64)> = std::mem::take(&mut self.rebound_reifiers)
             .into_iter()
             .filter(|&(rid, _)| {
+                let terms = self.terms();
                 self.reifier_index.anchors(rid).iter().any(|&tid| {
-                    let term = &self.g.terms[tid];
+                    let term = &terms[tid];
                     term.triple.is_none() && term.reifier == Some(rid)
                 })
             })
@@ -829,10 +844,10 @@ impl Folder<'_, '_, '_> {
                 .and_then(Value::as_text)
                 .map(str::to_string);
             // This row's id, read before any decode that can raise a diagnostic:
-            // diagnostics land in `self.g.diagnostics`, never in `self.g.terms`,
+            // diagnostics leave the term table unchanged,
             // so the id a refusal quotes is the id this row goes on to take.
-            let tid = self.g.terms.len() as i128;
-            let term_id = self.g.terms.len();
+            let tid = self.terms().len() as i128;
+            let term_id = self.terms().len();
             // THE language-tag decode point. `"l"` is the only field of the wire
             // format that becomes a `LANGTAG` token downstream, and this is the
             // only place it is read: `h_snapshot` re-enters through this very
@@ -859,7 +874,7 @@ impl Folder<'_, '_, '_> {
             // `read` returns a `Graph`, not a `Result` (permissive-read "never
             // panic ..., return graph state plus diagnostics", §7), and dropping
             // the whole row is impossible because term ids are positional —
-            // `tid` is `self.g.terms.len()`, so skipping a row would renumber
+            // `tid` is `self.terms().len()`, so skipping a row would renumber
             // every later term in the segment.
             // `lang_refused` distinguishes "there was no tag" from "there was a
             // tag and the grammar refused it". The base-direction arm below
@@ -990,7 +1005,7 @@ impl Folder<'_, '_, '_> {
                     index,
                 );
             }
-            self.g.terms.push(Term {
+            let term = Term {
                 kind,
                 value,
                 datatype: dt,
@@ -998,11 +1013,18 @@ impl Folder<'_, '_, '_> {
                 direction,
                 reifier: rf,
                 triple: tt,
-            });
-            self.reifier_index
-                .observe_term(term_id, &self.g.terms[term_id]);
-            if let Some(sink) = self.sink.as_deref_mut() {
-                sink.term(self.segment_index, term_id, &self.g.terms[term_id]);
+            };
+            if let Some(terms) = self.shared_terms.as_deref_mut() {
+                let term = Arc::new(term);
+                terms.push(Arc::clone(&term));
+                self.reifier_index.observe_term(term_id, &term);
+                if let Some(sink) = self.sink.as_deref_mut() {
+                    sink.term(self.segment_index, term_id, term);
+                }
+            } else {
+                self.g.terms.push(term);
+                self.reifier_index
+                    .observe_term(term_id, &self.g.terms[term_id]);
             }
         }
         Ok(())
@@ -1044,14 +1066,18 @@ impl Folder<'_, '_, '_> {
             let (Some(s), Some(p), Some(o)) = (s, p, o) else {
                 continue;
             };
-            if let Err(detail) = check_quad_positions(self.g, s, p, o, gslot) {
+            if let Err(detail) = check_quad_positions(self.terms(), s, p, o, gslot) {
                 let message = detail.to_string();
                 self.diag_native("PositionConstraint", *detail, message, index);
                 continue;
             }
             let quad = (s, p, o, gslot);
             if self.streamable {
-                self.provenance.observe(self.g, s, p, o);
+                let terms = match self.shared_terms.as_deref() {
+                    Some(terms) => TermsRef::Shared(terms),
+                    None => TermsRef::Owned(&self.g.terms),
+                };
+                self.provenance.observe_terms(terms, s, p, o);
             }
             self.with_sink(|segment_index, sink| sink.quad(segment_index, quad));
             if self.materialize {
@@ -1059,10 +1085,10 @@ impl Folder<'_, '_, '_> {
             }
             // Layout bookkeeping (§3.3): a stream:digest quad describes an
             // upcoming manifestation — record the IOU for the blob check.
-            if self.g.terms[p].value.as_deref() == Some(STREAM_DIGEST)
-                && let Some(obj) = &self.g.terms[o].value
+            if self.terms()[p].value.as_deref() == Some(STREAM_DIGEST)
+                && let Some(obj) = self.terms()[o].value.clone()
             {
-                self.described.insert(obj.clone());
+                self.described.insert(obj);
             }
         }
         Ok(())
@@ -1080,7 +1106,7 @@ impl Folder<'_, '_, '_> {
         };
         for row in rows {
             let (rid, triple, gslot) =
-                match decode_reifier_row(numeric_row::<5>(row?)?, self.g, base) {
+                match decode_reifier_row(numeric_row::<5>(row?)?, self.terms(), base) {
                     RowDecode::Skip => continue,
                     RowDecode::Row(row) => row,
                     RowDecode::Damaged(detail) => {
@@ -1106,7 +1132,10 @@ impl Folder<'_, '_, '_> {
             {
                 self.rebound_reifiers.push((rid, index));
             }
-            if self.reifier_index.binding_is_recursive(self.g, rid, triple) {
+            if self
+                .reifier_index
+                .binding_is_recursive(self.terms(), rid, triple)
+            {
                 self.diag(
                     FoldError::RecursiveReifier {
                         reifier: rid,
@@ -1133,19 +1162,20 @@ impl Folder<'_, '_, '_> {
             return Ok(());
         };
         for row in rows {
-            let annotation = match decode_annotation_row(numeric_row::<4>(row?)?, self.g, base) {
-                RowDecode::Skip => continue,
-                RowDecode::Row(row) => row,
-                RowDecode::Damaged(detail) => {
-                    self.damaged_row(*detail, index);
-                    continue;
-                }
-                RowDecode::Position(detail) => {
-                    let message = detail.to_string();
-                    self.diag_native("PositionConstraint", *detail, message, index);
-                    continue;
-                }
-            };
+            let annotation =
+                match decode_annotation_row(numeric_row::<4>(row?)?, self.terms(), base) {
+                    RowDecode::Skip => continue,
+                    RowDecode::Row(row) => row,
+                    RowDecode::Damaged(detail) => {
+                        self.damaged_row(*detail, index);
+                        continue;
+                    }
+                    RowDecode::Position(detail) => {
+                        let message = detail.to_string();
+                        self.diag_native("PositionConstraint", *detail, message, index);
+                        continue;
+                    }
+                };
             self.with_sink(|segment_index, sink| sink.annotation(segment_index, annotation));
             if self.materialize {
                 self.g.annotations.push(annotation);
@@ -1394,7 +1424,7 @@ impl Folder<'_, '_, '_> {
         if !payload.is_map() {
             return Ok(());
         }
-        let base = TermIdBase(self.g.terms.len());
+        let base = TermIdBase(self.terms().len());
         if let Some(terms) = payload.get("terms")? {
             self.h_terms(terms, index, base)?;
         }
@@ -1820,7 +1850,7 @@ pub fn read_with_options(data: &[u8], options: ReadOptions<'_>) -> Graph {
         return g;
     }
     if bounds.len() > 1 && !options.allow_segments {
-        let mut g = read_segment_with_sink(&items[..bounds[1]], 0, 0, None, options.content_key);
+        let mut g = read_segment(&items[..bounds[1]], 0, options.content_key);
         g.diagnostics.push(
             Diagnostic {
                 cause: None,
@@ -1957,6 +1987,9 @@ fn next_stream_item<R: Read>(
 
 struct ActiveStreamingSegment {
     g: Graph,
+    // These owners outlive every validation callback in the segment, then drop
+    // before the resolver flushes it on the next segment's first RDF event.
+    shared_terms: Vec<Arc<Term>>,
     header: Vec<(Value, Value)>,
     expected_prev: Vec<u8>,
     frame_ids: Vec<Vec<u8>>,
@@ -2059,6 +2092,7 @@ impl ActiveStreamingSegment {
         };
         Self {
             g,
+            shared_terms: Vec::new(),
             header,
             expected_prev,
             frame_ids: Vec::new(),
@@ -2105,6 +2139,7 @@ impl ActiveStreamingSegment {
         let reifier_index = std::mem::take(&mut self.reifier_index);
         let mut folder = Folder {
             g: &mut self.g,
+            shared_terms: Some(&mut self.shared_terms),
             sink: Some(sink),
             content_key,
             segment_index: self.segment_index,
@@ -2257,6 +2292,7 @@ impl ActiveStreamingSegment {
             if !self.rebound_reifiers.is_empty() {
                 let mut folder = Folder {
                     g: &mut self.g,
+                    shared_terms: Some(&mut self.shared_terms),
                     sink: Some(sink),
                     content_key: None,
                     segment_index: self.segment_index,
@@ -2591,12 +2627,12 @@ fn fold_segments(
         use rayon::prelude::*;
         ranges
             .par_iter()
-            .map(|&(a, b)| read_segment_with_sink(&items[a..b], a as u64, 0, None, None))
+            .map(|&(a, b)| read_segment(&items[a..b], a as u64, None))
             .collect()
     } else {
         ranges
             .iter()
-            .map(|&(a, b)| read_segment_with_sink(&items[a..b], a as u64, 0, None, content_key))
+            .map(|&(a, b)| read_segment(&items[a..b], a as u64, content_key))
             .collect()
     }
 }
@@ -2621,14 +2657,13 @@ fn parallel_content_ids(items: &[(usize, Value)]) -> Vec<Option<Vec<u8>>> {
         .collect()
 }
 
-fn read_segment_with_sink(
+fn read_segment(
     items: &[(usize, Value)],
     index_offset: u64,
-    segment_index: u64,
-    mut sink: Option<&mut dyn StreamingSink>,
     content_key: Option<&ContentKeyResolver<'_>>,
 ) -> Graph {
     let mut g = Graph::default();
+    let mut sink = None;
     let (_, raw_header) = &items[0];
     let header = match unwrap_header(raw_header) {
         Ok(h) => h,
@@ -2698,13 +2733,14 @@ fn read_segment_with_sink(
     // cheap `prev`-equality check per frame.
     let mut computed_ids = parallel_content_ids(&items[1..]);
 
-    let (index_records, blob_events, restored_sink) = {
+    let (index_records, blob_events) = {
         let catalog = catalog_from(header);
         let mut folder = Folder {
             g: &mut g,
-            sink: sink.take(),
+            shared_terms: None,
+            sink: None,
             content_key,
-            segment_index,
+            segment_index: 0,
             materialize: true,
             streamable: map_get(header, "layout").and_then(Value::as_text) == Some("streamable"),
             provenance: crate::compact::ProvenanceSubjects::default(),
@@ -2787,13 +2823,8 @@ fn read_segment_with_sink(
             folder.fold_frame(frame, abs_index, map_get(frame, "d").map(ValueRef::Owned));
         }
         folder.report_ambiguous_reifiers();
-        (folder.index_records, folder.blob_events, folder.sink)
+        (folder.index_records, folder.blob_events)
     };
-    sink = restored_sink;
-
-    if let Some(sink) = sink.as_deref_mut() {
-        sink.segment_head(segment_index, &expected_prev);
-    }
     g.segment_heads.push(expected_prev);
     let seg_meta = g.meta.clone();
     g.segment_meta.push(seg_meta);
@@ -2809,9 +2840,6 @@ fn read_segment_with_sink(
         index_offset,
         &mut sink,
     );
-    if let Some(sink) = sink {
-        sink.streamable_layout(segment_index, &info);
-    }
     g.segment_streamable.push(info);
     g
 }

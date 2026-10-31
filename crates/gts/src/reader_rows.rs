@@ -3,8 +3,9 @@
 
 use purrdf_lex::cbor::{DecodeError, Value, ValueRef};
 
-use crate::model::{AnnotationRow, Graph, ReifierRow, TermKind, Triple3};
+use crate::model::{AnnotationRow, ReifierRow, TermKind, Triple3};
 use crate::reader::as_i128;
+use crate::term_table::TermsRef;
 
 mod error;
 pub(crate) use error::RowError;
@@ -54,7 +55,7 @@ pub(crate) enum RowDecode<T> {
 
 pub(crate) fn decode_reifier_row(
     row: Option<NumericRow<5>>,
-    graph: &Graph,
+    terms: TermsRef<'_>,
     base: TermIdBase,
 ) -> RowDecode<ReifierRow> {
     let Some(row) = row else {
@@ -75,7 +76,7 @@ pub(crate) fn decode_reifier_row(
     };
     let [rid, s, p, o, graph_slot] = raw.map(|value| value.and_then(|id| usize::try_from(id).ok()));
     let has_graph = row.width == 5;
-    let n = graph.terms.len();
+    let n = terms.len();
     let ok = matches!((rid, s, p, o), (Some(rid), Some(s), Some(p), Some(o))
         if rid < n && s < n && p < n && o < n && graph_slot.is_none_or(|g| g < n));
     if !ok || (has_graph && graph_slot.is_none()) {
@@ -90,7 +91,7 @@ pub(crate) fn decode_reifier_row(
         return RowDecode::Skip;
     };
     let triple = (s, p, o);
-    if let Err(detail) = check_statement_positions(graph, triple, graph_slot, "reifier row") {
+    if let Err(detail) = check_statement_positions(terms, triple, graph_slot, "reifier row") {
         return RowDecode::Position(detail);
     }
     RowDecode::Row((rid, triple, graph_slot))
@@ -98,7 +99,7 @@ pub(crate) fn decode_reifier_row(
 
 pub(crate) fn decode_annotation_row(
     row: Option<NumericRow<4>>,
-    graph: &Graph,
+    terms: TermsRef<'_>,
     base: TermIdBase,
 ) -> RowDecode<AnnotationRow> {
     let Some(row) = row else {
@@ -120,7 +121,7 @@ pub(crate) fn decode_annotation_row(
     let [reifier, predicate, value, graph_slot] =
         raw.map(|value| value.and_then(|id| usize::try_from(id).ok()));
     let has_graph = row.width == 4;
-    let n = graph.terms.len();
+    let n = terms.len();
     let ok = matches!((reifier, predicate, value), (Some(r), Some(p), Some(v))
         if r < n && p < n && v < n && graph_slot.is_none_or(|g| g < n));
     if !ok || (has_graph && graph_slot.is_none()) {
@@ -134,43 +135,40 @@ pub(crate) fn decode_annotation_row(
     let (Some(reifier), Some(predicate), Some(value)) = (reifier, predicate, value) else {
         return RowDecode::Skip;
     };
-    if graph.terms[predicate].kind != TermKind::Iri {
+    if terms[predicate].kind != TermKind::Iri {
         return RowDecode::Position(Box::new(RowError::AnnotationPredicate {
             id: predicate,
-            actual: graph.terms[predicate].kind,
+            actual: terms[predicate].kind,
         }));
     }
     if let Some(graph_name) = graph_slot
-        && matches!(
-            graph.terms[graph_name].kind,
-            TermKind::Literal | TermKind::Triple
-        )
+        && matches!(terms[graph_name].kind, TermKind::Literal | TermKind::Triple)
     {
         return RowDecode::Position(Box::new(RowError::AnnotationGraph {
             id: graph_name,
-            actual: graph.terms[graph_name].kind,
+            actual: terms[graph_name].kind,
         }));
     }
     RowDecode::Row((reifier, predicate, value, graph_slot))
 }
 
 pub(crate) fn check_quad_positions(
-    graph: &Graph,
+    terms: TermsRef<'_>,
     s: usize,
     p: usize,
     o: usize,
     graph_slot: Option<usize>,
 ) -> Result<(), Box<RowError>> {
-    check_statement_positions(graph, (s, p, o), graph_slot, "quad")
+    check_statement_positions(terms, (s, p, o), graph_slot, "quad")
 }
 
 fn check_statement_positions(
-    graph: &Graph,
+    terms: TermsRef<'_>,
     (s, p, o): Triple3,
     graph_slot: Option<usize>,
     context: &'static str,
 ) -> Result<(), Box<RowError>> {
-    let n = graph.terms.len();
+    let n = terms.len();
     if !(s < n && p < n && o < n && graph_slot.is_none_or(|gv| gv < n)) {
         return Err(Box::new(RowError::Bounds {
             context,
@@ -184,13 +182,10 @@ fn check_statement_positions(
 
     // A well-formed quad: predicate is an IRI, subject is not a literal, and any
     // graph name is neither a literal nor a quoted triple.
-    let ok = graph.terms[p].kind == TermKind::Iri
-        && graph.terms[s].kind != TermKind::Literal
+    let ok = terms[p].kind == TermKind::Iri
+        && terms[s].kind != TermKind::Literal
         && graph_slot.is_none_or(|graph_name| {
-            !matches!(
-                graph.terms[graph_name].kind,
-                TermKind::Literal | TermKind::Triple
-            )
+            !matches!(terms[graph_name].kind, TermKind::Literal | TermKind::Triple)
         });
     if ok {
         Ok(())
@@ -201,9 +196,9 @@ fn check_statement_positions(
             p,
             o,
             graph: graph_slot,
-            subject_kind: graph.terms[s].kind,
-            predicate_kind: graph.terms[p].kind,
-            graph_kind: graph_slot.map(|id| graph.terms[id].kind),
+            subject_kind: terms[s].kind,
+            predicate_kind: terms[p].kind,
+            graph_kind: graph_slot.map(|id| terms[id].kind),
         }))
     }
 }

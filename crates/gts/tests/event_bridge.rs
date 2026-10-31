@@ -13,6 +13,7 @@ use purrdf_hash::error::ErrorValue;
 use purrdf_hash::fixed::FixedState;
 use purrdf_testkit::error_capture::{CallerRefusal, Capture};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use core::ops::ControlFlow;
 
@@ -858,9 +859,9 @@ fn dangling_term_ref_is_err() {
     let mut sink = CollectSink::default();
     let mut resolver = SegmentResolver::new(EventEmitter::new(&mut sink));
 
-    resolver.term(0, 0, &Term::iri("http://example.org/s"));
-    resolver.term(0, 1, &Term::iri("http://example.org/p"));
-    resolver.term(0, 2, &Term::iri("http://example.org/o"));
+    resolver.term(0, 0, Arc::new(Term::iri("http://example.org/s")));
+    resolver.term(0, 1, Arc::new(Term::iri("http://example.org/p")));
+    resolver.term(0, 2, Arc::new(Term::iri("http://example.org/o")));
     // Quad references gts id 99, which no `term` event ever introduced.
     resolver.quad(0, (0, 1, 99, None));
 
@@ -885,7 +886,11 @@ fn dangling_term_ref_is_err() {
 /// the sink and, per the bounded-memory fix, clearing `reifier_bindings` and
 /// `remaps` — before this segment starts accumulating anything of its own.
 fn open_bounded_memory_segment(resolver: &mut SegmentResolver<EventEmitter<'_>>, seg: u64) {
-    resolver.term(seg, 0, &Term::iri(format!("http://example.org/seg{seg}/s")));
+    resolver.term(
+        seg,
+        0,
+        Arc::new(Term::iri(format!("http://example.org/seg{seg}/s"))),
+    );
 }
 
 /// Feed the REST of segment `seg` (4 more IRI terms, one quad, and two
@@ -895,17 +900,25 @@ fn open_bounded_memory_segment(resolver: &mut SegmentResolver<EventEmitter<'_>>,
 /// (`http://example.org/seg{seg}/...`) so no cross-segment id reuse could
 /// accidentally mask a leak as "the same entry, re-seen".
 fn fill_bounded_memory_segment(resolver: &mut SegmentResolver<EventEmitter<'_>>, seg: u64) {
-    resolver.term(seg, 1, &Term::iri(format!("http://example.org/seg{seg}/p")));
-    resolver.term(seg, 2, &Term::iri(format!("http://example.org/seg{seg}/o")));
+    resolver.term(
+        seg,
+        1,
+        Arc::new(Term::iri(format!("http://example.org/seg{seg}/p"))),
+    );
+    resolver.term(
+        seg,
+        2,
+        Arc::new(Term::iri(format!("http://example.org/seg{seg}/o"))),
+    );
     resolver.term(
         seg,
         3,
-        &Term::iri(format!("http://example.org/seg{seg}/r1")),
+        Arc::new(Term::iri(format!("http://example.org/seg{seg}/r1"))),
     );
     resolver.term(
         seg,
         4,
-        &Term::iri(format!("http://example.org/seg{seg}/r2")),
+        Arc::new(Term::iri(format!("http://example.org/seg{seg}/r2"))),
     );
     resolver.quad(seg, (0, 1, 2, None));
     resolver.reifier(seg, (3, (0, 1, 2), None));

@@ -13,6 +13,7 @@ use purrdf_gts::model::{AnnotationRow, ByteRange, OpaqueNode, Quad, ReifierRow, 
 use purrdf_gts::reader::{FrameContext, StreamingSink, read_to_sink};
 use purrdf_gts::replication::inventory;
 use purrdf_gts::writer::Writer;
+use std::sync::Arc;
 
 /// Owned copy of one streamed [`FrameContext`], captured for later assertion.
 struct CapturedFrame {
@@ -136,7 +137,7 @@ impl StreamingSink for OrderingSink {
         self.log
             .push(format!("frame:{}:{}", ctx.segment_index, ctx.frame_index));
     }
-    fn term(&mut self, segment_index: u64, term_id: usize, _term: &Term) {
+    fn term(&mut self, segment_index: u64, term_id: usize, _term: Arc<Term>) {
         self.log.push(format!("term:{segment_index}:{term_id}"));
     }
     fn quad(&mut self, segment_index: u64, _quad: Quad) {
