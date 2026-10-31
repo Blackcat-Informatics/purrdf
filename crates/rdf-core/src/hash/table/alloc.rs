@@ -51,7 +51,7 @@ mod inner {
     impl Default for Global {
         #[inline]
         fn default() -> Self {
-            Global
+            Self
         }
     }
 

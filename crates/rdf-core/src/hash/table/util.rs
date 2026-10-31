@@ -9,6 +9,10 @@
 #[cold]
 fn cold_path() {}
 
+#[expect(
+    clippy::inline_always,
+    reason = "Preserves native kernel inlining across borrowed probe and iterator adapters in the fixed engine profile."
+)]
 #[inline(always)]
 pub(crate) fn likely(b: bool) -> bool {
     if b {
@@ -19,6 +23,10 @@ pub(crate) fn likely(b: bool) -> bool {
     }
 }
 
+#[expect(
+    clippy::inline_always,
+    reason = "Preserves native kernel inlining across borrowed probe and iterator adapters in the fixed engine profile."
+)]
 #[inline(always)]
 pub(crate) fn unlikely(b: bool) -> bool {
     if b {
@@ -31,6 +39,10 @@ pub(crate) fn unlikely(b: bool) -> bool {
 
 // FIXME: use strict provenance functions once they are stable.
 // Implement it with a transmute for now.
+#[expect(
+    clippy::inline_always,
+    reason = "Preserves native kernel inlining across borrowed probe and iterator adapters in the fixed engine profile."
+)]
 #[inline(always)]
 pub(crate) fn invalid_mut<T>(addr: usize) -> *mut T {
     unsafe { core::mem::transmute(addr) }

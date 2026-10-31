@@ -186,7 +186,7 @@ pub struct HashMap<K, V, S = DefaultHashBuilder, A: Allocator = Global> {
 
 impl<K: Clone, V: Clone, S: Clone, A: Allocator + Clone> Clone for HashMap<K, V, S, A> {
     fn clone(&self) -> Self {
-        HashMap {
+        Self {
             hash_builder: self.hash_builder.clone(),
             table: self.table.clone(),
         }
@@ -202,7 +202,6 @@ impl<K: Clone, V: Clone, S: Clone, A: Allocator + Clone> Clone for HashMap<K, V,
 
 /// Ensures that a single closure type across uses of this which, in turn prevents multiple
 /// instances of any functions like `RawTable::reserve` from being generated
-
 pub(crate) fn make_hasher<Q, V, S>(hash_builder: &S) -> impl Fn(&(Q, V)) -> u64 + '_
 where
     Q: Hash,
@@ -213,7 +212,6 @@ where
 
 /// Ensures that a single closure type across uses of this which, in turn prevents multiple
 /// instances of any functions like `RawTable::reserve` from being generated
-
 pub(crate) fn equivalent_key<Q, K, V>(k: &Q) -> impl Fn(&(K, V)) -> bool + '_
 where
     Q: Equivalent<K> + ?Sized,
@@ -223,7 +221,6 @@ where
 
 /// Ensures that a single closure type across uses of this which, in turn prevents multiple
 /// instances of any functions like `RawTable::reserve` from being generated
-
 pub(crate) fn make_hash<Q, S>(hash_builder: &S, val: &Q) -> u64
 where
     Q: Hash + ?Sized,
@@ -238,12 +235,10 @@ impl<K, V> HashMap<K, V, DefaultHashBuilder> {
     /// The hash map is initially created with a capacity of 0, so it will not allocate until it
     /// is first inserted into.
     ///
-
     /// # Hash policy
     ///
     /// Uses the workspace fixed-key hash builder without runtime seeding.
     ///
-
     /// # Examples
     ///
     /// ```
@@ -253,7 +248,6 @@ impl<K, V> HashMap<K, V, DefaultHashBuilder> {
     /// assert_eq!(map.capacity(), 0);
     /// ```
     #[must_use]
-
     pub fn new() -> Self {
         Self::with_hasher(DefaultHashBuilder::default())
     }
@@ -263,12 +257,10 @@ impl<K, V> HashMap<K, V, DefaultHashBuilder> {
     /// The hash map will be able to hold at least `capacity` elements without
     /// reallocating. If `capacity` is 0, the hash map will not allocate.
     ///
-
     /// # Hash policy
     ///
     /// Uses the workspace fixed-key hash builder without runtime seeding.
     ///
-
     /// # Examples
     ///
     /// ```
@@ -278,7 +270,6 @@ impl<K, V> HashMap<K, V, DefaultHashBuilder> {
     /// assert!(map.capacity() >= 10);
     /// ```
     #[must_use]
-
     pub fn with_capacity(capacity: usize) -> Self {
         Self::with_capacity_and_hasher(capacity, DefaultHashBuilder::default())
     }
@@ -290,12 +281,10 @@ impl<K, V, A: Allocator> HashMap<K, V, DefaultHashBuilder, A> {
     /// The hash map is initially created with a capacity of 0, so it will not allocate until it
     /// is first inserted into.
     ///
-
     /// # Hash policy
     ///
     /// Uses the workspace fixed-key hash builder without runtime seeding.
     ///
-
     /// # Examples
     ///
     /// ```
@@ -319,7 +308,6 @@ impl<K, V, A: Allocator> HashMap<K, V, DefaultHashBuilder, A> {
     /// assert!(map.capacity() > 1);
     /// ```
     #[must_use]
-
     pub fn new_in(alloc: A) -> Self {
         Self::with_hasher_in(DefaultHashBuilder::default(), alloc)
     }
@@ -329,12 +317,10 @@ impl<K, V, A: Allocator> HashMap<K, V, DefaultHashBuilder, A> {
     /// The hash map will be able to hold at least `capacity` elements without
     /// reallocating. If `capacity` is 0, the hash map will not allocate.
     ///
-
     /// # Hash policy
     ///
     /// Uses the workspace fixed-key hash builder without runtime seeding.
     ///
-
     /// # Examples
     ///
     /// ```
@@ -363,7 +349,6 @@ impl<K, V, A: Allocator> HashMap<K, V, DefaultHashBuilder, A> {
     /// assert_eq!(map.capacity(), empty_map_capacity)
     /// ```
     #[must_use]
-
     pub fn with_capacity_in(capacity: usize, alloc: A) -> Self {
         Self::with_capacity_and_hasher_in(capacity, DefaultHashBuilder::default(), alloc)
     }
@@ -376,12 +361,10 @@ impl<K, V, S> HashMap<K, V, S> {
     /// The hash map is initially created with a capacity of 0, so it will not
     /// allocate until it is first inserted into.
     ///
-
     /// # Hash policy
     ///
     /// Uses the workspace fixed-key hash builder without runtime seeding.
     ///
-
     /// # Examples
     ///
     /// ```
@@ -396,7 +379,6 @@ impl<K, V, S> HashMap<K, V, S> {
     /// map.insert(1, 2);
     /// ```
     #[must_use]
-
     pub const fn with_hasher(hash_builder: S) -> Self {
         Self {
             hash_builder,
@@ -410,12 +392,10 @@ impl<K, V, S> HashMap<K, V, S> {
     /// The hash map will be able to hold at least `capacity` elements without
     /// reallocating. If `capacity` is 0, the hash map will not allocate.
     ///
-
     /// # Hash policy
     ///
     /// Uses the workspace fixed-key hash builder without runtime seeding.
     ///
-
     /// # Examples
     ///
     /// ```
@@ -430,7 +410,6 @@ impl<K, V, S> HashMap<K, V, S> {
     /// map.insert(1, 2);
     /// ```
     #[must_use]
-
     pub fn with_capacity_and_hasher(capacity: usize, hash_builder: S) -> Self {
         Self {
             hash_builder,
@@ -452,12 +431,10 @@ impl<K, V, S, A: Allocator> HashMap<K, V, S, A> {
     /// The hash map is initially created with a capacity of 0, so it will not allocate until it
     /// is first inserted into.
     ///
-
     /// # Hash policy
     ///
     /// Uses the workspace fixed-key hash builder without runtime seeding.
     ///
-
     /// # Examples
     ///
     /// ```
@@ -469,7 +446,6 @@ impl<K, V, S, A: Allocator> HashMap<K, V, S, A> {
     /// map.insert(1, 2);
     /// ```
     #[must_use]
-
     pub const fn with_hasher_in(hash_builder: S, alloc: A) -> Self {
         Self {
             hash_builder,
@@ -483,12 +459,10 @@ impl<K, V, S, A: Allocator> HashMap<K, V, S, A> {
     /// The hash map will be able to hold at least `capacity` elements without
     /// reallocating. If `capacity` is 0, the hash map will not allocate.
     ///
-
     /// # Hash policy
     ///
     /// Uses the workspace fixed-key hash builder without runtime seeding.
     ///
-
     /// # Examples
     ///
     /// ```
@@ -500,7 +474,6 @@ impl<K, V, S, A: Allocator> HashMap<K, V, S, A> {
     /// map.insert(1, 2);
     /// ```
     #[must_use]
-
     pub fn with_capacity_and_hasher_in(capacity: usize, hash_builder: S, alloc: A) -> Self {
         Self {
             hash_builder,
@@ -520,7 +493,6 @@ impl<K, V, S, A: Allocator> HashMap<K, V, S, A> {
     /// let map: HashMap<i32, i32> = HashMap::with_hasher(hasher);
     /// let hasher: &DefaultHashBuilder = map.hasher();
     /// ```
-
     pub fn hasher(&self) -> &S {
         &self.hash_builder
     }
@@ -538,7 +510,6 @@ impl<K, V, S, A: Allocator> HashMap<K, V, S, A> {
     /// assert_eq!(map.len(), 0);
     /// assert!(map.capacity() >= 100);
     /// ```
-
     pub fn capacity(&self) -> usize {
         self.table.capacity()
     }
@@ -570,7 +541,6 @@ impl<K, V, S, A: Allocator> HashMap<K, V, S, A> {
     ///
     /// assert_eq!(map.len(), 3);
     /// ```
-
     pub fn keys(&self) -> Keys<'_, K, V> {
         Keys { inner: self.iter() }
     }
@@ -602,7 +572,6 @@ impl<K, V, S, A: Allocator> HashMap<K, V, S, A> {
     ///
     /// assert_eq!(map.len(), 3);
     /// ```
-
     pub fn values(&self) -> Values<'_, K, V> {
         Values { inner: self.iter() }
     }
@@ -640,7 +609,6 @@ impl<K, V, S, A: Allocator> HashMap<K, V, S, A> {
     ///
     /// assert_eq!(map.len(), 3);
     /// ```
-
     pub fn values_mut(&mut self) -> ValuesMut<'_, K, V> {
         ValuesMut {
             inner: self.iter_mut(),
@@ -674,7 +642,6 @@ impl<K, V, S, A: Allocator> HashMap<K, V, S, A> {
     ///
     /// assert_eq!(map.len(), 3);
     /// ```
-
     pub fn iter(&self) -> Iter<'_, K, V> {
         // Here we tie the lifetime of self to the iter.
         unsafe {
@@ -719,7 +686,6 @@ impl<K, V, S, A: Allocator> HashMap<K, V, S, A> {
     ///
     /// assert_eq!(map.len(), 3);
     /// ```
-
     pub fn iter_mut(&mut self) -> IterMut<'_, K, V> {
         // Here we tie the lifetime of self to the iter.
         unsafe {
@@ -742,7 +708,6 @@ impl<K, V, S, A: Allocator> HashMap<K, V, S, A> {
     /// a.insert(1, "a");
     /// assert_eq!(a.len(), 1);
     /// ```
-
     pub fn len(&self) -> usize {
         self.table.len()
     }
@@ -759,7 +724,6 @@ impl<K, V, S, A: Allocator> HashMap<K, V, S, A> {
     /// a.insert(1, "a");
     /// assert!(!a.is_empty());
     /// ```
-
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -802,7 +766,6 @@ impl<K, V, S, A: Allocator> HashMap<K, V, S, A> {
     /// // But the map is empty even if we do not use Drain iterator.
     /// assert!(a.is_empty());
     /// ```
-
     pub fn drain(&mut self) -> Drain<'_, K, V, A> {
         Drain {
             inner: self.table.drain(),
@@ -890,7 +853,6 @@ impl<K, V, S, A: Allocator> HashMap<K, V, S, A> {
     /// // ExtractIf was not exhausted, therefore no elements were drained.
     /// assert_eq!(map.len(), 8);
     /// ```
-
     pub fn extract_if<F>(&mut self, f: F) -> ExtractIf<'_, K, V, F, A>
     where
         F: FnMut(&K, &mut V) -> bool,
@@ -923,7 +885,6 @@ impl<K, V, S, A: Allocator> HashMap<K, V, S, A> {
     /// // But map capacity is equal to old one.
     /// assert_eq!(a.capacity(), capacity_before_clear);
     /// ```
-
     pub fn clear(&mut self) {
         self.table.clear();
     }
@@ -1016,7 +977,6 @@ where
     /// // And now map can hold at least 10 elements
     /// assert!(map.capacity() >= 10);
     /// ```
-
     pub fn reserve(&mut self, additional: usize) {
         self.table
             .reserve(additional, make_hasher::<_, V, S>(&self.hash_builder));
@@ -1066,7 +1026,6 @@ where
     /// #     test()
     /// # }
     /// ```
-
     pub fn try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
         self.table
             .try_reserve(additional, make_hasher::<_, V, S>(&self.hash_builder))
@@ -1088,7 +1047,6 @@ where
     /// map.shrink_to_fit();
     /// assert!(map.capacity() >= 2);
     /// ```
-
     pub fn shrink_to_fit(&mut self) {
         self.table
             .shrink_to(0, make_hasher::<_, V, S>(&self.hash_builder));
@@ -1117,7 +1075,6 @@ where
     /// map.shrink_to(10);
     /// assert!(map.capacity() >= 2);
     /// ```
-
     pub fn shrink_to(&mut self, min_capacity: usize) {
         self.table
             .shrink_to(min_capacity, make_hasher::<_, V, S>(&self.hash_builder));
@@ -1142,7 +1099,6 @@ where
     /// assert_eq!(letters[&'u'], 1);
     /// assert_eq!(letters.get(&'y'), None);
     /// ```
-
     pub fn entry(&mut self, key: K) -> Entry<'_, K, V, S, A> {
         let hash = make_hash::<K, S>(&self.hash_builder, &key);
         if let Some(elem) = self.table.find(hash, equivalent_key(&key)) {
@@ -1177,7 +1133,6 @@ where
     /// assert_eq!(words["poneyland"], 3);
     /// assert_eq!(words["horseyland"], 1);
     /// ```
-
     pub fn entry_ref<'a, 'b, Q>(&'a mut self, key: &'b Q) -> EntryRef<'a, 'b, K, Q, V, S, A>
     where
         Q: Hash + Equivalent<K> + ?Sized,
@@ -1317,7 +1272,6 @@ where
     /// assert_eq!(map.contains_key(&1), true);
     /// assert_eq!(map.contains_key(&2), false);
     /// ```
-
     pub fn contains_key<Q>(&self, k: &Q) -> bool
     where
         Q: Hash + Equivalent<K> + ?Sized,
@@ -1350,7 +1304,6 @@ where
     ///
     /// assert_eq!(map.get_mut(&2), None);
     /// ```
-
     pub fn get_mut<Q>(&mut self, k: &Q) -> Option<&mut V>
     where
         Q: Hash + Equivalent<K> + ?Sized,
@@ -1517,6 +1470,10 @@ where
 
     /// Attempts to get mutable references to `N` values in the map at once, without validating that
     /// the values are unique.
+    ///
+    /// # Safety
+    /// Each successful query must select a distinct stored entry. Overlapping
+    /// results are undefined behavior even if the returned references are unused.
     #[deprecated(note = "use `get_disjoint_unchecked_mut` instead")]
     pub unsafe fn get_many_unchecked_mut<Q, const N: usize>(
         &mut self,
@@ -1671,6 +1628,10 @@ where
 
     /// Attempts to get mutable references to `N` values in the map at once, with immutable
     /// references to the corresponding keys, without validating that the values are unique.
+    ///
+    /// # Safety
+    /// Each successful query must select a distinct stored entry. Overlapping
+    /// results are undefined behavior even if the returned references are unused.
     #[deprecated(note = "use `get_disjoint_key_value_unchecked_mut` instead")]
     pub unsafe fn get_many_key_value_unchecked_mut<Q, const N: usize>(
         &mut self,
@@ -1741,7 +1702,6 @@ where
     /// assert_eq!(map.insert(37, "c"), Some("b"));
     /// assert_eq!(map[&37], "c");
     /// ```
-
     pub fn insert(&mut self, k: K, v: V) -> Option<V> {
         let hash = make_hash(&self.hash_builder, &k);
         let equivalent = equivalent_key(&k);
@@ -1817,7 +1777,6 @@ where
     /// assert_eq!(map2[&4], "e");
     /// assert_eq!(map2.len(), 4);
     /// ```
-
     pub unsafe fn insert_unique_unchecked(&mut self, k: K, v: V) -> (&K, &mut V) {
         let hash = make_hash::<K, S>(&self.hash_builder, &k);
         let bucket = self
@@ -1855,7 +1814,6 @@ where
     ///     _ => panic!()
     /// }
     /// ```
-
     pub fn try_insert(
         &mut self,
         key: K,
@@ -1891,16 +1849,11 @@ where
     /// // Now map holds none elements
     /// assert!(map.is_empty());
     /// ```
-
     pub fn remove<Q>(&mut self, k: &Q) -> Option<V>
     where
         Q: Hash + Equivalent<K> + ?Sized,
     {
-        // Avoid `Option::map` because it bloats LLVM IR.
-        match self.remove_entry(k) {
-            Some((_, v)) => Some(v),
-            None => None,
-        }
+        self.remove_entry(k).map(|(_, v)| v)
     }
 
     /// Removes a key from the map, returning the stored key and value if the
@@ -1927,7 +1880,6 @@ where
     /// // Now map hold none elements
     /// assert!(map.is_empty());
     /// ```
-
     pub fn remove_entry<Q>(&mut self, k: &Q) -> Option<(K, V)>
     where
         Q: Hash + Equivalent<K> + ?Sized,
@@ -2004,7 +1956,6 @@ where
     /// let map: HashMap<u32, String, FastHasher> = HashMap::default();
     /// assert_eq!(map.capacity(), 0);
     /// ```
-
     fn default() -> Self {
         Self::with_hasher_in(Default::default(), Default::default())
     }
@@ -2035,7 +1986,6 @@ where
     /// assert_eq!(map[&"a"], "One");
     /// assert_eq!(map[&"b"], "Two");
     /// ```
-
     fn index(&self, key: &Q) -> &V {
         self.get(key).expect("no entry found for key")
     }
@@ -2149,7 +2099,6 @@ unsafe impl<K: Send, V: Send> Send for IterMut<'_, K, V> {}
 
 impl<K, V> IterMut<'_, K, V> {
     /// Returns a iterator of references over the remaining items.
-
     pub(super) fn iter(&self) -> Iter<'_, K, V> {
         Iter {
             inner: self.inner.clone(),
@@ -2192,7 +2141,6 @@ pub struct IntoIter<K, V, A: Allocator = Global> {
 
 impl<K, V, A: Allocator> IntoIter<K, V, A> {
     /// Returns a iterator of references over the remaining items.
-
     pub(super) fn iter(&self) -> Iter<'_, K, V> {
         Iter {
             inner: self.inner.iter(),
@@ -2486,7 +2434,6 @@ pub struct Drain<'a, K, V, A: Allocator = Global> {
 
 impl<K, V, A: Allocator> Drain<'_, K, V, A> {
     /// Returns a iterator of references over the remaining items.
-
     pub(super) fn iter(&self) -> Iter<'_, K, V> {
         Iter {
             inner: self.inner.iter(),
@@ -3002,7 +2949,6 @@ impl<'a, K, V, S, A: Allocator> IntoIterator for &'a HashMap<K, V, S, A> {
     ///
     /// assert_eq!(map_one, map_two);
     /// ```
-
     fn into_iter(self) -> Iter<'a, K, V> {
         self.iter()
     }
@@ -3038,7 +2984,6 @@ impl<'a, K, V, S, A: Allocator> IntoIterator for &'a mut HashMap<K, V, S, A> {
     /// vec.sort_unstable();
     /// assert_eq!(vec, [(&"a", &2), (&"b", &4), (&"c", &6)]);
     /// ```
-
     fn into_iter(self) -> IterMut<'a, K, V> {
         self.iter_mut()
     }
@@ -3066,7 +3011,6 @@ impl<K, V, S, A: Allocator> IntoIterator for HashMap<K, V, S, A> {
     /// vec.sort_unstable();
     /// assert_eq!(vec, [("a", 1), ("b", 2), ("c", 3)]);
     /// ```
-
     fn into_iter(self) -> IntoIter<K, V, A> {
         IntoIter {
             inner: self.table.into_iter(),
@@ -3380,7 +3324,6 @@ impl<'a, K, V, S, A: Allocator> Entry<'a, K, V, S, A> {
     ///
     /// assert_eq!(entry.key(), &"horseyland");
     /// ```
-
     pub fn insert(self, value: V) -> OccupiedEntry<'a, K, V, S, A>
     where
         K: Hash,
@@ -3413,7 +3356,6 @@ impl<'a, K, V, S, A: Allocator> Entry<'a, K, V, S, A> {
     /// *map.entry("poneyland").or_insert(10) *= 2;
     /// assert_eq!(map["poneyland"], 6);
     /// ```
-
     pub fn or_insert(self, default: V) -> &'a mut V
     where
         K: Hash,
@@ -3445,7 +3387,6 @@ impl<'a, K, V, S, A: Allocator> Entry<'a, K, V, S, A> {
     /// assert_eq!(entry.key(), &"poneyland");
     /// assert_eq!(entry.get(), &3);
     /// ```
-
     pub fn or_insert_entry(self, default: V) -> OccupiedEntry<'a, K, V, S, A>
     where
         K: Hash,
@@ -3475,7 +3416,6 @@ impl<'a, K, V, S, A: Allocator> Entry<'a, K, V, S, A> {
     /// *map.entry("poneyland").or_insert_with(|| 10) *= 2;
     /// assert_eq!(map["poneyland"], 6);
     /// ```
-
     pub fn or_insert_with<F: FnOnce() -> V>(self, default: F) -> &'a mut V
     where
         K: Hash,
@@ -3509,7 +3449,6 @@ impl<'a, K, V, S, A: Allocator> Entry<'a, K, V, S, A> {
     /// *map.entry("poneyland").or_insert_with_key(|key| key.chars().count() * 10) *= 2;
     /// assert_eq!(map["poneyland"], 18);
     /// ```
-
     pub fn or_insert_with_key<F: FnOnce(&K) -> V>(self, default: F) -> &'a mut V
     where
         K: Hash,
@@ -3538,7 +3477,6 @@ impl<'a, K, V, S, A: Allocator> Entry<'a, K, V, S, A> {
     /// // nonexistent key
     /// assert_eq!(map.entry("horseland").key(), &"horseland");
     /// ```
-
     pub fn key(&self) -> &K {
         match *self {
             Entry::Occupied(ref entry) => entry.key(),
@@ -3567,6 +3505,7 @@ impl<'a, K, V, S, A: Allocator> Entry<'a, K, V, S, A> {
             ///    .or_insert(42);
             /// assert_eq!(map["poneyland"], 43);
             /// ```
+            #[must_use]
             pub fn and_modify<F>(self, f: F) -> Self
             where
                 F: FnOnce(&mut V),
@@ -3628,7 +3567,7 @@ impl<'a, K, V, S, A: Allocator> Entry<'a, K, V, S, A> {
     ///
     /// assert!(!map.contains_key("poneyland"));
     /// ```
-
+    #[must_use]
     pub fn and_replace_entry_with<F>(self, f: F) -> Self
     where
         F: FnOnce(&K, V) -> Option<V>,
@@ -3668,7 +3607,6 @@ impl<'a, K, V: Default, S, A: Allocator> Entry<'a, K, V, S, A> {
     /// // existing key
     /// assert_eq!(map.entry("horseland").or_default(), &mut Some(3));
     /// ```
-
     pub fn or_default(self) -> &'a mut V
     where
         K: Hash,
@@ -3697,7 +3635,6 @@ impl<'a, K, V, S, A: Allocator> OccupiedEntry<'a, K, V, S, A> {
     ///     Entry::Occupied(entry) => assert_eq!(entry.key(), &"poneyland"),
     /// }
     /// ```
-
     pub fn key(&self) -> &K {
         unsafe { &self.elem.as_ref().0 }
     }
@@ -3733,7 +3670,6 @@ impl<'a, K, V, S, A: Allocator> OccupiedEntry<'a, K, V, S, A> {
     /// #     Box::from_raw(new_key);
     /// # }
     /// ```
-
     pub fn replace_key(&mut self, key: K) -> K
     where
         K: Equivalent<K>,
@@ -3788,7 +3724,6 @@ impl<'a, K, V, S, A: Allocator> OccupiedEntry<'a, K, V, S, A> {
     /// #     Box::from_raw(new_key);
     /// # }
     /// ```
-
     pub unsafe fn replace_key_unchecked(&mut self, key: K) -> K {
         mem::replace(unsafe { &mut self.elem.as_mut().0 }, key)
     }
@@ -3817,7 +3752,6 @@ impl<'a, K, V, S, A: Allocator> OccupiedEntry<'a, K, V, S, A> {
     /// // Now map hold none elements
     /// assert!(map.is_empty());
     /// ```
-
     pub fn remove_entry(self) -> (K, V) {
         unsafe { self.table.table.remove(self.elem).0 }
     }
@@ -3838,7 +3772,6 @@ impl<'a, K, V, S, A: Allocator> OccupiedEntry<'a, K, V, S, A> {
     ///     Entry::Occupied(entry) => assert_eq!(entry.get(), &12),
     /// }
     /// ```
-
     pub fn get(&self) -> &V {
         unsafe { &self.elem.as_ref().1 }
     }
@@ -3870,7 +3803,6 @@ impl<'a, K, V, S, A: Allocator> OccupiedEntry<'a, K, V, S, A> {
     ///
     /// assert_eq!(map["poneyland"], 24);
     /// ```
-
     pub fn get_mut(&mut self) -> &mut V {
         unsafe { &mut self.elem.as_mut().1 }
     }
@@ -3901,7 +3833,6 @@ impl<'a, K, V, S, A: Allocator> OccupiedEntry<'a, K, V, S, A> {
     ///
     /// assert_eq!(map["poneyland"], 22);
     /// ```
-
     pub fn into_mut(self) -> &'a mut V {
         unsafe { &mut self.elem.as_mut().1 }
     }
@@ -3936,7 +3867,6 @@ impl<'a, K, V, S, A: Allocator> OccupiedEntry<'a, K, V, S, A> {
     /// assert_eq!(key_val, (&"poneyland", &mut 22));
     /// assert_eq!(map["poneyland"], 22);
     /// ```
-
     pub fn into_entry(self) -> (&'a K, &'a mut V) {
         let (key, val) = unsafe { self.elem.as_mut() };
         (key, val)
@@ -3959,7 +3889,6 @@ impl<'a, K, V, S, A: Allocator> OccupiedEntry<'a, K, V, S, A> {
     ///
     /// assert_eq!(map["poneyland"], 15);
     /// ```
-
     pub fn insert(&mut self, value: V) -> V {
         mem::replace(self.get_mut(), value)
     }
@@ -3987,7 +3916,6 @@ impl<'a, K, V, S, A: Allocator> OccupiedEntry<'a, K, V, S, A> {
     /// // Now map hold none elements
     /// assert!(map.is_empty());
     /// ```
-
     pub fn remove(self) -> V {
         self.remove_entry().1
     }
@@ -4040,7 +3968,6 @@ impl<'a, K, V, S, A: Allocator> OccupiedEntry<'a, K, V, S, A> {
     ///
     /// assert!(!map.contains_key("poneyland"));
     /// ```
-
     pub fn replace_entry_with<F>(self, f: F) -> Entry<'a, K, V, S, A>
     where
         F: FnOnce(&K, V) -> Option<V>,
@@ -4089,7 +4016,6 @@ impl<'a, K, V, S, A: Allocator> VacantEntry<'a, K, V, S, A> {
     /// let mut map: HashMap<&str, u32> = HashMap::new();
     /// assert_eq!(map.entry("poneyland").key(), &"poneyland");
     /// ```
-
     pub fn key(&self) -> &K {
         &self.key
     }
@@ -4108,7 +4034,6 @@ impl<'a, K, V, S, A: Allocator> VacantEntry<'a, K, V, S, A> {
     ///     Entry::Vacant(v) => assert_eq!(v.into_key(), "poneyland"),
     /// }
     /// ```
-
     pub fn into_key(self) -> K {
         self.key
     }
@@ -4129,7 +4054,6 @@ impl<'a, K, V, S, A: Allocator> VacantEntry<'a, K, V, S, A> {
     /// }
     /// assert_eq!(map["poneyland"], 37);
     /// ```
-
     pub fn insert(self, value: V) -> &'a mut V
     where
         K: Hash,
@@ -4154,7 +4078,6 @@ impl<'a, K, V, S, A: Allocator> VacantEntry<'a, K, V, S, A> {
     ///     assert_eq!(o.get(), &37);
     /// }
     /// ```
-
     pub fn insert_entry(self, value: V) -> OccupiedEntry<'a, K, V, S, A>
     where
         K: Hash,
@@ -4178,7 +4101,7 @@ impl<'a, K, V, S, A: Allocator> VacantEntry<'a, K, V, S, A> {
     }
 }
 
-impl<'a, 'b, K, Q: ?Sized, V, S, A: Allocator> EntryRef<'a, 'b, K, Q, V, S, A> {
+impl<'a, K, Q: ?Sized, V, S, A: Allocator> EntryRef<'a, '_, K, Q, V, S, A> {
     /// Sets the value of the entry, and returns an `OccupiedEntry`.
     ///
     /// # Examples
@@ -4191,7 +4114,6 @@ impl<'a, 'b, K, Q: ?Sized, V, S, A: Allocator> EntryRef<'a, 'b, K, Q, V, S, A> {
     ///
     /// assert_eq!(entry.key(), "horseyland");
     /// ```
-
     pub fn insert(self, value: V) -> OccupiedEntry<'a, K, V, S, A>
     where
         K: Hash,
@@ -4225,7 +4147,6 @@ impl<'a, 'b, K, Q: ?Sized, V, S, A: Allocator> EntryRef<'a, 'b, K, Q, V, S, A> {
     /// *map.entry_ref("poneyland").or_insert(10) *= 2;
     /// assert_eq!(map["poneyland"], 6);
     /// ```
-
     pub fn or_insert(self, default: V) -> &'a mut V
     where
         K: Hash,
@@ -4256,7 +4177,6 @@ impl<'a, 'b, K, Q: ?Sized, V, S, A: Allocator> EntryRef<'a, 'b, K, Q, V, S, A> {
     /// *map.entry_ref("poneyland").or_insert_with(|| 10) *= 2;
     /// assert_eq!(map["poneyland"], 6);
     /// ```
-
     pub fn or_insert_with<F: FnOnce() -> V>(self, default: F) -> &'a mut V
     where
         K: Hash,
@@ -4288,7 +4208,6 @@ impl<'a, 'b, K, Q: ?Sized, V, S, A: Allocator> EntryRef<'a, 'b, K, Q, V, S, A> {
     /// *map.entry_ref("poneyland").or_insert_with_key(|key| key.chars().count() * 10) *= 2;
     /// assert_eq!(map["poneyland"], 18);
     /// ```
-
     pub fn or_insert_with_key<F: FnOnce(&Q) -> V>(self, default: F) -> &'a mut V
     where
         K: Hash + Borrow<Q>,
@@ -4318,7 +4237,6 @@ impl<'a, 'b, K, Q: ?Sized, V, S, A: Allocator> EntryRef<'a, 'b, K, Q, V, S, A> {
     /// // nonexistent key
     /// assert_eq!(map.entry_ref("horseland").key(), "horseland");
     /// ```
-
     pub fn key(&self) -> &Q
     where
         K: Borrow<Q>,
@@ -4349,7 +4267,7 @@ impl<'a, 'b, K, Q: ?Sized, V, S, A: Allocator> EntryRef<'a, 'b, K, Q, V, S, A> {
     ///    .or_insert(42);
     /// assert_eq!(map["poneyland"], 43);
     /// ```
-
+    #[must_use]
     pub fn and_modify<F>(self, f: F) -> Self
     where
         F: FnOnce(&mut V),
@@ -4372,7 +4290,7 @@ impl<'a, 'b, K, Q: ?Sized, V, S, A: Allocator> EntryRef<'a, 'b, K, Q, V, S, A> {
     }
 }
 
-impl<'a, 'b, K, Q: ?Sized, V: Default, S, A: Allocator> EntryRef<'a, 'b, K, Q, V, S, A> {
+impl<'a, K, Q: ?Sized, V: Default, S, A: Allocator> EntryRef<'a, '_, K, Q, V, S, A> {
     /// Ensures a value is in the entry by inserting the default value if empty,
     /// and returns a mutable reference to the value in the entry.
     ///
@@ -4392,7 +4310,6 @@ impl<'a, 'b, K, Q: ?Sized, V: Default, S, A: Allocator> EntryRef<'a, 'b, K, Q, V
     /// // existing key
     /// assert_eq!(map.entry_ref("horseland").or_default(), &mut Some(3));
     /// ```
-
     pub fn or_default(self) -> &'a mut V
     where
         K: Hash,
@@ -4426,7 +4343,6 @@ impl<'a, 'b, K, Q: ?Sized, V: Default, S, A: Allocator> EntryRef<'a, 'b, K, Q, V
     /// assert_eq!(entry.key(), &"horseland");
     /// assert_eq!(entry.get(), &Some(3));
     /// ```
-
     pub fn or_default_entry(self) -> OccupiedEntry<'a, K, V, S, A>
     where
         K: Hash,
@@ -4465,7 +4381,6 @@ impl<'map, 'key, K, Q: ?Sized, V, S, A: Allocator> VacantEntryRef<'map, 'key, K,
     /// let key: &str = "poneyland";
     /// assert_eq!(map.entry_ref(key).key(), "poneyland");
     /// ```
-
     pub fn key(&self) -> &'key Q {
         self.key
     }
@@ -4487,7 +4402,6 @@ impl<'map, 'key, K, Q: ?Sized, V, S, A: Allocator> VacantEntryRef<'map, 'key, K,
     /// }
     /// assert_eq!(map["poneyland"], 37);
     /// ```
-
     pub fn insert(self, value: V) -> &'map mut V
     where
         K: Hash,
@@ -4526,7 +4440,6 @@ impl<'map, 'key, K, Q: ?Sized, V, S, A: Allocator> VacantEntryRef<'map, 'key, K,
     /// };
     /// assert_eq!(*v, 'c');
     /// ```
-
     pub fn insert_with_key(self, key: K, value: V) -> &'map mut V
     where
         K: Hash,
@@ -4570,7 +4483,6 @@ impl<'map, 'key, K, Q: ?Sized, V, S, A: Allocator> VacantEntryRef<'map, 'key, K,
     /// };
     /// assert_eq!(*v, 'c');
     /// ```
-
     pub unsafe fn insert_with_key_unchecked(self, key: K, value: V) -> &'map mut V
     where
         K: Hash,
@@ -4596,7 +4508,6 @@ impl<'map, 'key, K, Q: ?Sized, V, S, A: Allocator> VacantEntryRef<'map, 'key, K,
     ///     assert_eq!(o.get(), &37);
     /// }
     /// ```
-
     pub fn insert_entry(self, value: V) -> OccupiedEntry<'map, K, V, S, A>
     where
         K: Hash,
@@ -4634,7 +4545,6 @@ impl<'map, 'key, K, Q: ?Sized, V, S, A: Allocator> VacantEntryRef<'map, 'key, K,
     /// };
     /// assert_eq!(r.get(), &'c');
     /// ```
-
     pub fn insert_entry_with_key(self, key: K, value: V) -> OccupiedEntry<'map, K, V, S, A>
     where
         K: Hash,
@@ -4683,7 +4593,6 @@ impl<'map, 'key, K, Q: ?Sized, V, S, A: Allocator> VacantEntryRef<'map, 'key, K,
     /// };
     /// assert_eq!(r.get(), &'c');
     /// ```
-
     pub unsafe fn insert_entry_with_key_unchecked(
         self,
         key: K,
@@ -4771,7 +4680,6 @@ where
     /// vec.sort_unstable();
     /// assert_eq!(vec, [(1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6)]);
     /// ```
-
     fn extend<T: IntoIterator<Item = (K, V)>>(&mut self, iter: T) {
         // Keys may be already present or show multiple times in the iterator.
         // Reserve the entire hint lower bound if the map is empty.
@@ -4835,7 +4743,6 @@ where
     /// vec.sort_unstable();
     /// assert_eq!(vec, [(1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6)]);
     /// ```
-
     fn extend<T: IntoIterator<Item = (&'a K, &'a V)>>(&mut self, iter: T) {
         self.extend(iter.into_iter().map(|(&key, &value)| (key, value)));
     }
@@ -4881,7 +4788,6 @@ where
     /// vec.sort_unstable();
     /// assert_eq!(vec, [(1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6)]);
     /// ```
-
     fn extend<T: IntoIterator<Item = &'a (K, V)>>(&mut self, iter: T) {
         self.extend(iter.into_iter().map(|&(key, value)| (key, value)));
     }
@@ -4928,4 +4834,17 @@ fn assert_covariance() {
     ) -> Drain<'new, &'new str, &'new str> {
         d
     }
+}
+
+native_borrowed_iter! {
+    [impl<'a, K, V> IntoIterator for &'a IterMut<'_, K, V>]
+    (&'a K, &'a V), Iter<'a, K, V>
+}
+native_borrowed_iter! {
+    [impl<'a, K, V, A: Allocator> IntoIterator for &'a IntoIter<K, V, A>]
+    (&'a K, &'a V), Iter<'a, K, V>
+}
+native_borrowed_iter! {
+    [impl<'a, K, V, A: Allocator> IntoIterator for &'a Drain<'_, K, V, A>]
+    (&'a K, &'a V), Iter<'a, K, V>
 }

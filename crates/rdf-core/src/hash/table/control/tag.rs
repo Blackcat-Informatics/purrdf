@@ -11,10 +11,10 @@ use core::{fmt, mem};
 pub(crate) struct Tag(pub(super) u8);
 impl Tag {
     /// Control tag value for an empty bucket.
-    pub(crate) const EMPTY: Tag = Tag(0b1111_1111);
+    pub(crate) const EMPTY: Self = Self(0b1111_1111);
 
     /// Control tag value for a deleted bucket.
-    pub(crate) const DELETED: Tag = Tag(0b1000_0000);
+    pub(crate) const DELETED: Self = Self(0b1000_0000);
 
     /// Checks whether a control tag represents a full bucket (top bit is clear).
     #[inline]
@@ -37,7 +37,7 @@ impl Tag {
 
     /// Creates a control tag representing a full bucket with the given hash.
     #[inline]
-    pub(crate) const fn full(hash: u64) -> Tag {
+    pub(crate) const fn full(hash: u64) -> Self {
         // Constant for function that grabs the top 7 bits of the hash.
         const MIN_HASH_LEN: usize = if size_of::<usize>() < size_of::<u64>() {
             size_of::<usize>()
@@ -50,7 +50,7 @@ impl Tag {
         // instead, which means that the top 32 bits are 0 on 32-bit platforms.
         // So we use MIN_HASH_LEN constant to handle this.
         let top7 = hash >> (MIN_HASH_LEN * 8 - 7);
-        Tag((top7 & 0x7f) as u8) // truncation
+        Self((top7 & 0x7f) as u8) // truncation
     }
 }
 impl fmt::Debug for Tag {

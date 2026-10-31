@@ -119,7 +119,7 @@ pub struct HashSet<T, S = DefaultHashBuilder, A: Allocator = Global> {
 
 impl<T: Clone, S: Clone, A: Allocator + Clone> Clone for HashSet<T, S, A> {
     fn clone(&self) -> Self {
-        HashSet {
+        Self {
             map: self.map.clone(),
         }
     }
@@ -135,12 +135,10 @@ impl<T> HashSet<T, DefaultHashBuilder> {
     /// The hash set is initially created with a capacity of 0, so it will not allocate until it
     /// is first inserted into.
     ///
-
     /// # Hash policy
     ///
     /// Uses the workspace fixed-key hash builder without runtime seeding.
     ///
-
     /// # Examples
     ///
     /// ```
@@ -148,7 +146,6 @@ impl<T> HashSet<T, DefaultHashBuilder> {
     /// let set: HashSet<i32> = HashSet::new();
     /// ```
     #[must_use]
-
     pub fn new() -> Self {
         Self {
             map: HashMap::new(),
@@ -160,12 +157,10 @@ impl<T> HashSet<T, DefaultHashBuilder> {
     /// The hash set will be able to hold at least `capacity` elements without
     /// reallocating. If `capacity` is 0, the hash set will not allocate.
     ///
-
     /// # Hash policy
     ///
     /// Uses the workspace fixed-key hash builder without runtime seeding.
     ///
-
     /// # Examples
     ///
     /// ```
@@ -174,7 +169,6 @@ impl<T> HashSet<T, DefaultHashBuilder> {
     /// assert!(set.capacity() >= 10);
     /// ```
     #[must_use]
-
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             map: HashMap::with_capacity(capacity),
@@ -188,12 +182,10 @@ impl<T: Hash + Eq, A: Allocator> HashSet<T, DefaultHashBuilder, A> {
     /// The hash set is initially created with a capacity of 0, so it will not allocate until it
     /// is first inserted into.
     ///
-
     /// # Hash policy
     ///
     /// Uses the workspace fixed-key hash builder without runtime seeding.
     ///
-
     /// # Examples
     ///
     /// ```
@@ -201,7 +193,6 @@ impl<T: Hash + Eq, A: Allocator> HashSet<T, DefaultHashBuilder, A> {
     /// let set: HashSet<i32> = HashSet::new();
     /// ```
     #[must_use]
-
     pub fn new_in(alloc: A) -> Self {
         Self {
             map: HashMap::new_in(alloc),
@@ -213,12 +204,10 @@ impl<T: Hash + Eq, A: Allocator> HashSet<T, DefaultHashBuilder, A> {
     /// The hash set will be able to hold at least `capacity` elements without
     /// reallocating. If `capacity` is 0, the hash set will not allocate.
     ///
-
     /// # Hash policy
     ///
     /// Uses the workspace fixed-key hash builder without runtime seeding.
     ///
-
     /// # Examples
     ///
     /// ```
@@ -227,7 +216,6 @@ impl<T: Hash + Eq, A: Allocator> HashSet<T, DefaultHashBuilder, A> {
     /// assert!(set.capacity() >= 10);
     /// ```
     #[must_use]
-
     pub fn with_capacity_in(capacity: usize, alloc: A) -> Self {
         Self {
             map: HashMap::with_capacity_in(capacity, alloc),
@@ -245,7 +233,6 @@ impl<T, S, A: Allocator> HashSet<T, S, A> {
     /// let set: HashSet<i32> = HashSet::with_capacity(100);
     /// assert!(set.capacity() >= 100);
     /// ```
-
     pub fn capacity(&self) -> usize {
         self.map.capacity()
     }
@@ -266,7 +253,6 @@ impl<T, S, A: Allocator> HashSet<T, S, A> {
     ///     println!("{}", x);
     /// }
     /// ```
-
     pub fn iter(&self) -> Iter<'_, T> {
         Iter {
             iter: self.map.keys(),
@@ -285,7 +271,6 @@ impl<T, S, A: Allocator> HashSet<T, S, A> {
     /// v.insert(1);
     /// assert_eq!(v.len(), 1);
     /// ```
-
     pub fn len(&self) -> usize {
         self.map.len()
     }
@@ -302,7 +287,6 @@ impl<T, S, A: Allocator> HashSet<T, S, A> {
     /// v.insert(1);
     /// assert!(!v.is_empty());
     /// ```
-
     pub fn is_empty(&self) -> bool {
         self.map.is_empty()
     }
@@ -324,7 +308,6 @@ impl<T, S, A: Allocator> HashSet<T, S, A> {
     ///
     /// assert!(set.is_empty());
     /// ```
-
     pub fn drain(&mut self) -> Drain<'_, T, A> {
         Drain {
             iter: self.map.drain(),
@@ -349,7 +332,7 @@ impl<T, S, A: Allocator> HashSet<T, S, A> {
     where
         F: FnMut(&T) -> bool,
     {
-        self.map.retain(|k, _| f(k));
+        self.map.retain(|k, ()| f(k));
     }
 
     /// Drains elements which are true under the given predicate,
@@ -380,7 +363,6 @@ impl<T, S, A: Allocator> HashSet<T, S, A> {
     /// assert_eq!(evens, vec![0, 2, 4, 6]);
     /// assert_eq!(odds, vec![1, 3, 5, 7]);
     /// ```
-
     pub fn extract_if<F>(&mut self, f: F) -> ExtractIf<'_, T, F, A>
     where
         F: FnMut(&T) -> bool,
@@ -406,7 +388,6 @@ impl<T, S, A: Allocator> HashSet<T, S, A> {
     /// v.clear();
     /// assert!(v.is_empty());
     /// ```
-
     pub fn clear(&mut self) {
         self.map.clear();
     }
@@ -419,12 +400,10 @@ impl<T, S> HashSet<T, S, Global> {
     /// The hash set is initially created with a capacity of 0, so it will not
     /// allocate until it is first inserted into.
     ///
-
     /// # Hash policy
     ///
     /// Uses the workspace fixed-key hash builder without runtime seeding.
     ///
-
     /// # Examples
     ///
     /// ```
@@ -436,7 +415,6 @@ impl<T, S> HashSet<T, S, Global> {
     /// set.insert(2);
     /// ```
     #[must_use]
-
     pub const fn with_hasher(hasher: S) -> Self {
         Self {
             map: HashMap::with_hasher(hasher),
@@ -449,12 +427,10 @@ impl<T, S> HashSet<T, S, Global> {
     /// The hash set will be able to hold at least `capacity` elements without
     /// reallocating. If `capacity` is 0, the hash set will not allocate.
     ///
-
     /// # Hash policy
     ///
     /// Uses the workspace fixed-key hash builder without runtime seeding.
     ///
-
     /// # Examples
     ///
     /// ```
@@ -466,7 +442,6 @@ impl<T, S> HashSet<T, S, Global> {
     /// set.insert(1);
     /// ```
     #[must_use]
-
     pub fn with_capacity_and_hasher(capacity: usize, hasher: S) -> Self {
         Self {
             map: HashMap::with_capacity_and_hasher(capacity, hasher),
@@ -490,12 +465,10 @@ where
     /// The hash set is initially created with a capacity of 0, so it will not
     /// allocate until it is first inserted into.
     ///
-
     /// # Hash policy
     ///
     /// Uses the workspace fixed-key hash builder without runtime seeding.
     ///
-
     /// # Examples
     ///
     /// ```
@@ -507,7 +480,6 @@ where
     /// set.insert(2);
     /// ```
     #[must_use]
-
     pub const fn with_hasher_in(hasher: S, alloc: A) -> Self {
         Self {
             map: HashMap::with_hasher_in(hasher, alloc),
@@ -520,12 +492,10 @@ where
     /// The hash set will be able to hold at least `capacity` elements without
     /// reallocating. If `capacity` is 0, the hash set will not allocate.
     ///
-
     /// # Hash policy
     ///
     /// Uses the workspace fixed-key hash builder without runtime seeding.
     ///
-
     /// # Examples
     ///
     /// ```
@@ -537,7 +507,6 @@ where
     /// set.insert(1);
     /// ```
     #[must_use]
-
     pub fn with_capacity_and_hasher_in(capacity: usize, hasher: S, alloc: A) -> Self {
         Self {
             map: HashMap::with_capacity_and_hasher_in(capacity, hasher, alloc),
@@ -556,7 +525,6 @@ where
     /// let set: HashSet<i32> = HashSet::with_hasher(hasher);
     /// let hasher: &DefaultHashBuilder = set.hasher();
     /// ```
-
     pub fn hasher(&self) -> &S {
         self.map.hasher()
     }
@@ -588,7 +556,6 @@ where
     /// set.reserve(10);
     /// assert!(set.capacity() >= 10);
     /// ```
-
     pub fn reserve(&mut self, additional: usize) {
         self.map.reserve(additional);
     }
@@ -609,7 +576,6 @@ where
     /// let mut set: HashSet<i32> = HashSet::new();
     /// set.try_reserve(10).expect("why is the test harness OOMing on 10 bytes?");
     /// ```
-
     pub fn try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
         self.map.try_reserve(additional)
     }
@@ -630,7 +596,6 @@ where
     /// set.shrink_to_fit();
     /// assert!(set.capacity() >= 2);
     /// ```
-
     pub fn shrink_to_fit(&mut self) {
         self.map.shrink_to_fit();
     }
@@ -656,7 +621,6 @@ where
     /// set.shrink_to(0);
     /// assert!(set.capacity() >= 2);
     /// ```
-
     pub fn shrink_to(&mut self, min_capacity: usize) {
         self.map.shrink_to(min_capacity);
     }
@@ -684,7 +648,6 @@ where
     /// let diff: HashSet<_> = b.difference(&a).collect();
     /// assert_eq!(diff, [4].iter().collect());
     /// ```
-
     pub fn difference<'a>(&'a self, other: &'a Self) -> Difference<'a, T, S, A> {
         Difference {
             iter: self.iter(),
@@ -713,7 +676,6 @@ where
     /// assert_eq!(diff1, diff2);
     /// assert_eq!(diff1, [1, 4].iter().collect());
     /// ```
-
     pub fn symmetric_difference<'a>(&'a self, other: &'a Self) -> SymmetricDifference<'a, T, S, A> {
         SymmetricDifference {
             iter: self.difference(other).chain(other.difference(self)),
@@ -738,7 +700,6 @@ where
     /// let intersection: HashSet<_> = a.intersection(&b).collect();
     /// assert_eq!(intersection, [2, 3].iter().collect());
     /// ```
-
     pub fn intersection<'a>(&'a self, other: &'a Self) -> Intersection<'a, T, S, A> {
         let (smaller, larger) = if self.len() <= other.len() {
             (self, other)
@@ -769,7 +730,6 @@ where
     /// let union: HashSet<_> = a.union(&b).collect();
     /// assert_eq!(union, [1, 2, 3, 4].iter().collect());
     /// ```
-
     pub fn union<'a>(&'a self, other: &'a Self) -> Union<'a, T, S, A> {
         // We'll iterate one set in full, and only the remaining difference from the other.
         // Use the smaller set for the difference in order to reduce hash lookups.
@@ -799,7 +759,6 @@ where
     /// assert_eq!(set.contains(&4), false);
     /// ```
     ///
-
     pub fn contains<Q>(&self, value: &Q) -> bool
     where
         Q: Hash + Equivalent<T> + ?Sized,
@@ -823,14 +782,13 @@ where
     /// assert_eq!(set.get(&4), None);
     /// ```
     ///
-
     pub fn get<Q>(&self, value: &Q) -> Option<&T>
     where
         Q: Hash + Equivalent<T> + ?Sized,
     {
         // Avoid `Option::map` because it bloats LLVM IR.
         match self.map.get_key_value(value) {
-            Some((k, _)) => Some(k),
+            Some((k, ())) => Some(k),
             None => None,
         }
     }
@@ -849,7 +807,6 @@ where
     /// assert_eq!(set.get_or_insert(100), &100);
     /// assert_eq!(set.len(), 4); // 100 was inserted
     /// ```
-
     pub fn get_or_insert(&mut self, value: T) -> &T {
         match self.map.entry(value) {
             map::Entry::Occupied(entry) => entry,
@@ -884,7 +841,6 @@ where
     /// let mut set = purrdf_core::hash::table::HashSet::new();
     /// set.get_or_insert_with("rust", |_| String::new());
     /// ```
-
     pub fn get_or_insert_with<Q, F>(&mut self, value: &Q, f: F) -> &T
     where
         Q: Hash + Equivalent<T> + ?Sized,
@@ -931,7 +887,6 @@ where
     /// assert!(singles.contains(&'u') && !dupes.contains(&'u'));
     /// assert!(!singles.contains(&'v') && !dupes.contains(&'v'));
     /// ```
-
     pub fn entry(&mut self, value: T) -> Entry<'_, T, S, A> {
         match self.map.entry(value) {
             map::Entry::Occupied(entry) => Entry::Occupied(OccupiedEntry { inner: entry }),
@@ -1001,7 +956,6 @@ where
     /// set.insert(2);
     /// assert_eq!(set.is_superset(&sub), true);
     /// ```
-
     pub fn is_superset(&self, other: &Self) -> bool {
         other.is_subset(self)
     }
@@ -1023,7 +977,6 @@ where
     /// assert_eq!(set.insert(2), false);
     /// assert_eq!(set.len(), 1);
     /// ```
-
     pub fn insert(&mut self, value: T) -> bool {
         self.map.insert(value, ()).is_none()
     }
@@ -1051,7 +1004,6 @@ where
     /// However this operation is still unsafe because the resulting `HashSet`
     /// may be passed to unsafe code which does expect the set to behave
     /// correctly, and would cause unsoundness as a result.
-
     pub unsafe fn insert_unique_unchecked(&mut self, value: T) -> &T {
         unsafe { self.map.insert_unique_unchecked(value, ()).0 }
     }
@@ -1071,7 +1023,6 @@ where
     /// set.replace(Vec::with_capacity(10));
     /// assert_eq!(set.get(&[][..]).unwrap().capacity(), 10);
     /// ```
-
     pub fn replace(&mut self, value: T) -> Option<T> {
         let value = UnsafeCell::new(value);
         // SAFETY: We know the key is no longer accessed after the initial check.
@@ -1110,7 +1061,6 @@ where
     /// assert_eq!(set.remove(&2), false);
     /// ```
     ///
-
     pub fn remove<Q>(&mut self, value: &Q) -> bool
     where
         Q: Hash + Equivalent<T> + ?Sized,
@@ -1134,16 +1084,11 @@ where
     /// assert_eq!(set.take(&2), None);
     /// ```
     ///
-
     pub fn take<Q>(&mut self, value: &Q) -> Option<T>
     where
         Q: Hash + Equivalent<T> + ?Sized,
     {
-        // Avoid `Option::map` because it bloats LLVM IR.
-        match self.map.remove_entry(value) {
-            Some((k, _)) => Some(k),
-            None => None,
-        }
+        self.map.remove_entry(value).map(|(k, ())| k)
     }
 
     /// Returns the total amount of memory allocated internally by the hash
@@ -1261,7 +1206,6 @@ where
     A: Default + Allocator,
 {
     /// Creates an empty `HashSet<T, S>` with the `Default` value for the hasher.
-
     fn default() -> Self {
         Self {
             map: HashMap::default(),
@@ -1401,7 +1345,7 @@ where
     }
 }
 
-impl<T, S, A> BitOrAssign<&HashSet<T, S, A>> for HashSet<T, S, A>
+impl<T, S, A> BitOrAssign<&Self> for HashSet<T, S, A>
 where
     T: Eq + Hash + Clone,
     S: BuildHasher,
@@ -1427,7 +1371,7 @@ where
     /// }
     /// assert_eq!(i, expected.len());
     /// ```
-    fn bitor_assign(&mut self, rhs: &HashSet<T, S, A>) {
+    fn bitor_assign(&mut self, rhs: &Self) {
         for item in rhs {
             if !self.contains(item) {
                 self.insert(item.clone());
@@ -1436,7 +1380,7 @@ where
     }
 }
 
-impl<T, S, A> BitAndAssign<&HashSet<T, S, A>> for HashSet<T, S, A>
+impl<T, S, A> BitAndAssign<&Self> for HashSet<T, S, A>
 where
     T: Eq + Hash + Clone,
     S: BuildHasher,
@@ -1462,12 +1406,12 @@ where
     /// }
     /// assert_eq!(i, expected.len());
     /// ```
-    fn bitand_assign(&mut self, rhs: &HashSet<T, S, A>) {
+    fn bitand_assign(&mut self, rhs: &Self) {
         self.retain(|item| rhs.contains(item));
     }
 }
 
-impl<T, S, A> BitXorAssign<&HashSet<T, S, A>> for HashSet<T, S, A>
+impl<T, S, A> BitXorAssign<&Self> for HashSet<T, S, A>
 where
     T: Eq + Hash + Clone,
     S: BuildHasher,
@@ -1493,7 +1437,7 @@ where
     /// }
     /// assert_eq!(i, expected.len());
     /// ```
-    fn bitxor_assign(&mut self, rhs: &HashSet<T, S, A>) {
+    fn bitxor_assign(&mut self, rhs: &Self) {
         for item in rhs {
             match self.map.entry_ref(item) {
                 map::EntryRef::Occupied(entry) => {
@@ -1507,7 +1451,7 @@ where
     }
 }
 
-impl<T, S, A> SubAssign<&HashSet<T, S, A>> for HashSet<T, S, A>
+impl<T, S, A> SubAssign<&Self> for HashSet<T, S, A>
 where
     T: Eq + Hash + Clone,
     S: BuildHasher,
@@ -1533,7 +1477,7 @@ where
     /// }
     /// assert_eq!(i, expected.len());
     /// ```
-    fn sub_assign(&mut self, rhs: &HashSet<T, S, A>) {
+    fn sub_assign(&mut self, rhs: &Self) {
         if rhs.len() < self.len() {
             for item in rhs {
                 self.remove(item);
@@ -1670,7 +1614,6 @@ impl<T, S, A: Allocator> IntoIterator for HashSet<T, S, A> {
     ///     println!("{}", x);
     /// }
     /// ```
-
     fn into_iter(self) -> IntoIter<T, A> {
         IntoIter {
             iter: self.map.into_iter(),
@@ -1688,7 +1631,7 @@ impl<K> Clone for Iter<'_, K> {
 impl<K> Default for Iter<'_, K> {
     fn default() -> Self {
         Iter {
-            iter: Default::default(),
+            iter: Keys::default(),
         }
     }
 }
@@ -1726,8 +1669,8 @@ impl<K: fmt::Debug> fmt::Debug for Iter<'_, K> {
 
 impl<K, A: Allocator> Default for IntoIter<K, A> {
     fn default() -> Self {
-        IntoIter {
-            iter: Default::default(),
+        Self {
+            iter: map::IntoIter::default(),
         }
     }
 }
@@ -1738,7 +1681,7 @@ impl<K, A: Allocator> Iterator for IntoIter<K, A> {
         [
             fn next(&mut self) -> Option<K>
         ]
-        self.iter.next(); (k, _) => k
+        self.iter.next(); (k, ()) => k
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -1767,7 +1710,7 @@ impl<K: fmt::Debug, A: Allocator> fmt::Debug for IntoIter<K, A> {
         [
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result
         ]
-        self.iter.iter(), f; (k, _) => k
+        self.iter.iter(), f; (k, ()) => k
     }
 }
 
@@ -1778,7 +1721,7 @@ impl<K, A: Allocator> Iterator for Drain<'_, K, A> {
         [
             fn next(&mut self) -> Option<K>
         ]
-        self.iter.next(); (k, _) => k
+        self.iter.next(); (k, ()) => k
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -1807,7 +1750,7 @@ impl<K: fmt::Debug, A: Allocator> fmt::Debug for Drain<'_, K, A> {
         [
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result
         ]
-        self.iter.iter(), f; (k, _) => k
+        self.iter.iter(), f; (k, ()) => k
     }
 }
 
@@ -2238,7 +2181,6 @@ impl<'a, T, S, A: Allocator> Entry<'a, T, S, A> {
     ///
     /// assert_eq!(entry.get(), &"horseyland");
     /// ```
-
     pub fn insert(self) -> OccupiedEntry<'a, T, S, A>
     where
         T: Hash,
@@ -2268,7 +2210,6 @@ impl<'a, T, S, A: Allocator> Entry<'a, T, S, A> {
     /// assert!(set.contains("poneyland"));
     /// assert_eq!(set.len(), 1);
     /// ```
-
     pub fn or_insert(self)
     where
         T: Hash,
@@ -2293,7 +2234,6 @@ impl<'a, T, S, A: Allocator> Entry<'a, T, S, A> {
     /// // nonexistent key
     /// assert_eq!(set.entry("horseland").get(), &"horseland");
     /// ```
-
     pub fn get(&self) -> &T {
         match *self {
             Entry::Occupied(ref entry) => entry.get(),
@@ -2318,7 +2258,6 @@ impl<T, S, A: Allocator> OccupiedEntry<'_, T, S, A> {
     ///     Entry::Occupied(entry) => assert_eq!(entry.get(), &"poneyland"),
     /// }
     /// ```
-
     pub fn get(&self) -> &T {
         self.inner.key()
     }
@@ -2347,7 +2286,6 @@ impl<T, S, A: Allocator> OccupiedEntry<'_, T, S, A> {
     /// // Now set hold none elements but capacity is equal to the old one
     /// assert!(set.len() == 0 && set.capacity() == capacity_before_remove);
     /// ```
-
     pub fn remove(self) -> T {
         self.inner.remove_entry().0
     }
@@ -2365,7 +2303,6 @@ impl<'a, T, S, A: Allocator> VacantEntry<'a, T, S, A> {
     /// let mut set: HashSet<&str> = HashSet::new();
     /// assert_eq!(set.entry("poneyland").get(), &"poneyland");
     /// ```
-
     pub fn get(&self) -> &T {
         self.inner.key()
     }
@@ -2384,7 +2321,6 @@ impl<'a, T, S, A: Allocator> VacantEntry<'a, T, S, A> {
     ///     Entry::Vacant(v) => assert_eq!(v.into_value(), "poneyland"),
     /// }
     /// ```
-
     pub fn into_value(self) -> T {
         self.inner.into_key()
     }
@@ -2404,7 +2340,6 @@ impl<'a, T, S, A: Allocator> VacantEntry<'a, T, S, A> {
     /// }
     /// assert!(set.contains("poneyland"));
     /// ```
-
     pub fn insert(self) -> OccupiedEntry<'a, T, S, A>
     where
         T: Hash,

@@ -22,10 +22,10 @@ impl core::fmt::Display for TryReserveError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("memory allocation failed")?;
         let reason = match self {
-            TryReserveError::CapacityOverflow => {
+            Self::CapacityOverflow => {
                 " because the computed capacity exceeded the collection's maximum"
             }
-            TryReserveError::AllocError { .. } => " because the memory allocator returned an error",
+            Self::AllocError { .. } => " because the memory allocator returned an error",
         };
         f.write_str(reason)
     }

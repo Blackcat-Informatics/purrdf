@@ -111,7 +111,6 @@ where
     /// # Examples
     ///
     /// ```
-
     /// # fn test() {
     /// use purrdf_core::hash::table::Global;
     /// use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
@@ -136,7 +135,6 @@ where
     /// assert!(table.capacity() > 1);
     /// # }
     /// # fn main() {
-
     /// #     test()
     /// # }
     /// ```
@@ -155,7 +153,6 @@ where
     /// # Examples
     ///
     /// ```
-
     /// # fn test() {
     /// use purrdf_core::hash::table::Global;
     /// use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
@@ -185,7 +182,6 @@ where
     /// assert_eq!(table.capacity(), empty_map_capacity)
     /// # }
     /// # fn main() {
-
     /// #     test()
     /// # }
     /// ```
@@ -211,7 +207,6 @@ where
     /// # Examples
     ///
     /// ```
-
     /// # fn test() {
     /// use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
@@ -226,7 +221,6 @@ where
     /// assert_eq!(table.find(hasher(&4), |&val| val == 4), None);
     /// # }
     /// # fn main() {
-
     /// #     test()
     /// # }
     /// ```
@@ -248,7 +242,6 @@ where
     /// # Examples
     ///
     /// ```
-
     /// # fn test() {
     /// use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
@@ -264,7 +257,6 @@ where
     /// assert_eq!(table.find(hasher(&2), |val| val.0 == 2), None);
     /// # }
     /// # fn main() {
-
     /// #     test()
     /// # }
     /// ```
@@ -286,7 +278,6 @@ where
     /// # Examples
     ///
     /// ```
-
     /// # fn test() {
     /// use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
@@ -301,11 +292,9 @@ where
     /// assert_eq!(table.find(hasher(&1), |val| val.0 == 1), None);
     /// # }
     /// # fn main() {
-
     /// #     test()
     /// # }
     /// ```
-
     pub fn find_entry(
         &mut self,
         hash: u64,
@@ -333,7 +322,6 @@ where
     /// # Examples
     ///
     /// ```
-
     /// # fn test() {
     /// use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
@@ -357,16 +345,13 @@ where
     /// assert_eq!(table.get_bucket(index), Some(&(2, 22)));
     /// # }
     /// # fn main() {
-
     /// #     test()
     /// # }
     /// ```
-
     pub fn find_bucket_index(&self, hash: u64, eq: impl FnMut(&T) -> bool) -> Option<usize> {
-        match self.raw.find(hash, eq) {
-            Some(bucket) => Some(unsafe { self.raw.bucket_index(&bucket) }),
-            None => None,
-        }
+        self.raw
+            .find(hash, eq)
+            .map(|bucket| unsafe { self.raw.bucket_index(&bucket) })
     }
 
     /// Returns an `Entry` for an entry in the table with the given hash
@@ -388,7 +373,6 @@ where
     /// # Examples
     ///
     /// ```
-
     /// # fn test() {
     /// use purrdf_core::hash::table::hash_table::Entry;
     /// use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
@@ -409,11 +393,9 @@ where
     /// assert_eq!(table.find(hasher(&2), |val| val.0 == 2), Some(&(2, "b")));
     /// # }
     /// # fn main() {
-
     /// #     test()
     /// # }
     /// ```
-
     pub fn entry(
         &mut self,
         hash: u64,
@@ -439,7 +421,6 @@ where
     /// # Examples
     ///
     /// ```
-
     /// # fn test() {
     /// use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
@@ -462,7 +443,6 @@ where
     /// assert!(table.find(hasher(&2), |val| val.0 == 2).is_none());
     /// # }
     /// # fn main() {
-
     /// #     test()
     /// # }
     /// ```
@@ -495,7 +475,6 @@ where
     /// # Examples
     ///
     /// ```
-
     /// # fn test() {
     /// use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
@@ -514,7 +493,6 @@ where
     /// ));
     /// # }
     /// # fn main() {
-
     /// #     test()
     /// # }
     /// ```
@@ -532,7 +510,6 @@ where
     /// # Examples
     ///
     /// ```
-
     /// # fn test() {
     /// use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
@@ -548,7 +525,6 @@ where
     /// assert_eq!(table.get_bucket(index), Some(&(2, 'b')));
     /// # }
     /// # fn main() {
-
     /// #     test()
     /// # }
     /// ```
@@ -572,7 +548,6 @@ where
     /// # Examples
     ///
     /// ```
-
     /// # fn test() {
     /// use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
@@ -591,7 +566,6 @@ where
     /// ));
     /// # }
     /// # fn main() {
-
     /// #     test()
     /// # }
     /// ```
@@ -606,7 +580,6 @@ where
     /// # Examples
     ///
     /// ```
-
     /// # fn test() {
     /// use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
@@ -626,7 +599,6 @@ where
     /// assert_eq!(table.get_bucket(index), Some(&(2, 'B')));
     /// # }
     /// # fn main() {
-
     /// #     test()
     /// # }
     /// ```
@@ -650,7 +622,6 @@ where
     /// # Examples
     ///
     /// ```
-
     /// # fn test() {
     /// use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
@@ -669,7 +640,6 @@ where
     /// ));
     /// # }
     /// # fn main() {
-
     /// #     test()
     /// # }
     /// ```
@@ -688,7 +658,6 @@ where
     /// # Examples
     ///
     /// ```
-
     /// # fn test() {
     /// use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
@@ -699,7 +668,6 @@ where
     /// v.insert_unique(hasher(&1), 1, hasher);
     /// # }
     /// # fn main() {
-
     /// #     test()
     /// # }
     /// ```
@@ -721,7 +689,6 @@ where
     /// # Examples
     ///
     /// ```
-
     /// # fn test() {
     /// use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
@@ -734,7 +701,6 @@ where
     /// assert!(v.is_empty());
     /// # }
     /// # fn main() {
-
     /// #     test()
     /// # }
     /// ```
@@ -752,7 +718,6 @@ where
     /// # Examples
     ///
     /// ```
-
     /// # fn test() {
     /// use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
@@ -767,7 +732,6 @@ where
     /// assert!(table.capacity() >= 2);
     /// # }
     /// # fn main() {
-
     /// #     test()
     /// # }
     /// ```
@@ -788,7 +752,6 @@ where
     /// # Examples
     ///
     /// ```
-
     /// # fn test() {
     /// use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
@@ -805,7 +768,6 @@ where
     /// assert!(table.capacity() >= 2);
     /// # }
     /// # fn main() {
-
     /// #     test()
     /// # }
     /// ```
@@ -831,7 +793,6 @@ where
     /// # Examples
     ///
     /// ```
-
     /// # fn test() {
     /// use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
@@ -843,7 +804,6 @@ where
     /// assert!(table.capacity() >= 10);
     /// # }
     /// # fn main() {
-
     /// #     test()
     /// # }
     /// ```
@@ -866,7 +826,6 @@ where
     /// # Examples
     ///
     /// ```
-
     /// # fn test() {
     /// use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
@@ -879,7 +838,6 @@ where
     ///     .expect("why is the test harness OOMing on 10 bytes?");
     /// # }
     /// # fn main() {
-
     /// #     test()
     /// # }
     /// ```
@@ -900,7 +858,6 @@ where
     /// # Examples
     ///
     /// ```
-
     /// # fn test() {
     /// use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
@@ -921,7 +878,6 @@ where
     /// assert_eq!(table.get_bucket(table.num_buckets()), None);
     /// # }
     /// # fn main() {
-
     /// #     test()
     /// # }
     /// ```
@@ -947,7 +903,6 @@ where
     /// # Examples
     ///
     /// ```
-
     /// # fn test() {
     /// use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
@@ -960,7 +915,6 @@ where
     /// assert_eq!(v.len(), 1);
     /// # }
     /// # fn main() {
-
     /// #     test()
     /// # }
     /// ```
@@ -973,7 +927,6 @@ where
     /// # Examples
     ///
     /// ```
-
     /// # fn test() {
     /// use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
@@ -986,7 +939,6 @@ where
     /// assert!(!v.is_empty());
     /// # }
     /// # fn main() {
-
     /// #     test()
     /// # }
     /// ```
@@ -1000,7 +952,6 @@ where
     /// # Examples
     ///
     /// ```
-
     /// # fn test() {
     /// use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
@@ -1017,7 +968,6 @@ where
     /// }
     /// # }
     /// # fn main() {
-
     /// #     test()
     /// # }
     /// ```
@@ -1035,7 +985,6 @@ where
     /// # Examples
     ///
     /// ```
-
     /// # fn test() {
     /// use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
@@ -1068,7 +1017,6 @@ where
     /// assert_eq!(table.len(), 3);
     /// # }
     /// # fn main() {
-
     /// #     test()
     /// # }
     /// ```
@@ -1110,7 +1058,6 @@ where
     /// # Examples
     ///
     /// ```
-
     /// # fn test() {
     /// use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
@@ -1127,7 +1074,6 @@ where
     /// }
     /// # }
     /// # fn main() {
-
     /// #     test()
     /// # }
     /// ```
@@ -1148,7 +1094,6 @@ where
     /// # Examples
     ///
     /// ```
-
     /// # fn test() {
     /// use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
@@ -1166,7 +1111,6 @@ where
     /// }
     /// # }
     /// # fn main() {
-
     /// #     test()
     /// # }
     /// ```
@@ -1187,7 +1131,6 @@ where
     /// # Examples
     ///
     /// ```
-
     /// # fn test() {
     /// use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
@@ -1219,7 +1162,6 @@ where
     /// assert_eq!(table.len(), 3);
     /// # }
     /// # fn main() {
-
     /// #     test()
     /// # }
     /// ```
@@ -1242,7 +1184,6 @@ where
     /// # Examples
     ///
     /// ```
-
     /// # fn test() {
     /// use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
@@ -1260,7 +1201,6 @@ where
     /// }
     /// # }
     /// # fn main() {
-
     /// #     test()
     /// # }
     /// ```
@@ -1278,7 +1218,6 @@ where
     /// # Examples
     ///
     /// ```
-
     /// # fn test() {
     /// use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
@@ -1293,7 +1232,6 @@ where
     /// assert_eq!(table.len(), 3);
     /// # }
     /// # fn main() {
-
     /// #     test()
     /// # }
     /// ```
@@ -1313,7 +1251,6 @@ where
     /// # Examples
     ///
     /// ```
-
     /// # fn test() {
     /// use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
@@ -1334,7 +1271,6 @@ where
     /// assert!(table.is_empty());
     /// # }
     /// # fn main() {
-
     /// #     test()
     /// # }
     /// ```
@@ -1359,7 +1295,6 @@ where
     /// # Examples
     ///
     /// ```
-
     /// # fn test() {
     /// use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
@@ -1381,7 +1316,6 @@ where
     /// assert_eq!(odds, vec![1, 3, 5, 7]);
     /// # }
     /// # fn main() {
-
     /// #     test()
     /// # }
     /// ```
@@ -1413,7 +1347,6 @@ where
     /// # Examples
     ///
     /// ```
-
     /// # fn test() {
     /// use purrdf_core::hash::table::hash_table::Entry;
     /// use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
@@ -1444,13 +1377,11 @@ where
     /// assert_eq!(got, [Some(&mut ("Athenæum", 1807)), None]);
     /// # }
     /// # fn main() {
-
     /// #     test()
     /// # }
     /// ```
     ///
     /// ```should_panic
-
     /// # fn test() {
     /// # use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
     /// # use std::hash::BuildHasher;
@@ -1470,9 +1401,7 @@ where
     /// let got = libraries.get_disjoint_mut(keys.map(|k| hasher(&k)), |i, val| keys[i] == val.0);
     /// # }
     /// # fn main() {
-
     /// #     test();
-
     /// # }
     /// ```
     pub fn get_disjoint_mut<const N: usize>(
@@ -1514,7 +1443,6 @@ where
     /// # Examples
     ///
     /// ```
-
     /// # fn test() {
     /// use purrdf_core::hash::table::hash_table::Entry;
     /// use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
@@ -1545,7 +1473,6 @@ where
     /// assert_eq!(got, [Some(&mut ("Athenæum", 1807)), None]);
     /// # }
     /// # fn main() {
-
     /// #     test()
     /// # }
     /// ```
@@ -1559,6 +1486,10 @@ where
 
     /// Attempts to get mutable references to `N` values in the map at once, without validating that
     /// the values are unique.
+    ///
+    /// # Safety
+    /// Each successful query must select a distinct stored entry. Overlapping
+    /// results are undefined behavior even if the returned references are unused.
     #[deprecated(note = "use `get_disjoint_unchecked_mut` instead")]
     pub unsafe fn get_many_unchecked_mut<const N: usize>(
         &mut self,
@@ -1623,7 +1554,7 @@ where
 {
     fn default() -> Self {
         Self {
-            raw: Default::default(),
+            raw: RawTable::default(),
         }
     }
 }
@@ -1663,7 +1594,6 @@ where
 /// # Examples
 ///
 /// ```
-
 /// # fn test() {
 /// use purrdf_core::hash::table::hash_table::{Entry, OccupiedEntry};
 /// use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
@@ -1702,7 +1632,6 @@ where
 /// assert_eq!(vec, ["a", "b", "c", "d", "e"]);
 /// # }
 /// # fn main() {
-
 /// #     test()
 /// # }
 /// ```
@@ -1715,7 +1644,6 @@ where
     /// # Examples
     ///
     /// ```
-
     /// # fn test() {
     /// use purrdf_core::hash::table::hash_table::{Entry, OccupiedEntry};
     /// use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
@@ -1734,7 +1662,6 @@ where
     /// }
     /// # }
     /// # fn main() {
-
     /// #     test()
     /// # }
     /// ```
@@ -1745,7 +1672,6 @@ where
     /// # Examples
     ///
     /// ```
-
     /// # fn test() {
     /// use purrdf_core::hash::table::hash_table::{Entry, OccupiedEntry};
     /// use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
@@ -1761,7 +1687,6 @@ where
     /// }
     /// # }
     /// # fn main() {
-
     /// #     test()
     /// # }
     /// ```
@@ -1787,7 +1712,6 @@ where
     /// # Examples
     ///
     /// ```
-
     /// # fn test() {
     /// use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
@@ -1803,7 +1727,6 @@ where
     /// assert_eq!(entry.get(), &"horseyland");
     /// # }
     /// # fn main() {
-
     /// #     test()
     /// # }
     /// ```
@@ -1824,7 +1747,6 @@ where
     /// # Examples
     ///
     /// ```
-
     /// # fn test() {
     /// use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
@@ -1851,7 +1773,6 @@ where
     /// assert_eq!(table.len(), 1);
     /// # }
     /// # fn main() {
-
     /// #     test()
     /// # }
     /// ```
@@ -1869,7 +1790,6 @@ where
     /// # Examples
     ///
     /// ```
-
     /// # fn test() {
     /// use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
@@ -1887,7 +1807,6 @@ where
     ///     .is_some());
     /// # }
     /// # fn main() {
-
     /// #     test()
     /// # }
     /// ```
@@ -1943,6 +1862,7 @@ where
             /// #     test()
             /// # }
             /// ```
+            #[must_use]
             pub fn and_modify(self, f: impl FnOnce(&mut T)) -> Self
         ]
         self, f
@@ -1963,7 +1883,6 @@ where
 /// # Examples
 ///
 /// ```
-
 /// # fn test() {
 /// use purrdf_core::hash::table::hash_table::{Entry, OccupiedEntry};
 /// use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
@@ -2001,7 +1920,6 @@ where
 /// assert_eq!(table.len(), 2);
 /// # }
 /// # fn main() {
-
 /// #     test()
 /// # }
 /// ```
@@ -2046,7 +1964,6 @@ where
     /// # Examples
     ///
     /// ```
-
     /// # fn test() {
     /// use purrdf_core::hash::table::hash_table::Entry;
     /// use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
@@ -2072,11 +1989,9 @@ where
     /// assert!(table.len() == 0 && table.capacity() == capacity_before_remove);
     /// # }
     /// # fn main() {
-
     /// #     test()
     /// # }
     /// ```
-
     pub fn remove(self) -> (T, VacantEntry<'a, T, A>) {
         let (val, index, tag) = unsafe { self.table.raw.remove_tagged(self.bucket) };
         (
@@ -2094,7 +2009,6 @@ where
     /// # Examples
     ///
     /// ```
-
     /// # fn test() {
     /// use purrdf_core::hash::table::hash_table::Entry;
     /// use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
@@ -2111,7 +2025,6 @@ where
     /// }
     /// # }
     /// # fn main() {
-
     /// #     test()
     /// # }
     /// ```
@@ -2130,7 +2043,6 @@ where
     /// # Examples
     ///
     /// ```
-
     /// # fn test() {
     /// use purrdf_core::hash::table::hash_table::Entry;
     /// use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
@@ -2164,7 +2076,6 @@ where
     /// );
     /// # }
     /// # fn main() {
-
     /// #     test()
     /// # }
     /// ```
@@ -2183,7 +2094,6 @@ where
     /// # Examples
     ///
     /// ```
-
     /// # fn test() {
     /// use purrdf_core::hash::table::hash_table::Entry;
     /// use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
@@ -2216,7 +2126,6 @@ where
     /// );
     /// # }
     /// # fn main() {
-
     /// #     test()
     /// # }
     /// ```
@@ -2242,7 +2151,6 @@ where
     /// # Examples
     ///
     /// ```
-
     /// # fn test() {
     /// use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
     /// use std::hash::BuildHasher;
@@ -2269,7 +2177,6 @@ where
     /// assert_eq!(table.get_bucket(index), Some(&(2, 22)));
     /// # }
     /// # fn main() {
-
     /// #     test()
     /// # }
     /// ```
@@ -2285,7 +2192,6 @@ where
     /// # Examples
     ///
     /// ```
-
     /// # fn test() {
     /// use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
     /// use purrdf_core::hash::table::hash_table::Entry;
@@ -2329,11 +2235,9 @@ where
     /// assert!(table.is_empty());
     /// # }
     /// # fn main() {
-
     /// #     test()
     /// # }
     /// ```
-
     pub fn replace_entry_with<F>(self, f: F) -> Entry<'a, T, A>
     where
         F: FnOnce(T) -> Option<T>,
@@ -2357,7 +2261,6 @@ where
 /// # Examples
 ///
 /// ```
-
 /// # fn test() {
 /// use purrdf_core::hash::table::hash_table::{Entry, VacantEntry};
 /// use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
@@ -2384,7 +2287,6 @@ where
 /// assert!(table.find(hasher(&"b"), |&x| x == "b").is_some() && table.len() == 2);
 /// # }
 /// # fn main() {
-
 /// #     test()
 /// # }
 /// ```
@@ -2415,7 +2317,6 @@ where
     /// # Examples
     ///
     /// ```
-
     /// # fn test() {
     /// use purrdf_core::hash::table::hash_table::Entry;
     /// use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
@@ -2434,7 +2335,6 @@ where
     /// );
     /// # }
     /// # fn main() {
-
     /// #     test()
     /// # }
     /// ```
@@ -2470,7 +2370,6 @@ where
 /// # Examples
 ///
 /// ```
-
 /// # fn test() {
 /// use purrdf_core::hash::table::hash_table::{AbsentEntry, Entry};
 /// use purrdf_core::hash::table::{HashTable, DefaultHashBuilder};
@@ -2496,7 +2395,6 @@ where
 /// assert!(table.find(hasher(&"b"), |&x| x == "b").is_some() && table.len() == 2);
 /// # }
 /// # fn main() {
-
 /// #     test()
 /// # }
 /// ```
@@ -2539,7 +2437,7 @@ pub struct Iter<'a, T> {
 impl<T> Default for Iter<'_, T> {
     fn default() -> Self {
         Iter {
-            inner: Default::default(),
+            inner: RawIter::default(),
             marker: PhantomData,
         }
     }
@@ -2579,8 +2477,8 @@ impl<T> ExactSizeIterator for Iter<'_, T> {
 impl<T> FusedIterator for Iter<'_, T> {}
 
 // FIXME(#26925) Remove in favor of `#[derive(Clone)]`
-impl<'a, T> Clone for Iter<'a, T> {
-    fn clone(&self) -> Iter<'a, T> {
+impl<T> Clone for Iter<'_, T> {
+    fn clone(&self) -> Self {
         Iter {
             inner: self.inner.clone(),
             marker: PhantomData,
@@ -2605,9 +2503,8 @@ pub struct IterMut<'a, T> {
     inner: RawIter<T>,
     marker: PhantomData<&'a mut T>,
 }
-impl<'a, T> IterMut<'a, T> {
+impl<T> IterMut<'_, T> {
     /// Returns a iterator of references over the remaining items.
-
     pub fn iter(&self) -> Iter<'_, T> {
         Iter {
             inner: self.inner.clone(),
@@ -2619,7 +2516,7 @@ impl<'a, T> IterMut<'a, T> {
 impl<T> Default for IterMut<'_, T> {
     fn default() -> Self {
         IterMut {
-            inner: Default::default(),
+            inner: RawIter::default(),
             marker: PhantomData,
         }
     }
@@ -2721,9 +2618,8 @@ pub struct UnsafeIter<'a, T> {
     inner: RawIter<T>,
     marker: PhantomData<&'a ()>,
 }
-impl<'a, T> UnsafeIter<'a, T> {
+impl<T> UnsafeIter<'_, T> {
     /// Returns a iterator of references over the remaining items.
-
     pub fn iter(&self) -> Iter<'_, T> {
         Iter {
             inner: self.inner.clone(),
@@ -2735,20 +2631,18 @@ impl<'a, T> UnsafeIter<'a, T> {
 impl<T> Default for UnsafeIter<'_, T> {
     fn default() -> Self {
         UnsafeIter {
-            inner: Default::default(),
+            inner: RawIter::default(),
             marker: PhantomData,
         }
     }
 }
-impl<'a, T> Iterator for UnsafeIter<'a, T> {
+impl<T> Iterator for UnsafeIter<'_, T> {
     type Item = NonNull<T>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        // Avoid `Option::map` because it bloats LLVM IR.
-        match self.inner.next() {
-            Some(bucket) => Some(unsafe { NonNull::new_unchecked(bucket.as_ptr()) }),
-            None => None,
-        }
+        self.inner
+            .next()
+            .map(|bucket| unsafe { NonNull::new_unchecked(bucket.as_ptr()) })
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -2860,7 +2754,7 @@ pub struct IterHash<'a, T> {
 impl<T> Default for IterHash<'_, T> {
     fn default() -> Self {
         IterHash {
-            inner: Default::default(),
+            inner: RawIterHash::default(),
             marker: PhantomData,
         }
     }
@@ -2890,8 +2784,8 @@ impl<'a, T> Iterator for IterHash<'a, T> {
 impl<T> FusedIterator for IterHash<'_, T> {}
 
 // FIXME(#26925) Remove in favor of `#[derive(Clone)]`
-impl<'a, T> Clone for IterHash<'a, T> {
-    fn clone(&self) -> IterHash<'a, T> {
+impl<T> Clone for IterHash<'_, T> {
+    fn clone(&self) -> Self {
         IterHash {
             inner: self.inner.clone(),
             marker: PhantomData,
@@ -2923,7 +2817,7 @@ pub struct IterHashMut<'a, T> {
 impl<T> Default for IterHashMut<'_, T> {
     fn default() -> Self {
         IterHashMut {
-            inner: Default::default(),
+            inner: RawIterHash::default(),
             marker: PhantomData,
         }
     }
@@ -3031,7 +2925,6 @@ where
     A: Allocator,
 {
     /// Returns a iterator of references over the remaining items.
-
     pub fn iter(&self) -> Iter<'_, T> {
         Iter {
             inner: self.inner.iter(),
@@ -3042,8 +2935,8 @@ where
 
 impl<T, A: Allocator> Default for IntoIter<T, A> {
     fn default() -> Self {
-        IntoIter {
-            inner: Default::default(),
+        Self {
+            inner: RawIntoIter::default(),
         }
     }
 }
@@ -3101,9 +2994,8 @@ where
 pub struct Drain<'a, T, A: Allocator = Global> {
     inner: RawDrain<'a, T, A>,
 }
-impl<'a, T, A: Allocator> Drain<'a, T, A> {
+impl<T, A: Allocator> Drain<'_, T, A> {
     /// Returns a iterator of references over the remaining items.
-
     pub fn iter(&self) -> Iter<'_, T> {
         Iter {
             inner: self.inner.iter(),
@@ -3307,4 +3199,21 @@ impl<T, A: Allocator> HashTable<T, A> {
             indices,
         })
     }
+}
+
+native_borrowed_iter! {
+    [impl<'a, T> IntoIterator for &'a IterMut<'_, T>]
+    &'a T, Iter<'a, T>
+}
+native_borrowed_iter! {
+    [impl<'a, T> IntoIterator for &'a UnsafeIter<'_, T>]
+    &'a T, Iter<'a, T>
+}
+native_borrowed_iter! {
+    [impl<'a, T, A: Allocator> IntoIterator for &'a IntoIter<T, A>]
+    &'a T, Iter<'a, T>
+}
+native_borrowed_iter! {
+    [impl<'a, T, A: Allocator> IntoIterator for &'a Drain<'_, T, A>]
+    &'a T, Iter<'a, T>
 }

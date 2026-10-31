@@ -43,6 +43,15 @@ division, WKT and GeoJSON parsing resource policies, the SPARQL pre-binding rewr
 SPARQL diagnostic codes.
 Each has its own section below.
 
+## Native table allocation errors
+
+`QueryIndexAllocationError::StatementHistogram` carries
+`purrdf_core::hash::table::TryReserveError` in 4.0, replacing the distinct
+`hashbrown::TryReserveError` type. Update payload annotations, constructors and
+conversions to the Core type. Code that only matches
+`QueryIndexAllocationError::StatementHistogram(_)` needs no payload-type change.
+The ordinal-array `Permutation` variant retains its existing storage error.
+
 ## Declared retrieval ranks
 
 `RankedDeclaration` now requires `rank_source: RankSource`. Existing native

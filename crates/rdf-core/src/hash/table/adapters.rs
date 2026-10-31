@@ -99,3 +99,16 @@ macro_rules! native_default {
         }
     };
 }
+
+/// Implement shared iteration through the native borrowed iterator method.
+macro_rules! native_borrowed_iter {
+    ([$($implementation:tt)*] $item:ty, $iter:ty) => {
+        $($implementation)* {
+            type Item = $item;
+            type IntoIter = $iter;
+            fn into_iter(self) -> Self::IntoIter {
+                self.iter()
+            }
+        }
+    };
+}
