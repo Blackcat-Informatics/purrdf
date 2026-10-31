@@ -111,8 +111,8 @@ const compiledContext = new CompiledJsonLdContext(
   }),
 );
 const compacted: string = matched.serializeWithContext("jsonld", compiledContext);
-const canonical: string = matched.canonicalize();
-const same: boolean = matched.isomorphic(Dataset.parse(serialized, "nquads"));
+const canonicalResult = matched.canonicalize("unlimited"); const canonical: string = canonicalResult.value; const canonicalizationJson: string = canonicalResult.canonicalizationJson; canonicalResult.free();
+const sameResult = matched.isomorphic(Dataset.parse(serialized, "nquads"), "unlimited"); const same: boolean = sameResult.value; sameResult.free();
 const projection: ProjectionPackage = matched.project("lpg-csv", JSON.stringify({
   profile: "lpg-csv",
   config: {
@@ -382,7 +382,7 @@ const asyncShaclEntailed: Promise<ShaclEntailment> = shaclEntailAsync(
   10n,
   undefined,
   undefined,
-  undefined,
+  undefined, "unlimited",
   shaclOptions,
 );
 const asyncRules: Promise<ShaclRulesInference> = shaclApplyRulesAsync(
@@ -415,7 +415,7 @@ const asyncNodes: Promise<ShaclNodeExprOutcome> = shaclEvalNodeExprAsync(
   undefined,
   { yieldEveryPolls: 0 },
 );
-const shaclProduct: Uint8Array = shaclPackProduct(shaclShapes);
+const productResult = shaclPackProduct(shaclShapes, undefined, undefined, undefined, undefined, "unlimited"); const shaclProduct: Uint8Array = productResult.value; productResult.free();
 const asyncProductSarif: Promise<string> = shaclProductValidateToSarifAsync(shaclProduct, shaclData, shaclOptions);
 const asyncProductRebuilt: Promise<string> = shaclProductValidateToSarifRebuildAsync(shaclProduct, shaclData);
 const asyncProductExpected: Promise<string> = shaclProductValidateToSarifExpectingAsync(
@@ -479,7 +479,7 @@ if (result.kind === "ask") {
 }
 
 void stream;
-void canonical;
+void [canonical, canonicalizationJson];
 void lossText;
 void lossStatementRows;
 void lossDirectional;
@@ -526,7 +526,7 @@ void asyncExplained;
 void asyncSarif;
 void asyncSarifBased;
 void asyncChange;
-void asyncShaclEntailed;
+void asyncShaclEntailed.then(result => { const receipts: string = result.canonicalizationJson; result.free(); return receipts; });
 void asyncProductSarif;
 void asyncProductRebuilt;
 void asyncProductExpected;

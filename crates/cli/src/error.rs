@@ -121,6 +121,22 @@ pub enum CliError {
     /// Any other runtime failure — parse, serialize, pack integrity, or I/O
     /// (exit code 1).
     Runtime(String),
+    /// Original native canonicalization refusal and its owned payload admission.
+    Canonical {
+        message: String,
+        cause: purrdf_core::CanonError,
+    },
+    /// Evidence output failed; any original refusal remains owned and visible.
+    ReceiptPublication {
+        destination: std::path::PathBuf,
+        cause: std::io::Error,
+        original: Option<Box<Self>>,
+    },
+    /// A deferred output failed while the original operation was already refused.
+    OutputPublication {
+        original: Box<Self>,
+        failure: Box<Self>,
+    },
     /// Original compiled glob syntax or storage refusal.
     GlobCompile(purrdf::glob::CompileError),
     /// Original compiled glob execution refusal.
@@ -150,7 +166,10 @@ impl CliError {
     pub(crate) fn exit_code(&self) -> i32 {
         match self {
             Self::Usage(_) => 2,
-            Self::Runtime(_)
+            Self::OutputPublication { .. }
+            | Self::Canonical { .. }
+            | Self::ReceiptPublication { .. }
+            | Self::Runtime(_)
             | Self::GlobCompile(_)
             | Self::GlobMatch(_)
             | Self::GlobIri(_)
@@ -167,6 +186,24 @@ impl fmt::Display for CliError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Usage(msg) | Self::Runtime(msg) => f.write_str(msg),
+            Self::Canonical { message, .. } => f.write_str(message),
+            Self::OutputPublication { original, failure } => {
+                write!(f, "{original}; output publication failed: {failure}")
+            }
+            Self::ReceiptPublication {
+                destination,
+                cause,
+                original,
+            } => {
+                if let Some(original) = original {
+                    write!(f, "{original}; ")?;
+                }
+                write!(
+                    f,
+                    "cannot publish --canonicalization-receipts {}: {cause}; choose a writable distinct destination",
+                    destination.display()
+                )
+            }
             Self::GlobCompile(error) => error.fmt(f),
             Self::GlobMatch(error) => error.fmt(f),
             Self::GlobSetCompile(error) => error.fmt(f),
@@ -184,6 +221,13 @@ impl fmt::Display for CliError {
 impl std::error::Error for CliError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::Canonical { cause, .. } => Some(cause),
+            Self::OutputPublication { original, .. } => Some(&**original),
+            Self::ReceiptPublication {
+                original: Some(original),
+                ..
+            } => Some(&**original),
+            Self::ReceiptPublication { cause, .. } => Some(cause),
             Self::GlobCompile(error) => Some(error),
             Self::GlobMatch(error) => Some(error),
             Self::GlobSetCompile(error) => Some(error),
@@ -195,6 +239,24 @@ impl std::error::Error for CliError {
         }
     }
 }
+
+impl CliError {
+    pub(crate) fn native(error: impl std::error::Error + 'static) -> Self {
+        match purrdf_validate::canonical::native_canonical_cause(&error) {
+            Some(cause) => Self::Canonical {
+                message: error.to_string(),
+                cause: cause.clone(),
+            },
+            None => Self::Runtime(error.to_string()),
+        }
+    }
+}
+
+purrdf_lex::variant_from!(CliError {
+    native(PackError),
+    native(purrdf_validate::canonical::CanonicalServiceError),
+    native(purrdf_validate::ShapesError),
+});
 
 /// The refusal for a command-line IRI value that denotes nothing.
 ///
@@ -228,12 +290,10 @@ pub(crate) fn argv_iri_refusal(
 purrdf_lex::variant_from!(CliError {
     Runtime(
         RdfDiagnostic,
-        PackError,
         purrdf_rdf::ProjectionError,
         purrdf_rdf::TransportError,
         std::io::Error,
         purrdf_sparql_results::Error,
-        purrdf_validate::ShapesError,
     ) as ToString::to_string
 });
 

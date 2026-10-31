@@ -755,16 +755,19 @@ mod tests {
 
     #[test]
     fn facade_exposes_ontology_schema_compilation_contract() {
-        let _: fn(&SchemaCompileRequest<'_>) -> Result<SchemaCompilation, SchemaCompileError> =
-            compile_schema;
+        type CompilationWithExpressions = (SchemaCompilation, SchemaClassExpressionReport);
+        let _: fn(
+            &SchemaCompileRequest<'_>,
+            &mut CanonicalizationControl<'_>,
+        ) -> Result<SchemaCompilation, SchemaCompileError> = compile_schema;
         let mode = SchemaSurfaceMode::OntologyComplete;
         assert!(matches!(mode, SchemaSurfaceMode::OntologyComplete));
         let _: Option<SchemaCoverageReport> = None;
         let _: Option<SchemaCompilationKey> = None;
         let _: fn(
             &SchemaCompileRequest<'_>,
-        )
-            -> Result<(SchemaCompilation, SchemaClassExpressionReport), SchemaCompileError> =
+            &mut CanonicalizationControl<'_>,
+        ) -> Result<CompilationWithExpressions, SchemaCompileError> =
             compile_schema_with_class_expressions;
         let _: Option<SchemaExpressionOutcome> = None;
     }
@@ -803,7 +806,11 @@ mod tests {
         // The supported umbrella also exposes the succinct dataset-pack cache
         // boundary; downstreams never need to depend on purrdf-core directly.
         let empty = RdfDatasetBuilder::new().freeze().expect("empty dataset");
-        let pack = PackBuilder::build_bytes(&empty).expect("pack empty dataset");
+        let pack = PackBuilder::build_bytes(
+            &empty,
+            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        )
+        .expect("pack empty dataset");
         let restored = restore_pack(&pack).expect("restore empty dataset");
         assert_eq!(restored.quad_count(), 0);
 
@@ -813,7 +820,12 @@ mod tests {
         let _: Option<sparql::CompleteSparqlResult<PagedQueryEvidence>> = None;
 
         let page_rows = std::num::NonZeroUsize::new(1).expect("positive canonical bound");
-        let base = canonical_paged_seal(restored.as_ref(), page_rows).expect("empty paged base");
+        let base = canonical_paged_seal(
+            restored.as_ref(),
+            page_rows,
+            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        )
+        .expect("empty paged base");
         let mut stack = PagedStack::new(vec![Arc::new(base)]).expect("root stack API");
         let value = TermValue::iri("https://example.org/value");
         stack
@@ -836,7 +848,11 @@ mod tests {
         );
         assert_eq!(
             snapshot
-                .compact(PagedQueryLimits::UNBOUNDED, page_rows)
+                .compact(
+                    PagedQueryLimits::UNBOUNDED,
+                    page_rows,
+                    &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+                )
                 .expect("root canonical fold")
                 .page_count(),
             1

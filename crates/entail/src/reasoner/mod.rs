@@ -292,8 +292,11 @@ impl Reasoner {
     /// computing `ds`'s producer-independent identity is refused (a reserved-vocabulary
     /// term, or an exhausted n-degree search budget). `ds` is caller-supplied,
     /// and the original canonicalization refusal is retained.
-    pub fn with_proofs<D: DatasetView>(ds: &D) -> Result<Self, EntailError<D::ReadError>> {
-        Self::recorded(ds, SchemaPreparationBudget::default(), None)
+    pub fn with_proofs<D: DatasetView>(
+        ds: &D,
+        control: &mut purrdf_core::CanonicalizationControl<'_>,
+    ) -> Result<Self, EntailError<D::ReadError>> {
+        Self::recorded(ds, SchemaPreparationBudget::default(), None, control)
     }
 
     /// Construct with preparation resource ceilings selected before schema encoding.
@@ -313,8 +316,9 @@ impl Reasoner {
     pub fn with_proofs_and_preparation_budget<D: DatasetView>(
         ds: &D,
         budget: SchemaPreparationBudget,
+        control: &mut purrdf_core::CanonicalizationControl<'_>,
     ) -> Result<Self, EntailError<D::ReadError>> {
-        Self::recorded(ds, budget, None)
+        Self::recorded(ds, budget, None, control)
     }
 
     /// Record proofs while retaining one caller stop signal from input identity
@@ -331,23 +335,19 @@ impl Reasoner {
         ds: &D,
         budget: SchemaPreparationBudget,
         stop: std::sync::Arc<dyn purrdf_datalog::StopSignal>,
+        control: &mut purrdf_core::CanonicalizationControl<'_>,
     ) -> Result<Self, EntailError<D::ReadError>> {
-        Self::recorded(ds, budget, Some(stop))
+        Self::recorded(ds, budget, Some(stop), control)
     }
 
     fn recorded<D: DatasetView>(
         ds: &D,
         budget: SchemaPreparationBudget,
         stop: Option<std::sync::Arc<dyn purrdf_datalog::StopSignal>>,
+        control: &mut purrdf_core::CanonicalizationControl<'_>,
     ) -> Result<Self, EntailError<D::ReadError>> {
-        let input = match stop.as_deref() {
-            Some(stop) => crate::owl_dl::proof::try_ontology_identity_with_stop(ds, stop),
-            None => crate::owl_dl::proof::try_ontology_identity(ds),
-        }
-        .map_err(|error| match error {
-            purrdf_core::CanonError::Stopped => EntailError::Stopped,
-            error => EntailError::Canonicalization(error),
-        })?;
+        let input = crate::owl_dl::proof::try_ontology_identity(ds, control)
+            .map_err(EntailError::Canonicalization)?;
         Self::build_with_preparation(ds, Some(input), budget, stop)
     }
 
@@ -533,7 +533,7 @@ impl Reasoner {
     /// reader could not account for — this refuses, and names the constructor to use.
     ///
     /// ```
-    /// use purrdf_core::{RdfDatasetBuilder, TermValue};
+    /// use purrdf_core::{CanonicalizationControl, RdfDatasetBuilder, SearchPolicy, TermValue};
     /// use purrdf_entail::reasoner::{DlAxiom, Question, Reasoner};
     ///
     /// let mut b = RdfDatasetBuilder::new();
@@ -550,18 +550,19 @@ impl Reasoner {
     /// let question = Question::AxiomEntailment { axiom: Box::new(axiom.clone()) };
     ///
     /// // Recording is OPT-IN, so the producer asks for it.
-    /// let mut reasoner = Reasoner::with_proofs(&ds).expect("reverse-map");
+    /// let mut control = CanonicalizationControl::new(SearchPolicy::Finite(1_000_000), None);
+    /// let mut reasoner = Reasoner::with_proofs(&ds, &mut control).expect("reverse-map");
     /// let answer = reasoner.entails(&axiom).expect("consistent");
     ///
     /// // The consumer checks with a reasoner of their OWN, over their own copy of the data.
-    /// let mut checker = Reasoner::with_proofs(&ds).expect("reverse-map");
+    /// let mut checker = Reasoner::with_proofs(&ds, &mut control).expect("reverse-map");
     /// checker.prepare(&question).expect("prepare the checking question");
     /// let ctx = checker.proof_context().expect("a recording reasoner checks proofs");
     /// let certificate = answer.certificate();
     /// let replay = answer
     ///     .proof()
     ///     .expect("a recording reasoner carries a proof")
-    ///     .verify(&ds, &question, Some(certificate), &ctx)
+    ///     .verify(&ds, &question, Some(certificate), &ctx, &mut control)
     ///     .expect("a genuine proof checks");
     /// assert_eq!(replay.runs(), replay.replayed());
     ///
@@ -588,10 +589,11 @@ impl Reasoner {
     /// afterwards this reasoner remains available for subsequent services.
     ///
     /// ```compile_fail
-    /// use purrdf_core::RdfDataset;
+    /// use purrdf_core::{CanonicalizationControl, RdfDataset, SearchPolicy};
     /// use purrdf_entail::reasoner::{Question, Reasoner};
     /// fn mutate_while_checking(dataset: &RdfDataset) {
-    ///     let mut consumer = Reasoner::with_proofs(dataset).unwrap();
+    ///     let mut control = CanonicalizationControl::new(SearchPolicy::Finite(1_000_000), None);
+    ///     let mut consumer = Reasoner::with_proofs(dataset, &mut control).unwrap();
     ///     let context = consumer.borrowed_proof_context().unwrap();
     ///     consumer.prepare(&Question::Consistency).unwrap();
     ///     let _ = context.input();
@@ -1346,8 +1348,14 @@ mod tests {
             .unwrap();
         b.push_quad(cat, sub, reserved, None).unwrap();
         let ds = b.freeze().expect("freeze");
-        let error = Reasoner::with_proofs(&ds)
-            .expect_err("a reserved-vocabulary dataset must refuse canonicalization, not panic");
+        let error = Reasoner::with_proofs(
+            &ds,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect_err("a reserved-vocabulary dataset must refuse canonicalization, not panic");
         assert!(matches!(error, EntailError::Canonicalization(_)), "{error}");
         assert!(
             error.to_string().contains(purrdf_core::RESERVED_NAMESPACE),
@@ -1367,7 +1375,14 @@ mod tests {
             .unwrap();
         b.push_quad(cat, sub, animal, None).unwrap();
         let ds = b.freeze().expect("freeze");
-        let reasoner = Reasoner::with_proofs(&ds).expect("an ordinary dataset must still build");
+        let reasoner = Reasoner::with_proofs(
+            &ds,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("an ordinary dataset must still build");
         assert!(reasoner.records_proofs());
     }
 }

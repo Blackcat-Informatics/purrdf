@@ -1409,7 +1409,17 @@ mod tests {
         let rewritten = write_lpg_csv(&decoded, &config).expect("rewrite CSV");
         assert!(same_artifacts(&projected.package, &rewritten));
         let lifted = lift_lpg(&decoded, &config).expect("lift");
-        assert!(datasets_isomorphic(&dataset, &lifted.dataset).unwrap());
+        assert!(
+            datasets_isomorphic(
+                &dataset,
+                &lifted.dataset,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+        );
     }
 
     #[test]
@@ -1458,14 +1468,31 @@ mod tests {
         let rewritten = write_neo4j_csv(&decoded, &config).expect("rewrite Neo4j");
         assert!(same_artifacts(&projected.package, &rewritten));
         let lifted = lift_lpg(&decoded, &config).expect("lift");
-        assert!(datasets_isomorphic(&dataset, &lifted.dataset).unwrap());
+        assert!(
+            datasets_isomorphic(
+                &dataset,
+                &lifted.dataset,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+        );
     }
 
     #[test]
     fn both_csv_profiles_are_backend_and_archive_deterministic() {
         let dataset = fixture();
         let config = test_config(1_000);
-        let pack = PackBuilder::build_bytes(&dataset).expect("pack");
+        let pack = PackBuilder::build_bytes(
+            &dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("pack");
         let view = PackView::from_bytes(&pack).expect("pack view");
 
         let generic_dataset = project_lpg_csv(dataset.as_ref(), &config).expect("dataset CSV");

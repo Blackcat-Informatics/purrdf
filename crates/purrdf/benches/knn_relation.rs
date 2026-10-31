@@ -77,7 +77,11 @@ const FX: Identities = Identities::at("https://example.org/");
 fn space(dims: usize, metric: DistanceMetric) -> EmbeddingSpace {
     let dimension = u32::try_from(dims).expect("a production width fits u32");
     let dataset = RdfDatasetBuilder::new().freeze().expect("empty dataset");
-    let (source, _) = CertifiedEmbeddingSource::from_dataset(&dataset).expect("source pack");
+    let (source, _) = CertifiedEmbeddingSource::from_dataset(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("source pack");
 
     let mut values = stream(ROWS * dims, SEED ^ dims as u64).into_iter();
     let mut targets = Vec::with_capacity(ROWS);

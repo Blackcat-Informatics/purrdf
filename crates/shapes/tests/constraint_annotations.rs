@@ -537,7 +537,13 @@ fn annotations_survive_the_prepared_product() {
     );
     let fresh = validate_with(&shapes, "ex:a ex:p 1 .");
     let product = PreparedShapes::new(Arc::new(shapes))
-        .to_product(&ShapesProfile::CORE)
+        .to_product(
+            &ShapesProfile::CORE,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
         .expect("the annotated shapes pack");
     let restored = ShapesProduct::open(&product)
         .expect("the product opens")
@@ -701,7 +707,13 @@ fn a_restored_preparation_takes_the_request_set() {
         "ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:severity sh:Warning ; sh:nodeKind sh:Literal .",
     );
     let product = PreparedShapes::new(Arc::new(shapes))
-        .to_product(&ShapesProfile::CORE)
+        .to_product(
+            &ShapesProfile::CORE,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
         .expect("packs");
     let restored = || {
         ShapesProduct::open(&product)

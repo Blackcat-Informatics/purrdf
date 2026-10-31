@@ -490,7 +490,10 @@ enum Comparable {
     },
 }
 
-fn comparable(result: &SparqlResult) -> Comparable {
+fn comparable(
+    result: &SparqlResult,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Comparable {
     match result {
         SparqlResult::Solutions {
             variables, rows, ..
@@ -500,7 +503,7 @@ fn comparable(result: &SparqlResult) -> Comparable {
         },
         SparqlResult::Boolean(b) => Comparable::Boolean(*b),
         SparqlResult::Graph(ds) => Comparable::Graph {
-            nquads: try_canonicalize(ds).unwrap().nquads,
+            nquads: try_canonicalize(ds, control).unwrap().nquads,
         },
     }
 }
@@ -521,8 +524,20 @@ fn parallel_paths_are_byte_identical_across_the_corpus() {
         let parallel = eval_forced(&engine, &ds, query, true);
         let sequential = eval_forced(&engine, &ds, query, false);
 
-        let parallel_cmp = comparable(&parallel);
-        let sequential_cmp = comparable(&sequential);
+        let parallel_cmp = comparable(
+            &parallel,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        );
+        let sequential_cmp = comparable(
+            &sequential,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        );
 
         assert_eq!(
             parallel_cmp, sequential_cmp,
@@ -741,8 +756,20 @@ fn property_function_paths_are_byte_identical_across_the_corpus() {
         let parallel = run(true);
         let sequential = run(false);
         assert_eq!(
-            comparable(&parallel),
-            comparable(&sequential),
+            comparable(
+                &parallel,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            ),
+            comparable(
+                &sequential,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            ),
             "query `{name}` diverged between forced-parallel and forced-sequential \
              evaluation:\n{query}"
         );
@@ -890,8 +917,20 @@ SELECT (AGG(<https://example.org/agg/listCollector>, ?n) AS ?names) WHERE {
     let parallel = run(true);
     let sequential = run(false);
     assert_eq!(
-        comparable(&parallel),
-        comparable(&sequential),
+        comparable(
+            &parallel,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        ),
+        comparable(
+            &sequential,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        ),
         "custom aggregate diverged between forced-parallel and forced-sequential evaluation"
     );
 

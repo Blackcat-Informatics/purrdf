@@ -86,7 +86,15 @@ mod tests {
     fn iso(a: &str, b: &str) -> bool {
         let da = ingest(a.as_bytes()).unwrap();
         let db = ingest(b.as_bytes()).unwrap();
-        crate::ir::datasets_isomorphic(&da, &db).unwrap()
+        crate::ir::datasets_isomorphic(
+            &da,
+            &db,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap()
     }
 
     #[test]

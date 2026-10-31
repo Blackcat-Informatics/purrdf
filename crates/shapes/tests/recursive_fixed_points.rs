@@ -351,7 +351,15 @@ fn products_retain_declared_cycles_after_native_projection_drops_the_edge() {
     )
     .unwrap();
     let prepared = PreparedShapes::new(Arc::new(shapes));
-    let bytes = prepared.to_product(&ShapesProfile::CORE).unwrap();
+    let bytes = prepared
+        .to_product(
+            &ShapesProfile::CORE,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
     let dataset = parse_turtle_to_dataset("", None).unwrap();
     for rebuild in [false, true] {
         let restore = |options: &ValidationOptions| {
@@ -1151,7 +1159,15 @@ fn named_conformance_keeps_original_reports_through_product_restore() {
             assert_eq!(fresh_report.results.len(), usize::from(!fresh_expected));
             let fresh_bytes = fresh_report.to_ntriples().unwrap();
             let prepared = PreparedShapes::new(Arc::new(shapes));
-            let bytes = prepared.to_product(&ShapesProfile::CORE).unwrap();
+            let bytes = prepared
+                .to_product(
+                    &ShapesProfile::CORE,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
+                )
+                .unwrap();
             assert_eq!(
                 prepared
                     .bind_dataset(&dataset)
@@ -1219,7 +1235,18 @@ fn named_conformance_keeps_original_reports_through_product_restore() {
                         "rebuild={rebuild}"
                     );
                 }
-                assert_eq!(restored.to_product(&ShapesProfile::CORE).unwrap(), bytes);
+                assert_eq!(
+                    restored
+                        .to_product(
+                            &ShapesProfile::CORE,
+                            &mut purrdf_core::CanonicalizationControl::new(
+                                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                                None
+                            )
+                        )
+                        .unwrap(),
+                    bytes
+                );
             }
         }
     }
@@ -1927,7 +1954,15 @@ fn named_where_targets_rebind_original_reports_after_product_restore() {
                 .unwrap(),
             );
             let prepared = PreparedShapes::new(Arc::clone(&shapes));
-            let bytes = prepared.to_product(&ShapesProfile::CORE).unwrap();
+            let bytes = prepared
+                .to_product(
+                    &ShapesProfile::CORE,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
+                )
+                .unwrap();
             for (graph, names) in [
                 (":a :p :b .", ["a", "b"]),
                 (":fresh :q :other .", ["fresh", "other"]),
@@ -1992,7 +2027,18 @@ fn named_where_targets_rebind_original_reports_after_product_restore() {
                         expected,
                         "rebuild={rebuild}"
                     );
-                    assert_eq!(restored.to_product(&ShapesProfile::CORE).unwrap(), bytes);
+                    assert_eq!(
+                        restored
+                            .to_product(
+                                &ShapesProfile::CORE,
+                                &mut purrdf_core::CanonicalizationControl::new(
+                                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                                    None
+                                )
+                            )
+                            .unwrap(),
+                        bytes
+                    );
                 }
             }
         }
@@ -2513,7 +2559,15 @@ fn selected_entries_refuse_unproved_original_scopes() {
             let report =
                 validate_shape_with_recursion(&data, &focus, &root, None, recursion).unwrap_err();
             let prepared = PreparedShapes::new(Arc::new(shapes));
-            let bytes = prepared.to_product(&ShapesProfile::CORE).unwrap();
+            let bytes = prepared
+                .to_product(
+                    &ShapesProfile::CORE,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
+                )
+                .unwrap();
             for rebuild in [false, true] {
                 let product = ShapesProduct::open(&bytes).unwrap();
                 let restored = if rebuild {

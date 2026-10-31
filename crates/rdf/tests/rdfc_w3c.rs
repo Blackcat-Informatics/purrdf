@@ -159,7 +159,14 @@ fn run_w3c_fixtures(scope: &str, include: &dyn Fn(&str) -> bool) {
         };
 
         if expected_path.exists() {
-            let outcome = try_canonicalize_with(&quads, hash_for(&stem));
+            let outcome = try_canonicalize_with(
+                &quads,
+                hash_for(&stem),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            );
             match outcome {
                 Ok(canonical) => {
                     let actual = canonical.nquads;
@@ -176,7 +183,14 @@ fn run_w3c_fixtures(scope: &str, include: &dyn Fn(&str) -> bool) {
             }
         } else {
             // Negative poison input must return the native work-budget refusal.
-            match try_canonicalize_with(&quads, hash_for(&stem)) {
+            match try_canonicalize_with(
+                &quads,
+                hash_for(&stem),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            ) {
                 Err(purrdf_rdf::CanonError::BudgetExceeded { .. }) => {}
                 Err(error) => failures.push(format!(
                     "{stem}: NEGATIVE test returned a different refusal: {error}"

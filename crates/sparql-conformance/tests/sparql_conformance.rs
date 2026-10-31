@@ -29,8 +29,12 @@ const CASE_PREFIX: &str = "run_manifest_case::";
 const INDEX_PREFIX: &str = "index_manifest::";
 
 /// Run one manifest; `label` names it in the tally line and failure message.
-fn run_manifest_case(manifest: &Path, label: &str) -> Result<(), Failed> {
-    let summary = purrdf_sparql_conformance::run_manifest(manifest)
+fn run_manifest_case(
+    manifest: &Path,
+    label: &str,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<(), Failed> {
+    let summary = purrdf_sparql_conformance::run_manifest(manifest, control)
         .map_err(|e| Failed::from(format!("{label}: {e}")))?;
     eprintln!("[{label}] {}", summary.tally_line());
     if summary.is_ok() {
@@ -63,7 +67,9 @@ fn main() -> ExitCode {
     let groups = discovery.groups.into_iter().map(|manifest| {
         let label = format!("suite/{}", manifest.relative);
         Trial::test(format!("{CASE_PREFIX}{}", manifest.relative), move || {
-            run_manifest_case(&manifest.path, &label)
+            let mut control =
+                purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            run_manifest_case(&manifest.path, &label, &mut control)
         })
     });
     // An index's coverage is checked by `discover` itself; its case reports the

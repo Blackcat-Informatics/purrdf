@@ -75,6 +75,7 @@ impl SourceVerificationReport {
 pub fn verify_embedding_source(
     embedding: &EmbeddingView<'_>,
     input: EmbeddingSource<'_>,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<SourceVerificationReport, SourceAttachmentError> {
     let source_format = input.source_format();
     let expected = embedding.source().source_format();
@@ -87,10 +88,10 @@ pub fn verify_embedding_source(
     let (exact_digest, certified_rdf_digest, ordinals_checked) = match input {
         EmbeddingSource::Purrpck(bytes) => {
             let exact = verify_exact_source(embedding, bytes)?;
-            let proof = verify_pack_bytes(bytes).map_err(EmbeddingError::source_pack)?;
+            let proof = verify_pack_bytes(bytes, control).map_err(EmbeddingError::source_pack)?;
             let rdf = RdfcDigest::from_raw(*proof.rdf_digest().as_bytes());
             verify_rdf_source(embedding, rdf)?;
-            let checked = verify_pack_ordinals(embedding, bytes)?;
+            let checked = verify_pack_ordinals(embedding, bytes, control)?;
             (exact, rdf, checked)
         }
         EmbeddingSource::Columnar(files) => {
@@ -108,7 +109,7 @@ pub fn verify_embedding_source(
             // only requested original row evidence bound to its actual dataset.
             let read = purrdf_columnar::read_with_ordinals(files, &requested)?;
             let dataset = &read.read().dataset;
-            let (rdf, canonical) = canonical_source(dataset)?;
+            let (rdf, canonical) = canonical_source(dataset, control)?;
             verify_rdf_source(embedding, rdf)?;
             let checked = verify_ordinals(embedding, |target, ordinal| {
                 columnar_target_id(
@@ -161,15 +162,21 @@ fn verify_rdf_source(
 
 pub(super) fn canonical_source(
     dataset: &RdfDataset,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<(RdfcDigest, Canonicalized), SourceAttachmentError> {
-    let canonical = try_canonicalize(dataset)?;
-    let digest = RdfcDigest::from_raw(*ContentDigest::of(canonical.nquads.as_bytes()).as_bytes());
+    let (canonical, digest) = purrdf_core::try_canonicalize_sha256_view(
+        dataset,
+        purrdf_core::CanonHash::Sha256,
+        control,
+    )?;
+    let digest = RdfcDigest::from_raw(*digest.as_bytes());
     Ok((digest, canonical))
 }
 
 fn verify_pack_ordinals(
     embedding: &EmbeddingView<'_>,
     bytes: &[u8],
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<u64, EmbeddingError> {
     if embedding
         .targets()
@@ -179,7 +186,7 @@ fn verify_pack_ordinals(
     }
     let pack = PackView::from_bytes(bytes).map_err(EmbeddingError::source_pack)?;
     let dataset = dataset_from_view(&pack).map_err(EmbeddingError::source_pack)?;
-    let canonical = try_canonicalize(&dataset).map_err(EmbeddingError::source_pack)?;
+    let canonical = try_canonicalize(&dataset, control).map_err(EmbeddingError::source_pack)?;
     verify_ordinals(embedding, |target, ordinal| {
         pack_target_id(
             target,
@@ -471,8 +478,9 @@ pub fn bind_external_pack(
     scope: ExternalScope,
     bytes: &[u8],
     contract: &ExternalBindingContract,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<ExternalBinding, EmbeddingError> {
-    let proof = verify_pack_bytes(bytes).map_err(EmbeddingError::external_pack)?;
+    let proof = verify_pack_bytes(bytes, control).map_err(EmbeddingError::external_pack)?;
     ExternalBinding::from_verified_pack(scope, proof, contract)
 }
 
@@ -480,12 +488,13 @@ pub fn bind_external_pack(
 pub fn verify_external_pack(
     binding: ExternalBindingView<'_>,
     bytes: &[u8],
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<RdfcDigest, EmbeddingError> {
     verify_external_artifact(binding, bytes)?;
     let expected = binding
         .certified_rdf_digest()
         .ok_or(EmbeddingError::Missing("external certified RDF digest"))?;
-    let proof = verify_pack_bytes(bytes).map_err(EmbeddingError::external_pack)?;
+    let proof = verify_pack_bytes(bytes, control).map_err(EmbeddingError::external_pack)?;
     let certified = proof.rdf_digest();
     DigestKind::CertifiedRdf.verify(&expected, certified.as_bytes())?;
     Ok(RdfcDigest::from_raw(*certified.as_bytes()))

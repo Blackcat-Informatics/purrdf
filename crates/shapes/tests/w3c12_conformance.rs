@@ -441,8 +441,18 @@ fn run_infer(tc: &InferCase) -> Result<(), String> {
     }
     let (inferred, base) = outcome?;
     let expected_full = merge(base.as_ref(), expected_triples(&tc.expected)?.as_ref())?;
-    let produced = try_canonicalize(inferred.as_ref()).unwrap().nquads;
-    let expected = try_canonicalize(expected_full.as_ref()).unwrap().nquads;
+    let produced = try_canonicalize(
+        inferred.as_ref(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap()
+    .nquads;
+    let expected = try_canonicalize(
+        expected_full.as_ref(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap()
+    .nquads;
     if produced == expected {
         return Ok(());
     }
@@ -535,8 +545,24 @@ fn run_srl(tc: &SrlCase) -> Result<(), String> {
             let produced =
                 expected_triples(&InferExpected::Triples(inference.inferred().to_vec()))?;
             let expected = parse_turtle_file(result)?;
-            let produced = try_canonicalize(produced.as_ref()).unwrap().nquads;
-            let expected = try_canonicalize(expected.as_ref()).unwrap().nquads;
+            let produced = try_canonicalize(
+                produced.as_ref(),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .unwrap()
+            .nquads;
+            let expected = try_canonicalize(
+                expected.as_ref(),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .unwrap()
+            .nquads;
             if produced == expected {
                 return Ok(());
             }

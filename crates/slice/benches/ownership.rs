@@ -68,7 +68,12 @@ fn fixture() -> (TempDir, SliceCatalog) {
     }
 
     let vocab = SliceVocab::for_namespace(NS);
-    let catalog = SliceCatalog::discover(temp.path(), vocab).expect("discover fixture");
+    let catalog = SliceCatalog::discover(
+        temp.path(),
+        vocab,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("discover fixture");
     (temp, catalog)
 }
 

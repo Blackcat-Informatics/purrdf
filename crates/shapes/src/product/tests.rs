@@ -201,7 +201,13 @@ fn prepare(body: &str) -> PreparedShapes {
 /// Write a product for `body` under the only profile this build implements.
 fn product_of(body: &str) -> Vec<u8> {
     prepare(body)
-        .to_product(&ShapesProfile::CORE)
+        .to_product(
+            &ShapesProfile::CORE,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
         .expect("the fixture is representable")
 }
 
@@ -424,7 +430,14 @@ fn admit_installs_host_aggregates() {
     shapes.aggregates = Arc::new(aggregates.clone());
     let prepared = PreparedShapes::new(Arc::new(shapes));
     let bytes = prepared
-        .to_product_with_implementation_identity(&ShapesProfile::CORE, IMPLEMENTATION_ID)
+        .to_product_with_implementation_identity(
+            &ShapesProfile::CORE,
+            IMPLEMENTATION_ID,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
         .expect("representable");
 
     let functions = UserFunctionRegistry::default();
@@ -533,7 +546,14 @@ fn a_product_written_for_a_host_restores_under_that_host_s_relations() {
         HostBindings::without_declarations(&functions, &aggregates, &wired, IMPLEMENTATION_ID);
 
     let bytes = PreparedShapes::new(Arc::new(shapes_of(PLAIN_SHAPES)))
-        .to_product_for_host(&ShapesProfile::CORE, &host)
+        .to_product_for_host(
+            &ShapesProfile::CORE,
+            &host,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
         .expect("a product bound to this host is representable");
 
     // The same host restores it.
@@ -580,7 +600,14 @@ fn a_product_written_under_a_declared_namespace_restores_only_under_it() {
     let host = HostBindings::new(&functions, &aggregates, &relations, &[], &declared);
 
     let bytes = PreparedShapes::new(Arc::new(shapes_of(PLAIN_SHAPES)))
-        .to_product_for_host(&ShapesProfile::CORE, &host)
+        .to_product_for_host(
+            &ShapesProfile::CORE,
+            &host,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
         .expect("a product bound to this host is representable");
 
     ShapesProduct::open(&bytes)
@@ -644,7 +671,14 @@ fn admit_refuses_a_different_aggregate_registry() {
     let mut shapes = shapes_of(&ttl);
     shapes.aggregates = Arc::new(sum_aggregates());
     let bytes = PreparedShapes::new(Arc::new(shapes))
-        .to_product_with_implementation_identity(&ShapesProfile::CORE, IMPLEMENTATION_ID)
+        .to_product_with_implementation_identity(
+            &ShapesProfile::CORE,
+            IMPLEMENTATION_ID,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
         .expect("representable");
 
     let functions = UserFunctionRegistry::default();
@@ -734,7 +768,13 @@ fn admit_restores_box_role_vocab() {
     );
 
     let bytes = PreparedShapes::new(Arc::new(parsed))
-        .to_product(&ShapesProfile::CORE)
+        .to_product(
+            &ShapesProfile::CORE,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
         .expect("representable");
     let view = ShapesProduct::open(&bytes).expect("opens");
     assert_eq!(
@@ -777,7 +817,13 @@ fn admit_under_none_vocab_restores_none() {
     );
 
     let bytes = PreparedShapes::new(Arc::new(parsed))
-        .to_product(&ShapesProfile::CORE)
+        .to_product(
+            &ShapesProfile::CORE,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
         .expect("representable");
     let view = ShapesProduct::open(&bytes).expect("opens");
     assert!(view.declared_provenance().box_role_vocab().is_none());
@@ -927,7 +973,13 @@ fn a_declared_sparql_function_survives_the_round_trip() {
     );
 
     let bytes = prepare(SPARQL_FN_SHAPES)
-        .to_product(&ShapesProfile::CORE)
+        .to_product(
+            &ShapesProfile::CORE,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
         .expect("a sh:SPARQLFunction declaration is representable");
     let admitted = ShapesProduct::open(&bytes)
         .expect("opens")
@@ -975,7 +1027,13 @@ fn a_declared_sparql_function_survives_the_round_trip() {
 fn a_declaration_the_model_does_not_reach_is_carried() {
     let document = prepare(UNREACHABLE_FN_SHAPES);
     let bytes = document
-        .to_product(&ShapesProfile::CORE)
+        .to_product(
+            &ShapesProfile::CORE,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
         .expect("a declaration called only from SPARQL text is representable");
     let admitted = ShapesProduct::open(&bytes)
         .expect("opens")
@@ -1043,7 +1101,10 @@ fn certify_is_not_reachable_from_admit() {
     let bytes = product_of(PLAIN_SHAPES);
     ShapesProduct::open(&bytes)
         .expect("opens")
-        .certify()
+        .certify(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None,
+        ))
         .expect("a freshly written product certifies");
 
     let tampered = repack(&bytes, |sections| {
@@ -1075,7 +1136,10 @@ fn certify_is_not_reachable_from_admit() {
 
     let error = ShapesProduct::open(&tampered)
         .expect("opens")
-        .certify()
+        .certify(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None,
+        ))
         .expect_err("certification recomputes, so it sees what admission cannot");
     assert_eq!(error.dimension(), ProductDimension::DatasetIdentity);
 }
@@ -1270,7 +1334,13 @@ fn disagreeing_carriers_refuse() {
     )
     .expect("shapes parse");
     let bytes = PreparedShapes::new(Arc::new(shapes))
-        .to_product(&ShapesProfile::CORE)
+        .to_product(
+            &ShapesProfile::CORE,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
         .expect("representable");
 
     // The valid neighbour first: the untouched product restores.
@@ -1327,7 +1397,13 @@ fn included_graphs_are_bound_by_the_identity() {
             .expect("the fixture parses");
         assert_eq!(shapes.provenance().included_graphs(), absorbed);
         let bytes = PreparedShapes::new(Arc::new(shapes))
-            .to_product(&ShapesProfile::CORE)
+            .to_product(
+                &ShapesProfile::CORE,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
             .expect("the fixture is representable");
         let identity = ShapesProduct::open(&bytes)
             .expect("the product opens")

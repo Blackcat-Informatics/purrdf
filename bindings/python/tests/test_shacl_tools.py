@@ -174,7 +174,7 @@ def test_py_entail_limits() -> None:
         "max_join_steps",
     ):
         with pytest.raises(ValueError) as refused:
-            purrdf.shapes.entail(_SHAPES, _DATA, **{keyword: 1})
+            purrdf.shapes.entail(_SHAPES, _DATA, **{keyword: 1}, canonical_search="1000000").value
         assert str(refused.value).endswith(f"entail({keyword}=...)"), str(refused.value)
         assert "RuleOptions::" not in str(refused.value)
     closed = purrdf.shapes.entail(
@@ -183,11 +183,11 @@ def test_py_entail_limits() -> None:
         max_term_generating_rounds=64,
         max_generated_terms=64,
         max_stored_facts=64,
-        max_join_steps=4096,
-    )
+        max_join_steps=4096, canonical_search="1000000"
+    ).value
     for line in _INFERRED.splitlines():
         assert line in closed["ntriples"], closed
-    assert closed == {**purrdf.shapes.entail(_SHAPES, _DATA), "execution_receipt_json": closed["execution_receipt_json"]}
+    assert closed == {**purrdf.shapes.entail(_SHAPES, _DATA, canonical_search="1000000").value, "execution_receipt_json": closed["execution_receipt_json"]}
     assert len(json.loads(closed["execution_receipt_json"])["executionIdentity"]) == 64
 
 def test_py_eval_node_expr() -> None:

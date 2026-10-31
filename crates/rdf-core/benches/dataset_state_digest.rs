@@ -84,9 +84,27 @@ fn cases() -> Vec<(&'static str, Arc<RdfDataset>)> {
 fn bench_state(c: &mut Bench) {
     let mut group = c.benchmark_group("dataset_state_digest");
     for (name, dataset) in cases() {
-        DatasetStateDigest::from_view(&dataset).expect("every measured fixture is admitted");
+        DatasetStateDigest::from_view(
+            &dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("every measured fixture is admitted");
         group.bench_function(name, |bencher| {
-            bencher.iter(|| black_box(DatasetStateDigest::from_view(black_box(&dataset)).unwrap()));
+            bencher.iter(|| {
+                black_box(
+                    DatasetStateDigest::from_view(
+                        black_box(&dataset),
+                        &mut purrdf_core::CanonicalizationControl::new(
+                            purrdf_core::RDFC_V2_CORPUS_POLICY,
+                            None,
+                        ),
+                    )
+                    .unwrap(),
+                )
+            });
         });
     }
     group.finish();

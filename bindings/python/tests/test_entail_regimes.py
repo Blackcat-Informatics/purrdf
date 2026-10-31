@@ -145,7 +145,7 @@ def _dataset(text: str = SCHEMA) -> RdfDataset:
 def test_owl_rl_derives_what_parsing_does_not() -> None:
     """OWL-RL infers triples that are in neither the input nor a Simple closure."""
     closure, _report = entail.materialize(_dataset(), entail.Regime.OWL_RL, "", [], [])
-    closed = closure.to_nquads()
+    closed = closure.to_nquads(canonical_search="1000000").value
 
     assert SUBCLASS_INFERENCE in closed, closed
     assert SYMMETRY_INFERENCE in closed, closed
@@ -154,21 +154,21 @@ def test_owl_rl_derives_what_parsing_does_not() -> None:
     assert SYMMETRY_INFERENCE not in SCHEMA
     # `simple` is the identity closure: the same input yields neither.
     identity, _ = entail.materialize(_dataset(), entail.Regime.SIMPLE, "", [], [])
-    assert SUBCLASS_INFERENCE not in identity.to_nquads()
-    assert SYMMETRY_INFERENCE not in identity.to_nquads()
+    assert SUBCLASS_INFERENCE not in identity.to_nquads(canonical_search="1000000").value
+    assert SYMMETRY_INFERENCE not in identity.to_nquads(canonical_search="1000000").value
 
 
 def test_symmetry_is_owl_only_not_rdfs() -> None:
     """`prp-symp` is an OWL rule: RDFS must NOT license the symmetric triple."""
     rdfs, _ = entail.materialize(_dataset(), entail.Regime.RDFS, "", [], [])
-    assert SUBCLASS_INFERENCE in rdfs.to_nquads(), "rdfs9/cax-sco still fires"
-    assert SYMMETRY_INFERENCE not in rdfs.to_nquads()
+    assert SUBCLASS_INFERENCE in rdfs.to_nquads(canonical_search="1000000").value, "rdfs9/cax-sco still fires"
+    assert SYMMETRY_INFERENCE not in rdfs.to_nquads(canonical_search="1000000").value
 
 
 def test_base_triples_survive_the_closure() -> None:
     """A closure adds; it never drops. Every input triple is still present."""
     closure, _ = entail.materialize(_dataset(), entail.Regime.OWL_RL, "", [], [])
-    closed = closure.to_nquads()
+    closed = closure.to_nquads(canonical_search="1000000").value
     for line in SCHEMA.splitlines():
         assert line in closed, f"input triple dropped by the closure: {line}"
     assert closure.quad_count() > len(SCHEMA.splitlines())
@@ -202,23 +202,23 @@ def _budget_count(report: str, resource: str) -> int:
 def test_the_evaluation_limits_refuse_naming_this_hosts_keyword() -> None:
     """Each real keyword refuses, preserves its counts and admits its neighbour."""
     def text(value):
-        return value if isinstance(value, str) else value.to_nquads()
-    for service, data, name in [(entail.materialize, _dataset(), "materialize"),
-                                (entail.materialize_nt, SCHEMA, "materialize_nt")]:
-        closure, report = service(data, entail.Regime.OWL_RL, "", [], [])
+        return value if isinstance(value, str) else value.to_nquads(canonical_search="1000000").value
+    for service, data, name, policy, unwrap in [(entail.materialize, _dataset(), "materialize", {}, lambda value: value),
+                                (entail.materialize_nt, SCHEMA, "materialize_nt", {"canonical_search": "1000000"}, lambda value: value.value)]:
+        closure, report = unwrap(service(data, entail.Regime.OWL_RL, "", [], [], **policy))
         facts = _budget_count(report, "stored-facts")
         arena = _budget_count(report, "term-arena-bytes")
         for key, short, raised in [("max_stored_facts", facts - 1, facts),
                                     ("max_join_steps", 1, 1048576),
                                     ("max_term_arena_bytes", arena - 1, arena)]:
             with pytest.raises(ValueError) as refused:
-                service(data, entail.Regime.OWL_RL, "", [], [], **{key: short})
+                service(data, entail.Regime.OWL_RL, "", [], [], **policy, **{key: short})
             message = str(refused.value)
             assert "evaluation exceeded" in message
             assert message.endswith(f"raise it with {name}({key}=...)")
             if key == "max_term_arena_bytes":
                 assert f"{arena} observed, {short} permitted" in message
-            exact, _ = service(data, entail.Regime.OWL_RL, "", [], [], **{key: raised})
+            exact, _ = unwrap(service(data, entail.Regime.OWL_RL, "", [], [], **policy, **{key: raised}))
             assert text(exact) == text(closure)
 
 
@@ -230,10 +230,10 @@ def test_the_limits_in_force_reach_the_contract_hash() -> None:
             line for line in report.splitlines() if line.startswith("contract-hash ")
         )
 
-    closure, report = entail.materialize_nt(SCHEMA, entail.Regime.OWL_RL, "", [], [])
+    closure, report = entail.materialize_nt(SCHEMA, entail.Regime.OWL_RL, "", [], [], canonical_search="1000000").value
     raised, raised_report = entail.materialize_nt(
-        SCHEMA, entail.Regime.OWL_RL, "", [], [], max_stored_facts=1 << 23
-    )
+        SCHEMA, entail.Regime.OWL_RL, "", [], [], max_stored_facts=1 << 23, canonical_search="1000000"
+    ).value
     assert raised == closure
     assert hash_of(raised_report) != hash_of(report)
 
@@ -243,20 +243,20 @@ def test_the_limits_in_force_reach_the_contract_hash() -> None:
 
 def test_materialize_nt_matches_the_dataset_path_byte_for_byte() -> None:
     """The string wrapper is the same boundary call, not a second engine path."""
-    text_closure, text_report = entail.materialize_nt(SCHEMA, entail.Regime.OWL_RL, "", [], [])
+    text_closure, text_report = entail.materialize_nt(SCHEMA, entail.Regime.OWL_RL, "", [], [], canonical_search="1000000").value
     dataset_closure, dataset_report = entail.materialize(
         _dataset(), entail.Regime.OWL_RL, "", [], []
     )
-    assert text_closure == dataset_closure.to_nquads()
+    assert text_closure == dataset_closure.to_nquads(canonical_search="1000000").value
     assert text_report == dataset_report
 
 
 def test_to_nquads_round_trips() -> None:
     """A serialized closure re-parses, and re-serializes to the same bytes."""
     closure, _ = entail.materialize(_dataset(), entail.Regime.OWL_RL, "", [], [])
-    serialized = closure.to_nquads()
+    serialized = closure.to_nquads(canonical_search="1000000").value
     reparsed = RdfDataset(serialized, RdfFormat.N_QUADS)
-    assert reparsed.to_nquads() == serialized
+    assert reparsed.to_nquads(canonical_search="1000000").value == serialized
     assert reparsed.quad_count() == closure.quad_count()
     # The same handle type the root surface exposes, not a private twin.
     assert isinstance(reparsed, purrdf.RdfDataset)
@@ -274,14 +274,14 @@ def test_repeated_calls_are_byte_identical(regime: entail.Regime, program: str) 
     at this repetition count.
     """
     first_closure, first_report = entail.materialize(_dataset(), regime, program, [], [])
-    first = first_closure.to_nquads()
+    first = first_closure.to_nquads(canonical_search="1000000").value
     for _ in range(11):
         closure, report = entail.materialize(_dataset(), regime, program, [], [])
-        assert closure.to_nquads() == first
+        assert closure.to_nquads(canonical_search="1000000").value == first
         assert report == first_report
     # …and the text path is stable in the same way.
-    text = entail.materialize_nt(SCHEMA, regime, program, [], [])
-    assert entail.materialize_nt(SCHEMA, regime, program, [], []) == text
+    text = entail.materialize_nt(SCHEMA, regime, program, [], [], canonical_search="1000000").value
+    assert entail.materialize_nt(SCHEMA, regime, program, [], [], canonical_search="1000000").value == text
 
 
 # ── Every regime member is accepted ─────────────────────────────────────────────
@@ -303,8 +303,8 @@ def test_every_regime_member_materializes(regime: entail.Regime, program: str) -
     assert report.startswith("purrdf-reasoning-report 4\n")
     assert report.endswith("inconsistency none\n")
     # …and the text path agrees, byte for byte, on the same regime and program.
-    text_closure, text_report = entail.materialize_nt(SCHEMA, regime, program, [], [])
-    assert text_closure == closure.to_nquads()
+    text_closure, text_report = entail.materialize_nt(SCHEMA, regime, program, [], [], canonical_search="1000000").value
+    assert text_closure == closure.to_nquads(canonical_search="1000000").value
     assert text_report == report
 
 
@@ -316,7 +316,7 @@ def test_the_rif_lane_entails_under_the_supplied_rules() -> None:
     no rule table ran.
     """
     closure, report = entail.materialize(_dataset(), entail.Regime.RIF, RIF_PROGRAM, [], [])
-    closed = closure.to_nquads()
+    closed = closure.to_nquads(canonical_search="1000000").value
     assert RIF_INFERENCE in closed, closed
     assert "\nregime rif\n" in report
     assert "http://www.w3.org/2000/01/rdf-schema#Resource" not in closed
@@ -325,7 +325,7 @@ def test_the_rif_lane_entails_under_the_supplied_rules() -> None:
 def test_owl_direct_materializes_the_query_independent_augmentation() -> None:
     """`OWL_DIRECT` closes: the tableau states what it decides about named terms."""
     closure, report = entail.materialize(_dataset(), entail.Regime.OWL_DIRECT, "", [], [])
-    assert SUBCLASS_INFERENCE in closure.to_nquads(), closure.to_nquads()
+    assert SUBCLASS_INFERENCE in closure.to_nquads(canonical_search="1000000").value, closure.to_nquads(canonical_search="1000000").value
     assert "\nregime owl-direct\n" in report
 
 
@@ -338,7 +338,7 @@ def test_a_rule_document_belongs_to_rif_alone(
         return
     for call in (
         lambda: entail.materialize(_dataset(), regime, RIF_PROGRAM, [], []),
-        lambda: entail.materialize_nt(SCHEMA, regime, RIF_PROGRAM, [], []),
+        lambda: entail.materialize_nt(SCHEMA, regime, RIF_PROGRAM, [], [], canonical_search="1000000").value,
     ):
         with pytest.raises(ValueError, match="takes no rule document"):
             call()
@@ -472,7 +472,7 @@ def test_the_gap_is_exactly_the_reports_missing_lines(regime: entail.Regime) -> 
 def test_malformed_input_raises_value_error() -> None:
     """A malformed document is an error, not an empty closure."""
     with pytest.raises(ValueError):
-        entail.materialize_nt("this is not n-quads\n", entail.Regime.RDFS, "", [], [])
+        entail.materialize_nt("this is not n-quads\n", entail.Regime.RDFS, "", [], [], canonical_search="1000000").value
     with pytest.raises(ValueError):
         RdfDataset("this is not n-quads\n", RdfFormat.N_QUADS)
 
@@ -505,15 +505,15 @@ def test_a_reserved_vocabulary_closure_raises_value_error_naming_it() -> None:
     """
     with pytest.raises(ValueError, match="urn:purrdf:rdfc:reifies"):
         entail.materialize_nt(
-            _RESERVED_PREDICATE_PLAIN_OBJECT, entail.Regime.SIMPLE, "", [], []
-        )
+            _RESERVED_PREDICATE_PLAIN_OBJECT, entail.Regime.SIMPLE, "", [], [], canonical_search="1000000"
+        ).value
 
 
 def test_an_ordinary_closure_neighbouring_the_reserved_iri_still_materializes() -> None:
     """The refusal above is not an over-refusal of an ordinary, unrelated IRI."""
     closed_nquads, _report = entail.materialize_nt(
-        _NEIGHBOURING_ORDINARY_PREDICATE, entail.Regime.SIMPLE, "", [], []
-    )
+        _NEIGHBOURING_ORDINARY_PREDICATE, entail.Regime.SIMPLE, "", [], [], canonical_search="1000000"
+    ).value
     assert "urn:purrdf:other:annotation" in closed_nquads, closed_nquads
 
 
@@ -521,7 +521,7 @@ def test_unknown_regime_spelling_names_the_accepted_set() -> None:
     """The error a caller three language boundaries away has to act on."""
     for call in (
         lambda: entail.materialize(_dataset(), "rdfs-plus", "", [], []),
-        lambda: entail.materialize_nt(SCHEMA, "rdfs-plus", "", [], []),
+        lambda: entail.materialize_nt(SCHEMA, "rdfs-plus", "", [], [], canonical_search="1000000").value,
         lambda: entail.rules("rdfs-plus"),
         lambda: entail.implemented_rules("rdfs-plus"),
     ):
@@ -627,8 +627,8 @@ def test_the_golden_vector_matches_through_python(case: dict[str, str]) -> None:
         case["input"], case["regime"], case.get("program", ""), [], [],
         max_stored_facts=4194304,
         max_join_steps=1048576,
-        max_term_arena_bytes=16777216,
-    )
+        max_term_arena_bytes=16777216, canonical_search="1000000"
+    ).value
     assert closure == case["closure"]
     assert report == case["report"]
 
@@ -659,7 +659,7 @@ def test_the_withheld_surrogate_count_is_visible_from_python() -> None:
     "counted here" and pointed at a number that was not in the string.
     """
     def withheld(regime: entail.Regime) -> int:
-        _closure, report = entail.materialize_nt(SCHEMA, regime, "", [], [])
+        _closure, report = entail.materialize_nt(SCHEMA, regime, "", [], [], canonical_search="1000000").value
         for line in report.splitlines():
             if line.startswith("withheld-surrogates "):
                 return int(line.removeprefix("withheld-surrogates "))
@@ -685,7 +685,7 @@ def test_an_inconsistent_run_raises_with_its_report_and_witness_triples() -> Non
     premise order.
     """
     with pytest.raises(ValueError) as raised:
-        entail.materialize_nt(INCONSISTENT, entail.Regime.OWL_RL, "", [], [])
+        entail.materialize_nt(INCONSISTENT, entail.Regime.OWL_RL, "", [], [], canonical_search="1000000").value
     message = str(raised.value)
 
     assert "cax-dw was satisfied by 3 asserted triples" in message
@@ -1184,7 +1184,7 @@ def test_every_regime_member_selects_a_distinct_native_regime() -> None:
     """
     reported = []
     for regime, program in REGIME_CALLS:
-        _, report = entail.materialize_nt(SCHEMA, regime, program, [], [])
+        _, report = entail.materialize_nt(SCHEMA, regime, program, [], [], canonical_search="1000000").value
         lines = [
             line.removeprefix("regime ")
             for line in report.splitlines()
@@ -1293,25 +1293,25 @@ def test_materialize_and_consistency_close_over_the_import_table() -> None:
     with pytest.raises(ValueError, match="example.org/lib"):
         entail.materialize(importing, entail.Regime.RDFS, "", [], [])
     with pytest.raises(ValueError, match="example.org/lib"):
-        entail.materialize_nt(_IMPORTING_PREMISE, entail.Regime.RDFS, "", [], [])
+        entail.materialize_nt(_IMPORTING_PREMISE, entail.Regime.RDFS, "", [], [], canonical_search="1000000").value
     closure, report = entail.materialize(importing, entail.Regime.RDFS, "", table, [])
-    assert _DERIVED_B in closure.to_nquads()
+    assert _DERIVED_B in closure.to_nquads(canonical_search="1000000").value
     assert "\nboundary ontology-import-resolved " in report
-    text, _ = entail.materialize_nt(_IMPORTING_PREMISE, entail.Regime.RDFS, "", table, [])
+    text, _ = entail.materialize_nt(_IMPORTING_PREMISE, entail.Regime.RDFS, "", table, [], canonical_search="1000000").value
     assert _DERIVED_B in text
     with pytest.raises(ValueError, match="would be read and never used"):
         entail.materialize(plain, entail.Regime.RDFS, "", table, [])
     unimported, _ = entail.materialize(plain, entail.Regime.RDFS, "", [], [])
-    assert _DERIVED_B not in unimported.to_nquads()
+    assert _DERIVED_B not in unimported.to_nquads(canonical_search="1000000").value
 
     with pytest.raises(ValueError, match="example.org/lib"):
-        entail.consistency(_IMPORTING_PREMISE, [], [])
-    answer, certificate = entail.consistency(_IMPORTING_PREMISE, table, [])
+        entail.consistency(_IMPORTING_PREMISE, [], [], canonical_search="1000000").value
+    answer, certificate = entail.consistency(_IMPORTING_PREMISE, table, [], canonical_search="1000000").value
     assert answer == "consistency false\n"
     assert "\nboundary ontology-import-resolved " in certificate
     with pytest.raises(ValueError, match="example.org/lib"):
-        entail.consistency(_FACTS, table, [])
-    assert entail.consistency(_FACTS, [], [])[0] == "consistency true\n"
+        entail.consistency(_FACTS, table, [], canonical_search="1000000").value
+    assert entail.consistency(_FACTS, [], [], canonical_search="1000000").value[0] == "consistency true\n"
 
 
 # ── The conclusion-directed services take the evaluation limits ──────────────────

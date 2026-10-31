@@ -213,7 +213,14 @@ fn write_result_golden(
 ) -> Result<(), purrdf_core::CanonError> {
     match result {
         SparqlResult::Graph(graph) => {
-            let nquads = try_canonicalize(graph)?.nquads;
+            let nquads = try_canonicalize(
+                graph,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )?
+            .nquads;
             std::fs::write(with_ext(stem, "nq"), nquads).expect("write .nq golden");
             tally.nq += 1;
         }

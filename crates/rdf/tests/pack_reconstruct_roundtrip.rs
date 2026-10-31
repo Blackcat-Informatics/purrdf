@@ -30,20 +30,36 @@ fn dataset_from_view_roundtrips_the_full_fixture() {
     let ds = build_fixture();
 
     // Build the pack, open a read-only view over it, and reconstruct a concrete dataset.
-    let bytes = PackBuilder::build_bytes(&ds).expect("pack build");
+    let bytes = PackBuilder::build_bytes(
+        &ds,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("pack build");
     let view = PackView::from_bytes(&bytes).expect("pack opens");
     let rebuilt = dataset_from_view(&view).expect("reconstruct from view");
 
     // 1) Direct dataset isomorphism (RDFC-1.0 blank-node canonicalization under the hood).
     assert!(
-        datasets_isomorphic(&rebuilt, &ds).unwrap(), // deref-coerces Arc<RdfDataset> -> &RdfDataset
+        datasets_isomorphic(
+            &rebuilt,
+            &ds,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap(), // deref-coerces Arc<RdfDataset> -> &RdfDataset
         "reconstruction must be isomorphic to the source dataset"
     );
 
     // 2) Isomorphism by RDFC-1.0 content digest: build a pack from the reconstruction and
     //    compare its stored RDFC-1.0 digest to the source pack's. Equal digests certify
     //    the two datasets canonicalize identically (base quads + reifier + annotations).
-    let rebuilt_bytes = PackBuilder::build_bytes(&rebuilt).expect("pack build from reconstruction");
+    let rebuilt_bytes = PackBuilder::build_bytes(
+        &rebuilt,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("pack build from reconstruction");
     let rebuilt_view = PackView::from_bytes(&rebuilt_bytes).expect("rebuilt pack opens");
     assert_eq!(
         view.rdfc_digest(),
@@ -74,11 +90,23 @@ fn dataset_from_view_roundtrips_the_full_fixture() {
 #[test]
 fn restore_pack_roundtrips_the_full_fixture() {
     let source = build_fixture();
-    let bytes = PackBuilder::build_bytes(&source).expect("pack build");
+    let bytes = PackBuilder::build_bytes(
+        &source,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("pack build");
     let restored = restore_pack(&bytes).expect("pack restores");
 
     assert!(
-        datasets_isomorphic(&restored, &source).unwrap(),
+        datasets_isomorphic(
+            &restored,
+            &source,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap(),
         "restore_pack must preserve the source dataset"
     );
     assert_eq!(restored.reifiers().count(), source.reifiers().count());

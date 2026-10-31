@@ -10,7 +10,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { ready, Dataset, QueryEngine } from "../index.mjs";
-
+import { canonicalValue } from "./fixtures/poisoned-surface.mjs";
 await ready();
 
 test("dataset identities and mutation generations use exact bigint transport", () => {
@@ -47,24 +47,24 @@ _:c ex:name "Cid" .
 test("isomorphic() is true for the same graph under blank-node relabeling", () => {
   const a = Dataset.parse(A, "turtle");
   const b = Dataset.parse(B, "turtle");
-  assert.equal(a.isomorphic(b), true);
+  assert.equal(canonicalValue(a.isomorphic(b, "unlimited")), true);
 });
 
 test("isomorphic() is false for a structurally different graph", () => {
   const a = Dataset.parse(A, "turtle");
   const c = Dataset.parse(C, "turtle");
-  assert.equal(a.isomorphic(c), false);
+  assert.equal(canonicalValue(a.isomorphic(c, "unlimited")), false);
 });
 
 test("canonicalize() is stable and identifies isomorphic graphs byte-for-byte", () => {
   const a = Dataset.parse(A, "turtle");
   const b = Dataset.parse(B, "turtle");
-  const canonA = a.canonicalize();
+  const canonA = canonicalValue(a.canonicalize("unlimited"));
   assert.ok(canonA.length > 0, "canonical form is non-empty");
   // Re-canonicalizing the same dataset is deterministic.
-  assert.equal(a.canonicalize(), canonA);
+  assert.equal(canonicalValue(a.canonicalize("unlimited")), canonA);
   // Isomorphic graphs canonicalize to the identical string — the identity guarantee.
-  assert.equal(b.canonicalize(), canonA);
+  assert.equal(canonicalValue(b.canonicalize("unlimited")), canonA);
 });
 
 // ── canonicalize() throws a JsError on a refusal, rather than aborting ──────────
@@ -91,11 +91,11 @@ ex:r <urn:purrdf:other:annotation> ex:o .
 
 test("canonicalize() throws on a reserved-vocabulary IRI, naming it, rather than aborting", () => {
   const refused = Dataset.parse(RESERVED_PREDICATE_PLAIN_OBJECT, "turtle");
-  assert.throws(() => refused.canonicalize(), /urn:purrdf:rdfc:reifies/);
+  assert.throws(() => canonicalValue(refused.canonicalize("unlimited")), /urn:purrdf:rdfc:reifies/);
 });
 
 test("an ordinary IRI neighbouring the reserved namespace still canonicalizes", () => {
   const ok = Dataset.parse(NEIGHBOURING_ORDINARY_PREDICATE, "turtle");
-  const canon = ok.canonicalize();
+  const canon = canonicalValue(ok.canonicalize("unlimited"));
   assert.ok(canon.includes("urn:purrdf:other:annotation"), canon);
 });

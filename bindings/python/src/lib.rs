@@ -55,6 +55,7 @@ macro_rules! copy_pyclass_from_py_object {
 }
 
 mod attestation;
+mod py_canonical;
 mod py_entail;
 mod py_geo;
 mod py_gts;

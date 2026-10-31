@@ -1709,11 +1709,28 @@ mod tests {
 
         let decoded = read_csvw_exact(&projected.package, &config).expect("read");
         assert!(decoded.loss_ledger.is_empty());
-        assert!(datasets_isomorphic(&dataset, &decoded.dataset).unwrap());
+        assert!(
+            datasets_isomorphic(
+                &dataset,
+                &decoded.dataset,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+        );
         let rewritten = project_csvw_exact(decoded.dataset.as_ref(), &config).expect("rewrite");
         assert!(same_artifacts(&projected.package, &rewritten.package));
 
-        let pack = PackBuilder::build_bytes(&dataset).expect("pack");
+        let pack = PackBuilder::build_bytes(
+            &dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("pack");
         let view = PackView::from_bytes(&pack).expect("view");
         let packed = project_csvw_exact(&view, &config).expect("pack projection");
         for ((left_path, left), (right_path, right)) in projected
@@ -1793,7 +1810,17 @@ mod tests {
         let config = test_config(100);
         let projected = project_csvw_exact(dataset.as_ref(), &config).expect("project");
         let decoded = read_csvw_exact(&projected.package, &config).expect("read");
-        assert!(datasets_isomorphic(&dataset, &decoded.dataset).unwrap());
+        assert!(
+            datasets_isomorphic(
+                &dataset,
+                &decoded.dataset,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+        );
         assert_eq!(decoded.dataset.named_graphs().count(), 2);
     }
 }

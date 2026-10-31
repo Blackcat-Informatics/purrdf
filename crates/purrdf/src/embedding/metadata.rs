@@ -31,11 +31,15 @@ pub struct CertifiedEmbeddingSource {
 
 impl CertifiedEmbeddingSource {
     /// Independently certify the actual native source; no digest claims are accepted.
-    pub fn certify(source: EmbeddingSource<'_>) -> Result<Self, SourceAttachmentError> {
+    pub fn certify(
+        source: EmbeddingSource<'_>,
+        control: &mut purrdf_core::CanonicalizationControl<'_>,
+    ) -> Result<Self, SourceAttachmentError> {
         let (source_format, source_length, source_exact_digest, certified_rdf_digest) = match source
         {
             EmbeddingSource::Purrpck(bytes) => {
-                let proof = verify_pack_bytes(bytes).map_err(EmbeddingError::source_pack)?;
+                let proof =
+                    verify_pack_bytes(bytes, control).map_err(EmbeddingError::source_pack)?;
                 (
                     EmbeddingSourceFormat::PurrpckV1,
                     u64::try_from(bytes.len())
@@ -47,7 +51,7 @@ impl CertifiedEmbeddingSource {
             EmbeddingSource::Columnar(files) => {
                 // A certificate is constructed only after every table and blob passed.
                 let read = purrdf_columnar::read(files)?;
-                let (rdf_digest, _) = canonical_source(&read.dataset)?;
+                let (rdf_digest, _) = canonical_source(&read.dataset, control)?;
                 let manifest = purrdf_columnar::source_manifest(files)?;
                 (
                     EmbeddingSourceFormat::ColumnarV1,
@@ -79,9 +83,13 @@ impl CertifiedEmbeddingSource {
     }
 
     /// Builds and certifies a `.purrpck` directly from a frozen RDF dataset.
-    pub fn from_dataset(dataset: &RdfDataset) -> Result<(Self, Vec<u8>), SourceAttachmentError> {
-        let bytes = PackBuilder::build_bytes(dataset).map_err(EmbeddingError::source_pack)?;
-        let source = Self::certify(EmbeddingSource::Purrpck(&bytes))?;
+    pub fn from_dataset(
+        dataset: &RdfDataset,
+        control: &mut purrdf_core::CanonicalizationControl<'_>,
+    ) -> Result<(Self, Vec<u8>), SourceAttachmentError> {
+        let bytes =
+            PackBuilder::build_bytes(dataset, control).map_err(EmbeddingError::source_pack)?;
+        let source = Self::certify(EmbeddingSource::Purrpck(&bytes), control)?;
         Ok((source, bytes))
     }
 
@@ -231,7 +239,14 @@ mod tests {
     }
     fn certified_empty_pack() -> (CertifiedEmbeddingSource, Vec<u8>) {
         let dataset = RdfDatasetBuilder::new().freeze().unwrap();
-        CertifiedEmbeddingSource::from_dataset(&dataset).unwrap()
+        CertifiedEmbeddingSource::from_dataset(
+            &dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap()
     }
     #[test]
     fn pack_certification_checks_original_exact_bytes() {
@@ -246,7 +261,13 @@ mod tests {
         );
         assert_eq!(&encoded[24..56], source.source_exact_digest().as_bytes());
         assert!(matches!(
-            CertifiedEmbeddingSource::certify(EmbeddingSource::Purrpck(b"not a pack")),
+            CertifiedEmbeddingSource::certify(
+                EmbeddingSource::Purrpck(b"not a pack"),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            ),
             Err(SourceAttachmentError::Embedding(
                 EmbeddingError::InvalidSourcePack(_)
             ))

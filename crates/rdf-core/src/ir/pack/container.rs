@@ -128,7 +128,7 @@ use sha2::{Digest, Sha256};
 
 use crate::bytes::{read_u32_le, read_u64_le};
 use crate::dataset_view::{DatasetView, DrainCheckpoint, FallibleDatasetView, checkpointed_drain};
-use crate::ir::canon::try_canonicalize_view;
+use crate::ir::canon::try_canonical_sha256_view;
 use crate::{CanonError, CanonHash, RdfDataset, RdfStoreCapabilities};
 
 use super::dict::{PackDict, PackDictError};
@@ -471,13 +471,16 @@ impl PackBuilder {
     /// method otherwise fails is if one of THIS module's own just-written
     /// sections fails to re-open — a broken-invariant bug in this module or
     /// an upstream submodule, not a data-dependent error.
-    pub fn build_bytes(dataset: &RdfDataset) -> Result<Vec<u8>, PackError> {
+    pub fn build_bytes(
+        dataset: &RdfDataset,
+        control: &mut crate::CanonicalizationControl<'_>,
+    ) -> Result<Vec<u8>, PackError> {
         // ONE ENCODER. The frozen dataset IS a `FallibleDatasetView` whose status
         // is `Ready` by construction, so the flat surface is a delegation through
         // the very core the view surface runs — not a second definition of "write
         // a pack". Flat/view byte parity is structural rather than tested into
         // existence, and neither checkpoint can refuse an infallible source.
-        Self::build_view_bytes(dataset)
+        Self::build_view_bytes(dataset, control)
     }
 
     /// Build the complete pack file for any [`FallibleDatasetView`] — a composite,
@@ -523,8 +526,9 @@ impl PackBuilder {
     /// remains available when the caller requests a human diagnostic.
     pub fn build_view_bytes<D: FallibleDatasetView>(
         view: &D,
+        control: &mut crate::CanonicalizationControl<'_>,
     ) -> Result<Vec<u8>, PackError<D::ReadError>> {
-        match checkpointed_drain(view, encode_view) {
+        match checkpointed_drain(view, |view| encode_view(view, control)) {
             Ok(result) => result,
             Err(failure) => Err(PackError::ViewNotReady {
                 checkpoint: PackCheckpoint::from(failure.checkpoint),
@@ -539,8 +543,11 @@ impl PackBuilder {
     /// # Errors
     ///
     /// Identical to [`build_bytes`](Self::build_bytes).
-    pub fn from_dataset(dataset: &RdfDataset) -> Result<Vec<u8>, PackError> {
-        Self::build_bytes(dataset)
+    pub fn from_dataset(
+        dataset: &RdfDataset,
+        control: &mut crate::CanonicalizationControl<'_>,
+    ) -> Result<Vec<u8>, PackError> {
+        Self::build_bytes(dataset, control)
     }
 }
 
@@ -558,7 +565,10 @@ fn source_read_error<E>(error: crate::TermLookupError<E>) -> PackError<E> {
     }
 }
 
-fn encode_view<D: DatasetView>(view: &D) -> Result<Vec<u8>, PackError<D::ReadError>> {
+fn encode_view<D: DatasetView>(
+    view: &D,
+    control: &mut crate::CanonicalizationControl<'_>,
+) -> Result<Vec<u8>, PackError<D::ReadError>> {
     let encoded_dict = PackDict::try_encode(view).map_err(source_read_error)?;
     let dict_bytes = encoded_dict.to_bytes();
     let n_terms = encoded_dict.n_terms();
@@ -579,9 +589,9 @@ fn encode_view<D: DatasetView>(view: &D) -> Result<Vec<u8>, PackError<D::ReadErr
 
     // Recomputed from the pack's OWN sections, never copied from the source view's
     // `capabilities()` claim — the header must describe what was actually written.
-    let canonicalized =
-        try_canonicalize_view(view, CanonHash::Sha256).map_err(PackError::CanonRefused)?;
-    let rdfc_digest: [u8; 32] = Sha256::digest(canonicalized.nquads.as_bytes()).into();
+    let canonicalized = try_canonical_sha256_view(view, CanonHash::Sha256, control)
+        .map_err(PackError::CanonRefused)?;
+    let rdfc_digest = *canonicalized.as_bytes();
 
     Ok(assemble(
         n_terms,

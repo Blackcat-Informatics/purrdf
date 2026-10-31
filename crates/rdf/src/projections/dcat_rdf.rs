@@ -689,7 +689,17 @@ mod tests {
             ),
         )
         .expect("mapped RDF");
-        assert!(datasets_isomorphic(&semantic, projected.dataset.as_ref()).unwrap());
+        assert!(
+            datasets_isomorphic(
+                &semantic,
+                projected.dataset.as_ref(),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+        );
     }
 
     #[test]
@@ -708,7 +718,17 @@ mod tests {
             );
             let bytes = mapped.package.get(&mapped.artifact_path).expect("artifact");
             let reparsed = parse_dataset(bytes, format.media_type(), None).expect("parse mapped");
-            assert!(datasets_isomorphic(mapped.dataset.as_ref(), &reparsed).unwrap());
+            assert!(
+                datasets_isomorphic(
+                    mapped.dataset.as_ref(),
+                    &reparsed,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
+                )
+                .unwrap()
+            );
 
             let construct = ConstructViewConfig::new(
                 "CONSTRUCT { <https://example.org/dataset> <https://example.org/title> \"DCAT\" } WHERE {}",
@@ -730,7 +750,17 @@ mod tests {
                 .expect("artifact");
             let reparsed =
                 parse_dataset(bytes, format.media_type(), None).expect("parse construct");
-            assert!(datasets_isomorphic(constructed.dataset.as_ref(), &reparsed).unwrap());
+            assert!(
+                datasets_isomorphic(
+                    constructed.dataset.as_ref(),
+                    &reparsed,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
+                )
+                .unwrap()
+            );
         }
     }
 

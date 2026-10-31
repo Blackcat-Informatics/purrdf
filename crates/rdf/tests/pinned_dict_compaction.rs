@@ -57,13 +57,18 @@ fn pinned_plan(dict: Vec<u8>) -> DictPlan {
     DictPlan::rsyncable(PINNED_NAME, DictStrategy::Pinned(dict), VECTOR_ZSTD_LEVEL)
 }
 
-fn certify(source: &[u8], plan: DictPlan) -> Vec<u8> {
+fn certify(
+    source: &[u8],
+    plan: DictPlan,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Vec<u8> {
     let (pack, cert) = compact_and_certify(
         source,
         plan,
         TIMESTAMP,
         false,
         (packaging_key(), "pack".to_string()),
+        control,
     )
     .expect("a pinned-dictionary compaction certifies");
     assert_eq!(
@@ -77,7 +82,11 @@ fn certify(source: &[u8], plan: DictPlan) -> Vec<u8> {
 fn a_pinned_pack_round_trips_at_canonical_graph_identity_and_verifies() {
     let shipped = shipped_dictionary();
     let source = fixed_source();
-    let pack = certify(&source, pinned_plan(shipped.clone()));
+    let pack = certify(
+        &source,
+        pinned_plan(shipped.clone()),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    );
 
     assert_eq!(
         header_dicts(&pack)[PINNED_NAME],
@@ -93,12 +102,32 @@ fn a_pinned_pack_round_trips_at_canonical_graph_identity_and_verifies() {
         after.diagnostics
     );
     assert_eq!(
-        refold_digest(&before).expect("source content-refold digest"),
-        refold_digest(&after).expect("pack content-refold digest"),
+        refold_digest(
+            &before,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .expect("source content-refold digest"),
+        refold_digest(
+            &after,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .expect("pack content-refold digest"),
         "the pack must fold to the SAME RDFC-1.0 canonical graph as its source"
     );
 
-    let report = verify_compaction(&source, &pack, &keyring()).expect("verify_compaction runs");
+    let report = verify_compaction(
+        &source,
+        &pack,
+        &keyring(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("verify_compaction runs");
     assert!(
         report.all_ok(),
         "a pinned-dictionary pack must independently verify — content equivalence, carried \
@@ -115,14 +144,24 @@ fn a_blobless_pinned_pack_round_trips_and_verifies() {
         "the fixture must genuinely have NO content blobs"
     );
 
-    let pack = certify(&source, pinned_plan(shipped.clone()));
+    let pack = certify(
+        &source,
+        pinned_plan(shipped.clone()),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    );
     assert_eq!(
         header_dicts(&pack)[PINNED_NAME],
         shipped,
         "a blob-less pack pins the caller's exact bytes with no corpus in sight"
     );
 
-    let report = verify_compaction(&source, &pack, &keyring()).expect("verify_compaction runs");
+    let report = verify_compaction(
+        &source,
+        &pack,
+        &keyring(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("verify_compaction runs");
     assert!(
         report.all_ok(),
         "a blob-less pinned pack must independently verify: {report:?}"
@@ -136,9 +175,21 @@ fn pinning_a_dictionary_does_not_perturb_a_derived_compaction_of_the_same_source
     let source = fixed_source();
     let derived_plan =
         || DictPlan::rsyncable(PINNED_NAME, DictStrategy::RawContent, VECTOR_ZSTD_LEVEL);
-    let a = certify(&source, derived_plan());
-    let _pinned = certify(&source, pinned_plan(shipped_dictionary()));
-    let b = certify(&source, derived_plan());
+    let a = certify(
+        &source,
+        derived_plan(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    );
+    let _pinned = certify(
+        &source,
+        pinned_plan(shipped_dictionary()),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    );
+    let b = certify(
+        &source,
+        derived_plan(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    );
     assert_eq!(
         a, b,
         "a derived compaction is byte-identical regardless of any pinned compaction \

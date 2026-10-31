@@ -976,7 +976,11 @@ fn retained_v1_pack_reader_migrates_into_the_versioned_representation() {
 
     // A v1 pack carries a declaration-only graph as a zero-row partition, so the
     // migration keeps it without a sidecar.
-    let current = purrdf_core::PackBuilder::build_bytes(source.as_ref()).unwrap();
+    let current = purrdf_core::PackBuilder::build_bytes(
+        source.as_ref(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let migrated = SegmentedImage::from_pack_v1(&current, limits).unwrap();
     let read = session(&migrated, 3);
     assert_eq!(read.checked_read(|view| view.quads().count()).unwrap(), 1);
@@ -994,7 +998,17 @@ fn retained_v1_pack_reader_migrates_into_the_versioned_representation() {
     .unwrap();
     assert_eq!(graph_count(&restated), 1);
     let restored = purrdf_core::dataset_from_view(&read).unwrap();
-    assert!(purrdf_core::datasets_isomorphic(source.as_ref(), restored.as_ref()).unwrap());
+    assert!(
+        purrdf_core::datasets_isomorphic(
+            source.as_ref(),
+            restored.as_ref(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+    );
     assert_eq!(restored.named_graphs().count(), 1);
 
     // A pack written without the declaration (as every pack written before
@@ -1002,7 +1016,11 @@ fn retained_v1_pack_reader_migrates_into_the_versioned_representation() {
     let mut builder = purrdf_core::RdfDatasetBuilder::new();
     let p = builder.intern_iri("http://example.org/p").unwrap();
     builder.push_quad(p, p, p, None).unwrap();
-    let old = purrdf_core::PackBuilder::build_bytes(builder.freeze().unwrap().as_ref()).unwrap();
+    let old = purrdf_core::PackBuilder::build_bytes(
+        builder.freeze().unwrap().as_ref(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     assert_eq!(
         graph_count(&SegmentedImage::from_pack_v1(&old, limits).unwrap()),
         0,

@@ -33,7 +33,7 @@ def _run(route, law, **coordinates):
     options = {"xpath_regex": law, "max_term_generating_rounds": 8,
                "max_generated_terms": 32, **coordinates}
     if route == "entail":
-        result = purrdf.shacl.entail(SHAPES, "", **options)
+        result = purrdf.shacl.entail(SHAPES, "", **options, canonical_search="1000000").value
         text = result["ntriples"]
     else:
         source = {"shapes_ttl": SHAPES} if route == "shapes" else {"srl": SRL}
@@ -65,7 +65,7 @@ def test_rule_routes_preserve_exact_coordinates_and_independent_defaults(route, 
 
 def test_rule_coordinate_refusals_precede_document_parsing_and_preserve_xpath_precedence():
     calls = (
-        lambda **kw: purrdf.shapes.entail("invalid shapes", "invalid data", **kw),
+        lambda **kw: purrdf.shapes.entail("invalid shapes", "invalid data", **kw, canonical_search="1000000").value,
         lambda **kw: purrdf.shacl.apply_rules("invalid data", "invalid shapes", **kw),
         lambda **kw: purrdf.shapes.apply_rules("invalid data", srl="invalid rules", **kw),
     )

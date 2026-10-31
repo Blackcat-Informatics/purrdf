@@ -179,7 +179,7 @@ options = dict(recursion="gfp", recursion_max_pairs=4096,
 shapes = purrdf.shapes.Shapes(shapes_ttl, **options)
 report = shapes.prepare().validate_nt(data_nt)
 product = purrdf.shapes.ShapesProduct.open(
-    purrdf.shapes.pack_product(shapes_ttl, **options)
+    purrdf.shapes.pack_product(shapes_ttl, canonical_search="unlimited", **options).value
 )
 restored = product.admit(**options)
 ```

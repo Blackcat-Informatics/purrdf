@@ -21,8 +21,10 @@ claim. None of these substitutes for another.
 The packaged case `isomorphic refusal crosses the wasm boundary as a JavaScript
 Error` in `canonicalization-host-error.test.mjs` exercises the wasm-bindgen
 `JsError` construction/import and JavaScript exception prototype. It distinguishes
-a caught host Error from a WASM trap; native Rust owns the underlying reserved-
-vocabulary refusal semantics. Run only this named package case for that obligation.
+a caught host Error from a WASM trap, transports an exact maximum `u64` policy
+as text, and keeps an owned native cause readable after its dataset wrapper is
+freed. Native Rust owns the underlying reserved-vocabulary refusal semantics.
+Run only this named package case for those host obligations.
 
 The packaged case `wasm_shacl_apply_rules: maxStoredFacts reaches the evaluator
 and names the host control` checks BigInt argument transport, a JavaScript Error

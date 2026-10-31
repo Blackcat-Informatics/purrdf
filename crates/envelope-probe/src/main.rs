@@ -150,7 +150,15 @@ fn main() -> ExitCode {
         // reports is not the one the memory ceiling has to hold.
         let window = WholeProcessWindow::open();
         let started = Instant::now();
-        let status = run(workload, &active, &window);
+        let status = run(
+            workload,
+            &active,
+            &window,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::SearchPolicy::Unlimited,
+                None,
+            ),
+        );
         let duration_ms = started.elapsed().as_millis();
         let measured = window.close();
         let peak_bytes = measured.peak_working_bytes;

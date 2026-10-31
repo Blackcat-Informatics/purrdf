@@ -111,8 +111,16 @@ fn the_five_label_probe_canonicalizes_apart_from_its_merged_variant() {
     // RDFC-1.0 mints the dataset's content-addressed identity, so a conflation
     // on the parse path would make a five-node graph canonicalize identically to
     // a genuinely three-node one — silently changing what the data IS.
-    let probe = try_canonicalize(&parse(PROBE)).unwrap();
-    let merged = try_canonicalize(&parse(MERGED)).unwrap();
+    let probe = try_canonicalize(
+        &parse(PROBE),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
+    let merged = try_canonicalize(
+        &parse(MERGED),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     assert_eq!(probe.labels.len(), 5, "five blank nodes to canonicalize");
     assert_eq!(merged.labels.len(), 3, "the control really has three");
     assert_ne!(
@@ -122,9 +130,15 @@ fn the_five_label_probe_canonicalizes_apart_from_its_merged_variant() {
     // Canonicalization is itself stable across the round trip.
     assert_eq!(
         probe.nquads,
-        try_canonicalize(&parse(&serialize(&parse(PROBE))))
-            .unwrap()
-            .nquads
+        try_canonicalize(
+            &parse(&serialize(&parse(PROBE))),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+        .nquads
     );
 }
 

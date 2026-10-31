@@ -143,10 +143,22 @@ fn assert_same_bytes(left: &[u8], right: &[u8], claim: &str) {
 fn encode_is_byte_deterministic() {
     let prepared = product_fixture::prepared();
     let first = prepared
-        .to_product(&ShapesProfile::CORE)
+        .to_product(
+            &ShapesProfile::CORE,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
         .expect("the fixture is representable");
     let second = prepared
-        .to_product(&ShapesProfile::CORE)
+        .to_product(
+            &ShapesProfile::CORE,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
         .expect("the fixture is representable");
 
     assert_same_bytes(
@@ -200,7 +212,13 @@ fn encode_decode_encode_is_idempotent() {
         .expect("the product admits");
 
     let round_tripped = restored
-        .to_product(&ShapesProfile::CORE)
+        .to_product(
+            &ShapesProfile::CORE,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
         .expect("a restored preparation re-encodes");
 
     assert_same_bytes(

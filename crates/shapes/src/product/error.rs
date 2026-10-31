@@ -251,6 +251,8 @@ pub struct ShapesProductError {
     message: String,
     /// The original native preparation refusal, when preparation failed.
     preparation: Option<crate::error::PreparationRefusal>,
+    /// Keep native canonical search evidence off the ordinary error stack.
+    canonical: Option<Box<purrdf_core::CanonError>>,
 }
 
 impl From<crate::error::PreparationRefusal> for ShapesProductError {
@@ -302,6 +304,21 @@ impl ShapesProductError {
             dimension,
             message: message.into(),
             preparation: None,
+            canonical: None,
+        }
+    }
+
+    pub(crate) fn with_canonical_refusal(mut self, cause: purrdf_core::CanonError) -> Self {
+        self.canonical = Some(Box::new(cause));
+        self
+    }
+
+    /// Original native canonicalization cause retained by the dataset codec.
+    #[must_use]
+    pub const fn canonical_refusal(&self) -> Option<&purrdf_core::CanonError> {
+        match &self.canonical {
+            Some(cause) => Some(cause),
+            None => None,
         }
     }
 
@@ -335,6 +352,10 @@ impl std::error::Error for ShapesProductError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         self.preparation_refusal()
             .map(|error| error as &dyn std::error::Error)
+            .or_else(|| {
+                self.canonical_refusal()
+                    .map(|error| error as &dyn std::error::Error)
+            })
     }
 }
 

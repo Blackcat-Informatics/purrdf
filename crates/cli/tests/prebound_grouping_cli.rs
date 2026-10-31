@@ -117,6 +117,10 @@ fn unreached_expression(select: &str) -> String {
 
 #[test]
 fn an_unreached_expression_reading_a_non_key_variable_is_refused_at_load_and_pack() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data = write_file(dir.path(), "data.ttl", DATA);
     let bad = write_file(
@@ -141,6 +145,12 @@ fn an_unreached_expression_reading_a_non_key_variable_is_refused_at_load_and_pac
         &bad,
         "--out",
         product.to_str().expect("utf-8 path"),
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert_ne!(code(&out), 0, "pack must refuse the shapes graph");
     assert!(
@@ -170,6 +180,12 @@ fn an_unreached_expression_reading_a_non_key_variable_is_refused_at_load_and_pac
         &good,
         "--out",
         product.to_str().expect("utf-8 path"),
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert_eq!(code(&out), 0, "{}", stderr(&out));
 }
@@ -181,6 +197,10 @@ fn an_unreached_expression_reading_a_non_key_variable_is_refused_at_load_and_pac
 /// `$this` and `$value` loads, packs, and answers the same from the restored product.
 #[test]
 fn a_reached_expression_reading_the_shape_context_is_refused_at_load_and_pack() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data = write_file(dir.path(), "data.ttl", DATA);
     let reached = |select: &str| {
@@ -215,6 +235,12 @@ fn a_reached_expression_reading_the_shape_context_is_refused_at_load_and_pack() 
             &refused,
             "--out",
             product.to_str().expect("utf-8 path"),
+            "--canonical-search",
+            "unlimited",
+            "--canonicalization-receipts",
+            canonical_receipt_1
+                .to_str()
+                .expect("UTF-8 canonical receipt path"),
         ]);
         assert_ne!(
             code(&out),
@@ -240,7 +266,20 @@ fn a_reached_expression_reading_the_shape_context_is_refused_at_load_and_pack() 
     assert!(verdict.contains("shacl conforms true\n"), "{verdict}");
     let product = dir.path().join("good.product");
     let product = product.to_str().expect("utf-8 path");
-    let out = run(&["shacl", "pack", "--shapes", &good, "--out", product]);
+    let out = run(&[
+        "shacl",
+        "pack",
+        "--shapes",
+        &good,
+        "--out",
+        product,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     let out = run(&["validate", "--shapes-product", product, &data]);
     assert_eq!(code(&out), 0, "{}", stderr(&out));
@@ -331,6 +370,9 @@ fn a_free_evaluation_s_scope_names_are_bound() {
 /// neighbour conforms through `validate`, `shacl pack` and `--shapes-product`.
 #[test]
 fn a_custom_call_argument_binds_only_what_its_empty_scope_binds() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data = write_file(dir.path(), "data.ttl", DATA);
     let id = "ex:id a sh:ListParameterExpressionFunction ;\n\
@@ -356,6 +398,12 @@ fn a_custom_call_argument_binds_only_what_its_empty_scope_binds() {
             shapes,
             "--out",
             product.to_str().expect("utf-8 path"),
+            "--canonical-search",
+            "unlimited",
+            "--canonicalization-receipts",
+            canonical_receipt_1
+                .to_str()
+                .expect("UTF-8 canonical receipt path"),
         ]);
         (out, product)
     };
@@ -430,6 +478,9 @@ fn a_custom_call_argument_binds_only_what_its_empty_scope_binds() {
 /// `shacl pack`, and the admitted body answers through `--shapes-product` too.
 #[test]
 fn a_named_function_body_reads_its_required_parameters_whatever_their_iri_order() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data = write_file(dir.path(), "data.ttl", DATA);
     let document = |read: &str, call: &str| {
@@ -451,6 +502,12 @@ fn a_named_function_body_reads_its_required_parameters_whatever_their_iri_order(
             shapes,
             "--out",
             product.to_str().expect("utf-8 path"),
+            "--canonical-search",
+            "unlimited",
+            "--canonicalization-receipts",
+            canonical_receipt_1
+                .to_str()
+                .expect("UTF-8 canonical receipt path"),
         ]);
         (out, product)
     };

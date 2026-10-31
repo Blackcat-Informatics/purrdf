@@ -22,12 +22,12 @@ let nextId = 1;
 const pending = new Map();
 
 worker.addEventListener("message", (event) => {
-  const { id, ok, result, error } = event.data ?? {};
+  const { id, ok, result, error, canonicalizationJson, nativeCauseJson, code } = event.data ?? {};
   const entry = pending.get(id);
   if (!entry) return;
   pending.delete(id);
   if (ok) entry.resolve(result);
-  else entry.reject(new Error(error));
+  else entry.reject(Object.assign(new Error(error), { canonicalizationJson, nativeCauseJson, code }));
 });
 
 worker.addEventListener("error", (event) => {
@@ -189,6 +189,7 @@ function collectState() {
   return {
     input: $("input-text").value,
     inputFormat: $("input-format").value,
+    canonicalSearch: $("canonical-search").value,
     query: $("sparql-text").value,
     shapes: $("shapes-text").value,
     graphA: $("graph-a-text").value,
@@ -203,6 +204,7 @@ function applyState(state) {
   const s = { ...DEFAULT_STATE, ...state };
   $("input-text").value = s.input ?? "";
   $("input-format").value = s.inputFormat ?? "turtle";
+  $("canonical-search").value = s.canonicalSearch ?? "";
   $("sparql-text").value = s.query ?? "";
   $("shapes-text").value = s.shapes ?? "";
   $("graph-a-text").value = s.graphA ?? "";
@@ -363,7 +365,7 @@ const EXT = {
 
 async function doSerializeAll() {
   await guard(async () => {
-    const res = await call("serializeAll", {});
+    const res = await call("serializeAll", { canonicalSearch: $("canonical-search").value });
     const grid = $("serialize-output");
     grid.replaceChildren();
     const failedFormats = [];
@@ -383,6 +385,8 @@ async function doSerializeAll() {
       let badge;
       if (failed) {
         badge = el("span", { class: "badge badge-warn", text: "unsupported" });
+      } else if (entry.roundtripError) {
+        badge = el("span", { class: "badge badge-warn", text: "comparison refused", title: entry.roundtripError.error });
       } else if (entry.roundtrips) {
         badge = el("span", { class: "badge badge-ok", text: "round-trips" });
       } else {
@@ -605,7 +609,7 @@ function renderSarif(sarif) {
 async function doEntail() {
   await guard(async () => {
     const shapes = $("shapes-text").value;
-    const res = await call("shaclEntail", { shapes });
+    const res = await call("shaclEntail", { shapes, canonicalSearch: $("canonical-search").value });
     $("entail-output").textContent = res.ntriples;
     showStatus(
       res.diagnostics.length === 0
@@ -626,6 +630,7 @@ async function doCompare() {
       aFormat: $("graph-a-format").value,
       bText: $("graph-b-text").value,
       bFormat: $("graph-b-format").value,
+      canonicalSearch: $("canonical-search").value,
     });
     $("identity-result").textContent = `isomorphic: ${res.isomorphic ? "yes" : "no"}`;
     $("identity-result").className = `identity-verdict ${res.isomorphic ? "verdict-yes" : "verdict-no"}`;

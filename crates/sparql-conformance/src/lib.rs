@@ -83,8 +83,9 @@ impl Summary {
         &mut self,
         case: &SparqlTestCase,
         outcome: Result<run::RunOutcome, String>,
+        control: &mut purrdf_core::CanonicalizationControl<'_>,
     ) -> Result<(), String> {
-        self.record_verdict(case, verdict_of_outcome(case, outcome))
+        self.record_verdict(case, verdict_of_outcome(case, outcome, control))
     }
 
     /// Record source setup failure without treating it as an expected query refusal.
@@ -235,7 +236,10 @@ pub fn discover(root: &Path) -> Result<Discovery, String> {
 /// Returns a message if the manifest itself cannot be loaded/parsed, if it is an
 /// index (whose members run as their own cases, so running it would run them
 /// twice), or if a case IRI is matched by more than one [`xfail`] registry entry.
-pub fn run_manifest(manifest_path: &Path) -> Result<Summary, String> {
+pub fn run_manifest(
+    manifest_path: &Path,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<Summary, String> {
     if manifest::index_members(manifest_path)?.is_some() {
         return Err(format!(
             "{} is an index: its members run as their own cases, and running it would run \
@@ -246,13 +250,16 @@ pub fn run_manifest(manifest_path: &Path) -> Result<Summary, String> {
     let cases = manifest::load(manifest_path)?;
     let mut summary = Summary::default();
     for case in &cases {
-        summary.record_verdict(case, verdict_of(case))?;
+        summary.record_verdict(case, verdict_of(case, control))?;
     }
     Ok(summary)
 }
 
 /// Run + compare a single case into a [`Verdict`].
-fn verdict_of(case: &SparqlTestCase) -> Verdict {
+fn verdict_of(
+    case: &SparqlTestCase,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Verdict {
     if matches!(case.kind, manifest::TestKind::Unknown) {
         return Verdict::Unmodeled;
     }
@@ -263,13 +270,17 @@ fn verdict_of(case: &SparqlTestCase) -> Verdict {
         Ok(source) => source,
         Err(msg) => return Verdict::Fail(msg),
     };
-    verdict_of_outcome(case, run::run(case, Some(&remote)))
+    verdict_of_outcome(case, run::run(case, Some(&remote)), control)
 }
 
 /// One comparison path for the original and carrier-specific executions.
-fn verdict_of_outcome(case: &SparqlTestCase, outcome: Result<run::RunOutcome, String>) -> Verdict {
+fn verdict_of_outcome(
+    case: &SparqlTestCase,
+    outcome: Result<run::RunOutcome, String>,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Verdict {
     match outcome {
-        Ok(outcome) => match compare::compare(case, &outcome) {
+        Ok(outcome) => match compare::compare(case, &outcome, control) {
             Ok(()) => Verdict::Pass,
             Err(msg) => Verdict::Fail(msg.to_string()),
         },

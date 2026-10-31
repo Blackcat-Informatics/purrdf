@@ -833,6 +833,9 @@ fn the_report_distinguishes_a_resolved_import_from_an_unresolved_one() {
 /// each command is the importing premise, which uses the very same pair and succeeds.
 #[test]
 fn every_entailment_subcommand_refuses_an_unreached_import_pair() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let importing = write_file(dir, "importing.ttl", IMPORTING_PREMISE);
@@ -889,7 +892,18 @@ fn every_entailment_subcommand_refuses_an_unreached_import_pair() {
                 &pair,
                 "ASK { ?s ?p ?o }",
             ]),
-            owned(&["consistency", "--import", &pair, premise]),
+            owned(&[
+                "consistency",
+                "--import",
+                &pair,
+                premise,
+                "--canonical-search",
+                "unlimited",
+                "--canonicalization-receipts",
+                canonical_receipt_1
+                    .to_str()
+                    .expect("UTF-8 canonical receipt path"),
+            ]),
         ]
     };
     for args in commands(&plain) {
@@ -1007,6 +1021,16 @@ fn query_entailment_closes_over_the_import_table() {
 /// recorded over the merge checks against the same command line.
 #[test]
 fn consistency_decides_the_imports_closure() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+    let canonical_receipt_3 = canonical_receipt_dir.path().join("request-3.json");
+    let canonical_receipt_4 = canonical_receipt_dir.path().join("request-4.json");
+    let canonical_receipt_5 = canonical_receipt_dir.path().join("request-5.json");
+    let canonical_receipt_6 = canonical_receipt_dir.path().join("request-6.json");
+    let canonical_receipt_7 = canonical_receipt_dir.path().join("request-7.json");
+    let canonical_receipt_8 = canonical_receipt_dir.path().join("request-8.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let premise = write_file(
@@ -1030,7 +1054,16 @@ fn consistency_decides_the_imports_closure() {
     );
     let pair = format!("http://example.org/schema={schema}");
 
-    let o = run(&["consistency", &premise]);
+    let o = run(&[
+        "consistency",
+        &premise,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
     assert!(
         stderr(&o).contains("owl:imports <http://example.org/schema>"),
@@ -1039,7 +1072,18 @@ fn consistency_decides_the_imports_closure() {
     );
     assert!(stdout(&o).is_empty(), "{}", stdout(&o));
 
-    let o = run(&["consistency", "--import", &pair, &premise]);
+    let o = run(&[
+        "consistency",
+        "--import",
+        &pair,
+        &premise,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(o.status.success(), "consistency --import: {}", stderr(&o));
     let decided = stdout(&o);
     assert!(decided.starts_with("consistency false\n"), "{decided}");
@@ -1051,7 +1095,19 @@ fn consistency_decides_the_imports_closure() {
 
     // The proof surface reasons over the same merge: recording a proof decides the same
     // verdict.
-    let o = run(&["consistency", "--proof", "--import", &pair, &premise]);
+    let o = run(&[
+        "consistency",
+        "--proof",
+        "--import",
+        &pair,
+        &premise,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_3
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(
         o.status.success(),
         "consistency --proof --import: {}",
@@ -1069,6 +1125,12 @@ fn consistency_decides_the_imports_closure() {
         "--check-proof",
         &negative_proof,
         &premise,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_4
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert!(checked.status.success(), "{}", stderr(&checked));
     assert!(stdout(&checked).contains("\nanswer checked 0\n"));
@@ -1085,7 +1147,19 @@ fn consistency_decides_the_imports_closure() {
             "ex:tom a ex:Cat .\n",
         ),
     );
-    let o = run(&["consistency", "--proof", "--import", &pair, &consistent]);
+    let o = run(&[
+        "consistency",
+        "--proof",
+        "--import",
+        &pair,
+        &consistent,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_5
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(o.status.success(), "{}", stderr(&o));
     let proved = stdout(&o);
     assert!(proved.starts_with("consistency true\n"), "{proved}");
@@ -1094,7 +1168,18 @@ fn consistency_decides_the_imports_closure() {
         .expect("the proof document");
     let proof = write_file(dir, "proof.txt", &proved[at..]);
     // Without the pair the premise is a different ontology: the import is refused.
-    let o = run(&["consistency", "--check-proof", &proof, &consistent]);
+    let o = run(&[
+        "consistency",
+        "--check-proof",
+        &proof,
+        &consistent,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_6
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
     let o = run(&[
         "consistency",
@@ -1103,6 +1188,12 @@ fn consistency_decides_the_imports_closure() {
         "--check-proof",
         &proof,
         &consistent,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_7
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert!(
         o.status.success(),
@@ -1122,7 +1213,16 @@ fn consistency_decides_the_imports_closure() {
         "plain.ttl",
         "@prefix ex: <http://example.org/> .\nex:tom a ex:Cat , ex:Dog .\n",
     );
-    let o = run(&["consistency", &plain]);
+    let o = run(&[
+        "consistency",
+        &plain,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_8
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(o.status.success(), "{}", stderr(&o));
     assert!(
         stdout(&o).starts_with("consistency true\n"),
@@ -1472,6 +1572,10 @@ fn an_inconsistent_premise_is_refused_with_its_witness() {
 /// rather than a text-only shortcut.
 #[test]
 fn every_input_syntax_reaches_the_boundary() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let turtle = write_file(dir, "premise.ttl", SUBCLASS_PREMISE);
@@ -1496,7 +1600,19 @@ fn every_input_syntax_reaches_the_boundary() {
 
     // A verified pack, through the same resolution.
     let pack = path(dir, "premise.purrpck");
-    let o = run(&["convert", "--to", "pack", &turtle, &pack]);
+    let o = run(&[
+        "convert",
+        "--to",
+        "pack",
+        &turtle,
+        &pack,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(o.status.success(), "convert failed: {}", stderr(&o));
     let o = run(&[
         "entails",
@@ -1506,6 +1622,12 @@ fn every_input_syntax_reaches_the_boundary() {
         &pack,
         "--conclusion",
         &conclusion,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert!(o.status.success(), "pack premise: {}", stderr(&o));
     assert_eq!(stdout(&o), expected);
@@ -1531,12 +1653,28 @@ fn every_input_syntax_reaches_the_boundary() {
 /// base it is handed) — refused by name instead, naming the specific document.
 #[test]
 fn base_with_a_pack_document_is_refused_by_name() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let turtle = write_file(dir, "premise.ttl", SUBCLASS_PREMISE);
     let conclusion = write_file(dir, "conclusion.ttl", DERIVED_CONCLUSION);
     let pack = path(dir, "premise.purrpck");
-    let o = run(&["convert", "--to", "pack", &turtle, &pack]);
+    let o = run(&[
+        "convert",
+        "--to",
+        "pack",
+        &turtle,
+        &pack,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(o.status.success(), "convert failed: {}", stderr(&o));
 
     let o = run(&[
@@ -1551,6 +1689,12 @@ fn base_with_a_pack_document_is_refused_by_name() {
         "http://example.org/base/",
         "--conclusion",
         &conclusion,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert_eq!(
         o.status.code(),
