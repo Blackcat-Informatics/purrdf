@@ -167,14 +167,9 @@ pub(crate) struct OwlConstruct {
     pub(crate) iri: &'static str,
     /// Where the mapping writes it, which fixes the fixture the inventory test builds.
     ///
-    /// Read by `every_owl2_construct_is_handled_or_bounded` alone: a shape is a
-    /// TEST-fixture recipe, and the parser learns nothing from it — the parser is driven by
-    /// [`Support`], which is what makes the test an independent check of the table rather
-    /// than a restatement of it.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "read by the inventory test only")
-    )]
+    /// The query materializer also distinguishes role denotations from structural
+    /// predicates through this mapping position. Handling and boundaries remain
+    /// governed by [`Support`].
     pub(crate) shape: Shape,
     /// What this layer does with it.
     pub(crate) support: Support,
@@ -647,6 +642,13 @@ pub(crate) fn support_of(iri: &str) -> Option<Support> {
         return Some(entry.support);
     }
     is_reserved(iri).then_some(Support::Bounded(Construct::UnrecognizedTerm))
+}
+
+/// Whether the reserved term denotes a role rather than an RDF mapping predicate.
+pub(crate) fn is_role_denotation(iri: &str) -> bool {
+    OWL2_CONSTRUCTS
+        .iter()
+        .any(|entry| entry.iri == iri && entry.shape == Shape::RoleDenotation)
 }
 
 #[cfg(test)]
