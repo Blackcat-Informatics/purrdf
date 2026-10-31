@@ -150,7 +150,9 @@ mod refusal;
 pub use refusal::ReservedVocabulary;
 mod result;
 pub use result::Canonicalized;
+mod rendering;
 
+use purrdf_lex::allocation::{Admission, Memory};
 use purrdf_lex::walk::WorkList;
 mod control;
 use control::SearchRun;
@@ -2233,7 +2235,8 @@ pub enum CanonError<E = Infallible> {
     BudgetExceeded(BudgetExceeded),
     /// The input carries an IRI in the profile's reserved namespace.
     ReservedVocabulary(ReservedVocabulary),
-    /// The backing dataset could not be read completely. No canonical result is returned.
+    /// The backing dataset refused a read or scoped scratch admission.
+    /// No canonical result is returned.
     Read(E),
     /// Original refusal from the source's owned payload admission capability.
     OwnedAdmission(E),
@@ -2584,38 +2587,44 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         let canonical = self.issue_labels()?;
         canonical.run.phase(CanonPhase::Output);
         let mut result = result::ResultBuilder::new(canonical.ds, canonical.presentation)?;
-        let lines = canonical
-            .canonical_lines()
-            .map_err(CanonError::with_read_error)?;
-        let bytes = lines
-            .iter()
-            .try_fold(0usize, |bytes, line| bytes.checked_add(line.len()))
-            .ok_or(CanonError::Storage(
-                purrdf_lex::allocation::StorageError::SizeOverflow,
-            ))?;
-        canonical
-            .check_stop()
-            .map_err(CanonError::with_read_error)?;
-        result.reserve_text(bytes)?;
-        for line in lines {
+        let reservation = canonical
+            .ds
+            .reserve_workspace(0)
+            .map_err(CanonError::Read)?;
+        rendering::ScratchGrant::new(reservation).run(|memory| {
+            let mut lines = canonical.canonical_lines(memory)?;
+            let bytes = lines
+                .iter()
+                .try_fold(0usize, |bytes, line| bytes.checked_add(line.len()))
+                .ok_or(CanonError::Storage(
+                    purrdf_lex::allocation::StorageError::SizeOverflow,
+                ))?;
             canonical
                 .check_stop()
                 .map_err(CanonError::with_read_error)?;
-            result.append(&line)?;
-        }
-        result.reserve_labels(canonical.canonical.issued.len())?;
-        for (id, label) in canonical.canonical.issued {
+            result.reserve_text(bytes)?;
+            for line in &mut lines {
+                canonical
+                    .check_stop()
+                    .map_err(CanonError::with_read_error)?;
+                result.append(line)?;
+                memory.release_string(std::mem::take(line))?;
+            }
+            memory.release_vec(lines)?;
+            result.reserve_labels(canonical.canonical.issued.len())?;
+            for (id, label) in canonical.canonical.issued {
+                canonical
+                    .run
+                    .check_stop()
+                    .map_err(|_| CanonError::Stopped)?;
+                result.label(id, &label)?;
+            }
             canonical
                 .run
                 .check_stop()
                 .map_err(|_| CanonError::Stopped)?;
-            result.label(id, &label)?;
-        }
-        canonical
-            .run
-            .check_stop()
-            .map_err(|_| CanonError::Stopped)?;
-        result.finish(canonical.stop)
+            result.finish(canonical.stop)
+        })
     }
 
     /// Admit and issue labels once for both typed relabeling and canonical text.
@@ -2629,15 +2638,15 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         self.collect_incidence()
             .map_err(CanonError::with_read_error)?;
         self.run.phase(CanonPhase::Search);
-        self.run_inner().map_err(CanonError::with_read_error)?;
+        self.run_inner()?;
         Ok(self)
     }
 
-    fn run_inner(&mut self) -> Result<(), CanonError> {
+    fn run_inner(&mut self) -> Result<(), CanonError<D::ReadError>> {
         // §4.4 step 3: first-degree hash of every blank, grouped by hash.
         let mut by_hash: BTreeMap<HashHex, Vec<D::Id>> = BTreeMap::new();
         for &b in &self.blanks {
-            self.check_stop()?;
+            self.check_stop().map_err(CanonError::with_read_error)?;
             let h = self.hash_first_degree(b)?;
             self.first_degree.insert(b, h);
             by_hash.entry(h).or_default().push(b);
@@ -2647,7 +2656,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         // Defer hash-colliding groups to the n-degree pass.
         let mut ambiguous: Vec<HashHex> = Vec::new();
         for (h, group) in &by_hash {
-            self.check_stop()?;
+            self.check_stop().map_err(CanonError::with_read_error)?;
             if group.len() == 1 {
                 self.canonical.issue(group[0]);
             } else {
@@ -2657,7 +2666,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
 
         // §4.4 step 5: resolve each ambiguous group via the n-degree search.
         for h in ambiguous {
-            self.check_stop()?;
+            self.check_stop().map_err(CanonError::with_read_error)?;
             // `by_hash` is a local, not part of `self`, so the group can be walked
             // by reference across the `&mut self` calls below (no `Vec` clone).
             let group = by_hash.get(&h).expect("ambiguous hash present");
@@ -2665,13 +2674,15 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
             // fresh temporary issuer seeded with that blank.
             let mut hash_paths: Vec<(HashHex, IdIssuer<D::Id>)> = Vec::new();
             for &b in group {
-                self.check_stop()?;
+                self.check_stop().map_err(CanonError::with_read_error)?;
                 if self.canonical.has(b) {
                     continue;
                 }
                 let mut temp = IdIssuer::new(TEMP_PREFIX);
                 temp.issue(b);
-                let (result_hash, result_issuer) = self.hash_n_degree(b, temp)?;
+                let (result_hash, result_issuer) = self
+                    .hash_n_degree(b, temp)
+                    .map_err(CanonError::with_read_error)?;
                 hash_paths.push((result_hash, result_issuer));
             }
             // 5.5: promote the temp issuers' bindings into the canonical issuer, the
@@ -2680,26 +2691,32 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
             hash_paths.sort_by_key(|(h, _)| *h);
             for (_h, issuer) in hash_paths {
                 for &b in issuer.order() {
-                    self.check_stop()?;
+                    self.check_stop().map_err(CanonError::with_read_error)?;
                     self.canonical.issue(b);
                 }
             }
         }
-        self.check_stop()
+        self.check_stop().map_err(CanonError::with_read_error)
     }
 
     /// Hash First Degree Quads (RDFC-1.0 §4.6) for blank `b`.
-    fn hash_first_degree(&self, b: D::Id) -> Result<HashHex, CanonError> {
+    fn hash_first_degree(&self, b: D::Id) -> Result<HashHex, CanonError<D::ReadError>> {
         let render = BlankRender::FirstDegree { focus: b };
-        let mut lines = Vec::new();
-        for comp in self.incident.get(&b).map_or_default(Vec::as_slice) {
-            self.check_stop()?;
-            let mut line = String::new();
-            self.write_component(*comp, render, &mut line)?;
-            lines.push(line);
-        }
-        lines.sort_unstable();
-        hash_lines(self.hash, &lines, self.stop)
+        let reservation = self.ds.reserve_workspace(0).map_err(CanonError::Read)?;
+        rendering::ScratchGrant::new(reservation).run(|memory| {
+            let mut lines = Vec::new();
+            for comp in self.incident.get(&b).map_or_default(Vec::as_slice) {
+                self.check_stop().map_err(CanonError::with_read_error)?;
+                let mut line = String::new();
+                self.write_component(*comp, render, &mut line, memory)?;
+                memory.push(&mut lines, line)?;
+            }
+            lines.sort_unstable();
+            let hash =
+                hash_lines(self.hash, &lines, self.stop).map_err(CanonError::with_read_error)?;
+            rendering::release_lines(lines, memory)?;
+            Ok(hash)
+        })
     }
 
     /// Hash N-Degree Quads (RDFC-1.0 §4.8): the gossip-path permutation search.
@@ -2993,68 +3010,74 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
     }
 
     /// §4.4 step 7: serialize every component with canonical labels, sorted + deduped.
-    fn canonical_lines(&self) -> Result<BTreeSet<String>, CanonError> {
+    fn canonical_lines<S: Admission + ?Sized>(
+        &self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Vec<String>, CanonError<D::ReadError>> {
         let render = BlankRender::Canonical {
             issuer: &self.canonical,
         };
-        let mut lines: BTreeSet<String> = BTreeSet::new();
-        collect_components::<_, Infallible>(
+        let mut lines = Vec::new();
+        collect_components::<_, D::ReadError>(
             self.ds,
             self.scope,
             self.presentation,
             self.stop,
             &mut |comp| {
                 let mut s = String::new();
-                self.write_component(comp, render, &mut s)?;
-                lines.insert(s);
+                self.write_component(comp, render, &mut s, memory)?;
+                memory.push(&mut lines, s)?;
                 Ok(())
             },
         )?;
-        self.check_stop()?;
+        rendering::sort_unique(&mut lines, memory)?;
+        self.check_stop().map_err(CanonError::with_read_error)?;
         Ok(lines)
     }
 
     /// Write one component as a canonical N-Quads line (`s p o [g] .\n`).
-    fn write_component(
+    fn write_component<S: Admission + ?Sized>(
         &self,
         comp: Component<D::Id>,
         render: BlankRender<'_, D::Id>,
         out: &mut String,
-    ) -> Result<(), CanonError> {
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), CanonError<D::ReadError>> {
         let (s, p, o, g) = comp.slots();
-        self.write_slot(s, render, out)?;
-        out.push(' ');
-        self.write_slot(p, render, out)?;
-        out.push(' ');
-        self.write_slot(o, render, out)?;
+        self.write_slot(s, render, out, memory)?;
+        memory.push_char(out, ' ')?;
+        self.write_slot(p, render, out, memory)?;
+        memory.push_char(out, ' ')?;
+        self.write_slot(o, render, out, memory)?;
         if let Some(g) = g {
-            out.push(' ');
-            self.write_slot(g, render, out)?;
+            memory.push_char(out, ' ')?;
+            self.write_slot(g, render, out, memory)?;
         }
-        out.push_str(" .\n");
+        memory.push_str(out, " .\n")?;
         Ok(())
     }
 
-    fn write_slot(
+    fn write_slot<S: Admission + ?Sized>(
         &self,
         slot: Slot<D::Id>,
         render: BlankRender<'_, D::Id>,
         out: &mut String,
-    ) -> Result<(), CanonError> {
-        self.check_stop()?;
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), CanonError<D::ReadError>> {
+        self.check_stop().map_err(CanonError::with_read_error)?;
         match slot {
-            Slot::Sentinel(iri) => write_iri(iri, out),
-            Slot::Term(id) => self.write_term(id, render, out)?,
+            Slot::Sentinel(iri) => memory.append_text(out, |out| write_iri(iri, out))?,
+            Slot::Term(id) => self.write_term(id, render, out, memory)?,
             Slot::AnnotationGraph(g) => {
                 // `None`: bare annotation sentinel — byte-identical to the pre-graph
                 // form. `Some(g)`: sentinel then the graph term, so a named-graph
                 // annotation stays lossless and never collides with a genuine quad
                 // (which never carries two graph tokens). Not re-parsed — this string
                 // is only hashed / byte-compared as the canonical oracle.
-                write_iri(SENTINEL_ANNOTATION_GRAPH, out);
+                memory.append_text(out, |out| write_iri(SENTINEL_ANNOTATION_GRAPH, out))?;
                 if let Some(g) = g {
-                    out.push(' ');
-                    self.write_term(g, render, out)?;
+                    memory.push_char(out, ' ')?;
+                    self.write_term(g, render, out, memory)?;
                 }
             }
         }
@@ -3076,101 +3099,137 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
     /// its subject next, with the separators, the predicate, the object and the
     /// closing ` )>>` held back in that order until the subject's whole nesting is
     /// written. A term that is not a triple term pushes nothing.
-    fn write_term(
+    fn write_term<S: Admission + ?Sized>(
         &self,
         id: D::Id,
         render: BlankRender<'_, D::Id>,
         out: &mut String,
-    ) -> Result<(), CanonError> {
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), CanonError<D::ReadError>> {
         enum Step<Id> {
             Term(Id),
             Text(&'static str),
         }
-        let mut held: Vec<Step<D::Id>> = Vec::new();
+        let mut held: WorkList<Step<D::Id>, 8> = WorkList::new();
         let mut next = Some(Step::Term(id));
         while let Some(step) = next.take().or_else(|| held.pop()) {
-            self.check_stop()?;
+            self.check_stop().map_err(CanonError::with_read_error)?;
             let id = match step {
                 Step::Text(text) => {
-                    out.push_str(text);
+                    memory.push_str(out, text)?;
                     continue;
                 }
                 Step::Term(id) => id,
             };
             let Some(guard) = self.ds.resolve_if_ready(id) else {
+                held.release_admitted(memory)?;
                 return Ok(());
             };
             match guard.term() {
-                TermRef::Iri(iri) => write_iri(iri, out),
-                TermRef::Blank { .. } => write_blank(render.label(id), out),
+                TermRef::Iri(iri) => memory.append_text(out, |out| write_iri(iri, out))?,
+                TermRef::Blank { .. } => {
+                    memory.append_text(out, |out| write_blank(render.label(id), out))?;
+                }
                 TermRef::Literal {
                     lexical,
                     datatype,
                     language,
                     direction,
                 } => {
-                    let rendered = self.render_composite_lexical(lexical, datatype, render);
-                    self.check_stop()?;
+                    let rendered =
+                        self.render_composite_lexical(lexical, datatype, render, memory)?;
+                    self.check_stop().map_err(CanonError::with_read_error)?;
                     let Some(datatype_guard) = self.ds.resolve_if_ready(datatype) else {
+                        if let Cow::Owned(rendered) = rendered {
+                            memory.release_string(rendered)?;
+                        }
+                        held.release_admitted(memory)?;
                         return Ok(());
                     };
                     let TermRef::Iri(dt) = datatype_guard.term() else {
                         unreachable!("literal datatype must be an IRI")
                     };
-                    write_literal(
-                        &rendered,
-                        dt,
-                        language,
-                        direction.map(crate::RdfTextDirection::as_str),
-                        out,
-                    );
+                    memory.append_text(out, |out| {
+                        write_literal(
+                            &rendered,
+                            dt,
+                            language,
+                            direction.map(crate::RdfTextDirection::as_str),
+                            out,
+                        );
+                    })?;
+                    if let Cow::Owned(rendered) = rendered {
+                        memory.release_string(rendered)?;
+                    }
                 }
                 TermRef::Triple { s, p, o } => {
                     // RDF-1.2 triple term: `<<( <s> <p> <o> )>>` (the RDF 1.2
                     // N-Quads form).
-                    out.push_str(TRIPLE_TERM_OPEN);
-                    out.push(' ');
-                    held.extend([
+                    memory.push_str(out, TRIPLE_TERM_OPEN)?;
+                    memory.push_char(out, ' ')?;
+                    for step in [
                         Step::Text(TRIPLE_TERM_CLOSE),
                         Step::Text(" "),
                         Step::Term(o),
                         Step::Text(" "),
                         Step::Term(p),
                         Step::Text(" "),
-                    ]);
+                    ] {
+                        held.try_push_admitted(step, memory)?;
+                    }
                     next = Some(Step::Term(s));
                 }
             }
         }
+        held.release_admitted(memory)?;
         Ok(())
     }
 
     /// A composite literal's lexical form with every embedded blank label
     /// replaced by the label `render` issues for that node; any other lexical
     /// form, borrowed unchanged.
-    fn render_composite_lexical<'l>(
+    fn render_composite_lexical<'l, S: Admission + ?Sized>(
         &self,
         lexical: &'l str,
         datatype: D::Id,
         render: BlankRender<'_, D::Id>,
-    ) -> Cow<'l, str> {
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Cow<'l, str>, CanonError<D::ReadError>> {
         let Some(guard) = self.ds.resolve_if_ready(datatype) else {
-            return Cow::Borrowed(lexical);
+            return Ok(Cow::Borrowed(lexical));
         };
         let TermRef::Iri(iri) = guard.term() else {
-            return Cow::Borrowed(lexical);
+            return Ok(Cow::Borrowed(lexical));
         };
-        crate::cdt_blank::rewrite_cdt_blank_terms(lexical, iri, &mut |label| {
-            let (label, scope) = crate::blank_label::decode_blank_label(
-                label,
-                crate::blank_label::LabelAlphabet::BlankNodeLabel,
-            );
-            let id = self.ds.term_id_if_ready(&TermValue::Blank {
-                label: label.into_owned(),
-                scope,
-            })?;
-            Some(format!("_:{}", render.label(id)))
-        })
+        Ok(crate::cdt_blank::rewrite_cdt_blank_terms_with_memory(
+            lexical,
+            iri,
+            &mut |label, memory| {
+                let (label, scope) = crate::blank_label::decode_blank_label_with_memory(
+                    label,
+                    crate::blank_label::LabelAlphabet::BlankNodeLabel,
+                    memory,
+                )?;
+                let label = match label {
+                    Cow::Borrowed(label) => memory.string(label)?,
+                    Cow::Owned(label) => label,
+                };
+                let lookup = TermValue::Blank { label, scope };
+                let id = self.ds.term_id_if_ready(&lookup);
+                let TermValue::Blank { label, .. } = lookup else {
+                    unreachable!("the blank lookup was constructed above")
+                };
+                memory.release_string(label)?;
+                let Some(id) = id else {
+                    return Ok(None);
+                };
+                let mut replacement = String::new();
+                memory.push_str(&mut replacement, "_:")?;
+                memory.push_str(&mut replacement, render.label(id))?;
+                Ok(Some(replacement))
+            },
+            memory,
+        )?)
     }
 }
 
@@ -5255,6 +5314,7 @@ mod tests {
                 },
                 render,
                 &mut via_id,
+                &mut Memory::new(&mut purrdf_lex::allocation::Resident),
             )
             .unwrap();
 
@@ -5268,6 +5328,7 @@ mod tests {
                 },
                 render,
                 &mut via_literal,
+                &mut Memory::new(&mut purrdf_lex::allocation::Resident),
             )
             .unwrap();
 
@@ -6440,7 +6501,10 @@ mod tests {
         .issue_labels()
         .unwrap();
         signal.0.store(8, std::sync::atomic::Ordering::Relaxed);
-        assert!(matches!(state.canonical_lines(), Err(CanonError::Stopped)));
+        assert!(matches!(
+            state.canonical_lines(&mut Memory::new(&mut purrdf_lex::allocation::Resident)),
+            Err(CanonError::Stopped)
+        ));
     }
 
     #[test]

@@ -6,7 +6,24 @@
 use purrdf_lex::allocation::{Admission, Memory, StorageError};
 
 use super::CanonError;
-use crate::{DatasetView, OwnedWorkspaceReservation};
+use crate::{DatasetView, OwnedWorkspaceReservation, WorkspaceReservation};
+
+/// Both source reservation owners preserve their first provider refusal while
+/// native allocation code carries its inline admission marker.
+pub(super) fn resize_reservation<R: WorkspaceReservation + ?Sized>(
+    reservation: &mut R,
+    failure: &mut Option<R::Error>,
+    bytes: usize,
+) -> Result<(), StorageError> {
+    let bytes = u64::try_from(bytes).map_err(|_| StorageError::SizeOverflow)?;
+    if failure.is_some() {
+        return Err(StorageError::AdmissionFailed);
+    }
+    reservation.resize(bytes).map_err(|cause| {
+        *failure = Some(cause);
+        StorageError::AdmissionFailed
+    })
+}
 
 pub(super) struct SourceGrant<E> {
     reservation: OwnedWorkspaceReservation<E>,
@@ -16,14 +33,7 @@ pub(super) struct SourceGrant<E> {
 
 impl<E> Admission for SourceGrant<E> {
     fn resize(&mut self, bytes: usize) -> Result<(), StorageError> {
-        let bytes = u64::try_from(bytes).map_err(|_| StorageError::SizeOverflow)?;
-        if self.failure.is_some() {
-            return Err(StorageError::AdmissionFailed);
-        }
-        self.reservation.resize(bytes).map_err(|cause| {
-            self.failure = Some(cause);
-            StorageError::AdmissionFailed
-        })
+        resize_reservation(self.reservation.as_mut(), &mut self.failure, bytes)
     }
 }
 
