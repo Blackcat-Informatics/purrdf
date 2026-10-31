@@ -6465,29 +6465,50 @@ mod tests {
         control: &mut purrdf_core::CanonicalizationControl<'_>,
     ) -> Vec<(
         &'static str,
-        Result<ReasoningAnswer<String>, crate::canonical::CanonicalServiceError>,
+        Result<ReasoningAnswer<ReasoningText>, crate::canonical::CanonicalServiceError>,
     )> {
         vec![
             (
                 "consistency",
-                consistency_to_string(document, &[], &[], 0, 0, control),
+                consistency_to_string(document, &[], &[], 0, 0, control)
+                    .map(|answer| answer.map_answer(ReasoningText::from)),
             ),
-            ("classify", classify_to_string(document, 0, 0, control)),
-            ("realize", realize_to_string(document, 0, 0, control)),
+            (
+                "classify",
+                classify_to_string(document, 0, 0, control)
+                    .map(|answer| answer.map_answer(ReasoningText::from)),
+            ),
+            (
+                "realize",
+                realize_to_string(document, 0, 0, control)
+                    .map(|answer| answer.map_answer(ReasoningText::from)),
+            ),
             (
                 "instances",
-                instances_to_string(document, "<http://example.org/C>", 0, 0, control),
+                instances_to_string(document, "<http://example.org/C>", 0, 0, control)
+                    .map(|answer| answer.map_answer(ReasoningText::from)),
             ),
             (
                 "entails",
-                entails_to_string(document, CHAIN_AXIOM, 0, 0, control),
+                entails_to_string(document, CHAIN_AXIOM, 0, 0, control)
+                    .map(|answer| answer.map_answer(ReasoningText::from)),
             ),
-            ("profile", profile_to_string(document).map_err(Into::into)),
+            (
+                "profile",
+                profile_to_string(document)
+                    .map(|answer| answer.map_answer(ReasoningText::from))
+                    .map_err(Into::into),
+            ),
             (
                 "extract-module",
-                extract_module_to_string(document, "<http://example.org/A>\n", "star", control),
+                extract_module_to_string(document, "<http://example.org/A>\n", "star", control)
+                    .map(|answer| answer.map_answer(ReasoningText::from)),
             ),
-            ("justify", justify_to_string(document, CHAIN_AXIOM, control)),
+            (
+                "justify",
+                justify_to_string(document, CHAIN_AXIOM, control)
+                    .map(|answer| answer.map_answer(ReasoningText::from)),
+            ),
             (
                 "explain-conclusion",
                 explain_conclusion_to_string(
@@ -6497,6 +6518,7 @@ mod tests {
                      <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
                      <http://example.org/C> .\n",
                 )
+                .map(|answer| answer.map_answer(ReasoningText::from))
                 .map_err(Into::into),
             ),
         ]

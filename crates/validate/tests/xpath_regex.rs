@@ -376,7 +376,7 @@ fn rules(
     value: &str,
     srl: bool,
     law: Option<Profile>,
-) -> Result<purrdf_core::Canonicalized, XPathValidationError> {
+) -> Result<String, XPathValidationError> {
     let shapes = rule_shapes(pattern);
     let rule_set = rule_set(pattern);
     let data = data(value);

@@ -40,7 +40,7 @@ const routes = [
   }]),
   ["raw update", (engine, data, text, o) => rawUpdate.call(engine, data, text, undefined, o.xpathRegex, o.now, o.entropySeed)],
   ["raw governed", (engine, data, text, o) => {
-    const result = rawGoverned.call(engine, data, text, ...Array(10).fill(undefined), o.xpathRegex, o.now, o.entropySeed);
+    const result = rawGoverned.call(engine, data, text, ...Array(12).fill(undefined), o.xpathRegex, o.now, o.entropySeed);
     try { assert.equal(result.isApplied, true); } finally { result.free(); }
   }],
   ...kinds.map((kind) => [`low-level ${kind}`, (engine, data, text, o) => lowLevel(engine, data, kind, text, o)]),

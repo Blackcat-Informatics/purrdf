@@ -184,6 +184,15 @@ checks exercise shipped host interfaces. The runner fixture exercises actual
 WASM imports, traps, rejected options and status propagation. Release/package
 builds and assembly-only probes are not semantic test executions.
 
+These exact package cases cover the heap driver's host boundaries:
+
+| Target / exact case | Concrete host obligation |
+| --- | --- |
+| `sync-coordinates.test.mjs` / `synchronous positional query coordinates reject lossy host values` | Raw query and entailment argument positions preserve the clock and seed slots after the UDF depth options |
+| `update-coordinates.test.mjs` / `UPDATE host coordinate errors precede mutation and release every claim` | Raw UPDATE argument positions preserve coordinate refusal and release the host dataset claim |
+| `async-concurrency.test.mjs` / `a request as deep as the synchronous lane evaluates answers on a job's region` | Actual per-job shadow-stack bounds, floor refusal, idle-pointer restoration, reuse and nonzero JSPI suspension |
+| `async-concurrency.test.mjs` / `a trap poisons every entry point of the instance, and jobs that fault without trapping poison nothing` | The existing armed WASM trap during async SERVICE handling poisons active and parked jobs and every exported surface; ordinary host faults leave the instance reusable |
+
 Names such as `wasm_determinism` or `product_wasm` do not make their entire native
 registration a WASM obligation. Unselected general tests remain native. Adding
 exceptions by listing generic semantics in this document is forbidden: inspect

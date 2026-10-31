@@ -298,12 +298,13 @@ fn is_small(local: &str) -> String {
 /// inferred by rules)" — so no `ex:area` triple survives into the output.
 #[test]
 fn expected_predicate_makes_the_derived_triples_visible_to_the_rule() {
-    let with = entail(
+    let with_owner = entail(
         &rectangle_shapes("; sh:expectedPredicate ex:area", "; sh:defaultValue 1"),
         RECTANGLES,
-    )
-    .nquads();
-    let without = entail(&rectangle_shapes("", "; sh:defaultValue 1"), RECTANGLES).nquads();
+    );
+    let with = with_owner.nquads();
+    let without_owner = entail(&rectangle_shapes("", "; sh:defaultValue 1"), RECTANGLES);
+    let without = without_owner.nquads();
     assert!(with.contains(&is_small("Small")), "{with}");
     assert!(with.contains(&is_small("Incomplete")), "{with}");
     assert!(!with.contains(&is_small("Large")), "{with}");
@@ -322,11 +323,11 @@ fn expected_predicate_makes_the_derived_triples_visible_to_the_rule() {
 #[test]
 fn default_value_is_a_derived_value_for_the_rules() {
     let expected = "; sh:expectedPredicate ex:area";
-    let with = entail(
+    let with_owner = entail(
         &rectangle_shapes(expected, "; sh:defaultValue 1"),
         RECTANGLES,
-    )
-    .nquads();
+    );
+    let with = with_owner.nquads();
     let without_owner = entail(&rectangle_shapes(expected, ""), RECTANGLES);
     let without = without_owner.nquads();
     assert!(with.contains(&is_small("Incomplete")), "{with}");
@@ -351,11 +352,11 @@ fn a_derived_triple_a_rule_also_infers_is_kept() {
     );
     let kept_owner = entail(&copying, RECTANGLES);
     let kept = kept_owner.nquads();
-    let dropped = entail(
+    let dropped_owner = entail(
         &rectangle_shapes("; sh:expectedPredicate ex:area", "; sh:defaultValue 1"),
         RECTANGLES,
-    )
-    .nquads();
+    );
+    let dropped = dropped_owner.nquads();
     let small_area = "<http://example.org/ns#Small> <http://example.org/ns#area> \"20\"^^<http://www.w3.org/2001/XMLSchema#integer> .";
     assert!(kept.contains(small_area), "{kept}");
     assert!(!dropped.contains(small_area), "{dropped}");
@@ -652,11 +653,13 @@ fn a_property_shape_deactivated_by_an_expression_derives_nothing_at_that_focus_n
             &format!("a sh:PropertyShape ; {deactivated}"),
         )
     };
-    let skipping = entail(&shapes("sh:deactivated [ sh:path ex:skip ] ;"), rectangles).nquads();
+    let skipping_owner = entail(&shapes("sh:deactivated [ sh:path ex:skip ] ;"), rectangles);
+    let skipping = skipping_owner.nquads();
     assert!(skipping.contains(&is_small("Incomplete")), "{skipping}");
     assert!(!skipping.contains(&is_small("Small")), "{skipping}");
     assert!(!skipping.contains(&is_small("Large")), "{skipping}");
-    let control = entail(&shapes("sh:deactivated false ;"), rectangles).nquads();
+    let control_owner = entail(&shapes("sh:deactivated false ;"), rectangles);
+    let control = control_owner.nquads();
     assert!(control.contains(&is_small("Incomplete")), "{control}");
     assert!(control.contains(&is_small("Small")), "{control}");
 }
