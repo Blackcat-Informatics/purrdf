@@ -107,8 +107,13 @@ name = "rfc3339"
 harness = false
 
 [[test]]
-# The same public primitive known answers execute natively and in wasm/Node.
+# Native FIPS 204 known answers for the public signature primitive.
 name = "mldsa65"
+harness = false
+
+[[test]]
+# Native FIPS 203 answers and input checks; ordinary semantics stay native.
+name = "mlkem1024"
 harness = false
 
 [[test]]

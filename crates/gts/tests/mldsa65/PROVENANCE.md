@@ -28,9 +28,10 @@ directory in `gen-val/json-files`. Prompt/results are joined by `tgId` and
 | ML-DSA-sigVer-FIPS204/prompt.json | `e2cba4589389756fa0bea1a7e6837138bf0a81f9d14234c9ee8f6d33caa1654e` |
 | ML-DSA-sigVer-FIPS204/expectedResults.json | `e1d84ef1b2f35196278ab0b0ed6a46ec62cc03d2dfa92c564199e1999bfb8ea6` |
 
-The shared vector reader verifies each body checksum and record count. Tests
-compare complete answers and execute the same public APIs natively and in wasm.
-These files are primitive known answers, separate from the governed GTS corpus.
+The shared vector reader verifies each body checksum and record count. Native
+tests compare complete answers through the public APIs. Release WASM builds
+establish portability. These primitive known answers are separate from the
+governed GTS corpus.
 
 | File | Selected groups and complete records | Fields after group/case IDs |
 |---|---|---|

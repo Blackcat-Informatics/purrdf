@@ -25,12 +25,14 @@ pub(crate) fn bit_mask(bit: u64) -> u64 {
 
 /// Byte-string equality that reads every byte before deciding for equal-length
 /// inputs. Lengths are public; different lengths are refused before scanning.
+/// Owned final-difference storage is cleared before returning the Boolean.
 pub fn bytes_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
     }
-    let diff = a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y));
-    black_box(diff) == 0
+    let diff =
+        purrdf_hash::SecretArray::new([a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y))]);
+    black_box(diff[0]) == 0
 }
 
 #[cfg(test)]

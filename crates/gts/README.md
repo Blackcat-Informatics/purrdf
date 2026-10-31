@@ -40,6 +40,18 @@ The crate owns the wire-format machinery:
   expansion, validated expanded-key import, deterministic signing, explicit
   caller-supplied hedged randomness and strict signature verification. The
   primitive's independent NIST fixtures are separate from the GTS wire corpus.
+- **`mlkem1024`** — native ML-KEM-1024 (FIPS 203), with deterministic expansion
+  of a caller-owned 64-byte `(d, z)` seed, explicit 32-byte encapsulation
+  randomness, exact FIPS key/ciphertext encodings and implicit rejection.
+  Private keys and shared secrets clear their owned storage on drop. Matrix
+  sampling depends on public data; secret arithmetic uses fixed schedules.
+
+For ML-KEM, construct `mlkem1024::DecapsulationKey::from_seed(&seed)`, obtain its
+checked public key with `encapsulation_key()?`, then call
+`public.encapsulate(&m)` to obtain `(ciphertext, shared_secret)`. The recipient
+calls `private.decapsulate(&ciphertext)`. The caller supplies cryptographic
+entropy and clears its own seeds, randomizers and exported private bytes.
+The primitive adds no transport envelope or hybrid-recipient policy.
 
 Both this engine and its sibling implementations are gated against the same
 frozen, language-neutral conformance vectors, byte-exact. The format is

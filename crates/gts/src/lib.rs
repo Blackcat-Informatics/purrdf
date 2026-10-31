@@ -78,7 +78,10 @@ pub mod files;
 #[doc(hidden)]
 pub mod fixture;
 pub mod from_tar;
+mod lattice;
 pub mod mldsa65;
+/// Native FIPS 203 ML-KEM-1024 with caller-supplied entropy.
+pub mod mlkem1024;
 pub mod mmr;
 pub mod model;
 pub mod nested;
