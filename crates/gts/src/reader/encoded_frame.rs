@@ -5,6 +5,7 @@
 
 use purrdf_lex::cbor::{self, BorrowedItem, EncodedItem, Value, ValueRef};
 
+#[derive(Debug)]
 pub(super) enum StreamItem {
     Header(Value),
     Frame(EncodedItem),

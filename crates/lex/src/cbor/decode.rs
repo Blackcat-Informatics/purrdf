@@ -167,6 +167,17 @@ struct Slice<'a> {
     pos: usize,
 }
 
+impl Slice<'_> {
+    fn extent(&self, len: u64) -> Result<core::ops::Range<usize>, DecodeError> {
+        let available = self.bytes.len() - self.pos;
+        let len = usize::try_from(len)
+            .ok()
+            .filter(|&len| len <= available)
+            .ok_or_else(|| DecodeError::new(DecodeErrorKind::Truncated, self.bytes.len()))?;
+        Ok(self.pos..self.pos + len)
+    }
+}
+
 impl Source for Slice<'_> {
     fn offset(&self) -> usize {
         self.pos
@@ -182,13 +193,9 @@ impl Source for Slice<'_> {
     }
 
     fn take(&mut self, len: u64, out: &mut Vec<u8>) -> Result<(), DecodeError> {
-        let available = self.bytes.len() - self.pos;
-        let len = usize::try_from(len)
-            .ok()
-            .filter(|&len| len <= available)
-            .ok_or_else(|| DecodeError::new(DecodeErrorKind::Truncated, self.bytes.len()))?;
-        out.extend_from_slice(&self.bytes[self.pos..self.pos + len]);
-        self.pos += len;
+        let extent = self.extent(len)?;
+        out.extend_from_slice(&self.bytes[extent.clone()]);
+        self.pos = extent.end;
         Ok(())
     }
 
@@ -313,12 +320,12 @@ impl DecodeOutput for OwnedOutput {
     }
 }
 
-struct SpanOutput<'a, F> {
+struct SpanOutput<'a, F, const TRUSTED: bool> {
     depth: usize,
     visit: &'a mut F,
 }
 
-impl<F: FnMut(ItemSpan)> SpanOutput<'_, F> {
+impl<F: FnMut(ItemSpan), const TRUSTED: bool> SpanOutput<'_, F, TRUSTED> {
     fn record(&mut self, span: ItemSpan, depth: usize) {
         if depth == self.depth {
             (self.visit)(span);
@@ -326,7 +333,7 @@ impl<F: FnMut(ItemSpan)> SpanOutput<'_, F> {
     }
 }
 
-impl<F: FnMut(ItemSpan)> DecodeOutput for SpanOutput<'_, F> {
+impl<F: FnMut(ItemSpan), const TRUSTED: bool> DecodeOutput for SpanOutput<'_, F, TRUSTED> {
     type Item = ();
     type Array = ();
     type Map = ();
@@ -344,6 +351,60 @@ impl<F: FnMut(ItemSpan)> DecodeOutput for SpanOutput<'_, F> {
     }
     fn tag(&mut self, _: u64, (): (), span: ItemSpan, depth: usize) {
         self.record(span, depth);
+    }
+}
+
+/// String output is separate so trusted extent navigation can only use a slice.
+/// Initial admission and owned decoding always retain the validating policy.
+trait DecodeString<S: Source>: DecodeOutput {
+    fn string(
+        &mut self,
+        source: &mut S,
+        major: u8,
+        length: Option<u64>,
+        deterministic: bool,
+        at: usize,
+        depth: usize,
+    ) -> Result<Self::Item, DecodeError> {
+        let bytes = string_bytes(source, major, length, deterministic, at)?;
+        let value = if major == 2 {
+            Value::Bytes(bytes)
+        } else {
+            Value::Text(
+                String::from_utf8(bytes)
+                    .map_err(|_| DecodeError::new(DecodeErrorKind::InvalidUtf8, at))?,
+            )
+        };
+        Ok(self.scalar(value, (at, source.offset()), depth))
+    }
+}
+
+impl<S: Source> DecodeString<S> for OwnedOutput {}
+impl<S: Source, F: FnMut(ItemSpan)> DecodeString<S> for SpanOutput<'_, F, false> {}
+
+impl<F: FnMut(ItemSpan)> DecodeString<Slice<'_>> for SpanOutput<'_, F, true> {
+    fn string(
+        &mut self,
+        source: &mut Slice<'_>,
+        major: u8,
+        length: Option<u64>,
+        deterministic: bool,
+        at: usize,
+        depth: usize,
+    ) -> Result<(), DecodeError> {
+        string_chunks(
+            source,
+            major,
+            length,
+            deterministic,
+            at,
+            |source, len, _| {
+                source.pos = source.extent(len)?.end;
+                Ok(())
+            },
+        )?;
+        self.record((at, source.offset()), depth);
+        Ok(())
     }
 }
 
@@ -394,7 +455,7 @@ fn visit_prefix(
         &mut source,
         limits,
         false,
-        &mut SpanOutput {
+        &mut SpanOutput::<_, false> {
             depth,
             visit: &mut visit,
         },
@@ -498,7 +559,7 @@ fn attach_to<S: Source, B: DecodeOutput>(
     }
 }
 
-fn decode_item_to<S: Source, B: DecodeOutput>(
+fn decode_item_to<S: Source, B: DecodeString<S>>(
     source: &mut S,
     limits: Limits,
     deterministic: bool,
@@ -554,18 +615,7 @@ fn decode_item_to<S: Source, B: DecodeOutput>(
                 ),
                 source.offset(),
             ),
-            (2, length) => {
-                let value = Value::Bytes(string_bytes(source, 2, length, deterministic, at)?);
-                scalar(output, value, source.offset())
-            }
-            (3, length) => {
-                let bytes = string_bytes(source, 3, length, deterministic, at)?;
-                let value = Value::Text(
-                    String::from_utf8(bytes)
-                        .map_err(|_| DecodeError::new(DecodeErrorKind::InvalidUtf8, at))?,
-                );
-                scalar(output, value, source.offset())
-            }
+            (2 | 3, length) => output.string(source, major, length, deterministic, at, depth)?,
             (4..=6, _) if open.len() >= limits.max_depth => {
                 return Err(DecodeError::new(
                     DecodeErrorKind::Depth {
@@ -705,6 +755,35 @@ fn string_bytes<S: Source>(
     at: usize,
 ) -> Result<Vec<u8>, DecodeError> {
     let mut bytes = Vec::new();
+    let indefinite = length.is_none();
+    string_chunks(
+        source,
+        major,
+        length,
+        deterministic,
+        at,
+        |source, len, chunk_at| {
+            let from = bytes.len();
+            source.take(len, &mut bytes)?;
+            if indefinite && major == 3 && core::str::from_utf8(&bytes[from..]).is_err() {
+                return Err(DecodeError::new(DecodeErrorKind::InvalidUtf8, chunk_at));
+            }
+            Ok(())
+        },
+    )?;
+    Ok(bytes)
+}
+
+/// The one definite/indefinite string grammar, shared by admission and extent
+/// navigation. Only admitted immutable slices may skip a chunk's bytes.
+fn string_chunks<S: Source>(
+    source: &mut S,
+    major: u8,
+    length: Option<u64>,
+    deterministic: bool,
+    at: usize,
+    mut chunk: impl FnMut(&mut S, u64, usize) -> Result<(), DecodeError>,
+) -> Result<(), DecodeError> {
     let Some(length) = length else {
         if deterministic {
             return Err(DecodeError::new(
@@ -716,7 +795,7 @@ fn string_bytes<S: Source>(
             let chunk_at = source.offset();
             let initial = source.byte()?;
             if initial == 0xff {
-                return Ok(bytes);
+                return Ok(());
             }
             if initial >> 5 != major {
                 return Err(DecodeError::new(
@@ -726,24 +805,19 @@ fn string_bytes<S: Source>(
                     chunk_at,
                 ));
             }
-            let Some(chunk) = argument(source, initial, chunk_at, false)? else {
+            let Some(length) = argument(source, initial, chunk_at, false)? else {
                 return Err(DecodeError::new(
                     DecodeErrorKind::Malformed("an indefinite string's chunks must be definite"),
                     chunk_at,
                 ));
             };
-            let from = bytes.len();
-            source.take(chunk, &mut bytes)?;
-            if major == 3 && core::str::from_utf8(&bytes[from..]).is_err() {
-                return Err(DecodeError::new(DecodeErrorKind::InvalidUtf8, chunk_at));
-            }
+            chunk(source, length, chunk_at)?;
         }
     };
     if usize::try_from(length).is_err() {
         return Err(DecodeError::new(DecodeErrorKind::TooLong, at));
     }
-    source.take(length, &mut bytes)?;
-    Ok(bytes)
+    chunk(source, length, at)
 }
 
 /// A major type 7 item: a simple value or a float.
@@ -1180,10 +1254,32 @@ impl<'a> Iterator for BorrowedChildren<'a> {
         if self.remaining.is_empty() {
             return None;
         }
-        match borrowed_prefix(self.remaining, self.limits) {
-            Ok((item, consumed)) => {
-                self.remaining = &self.remaining[consumed..];
-                Some(Ok(item))
+        // This private cursor only receives children of an immutable item
+        // already admitted by the shared decoder. Reuse its container machine
+        // and string grammar, but skip admitted string bytes without allocating
+        // or validating their UTF-8 again.
+        let mut source = Slice {
+            bytes: self.remaining,
+            pos: 0,
+        };
+        let mut ignore = |_| {};
+        let result = decode_item_to(
+            &mut source,
+            self.limits,
+            false,
+            &mut SpanOutput::<_, true> {
+                depth: 0,
+                visit: &mut ignore,
+            },
+        );
+        match result {
+            Ok(()) => {
+                let (encoded, remaining) = self.remaining.split_at(source.pos);
+                self.remaining = remaining;
+                Some(Ok(BorrowedItem {
+                    encoded,
+                    limits: self.limits,
+                }))
             }
             Err(error) => {
                 self.remaining = &[];
@@ -1296,7 +1392,7 @@ pub fn read_encoded_from<R: Read + ?Sized>(
         encoded: Vec::new(),
     };
     let mut ignore = |_| {};
-    let mut output = SpanOutput {
+    let mut output = SpanOutput::<_, false> {
         depth: 0,
         visit: &mut ignore,
     };

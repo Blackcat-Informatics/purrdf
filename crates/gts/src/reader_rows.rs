@@ -215,6 +215,24 @@ fn fmt_opt(graph_slot: Option<usize>) -> String {
     }
 }
 
+pub(crate) struct NumericRow<const N: usize> {
+    pub(crate) width: usize,
+    pub(crate) values: [Option<i128>; N],
+}
+pub(crate) fn numeric_row<const N: usize>(
+    value: ValueRef<'_>,
+) -> Result<Option<NumericRow<N>>, DecodeError> {
+    let Some(items) = value.array()? else {
+        return Ok(None);
+    };
+    let width = items.len();
+    let mut values = [None; N];
+    for (slot, item) in values.iter_mut().zip(items) {
+        *slot = item?.integer();
+    }
+    Ok(Some(NumericRow { width, values }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -240,22 +258,4 @@ mod tests {
             size_of::<Previous<AnnotationRow>>()
         );
     }
-}
-
-pub(crate) struct NumericRow<const N: usize> {
-    pub(crate) width: usize,
-    pub(crate) values: [Option<i128>; N],
-}
-pub(crate) fn numeric_row<const N: usize>(
-    value: ValueRef<'_>,
-) -> Result<Option<NumericRow<N>>, DecodeError> {
-    let Some(items) = value.array()? else {
-        return Ok(None);
-    };
-    let width = items.len();
-    let mut values = [None; N];
-    for (slot, item) in values.iter_mut().zip(items) {
-        *slot = item?.integer();
-    }
-    Ok(Some(NumericRow { width, values }))
 }
