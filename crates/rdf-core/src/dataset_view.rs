@@ -59,6 +59,7 @@ fn owned_term_leaf<D: DatasetView + ?Sized, C: ?Sized, E>(
     ctx: &mut C,
     mut text: impl FnMut(&mut C, &str) -> Result<String, E>,
     lookup_error: impl Fn(TermLookupError<D::ReadError>) -> E,
+    check_ready: bool,
 ) -> Result<TermValue, E> {
     Ok(match term {
         TermRef::Iri(iri) => TermValue::Iri(text(ctx, iri)?),
@@ -72,18 +73,30 @@ fn owned_term_leaf<D: DatasetView + ?Sized, C: ?Sized, E>(
             language,
             direction,
         } => {
+            if check_ready && let Some(cause) = view.read_error() {
+                return Err(lookup_error(TermLookupError::Read(cause)));
+            }
             let guard = view
                 .resolve(datatype)
-                .map_err(|error| lookup_error(TermLookupError::Read(error)))?;
-            let TermRef::Iri(datatype) = guard.term() else {
+                .map_err(|cause| lookup_error(TermLookupError::Read(cause)))?;
+            let term = guard.term();
+            if check_ready && let Some(cause) = view.read_error() {
+                return Err(lookup_error(TermLookupError::Read(cause)));
+            }
+            let TermRef::Iri(datatype) = term else {
                 return Err(lookup_error(TermLookupError::ForeignId));
             };
-            TermValue::Literal {
+            let value = TermValue::Literal {
                 lexical_form: text(ctx, lexical)?,
                 datatype: text(ctx, datatype)?,
                 language: language.map(|language| text(ctx, language)).transpose()?,
                 direction,
+            };
+            drop(guard);
+            if check_ready && let Some(cause) = view.read_error() {
+                return Err(lookup_error(TermLookupError::Read(cause)));
             }
+            value
         }
         TermRef::Triple { .. } => unreachable!("a triple term is assembled from its components"),
     })
@@ -101,6 +114,54 @@ fn owned_term_triple<E>(
         p: boxed(p)?,
         o: boxed(o)?,
     })
+}
+
+/// Shared native conversion; only snapshot acquisition requests readiness
+/// at each source boundary. Ordinary cached term copying keeps its old policy.
+pub(crate) fn term_value_with_memory_inner<
+    D: DatasetView + ?Sized,
+    S: purrdf_lex::allocation::Admission + ?Sized,
+    E,
+>(
+    view: &D,
+    id: D::Id,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    lookup_error: impl Fn(TermLookupError<D::ReadError>) -> E,
+    storage_error: impl Fn(
+        purrdf_lex::allocation::StorageError,
+        &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> E,
+    check_ready: bool,
+) -> Result<TermValue, E> {
+    crate::ir::try_fold_term_with_memory_inner(
+        (view, check_ready),
+        id,
+        |_, term, memory| {
+            owned_term_leaf(
+                view,
+                term,
+                memory,
+                |memory, source| {
+                    memory
+                        .string_with_progress(source)
+                        .map_err(|error| storage_error(error, memory))
+                },
+                &lookup_error,
+                check_ready,
+            )
+        },
+        |_, s, p, o, memory| {
+            owned_term_triple(s, p, o, |value| {
+                memory
+                    .boxed(value)
+                    .map(Into::into)
+                    .map_err(|error| storage_error(error, memory))
+            })
+        },
+        |error| lookup_error(TermLookupError::Read(error)),
+        &storage_error,
+        memory,
+    )
 }
 
 mod sealed {
@@ -849,6 +910,7 @@ pub trait DatasetView {
                     &mut (),
                     |(), source| crate::ir::try_owned_text(source).map_err(&storage_error),
                     &lookup_error,
+                    false,
                 )
             },
             |_, s, p, o| {
@@ -884,34 +946,7 @@ pub trait DatasetView {
             &mut purrdf_lex::allocation::Memory<'_, S>,
         ) -> E,
     ) -> Result<TermValue, E> {
-        crate::ir::try_fold_term_with_memory(
-            self,
-            id,
-            |_, term, memory| {
-                owned_term_leaf(
-                    self,
-                    term,
-                    memory,
-                    |memory, source| {
-                        memory
-                            .string(source)
-                            .map_err(|error| storage_error(error, memory))
-                    },
-                    &lookup_error,
-                )
-            },
-            |_, s, p, o, memory| {
-                owned_term_triple(s, p, o, |value| {
-                    memory
-                        .boxed(value)
-                        .map(Into::into)
-                        .map_err(|error| storage_error(error, memory))
-                })
-            },
-            |error| lookup_error(TermLookupError::Read(error)),
-            &storage_error,
-            memory,
-        )
+        term_value_with_memory_inner(self, id, memory, lookup_error, storage_error, false)
     }
 
     /// Quads matching an optional `(s, p, o)` id pattern and a [`GraphMatch`].

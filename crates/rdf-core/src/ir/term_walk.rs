@@ -840,6 +840,38 @@ pub fn try_fold_term_with_memory<
 >(
     view: &D,
     id: D::Id,
+    leaf: impl FnMut(
+        D::Id,
+        TermRef<'_, D::Id>,
+        &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<T, E>,
+    triple: impl FnMut(D::Id, T, T, T, &mut purrdf_lex::allocation::Memory<'_, S>) -> Result<T, E>,
+    read_error: impl FnMut(D::ReadError) -> E,
+    storage_error: impl FnMut(
+        purrdf_lex::allocation::StorageError,
+        &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> E,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+) -> Result<T, E> {
+    try_fold_term_with_memory_inner(
+        (view, false),
+        id,
+        leaf,
+        triple,
+        read_error,
+        storage_error,
+        memory,
+    )
+}
+
+pub(crate) fn try_fold_term_with_memory_inner<
+    D: DatasetView + ?Sized,
+    T,
+    E,
+    S: purrdf_lex::allocation::Admission + ?Sized,
+>(
+    source: (&D, bool),
+    id: D::Id,
     mut leaf: impl FnMut(
         D::Id,
         TermRef<'_, D::Id>,
@@ -853,18 +885,39 @@ pub fn try_fold_term_with_memory<
     ) -> E,
     memory: &mut purrdf_lex::allocation::Memory<'_, S>,
 ) -> Result<T, E> {
+    let (view, check_ready) = source;
+    let storage_error = core::cell::RefCell::new(storage_error);
     try_fold_nested_with_memory(
         id,
         &mut (),
         |(), id, memory| {
+            if check_ready && let Some(cause) = view.read_error() {
+                return Err(read_error(cause));
+            }
+            memory
+                .admission_mut()
+                .checkpoint(1)
+                .map_err(|cause| (storage_error.borrow_mut())(cause, memory))?;
             let guard = view.resolve(id).map_err(&mut read_error)?;
-            match guard.term() {
+            let term = guard.term();
+            if check_ready && let Some(cause) = view.read_error() {
+                return Err(read_error(cause));
+            }
+            let result = match term {
                 TermRef::Triple { s, p, o } => Ok(Nested::Triple(s, p, o)),
                 resolved => leaf(id, resolved, memory).map(Nested::Leaf),
+            };
+            drop(guard);
+            if check_ready
+                && result.is_ok()
+                && let Some(cause) = view.read_error()
+            {
+                return Err(read_error(cause));
             }
+            result
         },
         |(), id, s, p, o, memory| triple(id, s, p, o, memory),
-        storage_error,
+        |cause, memory| (storage_error.borrow_mut())(cause, memory),
         memory,
     )
 }
@@ -966,9 +1019,13 @@ impl TermValue {
             &mut before,
             |before, term, memory| {
                 before(term).map_err(OwnedTermFoldError::Visitor)?;
+                memory
+                    .admission_mut()
+                    .checkpoint(1)
+                    .map_err(OwnedTermFoldError::Storage)?;
                 match term {
                     Self::Triple { s, p, o } => Ok(Nested::Triple(&**s, &**p, &**o)),
-                    leaf => shallow_clone(leaf, |source| memory.string(source))
+                    leaf => shallow_clone(leaf, |source| memory.string_with_progress(source))
                         .map(Nested::Leaf)
                         .map_err(OwnedTermFoldError::Storage),
                 }
@@ -1076,24 +1133,24 @@ fn try_compare_pairs(
     b: &TermValue,
     shallow: impl Fn(&TermValue, &TermValue) -> Ordering,
 ) -> Result<Ordering, std::collections::TryReserveError> {
-    compare_pairs_with(a, b, shallow, WorkList::try_push)
+    compare_pairs_with(a, b, |a, b| Ok(shallow(a, b)), WorkList::try_push)
 }
 
 fn compare_pairs_with<'a, E>(
     a: &'a TermValue,
     b: &'a TermValue,
-    shallow: impl Fn(&TermValue, &TermValue) -> Ordering,
+    mut shallow: impl FnMut(&TermValue, &TermValue) -> Result<Ordering, E>,
     mut push: impl FnMut(
         &mut WorkList<(&'a TermValue, &'a TermValue), 16>,
         (&'a TermValue, &'a TermValue),
     ) -> Result<(), E>,
 ) -> Result<Ordering, E> {
     if !matches!(a, TermValue::Triple { .. }) || !matches!(b, TermValue::Triple { .. }) {
-        return Ok(shallow(a, b));
+        return shallow(a, b);
     }
     let mut pending: WorkList<(&TermValue, &TermValue), 16> = WorkList::with((a, b));
     while let Some((a, b)) = pending.pop() {
-        match shallow(a, b) {
+        match shallow(a, b)? {
             Ordering::Equal => {}
             decided => return Ok(decided),
         }
@@ -1230,53 +1287,145 @@ impl TermValue {
     ) -> Result<Ordering, purrdf_lex::allocation::StorageError> {
         let baseline = memory.admitted_bytes();
         let result = memory.scope(|memory| {
-            compare_pairs_with(self, other, compare_shallow, |pending, pair| {
-                pending.try_push_admitted(pair, memory)
-            })
+            compare_pairs_with(
+                self,
+                other,
+                |a, b| Ok(compare_shallow(a, b)),
+                |pending, pair| pending.try_push_admitted(pair, memory),
+            )
         })?;
         memory.release_bytes(memory.admitted_bytes() - baseline)?;
+        Ok(result)
+    }
+
+    /// Compare the same native RDF order with original storage and progress control.
+    ///
+    /// Each paired node admits its kind/field step, then only bounded text extents
+    /// actually compared before a decision. Nested pairs use the same traversal as
+    /// [`Self::try_cmp_with_memory`]; no resident comparison workspace is created.
+    ///
+    /// # Errors
+    /// Preserves physical refusal in `Native` and the unchanged callback failure
+    /// in `Control`. Temporary traversal buffers die before their grant is refunded.
+    ///
+    /// ```
+    /// use purrdf_core::TermValue;
+    /// use purrdf_lex::{allocation::{Memory, Resident}, control::ControlledError};
+    /// let mut resident = Resident;
+    /// let mut memory = Memory::new(&mut resident);
+    /// let result = TermValue::iri("urn:a").try_cmp_with_control(
+    ///     &TermValue::iri("urn:b"), &mut memory, &mut |_| Err(7_u32));
+    /// assert!(matches!(result, Err(ControlledError::Control(7))));
+    /// ```
+    pub fn try_cmp_with_control<S: purrdf_lex::allocation::Admission + ?Sized, E>(
+        &self,
+        other: &Self,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+        progress: &mut impl FnMut(u64) -> Result<(), E>,
+    ) -> Result<
+        Ordering,
+        purrdf_lex::control::ControlledError<purrdf_lex::allocation::StorageError, E>,
+    > {
+        use purrdf_lex::control::ControlledError;
+        progress(0).map_err(ControlledError::Control)?;
+        let baseline = memory.admitted_bytes();
+        let result = memory.try_scope(|memory| {
+            compare_pairs_with(
+                self,
+                other,
+                |a, b| {
+                    progress(1).map_err(ControlledError::Control)?;
+                    compare_shallow_with(a, b, |a, b| {
+                        purrdf_lex::control::compare_bytes(a.as_bytes(), b.as_bytes(), progress)
+                            .map_err(ControlledError::Control)
+                    })
+                },
+                |pending, pair| {
+                    pending
+                        .try_push_admitted(pair, memory)
+                        .map_err(ControlledError::Native)
+                },
+            )
+        })?;
+        memory
+            .release_bytes(memory.admitted_bytes() - baseline)
+            .map_err(ControlledError::Native)?;
         Ok(result)
     }
 }
 
 fn compare_shallow(a: &TermValue, b: &TermValue) -> Ordering {
+    match compare_shallow_with(a, b, |a, b| Ok::<_, Infallible>(a.cmp(b))) {
+        Ok(order) => order,
+        Err(never) => match never {},
+    }
+}
+
+/// One native field-order authority. Controlled consumers replace only the
+/// text comparator; kind tags and fields keep their original short circuit.
+fn compare_shallow_with<E>(
+    a: &TermValue,
+    b: &TermValue,
+    mut text: impl FnMut(&str, &str) -> Result<Ordering, E>,
+) -> Result<Ordering, E> {
     use TermValue as Value;
-    a.canonical_tag()
-        .cmp(&b.canonical_tag())
-        .then_with(|| match (a, b) {
-            (Value::Iri(a), Value::Iri(b)) => a.cmp(b),
-            (
-                Value::Literal {
-                    lexical_form: la,
-                    datatype: da,
-                    language: ga,
-                    direction: dira,
-                },
-                Value::Literal {
-                    lexical_form: lb,
-                    datatype: db,
-                    language: gb,
-                    direction: dirb,
-                },
-            ) => da
-                .cmp(db)
-                .then_with(|| ga.cmp(gb))
-                .then_with(|| la.cmp(lb))
-                .then_with(|| dira.cmp(dirb)),
-            (
-                Value::Blank {
-                    label: la,
-                    scope: sa,
-                },
-                Value::Blank {
-                    label: lb,
-                    scope: sb,
-                },
-            ) => la.cmp(lb).then_with(|| sa.cmp(sb)),
-            // Equal tags guarantee the same variant; two triple terms are
-            // ordered by their components, which the walk compares next.
-            _ => Ordering::Equal,
-        })
+    let tag = a.canonical_tag().cmp(&b.canonical_tag());
+    if !tag.is_eq() {
+        return Ok(tag);
+    }
+    match (a, b) {
+        (Value::Iri(a), Value::Iri(b)) => text(a, b),
+        (
+            Value::Literal {
+                lexical_form: la,
+                datatype: da,
+                language: ga,
+                direction: dira,
+            },
+            Value::Literal {
+                lexical_form: lb,
+                datatype: db,
+                language: gb,
+                direction: dirb,
+            },
+        ) => {
+            let order = text(da, db)?;
+            if !order.is_eq() {
+                return Ok(order);
+            }
+            let order = match (ga, gb) {
+                (None, None) => Ordering::Equal,
+                (None, Some(_)) => Ordering::Less,
+                (Some(_), None) => Ordering::Greater,
+                (Some(a), Some(b)) => text(a, b)?,
+            };
+            if !order.is_eq() {
+                return Ok(order);
+            }
+            let order = text(la, lb)?;
+            if !order.is_eq() {
+                return Ok(order);
+            }
+            Ok(dira.cmp(dirb))
+        }
+        (
+            Value::Blank {
+                label: la,
+                scope: sa,
+            },
+            Value::Blank {
+                label: lb,
+                scope: sb,
+            },
+        ) => {
+            let order = text(la, lb)?;
+            if !order.is_eq() {
+                return Ok(order);
+            }
+            Ok(sa.cmp(sb))
+        }
+        _ => Ok(Ordering::Equal),
+    }
 }
 
 impl PartialOrd for TermValue {
@@ -1557,6 +1706,91 @@ mod tests {
         assert_eq!(copied, resident_copy);
         drop((term, resident_copy));
         copied.release_with_memory(&mut memory).unwrap();
+        assert_eq!(memory.admitted_bytes(), baseline);
+        memory.release_string(parent).unwrap();
+        assert_eq!(memory.admitted_bytes(), 0);
+    }
+
+    #[test]
+    fn controlled_term_order_retains_native_precedence_and_stops_inside_nested_pairs() {
+        use purrdf_lex::{
+            allocation::{Memory, Resident},
+            control::ControlledError,
+        };
+        #[derive(Debug, PartialEq, Eq)]
+        struct Stop(u8);
+        let mut nested = TermValue::typed_literal("original", "urn:datatype");
+        for _ in 0..64 {
+            nested = TermValue::Triple {
+                s: TermBox::new(nested),
+                p: TermBox::new(TermValue::iri("urn:predicate")),
+                o: TermBox::new(TermValue::iri("urn:object")),
+            };
+        }
+        let neighbor = nested.clone();
+        let mut resident = Resident;
+        let mut memory = Memory::new(&mut resident);
+        let parent = memory.string("prior caller allocation").unwrap();
+        let baseline = memory.admitted_bytes();
+        let mut total = 0_u64;
+        let compared = nested
+            .try_cmp_with_control(&neighbor, &mut memory, &mut |units| {
+                total += units;
+                Ok::<(), Stop>(())
+            })
+            .unwrap();
+        assert_eq!(compared, nested.cmp(&neighbor));
+        assert!(
+            total > 64 * 3,
+            "actual leaf text extents contribute to comparison work"
+        );
+        assert_eq!(memory.admitted_bytes(), baseline);
+        let mut calls = 0;
+        let stopped = nested.try_cmp_with_control(&neighbor, &mut memory, &mut |_| {
+            calls += 1;
+            if calls == 21 { Err(Stop(53)) } else { Ok(()) }
+        });
+        assert!(matches!(stopped, Err(ControlledError::Control(Stop(53)))));
+        assert_eq!(memory.admitted_bytes(), baseline);
+        let iri = TermValue::iri("urn:z");
+        let literal = TermValue::typed_literal("z", "urn:a");
+        let blank = TermValue::Blank {
+            label: "a".to_owned(),
+            scope: BlankScope(3),
+        };
+        for (a, b) in [
+            (&iri, &literal),
+            (&literal, &blank),
+            (&blank, &nested),
+            (&literal, &iri),
+        ] {
+            assert_eq!(
+                a.try_cmp_with_control(b, &mut memory, &mut |_| Ok::<(), Stop>(()))
+                    .unwrap(),
+                a.cmp(b)
+            );
+        }
+        let tail = "x".repeat(32_768);
+        let early_a = TermValue::iri(format!("a{tail}"));
+        let early_b = TermValue::iri(format!("b{tail}"));
+        for (a, b) in [(&early_a, &early_b), (&early_a, &literal)] {
+            let mut remaining = 1024_u64;
+            let mut progress = |units: u64| -> Result<(), Stop> {
+                remaining = remaining.checked_sub(units).ok_or(Stop(91))?;
+                Ok(())
+            };
+            let order = a
+                .try_cmp_with_control(b, &mut memory, &mut progress)
+                .expect("an early decision must not charge unused text tails");
+            assert_eq!(order, a.cmp(b));
+        }
+        let mut remaining = 1024_u64;
+        let mut progress = |units: u64| -> Result<(), Stop> {
+            remaining = remaining.checked_sub(units).ok_or(Stop(92))?;
+            Ok(())
+        };
+        let exhausted = early_a.try_cmp_with_control(&early_a, &mut memory, &mut progress);
+        assert!(matches!(exhausted, Err(ControlledError::Control(Stop(92)))));
         assert_eq!(memory.admitted_bytes(), baseline);
         memory.release_string(parent).unwrap();
         assert_eq!(memory.admitted_bytes(), 0);

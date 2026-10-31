@@ -10,6 +10,18 @@ use crate::{BlankScope, RdfDataset, RdfDatasetBuilder, RdfQuad, RdfTerm, TermVal
 use purrdf_iri::vocab::rdf::{FIRST, REST};
 use std::sync::Arc;
 
+fn native_error<R>(
+    error: super::FnoReadFailure<R>,
+) -> purrdf_lex::allocation::SharedOwned<FnoReadError> {
+    match error {
+        super::FnoConstructionFailure::Semantic(cause) => cause,
+        super::FnoConstructionFailure::Storage(cause) => {
+            panic!("unexpected native storage refusal: {cause}")
+        }
+        super::FnoConstructionFailure::Source(_) => panic!("unexpected provider failure"),
+    }
+}
+
 fn builder(rows: &[RdfQuad]) -> RdfDatasetBuilder {
     let mut builder = RdfDatasetBuilder::new();
     for row in rows {
@@ -18,7 +30,7 @@ fn builder(rows: &[RdfQuad]) -> RdfDatasetBuilder {
     builder
 }
 
-fn dataset(rows: &[RdfQuad]) -> Arc<RdfDataset> {
+pub(super) fn dataset(rows: &[RdfQuad]) -> Arc<RdfDataset> {
     builder(rows).freeze().unwrap()
 }
 
@@ -242,7 +254,9 @@ fn strict_reader_refuses_unreproducible_rows_and_retains_original_operands() {
         }
         let error = {
             let source = dataset(&rows);
-            FnoCatalog::from_dataset(&source, &catalog.as_input().ontology_iri).unwrap_err()
+            native_error(
+                FnoCatalog::from_dataset(&source, &catalog.as_input().ontology_iri).unwrap_err(),
+            )
         };
         let captured = Capture::read(error.as_ref());
         let expected = match selection {
@@ -254,7 +268,7 @@ fn strict_reader_refuses_unreproducible_rows_and_retains_original_operands() {
             16 => "fno-read-returns",
             _ => unreachable!(),
         };
-        assert_eq!(captured.code, expected, "selection {selection}: {error}");
+        assert_eq!(captured.code, expected, "selection {selection}: {}", *error);
         match error.as_ref() {
             FnoReadError::Field {
                 subject,
@@ -343,7 +357,7 @@ fn document_empty_graph_and_foreign_identifier_boundaries_have_healthy_neighbors
     let rows = to_quads(&catalog);
     let source = dataset(&rows);
     assert!(matches!(
-        *FnoCatalog::from_dataset(&source, "urn:test:unselected").unwrap_err(),
+        *native_error(FnoCatalog::from_dataset(&source, "urn:test:unselected").unwrap_err()),
         FnoReadError::Document { .. }
     ));
     let mut builder = builder(&rows);
@@ -351,7 +365,9 @@ fn document_empty_graph_and_foreign_identifier_boundaries_have_healthy_neighbors
     builder.declare_named_graph(graph).unwrap();
     let source = builder.freeze().unwrap();
     assert!(matches!(
-        *FnoCatalog::from_dataset(&source, &catalog.as_input().ontology_iri).unwrap_err(),
+        *native_error(
+            FnoCatalog::from_dataset(&source, &catalog.as_input().ontology_iri).unwrap_err()
+        ),
         FnoReadError::Graph { .. }
     ));
     let source = dataset(&rows);
@@ -365,8 +381,10 @@ fn document_empty_graph_and_foreign_identifier_boundaries_have_healthy_neighbors
         foreign: true,
     };
     assert!(matches!(
-        *FnoCatalog::from_dataset(&foreign, &catalog.as_input().ontology_iri).unwrap_err(),
-        FnoReadError::Term(crate::TermLookupError::ForeignId)
+        FnoCatalog::from_dataset(&foreign, &catalog.as_input().ontology_iri).unwrap_err(),
+        super::FnoConstructionFailure::Source(super::FnoReadSourceError::Term(
+            crate::TermLookupError::ForeignId
+        ))
     ));
     foreign.foreign = false;
     assert_eq!(
@@ -393,10 +411,13 @@ fn source_failures_and_rdf_statement_layers_never_publish_a_partial_catalog() {
         }
         let error =
             FnoCatalog::from_dataset(&faulty, &catalog.as_input().ontology_iri).unwrap_err();
-        let FnoReadError::Source(cause) = error.as_ref() else {
+        let super::FnoConstructionFailure::Source(error) = error else {
             panic!("cut {cut}, prior fault {before}: {error}");
         };
-        let native = std::error::Error::source(error.as_ref())
+        let super::FnoReadSourceError::Source(cause) = &error else {
+            panic!("unexpected native term source failure");
+        };
+        let native = std::error::Error::source(&error)
             .unwrap()
             .downcast_ref::<crate::term_fixture::ProbeFault>()
             .unwrap();
@@ -408,6 +429,22 @@ fn source_failures_and_rdf_statement_layers_never_publish_a_partial_catalog() {
             if iri == catalog.as_input().document_iri))
                 .unwrap()
         );
+        let mut resident = purrdf_lex::allocation::Resident;
+        let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
+        let cached_copy: Result<TermValue, core::convert::Infallible> = faulty
+            .term_value_with_memory(
+                cached,
+                &mut memory,
+                |cause| panic!("cached native lookup failed: {cause}"),
+                |cause, _| panic!("cached native storage failed: {cause}"),
+            );
+        let cached_copy = cached_copy.unwrap();
+        assert_eq!(
+            cached_copy, document,
+            "snapshot readiness must not change ordinary cached copies"
+        );
+        cached_copy.release_with_memory(&mut memory).unwrap();
+        assert_eq!(memory.admitted_bytes(), 0);
     }
     let healthy = BudgetedView::new(Arc::clone(&source), usize::MAX);
     assert_eq!(
@@ -426,10 +463,11 @@ fn source_failures_and_rdf_statement_layers_never_publish_a_partial_catalog() {
             builder.push_annotation(s, p, o).unwrap();
         }
         let source = builder.freeze().unwrap();
-        let error =
-            FnoCatalog::from_dataset(&source, &catalog.as_input().ontology_iri).unwrap_err();
+        let error = native_error(
+            FnoCatalog::from_dataset(&source, &catalog.as_input().ontology_iri).unwrap_err(),
+        );
         let FnoReadError::Statement { row, reason } = error.as_ref() else {
-            panic!("{error}");
+            panic!("{}", *error);
         };
         assert_eq!(
             *reason,

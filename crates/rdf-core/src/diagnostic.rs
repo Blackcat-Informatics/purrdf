@@ -470,10 +470,8 @@ impl RdfDiagnostic {
         message: &(impl fmt::Display + ?Sized),
         memory: &mut purrdf_lex::allocation::Memory<'_, S>,
     ) -> Result<Self, purrdf_lex::allocation::StorageError> {
-        let mut owned_code = String::new();
-        memory.reserve_string(&mut owned_code, code.len())?;
-        owned_code.push_str(code);
-        let message = memory.format(message)?;
+        let owned_code = memory.string_with_progress(code)?;
+        let message = memory.format_with_progress(message)?;
         Ok(Self::error(owned_code, message))
     }
 

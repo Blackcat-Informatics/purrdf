@@ -133,12 +133,12 @@ pub use segmented::{
 };
 pub use skolem::{GENID_WELL_KNOWN_PATH, SkolemError, deskolemize, skolemize};
 pub use term::{BlankScope, NonIriPredicate, TermId, TermValue};
-pub(crate) use term_walk::try_owned_text;
 pub use term_walk::{
     Nested, OwnedTermFoldError, TermBox, TermVisit, fold_term, fold_workspace_bound,
     try_fold_nested, try_fold_nested_with_memory, try_fold_term, try_fold_term_with_memory,
     try_fold_term_with_storage, visit_nested,
 };
+pub(crate) use term_walk::{try_fold_term_with_memory_inner, try_owned_text};
 pub use triple::{
     TripleDataset, TripleIds, TripleOrder, TripleRead, TripleReadError, TripleReifierRow,
     TripleReservation, TripleRows, TripleStorageLayout,
