@@ -526,13 +526,19 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
 
         let data = "<http://example.org/alice> <http://example.org/knows> \
             <urn:purrdf:rdfc:bad> .\n";
-        let error = entail_to_ntriples_string(SHAPES, None, data, &[], &mut control)
-            .expect_err(
-                "a dataset carrying a reserved-vocabulary IRI must refuse canonicalization \
+        let error = entail_to_ntriples_string(SHAPES, None, data, &[], &mut control).expect_err(
+            "a dataset carrying a reserved-vocabulary IRI must refuse canonicalization \
              as a value, not panic",
-            )
-            .to_string();
-        assert!(error.contains("refused canonicalization"), "{error}");
+        );
+        assert!(
+            matches!(
+                &error,
+                ShapesError::Canonical(purrdf_core::CanonError::ReservedVocabulary(refusal))
+                    if refusal.iri() == "urn:purrdf:rdfc:bad"
+                        && refusal.position() == purrdf_core::TermPosition::Object
+            ),
+            "{error}"
+        );
     }
 
     /// The valid neighbour of the refusal above: an ORDINARY object IRI (no
