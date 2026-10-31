@@ -599,16 +599,13 @@ impl purrdf_hash::error::StructuredError for CandidateExecutionResult<'_> {
 /// exhausted — the silent drop, certified. Panicking would turn a condition this
 /// crate cannot rule out *by type* into a crash in a library.
 ///
-/// What rules it out is the lane's configuration, which is a fact about two
-/// values rather than about this enum: [`QueryGovernors::UNBOUNDED`] engages no
-/// caller-settable ceiling and carries no stop signal, leaving only the
-/// evaluator's fixed recursion guard on user-function depth engaged; and the
-/// options built below inject no user-function registry, so a unit cannot enter
-/// a user function at all, let alone nest one past a build constant. Both halves
-/// are executed in `tests/execute_dataset.rs` beside the witness test, so a
-/// later change to either — a ceiling added to the lane, a registry injected —
-/// reddens a test rather than quietly making a documented impossibility
-/// possible.
+/// What rules it out is the lane's configuration:
+/// [`QueryGovernors::UNBOUNDED`] engages no resource ceiling, including logical
+/// user-function depth, and carries no stop signal. The options built below
+/// also inject no user-function registry, so an unknown function fails its own
+/// stratum rather than entering a function body. Both properties are exercised
+/// in `tests/execute_dataset.rs` beside the witness test. Memory admission can
+/// still refuse execution through its separate native error path.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum ExecutionError {
