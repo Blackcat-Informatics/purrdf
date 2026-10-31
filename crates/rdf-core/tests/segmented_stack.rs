@@ -395,7 +395,14 @@ fn generated_chronological_publications_match_eager_typed_seals() {
             let eager_fold = paged
                 .snapshot()
                 .unwrap()
-                .compact(PagedQueryLimits::UNBOUNDED, page_rows)
+                .compact(
+                    PagedQueryLimits::UNBOUNDED,
+                    page_rows,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
+                )
                 .unwrap();
             let sparse_bytes = PackBuilder::build_view_bytes(
                 &sparse_fold.query_view(PagedQueryLimits::UNBOUNDED),

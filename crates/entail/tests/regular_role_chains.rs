@@ -858,7 +858,16 @@ fn recorded_chain_consequence_replays_against_the_original_rbox() {
     let context = consumer.proof_context().expect("proof context");
     let proof = answer.proof().expect("actual recorded chain refutation");
     proof
-        .verify(&dataset, &question, Some(answer.certificate()), &context)
+        .verify(
+            &dataset,
+            &question,
+            Some(answer.certificate()),
+            &context,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
         .expect("independent original-inclusion replay");
 
     let mut altered = Ontology::default();
@@ -882,7 +891,11 @@ fn recorded_chain_consequence_replays_against_the_original_rbox() {
                 &altered,
                 &question,
                 Some(answer.certificate()),
-                &changed_context
+                &changed_context,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                ),
             )
             .is_err(),
         "a proof of p·q must not authenticate a q·p source"
@@ -1063,6 +1076,10 @@ fn fixed_top_aliases_without_a_chain_reach_query_only_individuals() {
                 &question,
                 Some(answer.certificate()),
                 &consumer.proof_context().expect("checking context"),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
             )
             .expect("independent fixed-role alias replay");
 

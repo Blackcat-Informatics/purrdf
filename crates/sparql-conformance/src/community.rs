@@ -725,16 +725,21 @@ impl Corpus {
             };
             records.push(record("native/rules", observed));
         } else {
-            let mut grade = |outcome: Result<CompleteValidationReport, CompleteValidationError>| {
-                self.observe(case, law, &shapes_dataset, outcome, control)
-            };
+            let grade =
+                |outcome: Result<CompleteValidationReport, CompleteValidationError>,
+                 control: &mut purrdf_core::CanonicalizationControl<'_>| {
+                    self.observe(case, law, &shapes_dataset, outcome, control)
+                };
             records.push(record(
                 "native/fresh",
-                grade(purrdf_validate::validate_complete_sources(
-                    Arc::clone(&data),
-                    Arc::clone(&shapes),
-                    &options,
-                )),
+                grade(
+                    purrdf_validate::validate_complete_sources(
+                        Arc::clone(&data),
+                        Arc::clone(&shapes),
+                        &options,
+                    ),
+                    control,
+                ),
             ));
             let prepared =
                 PreparedShapes::new(Arc::clone(&shapes)).with_validation_options(options.clone());
@@ -743,13 +748,15 @@ impl Corpus {
                     for repetition in 0..2 {
                         records.push(record(
                             &format!("native/prepared/{repetition}"),
-                            grade(validator.validate()),
+                            grade(validator.validate(), control),
                         ));
                     }
                 }
-                Err(error) => records.push(record("native/prepared/bind", grade(Err(error)))),
+                Err(error) => {
+                    records.push(record("native/prepared/bind", grade(Err(error), control)))
+                }
             }
-            match purrdf_validate::prepared_to_product(&prepared) {
+            match purrdf_validate::prepared_to_product(&prepared, control) {
                 Ok(product) => {
                     for (surface, rebuild) in [
                         ("native/product-admitted", false),
@@ -762,7 +769,7 @@ impl Corpus {
                             restored.bind_complete_shared_dataset(Arc::clone(&data))
                         })
                         .and_then(|validator| validator.validate());
-                        records.push(record(surface, grade(outcome)));
+                        records.push(record(surface, grade(outcome, control)));
                     }
                 }
                 Err(error) => records.push(record(

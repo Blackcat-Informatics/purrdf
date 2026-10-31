@@ -18,7 +18,7 @@
 //!   compaction against a verifier's own keyring — never trusts the pack's own
 //!   embedded digest without recomputing it from the *pre* bytes too.
 //! - [`compact_and_certify`]: the certifying authoring wrapper — folds,
-//!   computes the pre digest (poison-guarded), compacts, and certifies that
+//!   computes the pre digest under caller control, compacts, and certifies that
 //!   the post digest agrees.
 //!
 //! [`compose`] chains two certificates end-to-end (`A→B`, `B→C` ⇒ `A→C`) for
@@ -146,10 +146,8 @@ pub fn content_projection(g: &Graph) -> Graph {
 ///
 /// # Errors
 /// Returns [`CertifyError::Dataset`] when the projection cannot be bridged
-/// into a frozen dataset, and [`CertifyError::Poison`] when its blank-node
-/// count exceeds [`POISON_BLANK_LIMIT`] — refused BEFORE canonicalization is
-/// attempted. Returns [`CertifyError::CanonRefused`] when canonicalization
-/// refuses the admitted projection.
+/// into a frozen dataset. Returns [`CertifyError::CanonRefused`] with the
+/// original cause when canonicalization refuses under the caller's control.
 pub fn refold_digest(
     g: &Graph,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
@@ -165,10 +163,8 @@ pub fn refold_digest(
 ///
 /// # Errors
 /// Returns [`CertifyError::Dataset`] when `projected` cannot be bridged into a
-/// frozen dataset, and [`CertifyError::Poison`] when its blank-node count
-/// exceeds [`POISON_BLANK_LIMIT`] — refused BEFORE canonicalization is
-/// attempted. Returns [`CertifyError::CanonRefused`] when canonicalization
-/// refuses the admitted projection.
+/// frozen dataset. Returns [`CertifyError::CanonRefused`] with the original
+/// cause when canonicalization refuses under the caller's control.
 fn canonical_digest(
     projected: &Graph,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
@@ -326,8 +322,7 @@ pub fn effective_projection(g: &Graph) -> Graph {
 ///
 /// # Errors
 /// Returns [`CertifyError::Dataset`] when the projection cannot be bridged
-/// into a frozen dataset, and [`CertifyError::Poison`] when its blank-node
-/// count exceeds [`POISON_BLANK_LIMIT`]. Canonicalization refusals retain their
+/// into a frozen dataset. Canonicalization refusals retain their
 /// original cause in [`CertifyError::CanonRefused`].
 pub fn effective_digest(
     g: &Graph,
@@ -607,12 +602,10 @@ fn suppressions_ok(
 /// `pre_bytes`/`post_bytes` are UNTRUSTED (an independent verifier's whole
 /// point is to not trust the claimant), so every digest this function
 /// computes over them goes through the fallible RDFC-1.0 canonicalizer
-/// ([`refold_digest`]/[`effective_digest`], backing
-/// [`try_canonicalize_with`]): a pathologically symmetric blank graph that stays
-/// under [`POISON_BLANK_LIMIT`]'s cheap blank-COUNT pre-reject yet exhausts
-/// RDFC-1.0's n-degree search call budget surfaces as
-/// [`CertifyError::CanonRefused`], never a process-aborting panic —
-/// this function must never be a resource-exhaustion (or crash) vector.
+/// ([`refold_digest`]/[`effective_digest`], backed by
+/// [`try_canonical_sha256_view`]). The caller supplies the per-run search
+/// policy and optional stop signal. A search refusal on a symmetric blank
+/// graph retains its original cause in [`CertifyError::CanonRefused`].
 ///
 /// A post pack with a broken hash chain (a corrupted frame) still returns
 /// `Ok` with `seam_chain_ok: false` rather than erroring — the reader
@@ -621,9 +614,8 @@ fn suppressions_ok(
 ///
 /// # Errors
 /// Returns [`CertifyError`] only when a content projection genuinely cannot be
-/// canonicalized: the GTS→dataset bridge fails, the blank-count poison guard
-/// trips, or the RDFC-1.0 call budget is exhausted on a symmetric-poison
-/// graph.
+/// canonicalized: the GTS→dataset bridge fails or canonicalization refuses
+/// under the caller's control.
 pub fn verify_compaction<K: SignatureKeyring + ?Sized>(
     pre_bytes: &[u8],
     post_bytes: &[u8],
@@ -807,8 +799,8 @@ pub fn compose(
 /// preserved content — the sole authoring entry point that both performs and
 /// certifies a compaction, so the two can never drift apart.
 ///
-/// Computes the pre-compaction content-refold digest FIRST (running the
-/// poison guard, refusing an uncanonicalizable input BEFORE authoring),
+/// Computes the pre-compaction content-refold digest FIRST under the caller's
+/// control, refusing an uncanonicalizable input BEFORE authoring,
 /// embeds it in the pack as `stream:contentRefoldDigest` (a proof-carrying
 /// pack, §10.1), then recomputes the digest from the freshly authored pack
 /// and asserts the two agree — an internal invariant, since a fresh
@@ -816,7 +808,7 @@ pub fn compose(
 /// compaction-authoring bug, never a caller error.
 ///
 /// # Errors
-/// Returns [`CertifyError::Dataset`]/[`CertifyError::Poison`] when the source
+/// Returns [`CertifyError::Dataset`]/[`CertifyError::CanonRefused`] when the source
 /// cannot be canonicalized, [`CertifyError::Refused`] when
 /// `compact_streamable` refuses the input, and [`CertifyError::Invariant`] if
 /// the freshly authored pack's digest ever disagrees with the one it was
