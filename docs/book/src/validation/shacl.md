@@ -148,6 +148,17 @@ Variable scope and all pure expression operations retain their ordinary native
 semantics. Nested conformance, function/query calls, argument expressions and
 ownership wrappers remain outside this proof.
 
+A computed shape operand can also participate when its complete finite output
+set is known: constants, lists, empty expressions, unions, concatenations and
+conditionals compose that set. Every condition must use the pure native family
+above. Each possible original shape contributes a positive dependency, while
+evaluation selects its target through the original shape index and the active
+pair relation. An empty focus skips the shape operand. Otherwise, the shape
+operand must produce exactly one existing shape; undefined or multiple selected
+outputs retain the ordinary evaluation failure. Untaken branches retain lazy
+evaluation. Path-derived shape operands, callbacks and computations without this
+complete output proof remain outside the admitted surface.
+
 A `sh:targetWhere :Target` can use the same explicit selection when its operand
 is a canonical IRI or blank-node reference in the same original catalog. Discovery reuses
 the original plan and dataset binding, seeds every candidate pair into one

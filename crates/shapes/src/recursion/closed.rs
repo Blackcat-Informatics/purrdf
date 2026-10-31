@@ -113,24 +113,30 @@ impl std::error::Error for ClosedRecursionRefusal {}
 pub(crate) struct ClosedProof(pub(super) ());
 
 /// A conformance question whose focus and target cannot depend on the current
-/// recursive valuation. Only a canonical reference into the same original
-/// catalog is admitted: neither a local replacement body nor another model's
-/// equal-named shape may acquire this catalog's proof or borrowed binding.
+/// recursive valuation. Static targets retain canonical original references;
+/// computed targets enumerate their possible outputs in the same original index.
+/// A local replacement or another model cannot acquire this catalog's proof.
 pub(crate) fn original_conformance<'a>(
     expression: &'a NodeExpr,
     owner: Option<&Arc<ModelOwner>>,
-) -> Result<Option<&'a crate::shapes::Shape>, crate::error::ShapesError> {
-    let NodeExpr::ConformsToShape {
-        node,
-        shape: ShapeArg::Named(shape),
-    } = expression
-    else {
+) -> Result<Option<&'a ShapeArg>, crate::error::ShapesError> {
+    let NodeExpr::ConformsToShape { node, shape } = expression else {
         return Ok(None);
     };
-    let Some(target) = original_reference(shape, owner) else {
+    if !pure_focus(node)? {
         return Ok(None);
+    }
+    let proved = match shape {
+        ShapeArg::Named(shape) => original_reference(shape, owner).is_some(),
+        ShapeArg::Computed { expr, shapes } => {
+            owner.is_some_and(|owner| Weak::ptr_eq(shapes, &Arc::downgrade(&owner.index)))
+                && pure_focus(expr)?
+                && crate::expression::named_outputs::visit_terms(expr, |_| {
+                    Ok::<(), crate::error::ShapesError>(())
+                })?
+        }
     };
-    Ok(pure_focus(node)?.then_some(target))
+    Ok(proved.then_some(shape))
 }
 
 /// Check every child, independently of which branch a particular focus takes.
