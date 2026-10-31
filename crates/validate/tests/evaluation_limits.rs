@@ -7,6 +7,7 @@
 //! knob in the calling host's own spelling; the neighbour one fact or step inside the
 //! limit completes.
 
+use purrdf_validate::canonical::CanonicalServiceError;
 use purrdf_validate::{
     MaterializeLimits, RegimeHost, RulesHost, RulesRequest, apply_rules_to_ntriples,
     materialize_to_nquads_string, materialize_to_nquads_string_with,
@@ -172,6 +173,11 @@ fn a_materialization_refusal_names_the_hosts_knob_and_the_neighbour_completes() 
             )
             .expect_err("one fact short");
             assert!(
+                matches!(&refused, CanonicalServiceError::Text(_)),
+                "{refused:?}"
+            );
+            let refused = refused.to_string();
+            assert!(
                 refused.starts_with(&format!(
                     "entailment regime \"{regime}\": evaluation exceeded the stored-fact \
                      limit: "
@@ -208,6 +214,11 @@ fn a_materialization_refusal_names_the_hosts_knob_and_the_neighbour_completes() 
                 ),
             )
             .expect_err("one join step");
+            assert!(
+                matches!(&refused, CanonicalServiceError::Text(_)),
+                "{refused:?}"
+            );
+            let refused = refused.to_string();
             assert!(
                 refused.contains("evaluation exceeded the join-step limit: ")
                     && refused.ends_with(&format!("raise it with {join_steps}")),
@@ -295,6 +306,11 @@ fn term_arena_limits_reach_the_engine_and_name_the_available_rust_control() {
             ),
         )
         .expect_err("one original byte short");
+        assert!(
+            matches!(&refused, CanonicalServiceError::Text(_)),
+            "{refused:?}"
+        );
+        let refused = refused.to_string();
         assert!(
             refused.contains(&format!(
                 "term arena bytes limit: {bytes} observed, {} permitted",

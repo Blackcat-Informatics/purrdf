@@ -141,10 +141,19 @@ mod tests {
                 Some(&cause)
             );
         }
-        for cause in [
-            purrdf_core::CanonError::Stopped,
-            purrdf_core::CanonError::ReservedVocabulary("urn:purrdf:rdfc:refused".to_owned()),
-        ] {
+        let mut builder = purrdf_core::RdfDatasetBuilder::new();
+        let subject = builder.intern_iri("urn:purrdf:rdfc:refused").unwrap();
+        let predicate = builder.intern_iri("urn:predicate").unwrap();
+        builder
+            .push_quad(subject, predicate, predicate, None)
+            .unwrap();
+        let dataset = builder.freeze().unwrap();
+        let reserved = purrdf_core::check_admissible(&dataset).expect_err("reserved subject");
+        assert!(
+            matches!(&reserved, purrdf_core::CanonError::ReservedVocabulary(_)),
+            "{reserved:?}"
+        );
+        for cause in [purrdf_core::CanonError::Stopped, reserved] {
             let error = GradeError::from(cause.clone());
             assert_eq!(error, GradeError::Canonicalization(cause.clone()));
             assert_eq!(

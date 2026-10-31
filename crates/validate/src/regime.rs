@@ -2236,14 +2236,17 @@ fn verdict_name(verdict: Verdict) -> &'static str {
 /// [`open`]: Self::open
 ///
 /// ```
+/// use purrdf_core::{CanonicalizationControl, SearchPolicy};
 /// use purrdf_validate::regime::ReasonerSession;
 ///
 /// let data = "<http://example.org/tom> \
 ///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .\n";
 /// let mut session = ReasonerSession::open(data, 0, 0).expect("parses");
 /// // Two questions, one parse and one reverse mapping.
-/// assert_eq!(session.consistency().expect("decides").answer(), "consistency true\n");
-/// assert!(session.classify().expect("decides").answer().contains("subclass"));
+/// let mut control = CanonicalizationControl::new(SearchPolicy::Unlimited, None);
+/// assert_eq!(session.consistency(&mut control).expect("decides").answer(), "consistency true\n");
+/// let mut control = CanonicalizationControl::new(SearchPolicy::Unlimited, None);
+/// assert!(session.classify(&mut control).expect("decides").answer().contains("subclass"));
 /// ```
 pub struct ReasonerSession {
     /// The parsed document. Every service reads it; `Arc` because parsing hands one back.

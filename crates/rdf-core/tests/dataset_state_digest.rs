@@ -1395,7 +1395,7 @@ fn capacity_and_invalid_datatype_refusals_have_ready_neighbors() {
 }
 
 fn disconnected_symmetry_refuses_production_search_and_has_an_admitted_neighbor() {
-    assert_eq!(
+    assert!(matches!(
         DatasetStateDigest::from_view(
             &fixtures::triangle_components(8),
             &mut purrdf_core::CanonicalizationControl::new(
@@ -1403,8 +1403,10 @@ fn disconnected_symmetry_refuses_production_search_and_has_an_admitted_neighbor(
                 None
             )
         ),
-        Err(DatasetStateError::SearchBudgetExceeded),
-    );
+        Err(DatasetStateError::SearchBudgetExceeded { limit, work })
+            if purrdf_core::SearchPolicy::Finite(limit) == purrdf_core::RDFC_V2_CORPUS_POLICY
+                && work.total() == limit
+    ));
     assert!(
         DatasetStateDigest::from_view(
             &fixtures::triangle_components(2),
