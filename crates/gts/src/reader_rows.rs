@@ -5,10 +5,43 @@ use purrdf_lex::cbor::Value;
 
 use crate::model::{AnnotationRow, Graph, ReifierRow, TermKind, Triple3};
 use crate::reader::as_i128;
-use crate::reader::as_idx;
 
 mod error;
 pub(crate) use error::RowError;
+
+/// Translate snapshot-local references without building another CBOR tree.
+/// Ordinary frames use zero; a snapshot captures its base before adding terms.
+#[derive(Clone, Copy)]
+pub(crate) struct TermIdBase(pub(crate) usize);
+
+impl TermIdBase {
+    pub(crate) fn integer(self, value: &Value) -> Result<Option<i128>, RowError> {
+        let raw = as_i128(value);
+        let Some(local) = raw.and_then(|id| usize::try_from(id).ok()) else {
+            // Keep malformed and negative operands for the existing semantic
+            // checks and their diagnostics, rather than coercing them to IDs.
+            return Ok(raw);
+        };
+        local
+            .checked_add(self.0)
+            .map(|id| Some(id as i128))
+            .ok_or(RowError::TermIdBaseOverflow {
+                value: local,
+                base: self.0,
+            })
+    }
+
+    pub(crate) fn row<const N: usize>(
+        self,
+        items: &[Value],
+    ) -> Result<[Option<i128>; N], RowError> {
+        let mut ids = [None; N];
+        for (id, value) in ids.iter_mut().zip(items) {
+            *id = self.integer(value)?;
+        }
+        Ok(ids)
+    }
+}
 
 pub(crate) enum RowDecode<T> {
     Skip,
@@ -17,7 +50,11 @@ pub(crate) enum RowDecode<T> {
     Position(Box<RowError>),
 }
 
-pub(crate) fn decode_reifier_row(row: &Value, graph: &Graph) -> RowDecode<ReifierRow> {
+pub(crate) fn decode_reifier_row(
+    row: &Value,
+    graph: &Graph,
+    base: TermIdBase,
+) -> RowDecode<ReifierRow> {
     let Value::Array(items) = row else {
         return RowDecode::Skip;
     };
@@ -30,21 +67,19 @@ pub(crate) fn decode_reifier_row(row: &Value, graph: &Graph) -> RowDecode<Reifie
         }));
     }
 
-    let (rid, s, p, o) = (
-        as_idx(&items[0]),
-        as_idx(&items[1]),
-        as_idx(&items[2]),
-        as_idx(&items[3]),
-    );
+    let raw = match base.row::<5>(items) {
+        Ok(raw) => raw,
+        Err(error) => return RowDecode::Damaged(Box::new(error)),
+    };
+    let [rid, s, p, o, graph_slot] = raw.map(|value| value.and_then(|id| usize::try_from(id).ok()));
     let has_graph = items.len() == 5;
-    let graph_slot = if has_graph { as_idx(&items[4]) } else { None };
     let n = graph.terms.len();
     let ok = matches!((rid, s, p, o), (Some(rid), Some(s), Some(p), Some(o))
         if rid < n && s < n && p < n && o < n && graph_slot.is_none_or(|g| g < n));
     if !ok || (has_graph && graph_slot.is_none()) {
         return RowDecode::Damaged(Box::new(RowError::Ids {
             context: "reifies",
-            values: items.iter().map(as_i128).collect(),
+            values: raw[..items.len()].to_vec(),
             terms: n,
         }));
     }
@@ -59,7 +94,11 @@ pub(crate) fn decode_reifier_row(row: &Value, graph: &Graph) -> RowDecode<Reifie
     RowDecode::Row((rid, triple, graph_slot))
 }
 
-pub(crate) fn decode_annotation_row(row: &Value, graph: &Graph) -> RowDecode<AnnotationRow> {
+pub(crate) fn decode_annotation_row(
+    row: &Value,
+    graph: &Graph,
+    base: TermIdBase,
+) -> RowDecode<AnnotationRow> {
     let Value::Array(items) = row else {
         return RowDecode::Skip;
     };
@@ -72,16 +111,20 @@ pub(crate) fn decode_annotation_row(row: &Value, graph: &Graph) -> RowDecode<Ann
         }));
     }
 
-    let (reifier, predicate, value) = (as_idx(&items[0]), as_idx(&items[1]), as_idx(&items[2]));
+    let raw = match base.row::<4>(items) {
+        Ok(raw) => raw,
+        Err(error) => return RowDecode::Damaged(Box::new(error)),
+    };
+    let [reifier, predicate, value, graph_slot] =
+        raw.map(|value| value.and_then(|id| usize::try_from(id).ok()));
     let has_graph = items.len() == 4;
-    let graph_slot = if has_graph { as_idx(&items[3]) } else { None };
     let n = graph.terms.len();
     let ok = matches!((reifier, predicate, value), (Some(r), Some(p), Some(v))
         if r < n && p < n && v < n && graph_slot.is_none_or(|g| g < n));
     if !ok || (has_graph && graph_slot.is_none()) {
         return RowDecode::Damaged(Box::new(RowError::Ids {
             context: "annot",
-            values: items.iter().map(as_i128).collect(),
+            values: raw[..items.len()].to_vec(),
             terms: n,
         }));
     }
