@@ -2274,9 +2274,9 @@ impl<E: std::fmt::Display> std::fmt::Display for CanonError<E> {
             Self::CounterCapacity => {
                 f.write_str("canonicalization charged-work counter cannot represent another event")
             }
-            Self::OwnedWorkspaceUnavailable => f.write_str(
-                "canonical payload requires source-owned workspace admission",
-            ),
+            Self::OwnedWorkspaceUnavailable => {
+                f.write_str("canonical payload requires source-owned workspace admission")
+            }
         }
     }
 }
