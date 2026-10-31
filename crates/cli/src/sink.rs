@@ -81,7 +81,7 @@ pub(crate) fn write_out(out: &str, bytes: &[u8]) -> Result<(), CliError> {
 pub(crate) fn write_out_with_request(
     out: &str,
     bytes: &[u8],
-    canonical: &mut crate::canonical::Request,
+    canonical: &crate::canonical::Request,
 ) -> Result<(), CliError> {
     canonical.before_output()?;
     write_out(out, bytes)
@@ -299,7 +299,7 @@ pub(crate) fn write_results(
     format: purrdf_sparql_results::SparqlResultsFormat,
     provenance: &purrdf_sparql_results::ResultProvenance,
     namespace: Option<&purrdf_sparql_results::ProvenanceNamespace>,
-    canonical: &mut crate::canonical::Request,
+    canonical: &crate::canonical::Request,
 ) -> Result<(), CliError> {
     canonical.before_output()?;
     let mut target = OutTarget::open(out)?;

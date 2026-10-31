@@ -3121,7 +3121,7 @@ impl Cli {
                 paths.push(PathBuf::from(&args.plan));
                 paths.push(PathBuf::from(&args.input));
             }
-            _ => {}
+            Command::GlobSet { .. } => {}
         }
         paths
     }

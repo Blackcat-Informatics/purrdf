@@ -155,7 +155,7 @@ impl PremiseImports {
         plan: Materialization<'_>,
         limits: &MaterializeLimits,
         target: &ReportTarget,
-        canonical: &mut crate::canonical::Request,
+        canonical: &crate::canonical::Request,
     ) -> Result<Arc<purrdf_core::RdfDataset>, CliError> {
         let loaded: Vec<&str> = self.map.loaded().collect();
         if self.map.is_empty()

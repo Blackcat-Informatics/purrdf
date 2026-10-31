@@ -19,9 +19,7 @@ use crate::status::PurrdfStatus;
 #[derive(Debug)]
 pub struct PurrdfError {
     execution_receipt: Option<CString>,
-    canonicalization_json: Option<CString>,
-    native_cause_json: Option<CString>,
-    original_canonical_cause: Option<purrdf_core::CanonError>,
+    canonical: Option<Box<CanonicalFailure>>,
     pub(crate) code: PurrdfStatus,
     pub(crate) message: CString,
     /// The prepared-shapes-product admission dimension this refusal names, when it
@@ -40,6 +38,14 @@ pub struct PurrdfError {
     pub(crate) import: Option<ImportRefusal>,
     /// Original structured RDF presentation, borrowed through the error handle.
     diagnostic: Option<CString>,
+}
+
+/// Canonicalization evidence owned only by errors that carry it.
+#[derive(Debug, Default)]
+struct CanonicalFailure {
+    canonicalization_json: Option<CString>,
+    native_cause_json: Option<CString>,
+    original_canonical_cause: Option<purrdf_core::CanonError>,
 }
 
 /// The typed half of a [`PurrdfStatus::ShapesImportError`], kept as C strings so the
@@ -63,7 +69,9 @@ impl PurrdfError {
     pub(crate) fn retaining_cause(mut self, error: &(dyn std::error::Error + 'static)) -> Self {
         if let Some(cause) = purrdf_validate::canonical::native_canonical_cause(error) {
             self.code = PurrdfStatus::CanonicalizationError;
-            self.original_canonical_cause = Some(cause.clone());
+            self.canonical
+                .get_or_insert_with(Box::default)
+                .original_canonical_cause = Some(cause.clone());
         }
         self
     }
@@ -73,9 +81,7 @@ impl PurrdfError {
     pub(crate) fn new(code: PurrdfStatus, message: impl Into<String>) -> Self {
         Self {
             execution_receipt: None,
-            canonicalization_json: None,
-            native_cause_json: None,
-            original_canonical_cause: None,
+            canonical: None,
             code,
             message: sanitized(&message.into()),
             dimension: None,
@@ -139,9 +145,7 @@ impl PurrdfError {
     pub(crate) fn shapes_import(error: &purrdf_validate::ShapesImportError) -> Self {
         Self {
             execution_receipt: None,
-            canonicalization_json: None,
-            native_cause_json: None,
-            original_canonical_cause: None,
+            canonical: None,
             code: PurrdfStatus::ShapesImportError,
             message: sanitized(&error.to_string()),
             dimension: None,
@@ -162,9 +166,7 @@ impl PurrdfError {
     pub(crate) fn product(dimension: Option<&'static str>, message: impl Into<String>) -> Self {
         Self {
             execution_receipt: None,
-            canonicalization_json: None,
-            native_cause_json: None,
-            original_canonical_cause: None,
+            canonical: None,
             code: PurrdfStatus::ShapesProductError,
             message: sanitized(&message.into()),
             dimension: dimension.map(sanitized),
@@ -189,10 +191,11 @@ impl PurrdfError {
         receipts: &str,
         cause: Option<(purrdf_core::CanonError, String)>,
     ) -> Self {
-        self.canonicalization_json = Some(sanitized(receipts));
+        let canonical = self.canonical.get_or_insert_with(Box::default);
+        canonical.canonicalization_json = Some(sanitized(receipts));
         if let Some((original, json)) = cause {
-            self.original_canonical_cause = Some(original);
-            self.native_cause_json = Some(sanitized(&json));
+            canonical.original_canonical_cause = Some(original);
+            canonical.native_cause_json = Some(sanitized(&json));
         }
         self
     }
@@ -212,7 +215,9 @@ impl std::fmt::Display for PurrdfError {
 
 impl std::error::Error for PurrdfError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        self.original_canonical_cause
+        self.canonical
+            .as_ref()?
+            .original_canonical_cause
             .as_ref()
             .map(|cause| cause as _)
     }
@@ -246,7 +251,7 @@ pub unsafe extern "C" fn purrdf_error_canonicalization_json(
         ffi_guard!(std::ptr::null(), {
             error
                 .as_ref()
-                .and_then(|error| error.canonicalization_json.as_ref())
+                .and_then(|error| error.canonical.as_ref()?.canonicalization_json.as_ref())
                 .map_or(std::ptr::null(), |value| value.as_ptr())
         })
     }
@@ -266,8 +271,9 @@ pub unsafe extern "C" fn purrdf_error_native_cause_json(
             error
                 .as_ref()
                 .and_then(|error| {
-                    error.original_canonical_cause.as_ref()?;
-                    error.native_cause_json.as_ref()
+                    let canonical = error.canonical.as_ref()?;
+                    canonical.original_canonical_cause.as_ref()?;
+                    canonical.native_cause_json.as_ref()
                 })
                 .map_or(std::ptr::null(), |value| value.as_ptr())
         })

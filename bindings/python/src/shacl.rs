@@ -2025,8 +2025,8 @@ fn restore_product_request(
 #[pyo3(signature = (shapes_ttl, *, shapes_base=None, imports=Vec::new(), shapes_graph=None, recursion=None, recursion_max_pairs=None, recursion_max_iterations=None, canonical_search, cancel=None))]
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 #[allow(clippy::too_many_arguments)] // one keyword per validation-request option
-fn pack_product<'py>(
-    py: Python<'py>,
+fn pack_product(
+    py: Python<'_>,
     shapes_ttl: &str,
     shapes_base: Option<&str>,
     imports: Vec<(String, String)>,

@@ -386,6 +386,10 @@ pub fn pack_shapes_product_from_dataset(
 ///
 /// # Errors
 /// Preserves original model, import, profile and preparation refusals.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the original dataset coordinates, admission options and caller search control are independent inputs"
+)]
 pub fn pack_shapes_product_from_dataset_with_options(
     dataset: &Arc<RdfDataset>,
     doc_prefixes: &[(String, String)],

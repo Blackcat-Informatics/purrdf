@@ -183,7 +183,7 @@ fn resolve(path: &Path) -> Result<PathBuf, CliError> {
             let parent = path
                 .parent()
                 .filter(|path| !path.as_os_str().is_empty())
-                .unwrap_or(Path::new("."));
+                .unwrap_or_else(|| Path::new("."));
             let name = path.file_name().ok_or_else(|| {
                 CliError::Usage(format!(
                     "invalid receipt/input/output path {}",

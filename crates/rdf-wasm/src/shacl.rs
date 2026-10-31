@@ -1233,6 +1233,10 @@ pub(crate) fn product_certify_impl(
 ///
 /// Rejects with a [`ShaclProductRefusal`]; call `.free()` on it when done.
 #[wasm_bindgen(js_name = shaclProductCertify)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "wasm-bindgen requires owned optional exported-class handles; optional references have no ABI conversion"
+)]
 pub fn shacl_product_certify(
     product: &[u8],
     canonical_search: &str,

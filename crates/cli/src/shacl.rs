@@ -269,7 +269,7 @@ pub(crate) fn verify(
 /// well-formed product of this format.
 pub(crate) fn explain(
     product: &str,
-    canonical: &mut crate::canonical::Request,
+    canonical: &crate::canonical::Request,
 ) -> Result<(), CliError> {
     let owner = source::acquire_product_input(product)?;
     let explained = purrdf_validate::explain_shapes_product(owner.as_bytes())
@@ -302,7 +302,7 @@ pub(crate) fn explain(
 pub(crate) fn diff(
     a: &str,
     b: &str,
-    canonical: &mut crate::canonical::Request,
+    canonical: &crate::canonical::Request,
 ) -> Result<(), CliError> {
     if a == "-" && b == "-" {
         return Err(CliError::Usage(

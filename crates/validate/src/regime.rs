@@ -4949,6 +4949,10 @@ pub fn check_dl_proof(
     )
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the proof checks its original source, query, answer and certificate under caller control"
+)]
 fn check_dl_proof_from_source(
     source: impl FnOnce() -> Result<std::sync::Arc<purrdf_rdf::RdfDataset>, String>,
     resolved_imports: bool,

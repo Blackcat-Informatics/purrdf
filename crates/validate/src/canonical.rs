@@ -299,7 +299,7 @@ mod tests {
             let request = execute(policy, None, |control| {
                 purrdf_core::try_canonicalize(&dataset, control)
             });
-            assert!(request.result.unwrap().nquads.is_empty());
+            assert_eq!(request.result.unwrap().nquads, "");
             let encoded = receipts_json(&request.receipts).to_string();
             assert!(
                 encoded.contains(&format!("\"finite\":\"{limit}\"")),

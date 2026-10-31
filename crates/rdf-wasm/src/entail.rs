@@ -302,6 +302,10 @@ pub fn entail_extensions(regime: &str) -> Result<Vec<String>, JsError> {
 ///
 /// Throws with the case name and a diff of the two strings on any mismatch.
 #[wasm_bindgen(js_name = entailCheckGoldenVectors)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "wasm-bindgen requires owned optional exported-class handles; optional references have no ABI conversion"
+)]
 pub fn entail_check_golden_vectors(
     canonical_search: &str,
     cancel: Option<crate::query::CancellationToken>,
@@ -328,6 +332,10 @@ pub fn entail_check_golden_vectors(
 ///
 /// Throws naming the fragment the refusal failed to carry, with the refusal verbatim.
 #[wasm_bindgen(js_name = entailCheckInconsistentRefusal)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "wasm-bindgen requires owned optional exported-class handles; optional references have no ABI conversion"
+)]
 pub fn entail_check_inconsistent_refusal(
     canonical_search: &str,
     cancel: Option<crate::query::CancellationToken>,
@@ -545,6 +553,10 @@ pub(crate) fn classify_impl(
 /// Throws on a malformed document, or on an ontology with no model — every class
 /// then subsumes every other and the hierarchy would be a complete graph.
 #[wasm_bindgen(js_name = entailClassify)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "wasm-bindgen requires owned optional exported-class handles; optional references have no ABI conversion"
+)]
 pub fn entail_classify(
     document: &str,
     step_cap: u32,
@@ -576,6 +588,10 @@ pub(crate) fn realize_impl(
 /// Throws on a malformed document, an ontology with no model, or incomplete
 /// directness. The latter retains the complete original certificate in the message.
 #[wasm_bindgen(js_name = entailRealize)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "wasm-bindgen requires owned optional exported-class handles; optional references have no ABI conversion"
+)]
 pub fn entail_realize(
     document: &str,
     step_cap: u32,
@@ -612,6 +628,10 @@ pub(crate) fn instances_impl(
 /// Throws on a malformed document, a `class` that is not one N-Triples term, or an
 /// ontology with no model.
 #[wasm_bindgen(js_name = entailInstances)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "wasm-bindgen requires owned optional exported-class handles; optional references have no ABI conversion"
+)]
 pub fn entail_instances(
     document: &str,
     class: &str,
@@ -656,6 +676,10 @@ pub(crate) fn entails_impl(
 /// Throws on a malformed document, an `axiom` that is not one triple, or an
 /// ontology with no model.
 #[wasm_bindgen(js_name = entailEntails)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "wasm-bindgen requires owned optional exported-class handles; optional references have no ABI conversion"
+)]
 pub fn entail_entails(
     document: &str,
     axiom: &str,
@@ -719,6 +743,10 @@ pub(crate) fn extract_module_impl(
 /// Throws on a malformed document, a signature line that is not one N-Triples term,
 /// an unknown method, or a module that cannot be frozen.
 #[wasm_bindgen(js_name = entailExtractModule)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "wasm-bindgen requires owned optional exported-class handles; optional references have no ABI conversion"
+)]
 pub fn entail_extract_module(
     document: &str,
     signature: &str,
@@ -760,6 +788,10 @@ pub(crate) fn justify_impl(
 /// "nothing is needed" and means the opposite — or if the tableau could not decide
 /// it, leaving no answer to shrink against.
 #[wasm_bindgen(js_name = entailJustify)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "wasm-bindgen requires owned optional exported-class handles; optional references have no ABI conversion"
+)]
 pub fn entail_justify(
     document: &str,
     axiom: &str,
@@ -1155,6 +1187,10 @@ pub(crate) fn prove_impl(
 /// Throws on a malformed document, an unknown service, an argument wrong for the service, or
 /// whatever that service itself refuses.
 #[wasm_bindgen(js_name = entailProve)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "wasm-bindgen requires owned optional exported-class handles; optional references have no ABI conversion"
+)]
 pub fn entail_prove(
     document: &str,
     service: &str,
@@ -1213,6 +1249,10 @@ pub(crate) fn check_proof_impl(
 /// to record is never presented as a verified one — and for every other rejection.
 #[wasm_bindgen(js_name = entailCheckProof)]
 #[allow(clippy::too_many_arguments)] // existing service inputs plus explicit canonical controls
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "wasm-bindgen requires owned optional exported-class handles; optional references have no ABI conversion"
+)]
 pub fn entail_check_proof(
     document: &str,
     service: &str,
@@ -1254,6 +1294,10 @@ pub fn entail_check_proof(
 ///
 /// Throws with the case name and a diff of the two strings on any mismatch.
 #[wasm_bindgen(js_name = entailCheckProofGoldenVectors)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "wasm-bindgen requires owned optional exported-class handles; optional references have no ABI conversion"
+)]
 pub fn entail_check_proof_golden_vectors(
     canonical_search: &str,
     cancel: Option<crate::query::CancellationToken>,
@@ -1278,6 +1322,10 @@ pub fn entail_check_proof_golden_vectors(
 ///
 /// Throws naming which of the three failed.
 #[wasm_bindgen(js_name = entailCheckAbsentProof)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "wasm-bindgen requires owned optional exported-class handles; optional references have no ABI conversion"
+)]
 pub fn entail_check_absent_proof(
     canonical_search: &str,
     cancel: Option<crate::query::CancellationToken>,
@@ -1378,6 +1426,10 @@ impl Reasoner {
     /// Answer `service` about `argument`, with its proof. See `entailProve`.
     ///
     /// Throws on a session that records nothing: open it with `Reasoner.withProofs`.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "wasm-bindgen requires owned optional exported-class handles; optional references have no ABI conversion"
+    )]
     pub fn prove(
         &mut self,
         service: &str,
@@ -1396,6 +1448,10 @@ impl Reasoner {
     }
 
     /// Is the knowledge base consistent? See `entailConsistency`.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "wasm-bindgen requires owned optional exported-class handles; optional references have no ABI conversion"
+    )]
     pub fn consistency(
         &mut self,
         canonical_search: &str,
@@ -1410,6 +1466,10 @@ impl Reasoner {
     }
 
     /// The entailed subsumption hierarchy. See `entailClassify`.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "wasm-bindgen requires owned optional exported-class handles; optional references have no ABI conversion"
+    )]
     pub fn classify(
         &mut self,
         canonical_search: &str,
@@ -1424,6 +1484,10 @@ impl Reasoner {
     }
 
     /// The entailed types of the named individuals. See `entailRealize`.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "wasm-bindgen requires owned optional exported-class handles; optional references have no ABI conversion"
+    )]
     pub fn realize(
         &mut self,
         canonical_search: &str,
@@ -1438,6 +1502,10 @@ impl Reasoner {
     }
 
     /// The individuals entailed to be instances of `class`. See `entailInstances`.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "wasm-bindgen requires owned optional exported-class handles; optional references have no ABI conversion"
+    )]
     pub fn instances(
         &mut self,
         class: &str,
@@ -1455,6 +1523,10 @@ impl Reasoner {
     }
 
     /// Does the ontology entail `axiom`? See `entailEntails`.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "wasm-bindgen requires owned optional exported-class handles; optional references have no ABI conversion"
+    )]
     pub fn entails(
         &mut self,
         axiom: &str,
@@ -1482,6 +1554,10 @@ impl Reasoner {
 
     /// A module for `signature`. See `entailExtractModule`.
     #[wasm_bindgen(js_name = extractModule)]
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "wasm-bindgen requires owned optional exported-class handles; optional references have no ABI conversion"
+    )]
     pub fn extract_module(
         &self,
         signature: &str,
@@ -1500,6 +1576,10 @@ impl Reasoner {
     }
 
     /// A justification for `axiom`. See `entailJustify`.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "wasm-bindgen requires owned optional exported-class handles; optional references have no ABI conversion"
+    )]
     pub fn justify(
         &self,
         axiom: &str,

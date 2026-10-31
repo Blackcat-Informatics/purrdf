@@ -684,7 +684,7 @@ fn entailed_query<D: DatasetView>(
     options: EngineQueryOptions<'_, '_>,
     relations: &ClosureRelations<'_>,
     report_target: &ReportTarget,
-    canonical: &mut crate::canonical::Request,
+    canonical: &crate::canonical::Request,
 ) -> Result<GovernedEntailment, CliError> {
     let request = SparqlRequest {
         query,

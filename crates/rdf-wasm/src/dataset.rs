@@ -754,6 +754,10 @@ impl Dataset {
     /// thrown `JsError` via the typed [`try_canonicalize_flat_view`] path, never as a
     /// wasm trap/process abort.
     #[wasm_bindgen(js_name = canonicalize)]
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "wasm-bindgen requires owned optional exported-class handles; optional references have no ABI conversion"
+    )]
     pub fn canonicalize(
         &self,
         canonical_search: &str,
@@ -785,6 +789,10 @@ impl Dataset {
     /// comparing the two [`canonicalize`](Self::canonicalize) strings, but avoids
     /// materializing them for obviously-different inputs.
     #[wasm_bindgen(js_name = isomorphic)]
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "wasm-bindgen requires owned optional exported-class handles; optional references have no ABI conversion"
+    )]
     pub fn isomorphic(
         &self,
         other: &Self,
@@ -1087,8 +1095,8 @@ mod identity_fixture {
     use super::Dataset;
     use wasm_bindgen::prelude::*;
 
-    /// Unit-test-module fixture only: seed the real exported getters beyond binary64's
-    /// exact integer range without adding a seed operation to the release package.
+    /// Unit-test-module fixture only: seed the real exported getters beyond JavaScript's
+    /// safe integer range without adding a seed operation to the release package.
     #[wasm_bindgen]
     pub fn __purrdf_test_large_dataset_identity() -> Result<Dataset, JsValue> {
         let mut dataset = Dataset::new(None)?;

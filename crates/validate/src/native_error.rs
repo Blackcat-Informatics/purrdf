@@ -71,7 +71,7 @@ impl<'error> Inspector<'_, 'error> {
             },
             Node::List { items, .. } if name.is_none() => items.push(cell),
             Node::List { .. } => {
-                self.error = Some(InspectionError("a list entry has a field name"))
+                self.error = Some(InspectionError("a list entry has a field name"));
             }
         }
     }
@@ -110,12 +110,12 @@ impl<'error> ErrorVisitor<'error> for Inspector<'_, 'error> {
         }
         match self.stack.last().map(|&index| &mut self.arena[index]) {
             Some(Node::Record { code: previous, .. }) if previous.is_none() => {
-                *previous = Some(code)
+                *previous = Some(code);
             }
             _ => {
                 self.error = Some(InspectionError(
                     "a variant is outside a record or repeats its code",
-                ))
+                ));
             }
         }
     }

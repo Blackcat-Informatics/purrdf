@@ -125,7 +125,7 @@ enum ErrorText {
 pub(crate) struct JobError {
     execution_receipt: Option<Box<str>>,
     canonicalization_json: Option<Box<str>>,
-    native_canonical_cause: Option<purrdf_core::CanonError>,
+    native_canonical_cause: Option<Box<purrdf_core::CanonError>>,
     kind: JobErrorKind,
     diagnostic: Box<RdfDiagnostic>,
     text: ErrorText,
@@ -244,7 +244,7 @@ impl JobError {
         cause: Option<purrdf_core::CanonError>,
     ) -> Self {
         self.canonicalization_json = Some(receipts.into_boxed_str());
-        self.native_canonical_cause = cause;
+        self.native_canonical_cause = cause.map(Box::new);
         self
     }
 
@@ -253,12 +253,15 @@ impl JobError {
     }
 
     pub(crate) fn native_cause(&self) -> Option<crate::canonical::CanonicalCause> {
-        self.native_canonical_cause.clone().map(Into::into)
+        self.native_canonical_cause
+            .as_deref()
+            .cloned()
+            .map(Into::into)
     }
 
     pub(crate) fn native_cause_json(&self) -> Result<Option<String>, JsError> {
         self.native_canonical_cause
-            .as_ref()
+            .as_deref()
             .map(|cause| {
                 purrdf_validate::native_error::to_json(cause)
                     .map(|value| value.to_string())
@@ -371,7 +374,7 @@ impl JobError {
             Some(receipts) => crate::canonical::attach_evidence(
                 error,
                 receipts,
-                self.native_canonical_cause.as_ref(),
+                self.native_canonical_cause.as_deref(),
             ),
             None => error,
         }

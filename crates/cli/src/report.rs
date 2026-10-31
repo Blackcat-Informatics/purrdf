@@ -77,7 +77,7 @@ pub(crate) fn materialize_reported<D: DatasetView>(
     plan: Materialization<'_>,
     limits: &MaterializeLimits,
     target: &ReportTarget,
-    canonical: &mut crate::canonical::Request,
+    canonical: &crate::canonical::Request,
 ) -> Result<Arc<RdfDataset>, CliError> {
     let regime = regime_name(plan.regime());
     reported(
@@ -103,7 +103,7 @@ pub(crate) fn materialize_reported_with_imports(
     imports: &ImportMap,
     limits: &MaterializeLimits,
     target: &ReportTarget,
-    canonical: &mut crate::canonical::Request,
+    canonical: &crate::canonical::Request,
 ) -> Result<Arc<RdfDataset>, CliError> {
     let regime = regime_name(plan.regime());
     reported(
@@ -157,7 +157,7 @@ fn reported<E: std::fmt::Display>(
     outcome: Result<(Arc<RdfDataset>, ReasoningReport), EntailError<E>>,
     limits: &MaterializeLimits,
     target: &ReportTarget,
-    canonical: &mut crate::canonical::Request,
+    canonical: &crate::canonical::Request,
 ) -> Result<Arc<RdfDataset>, CliError> {
     match outcome {
         Ok((closure, report)) => {
@@ -301,7 +301,7 @@ pub(crate) fn materialize_reported_over_input(
 pub(crate) fn surface(
     target: &ReportTarget,
     report: &ReasoningReport,
-    canonical: &mut crate::canonical::Request,
+    canonical: &crate::canonical::Request,
 ) -> Result<(), CliError> {
     surface_rendered(target, &render_reasoning_report(report), canonical)
 }
@@ -316,7 +316,7 @@ pub(crate) fn surface(
 pub(crate) fn surface_rendered(
     target: &ReportTarget,
     rendered: &str,
-    canonical: &mut crate::canonical::Request,
+    canonical: &crate::canonical::Request,
 ) -> Result<(), CliError> {
     canonical.defer_report(target, rendered)
 }
