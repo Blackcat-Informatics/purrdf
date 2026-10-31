@@ -188,9 +188,21 @@ class CompiledJsonLdContext:
     def canonical_context_json(self) -> str:
         ...
 
-class CanonicalizationAlgorithm:
-    RDFC_1_0: CanonicalizationAlgorithm
-    UNSTABLE: CanonicalizationAlgorithm
+class CanonicalCause:
+
+    @property
+    def json(self) -> str:
+        ...
+
+class CanonicalResult:
+
+    @property
+    def value(self) -> Any:
+        ...
+
+    @property
+    def canonicalization_json(self) -> str:
+        ...
 
 class NamedNode:
 
@@ -738,7 +750,7 @@ class Dataset:
     def add(self, quad: Quad) -> None:
         ...
 
-    def canonicalize(self, algorithm: CanonicalizationAlgorithm) -> None:
+    def canonicalize(self, *, canonical_search: str, cancel: CancellationToken | None=None) -> CanonicalResult:
         ...
 
     def __iter__(self) -> QuadIter:
@@ -1138,7 +1150,7 @@ class RdfDataset:
     def __len__(self) -> int:
         ...
 
-    def to_nquads(self) -> str:
+    def to_nquads(self, *, canonical_search: str, cancel: CancellationToken | None=None) -> CanonicalResult:
         ...
 
     def serialize_jsonld(self, output_format: str, *, options_json: str | None=..., context: CompiledJsonLdContext | None=..., yaml_schema_url: str | None=...) -> str:
@@ -1271,7 +1283,7 @@ class _PreparedShapes:
     """An immutable shape preparation, reusable across data graphs and writable as
     a prepared product."""
 
-    def to_product(self) -> bytes:
+    def to_product(self, *, canonical_search: str, cancel: CancellationToken | None=None) -> CanonicalResult:
         ...
 
     def provenance(self) -> str:
@@ -1348,7 +1360,7 @@ class _ShapesProduct:
     def rebuild_expecting(self, expected_identity: str, *, recursion: str | None=None, recursion_max_pairs: int | None=None, recursion_max_iterations: int | None=None) -> _PreparedShapes:
         ...
 
-    def certify(self) -> None:
+    def certify(self, *, canonical_search: str, cancel: CancellationToken | None=None) -> CanonicalResult:
         ...
 
 class shapes:
@@ -1361,7 +1373,7 @@ class shapes:
     ShapesImportError: TypeAlias = _ShapesImportError
 
     @staticmethod
-    def pack_product(shapes_ttl: str, *, shapes_base: str | None=None, imports: Sequence[tuple[str, str]]=..., shapes_graph: str | None=None, recursion: str | None=None, recursion_max_pairs: int | None=None, recursion_max_iterations: int | None=None) -> bytes:
+    def pack_product(shapes_ttl: str, *, shapes_base: str | None=None, imports: Sequence[tuple[str, str]]=..., shapes_graph: str | None=None, recursion: str | None=None, recursion_max_pairs: int | None=None, recursion_max_iterations: int | None=None, canonical_search: str, cancel: CancellationToken | None=None) -> CanonicalResult:
         ...
 
     @staticmethod
@@ -1369,7 +1381,7 @@ class shapes:
         ...
 
     @staticmethod
-    def entail(shapes_ttl: str, data_nt: str, *, shapes_base: str | None=None, imports: Sequence[tuple[str, str]]=..., shapes_graph: str | None=None, max_term_generating_rounds: int | None=None, max_generated_terms: int | None=None, max_stored_facts: int | None=None, max_join_steps: int | None=None, xpath_regex: str | None=None, now: str | None=None, entropy_seed: int | None=None) -> dict[str, builtins.object]:
+    def entail(shapes_ttl: str, data_nt: str, *, shapes_base: str | None=None, imports: Sequence[tuple[str, str]]=..., shapes_graph: str | None=None, max_term_generating_rounds: int | None=None, max_generated_terms: int | None=None, max_stored_facts: int | None=None, max_join_steps: int | None=None, xpath_regex: str | None=None, now: str | None=None, entropy_seed: int | None=None, canonical_search: str, cancel: CancellationToken | None=None) -> CanonicalResult:
         ...
 
     @staticmethod
@@ -1408,7 +1420,7 @@ class entail:
         ...
 
     @staticmethod
-    def materialize_nt(data: str, regime: RegimeLike, program: str, imports: Sequence[tuple[str, str]], premise_iris: Sequence[str], *, max_stored_facts: int | None=None, max_join_steps: int | None=None, max_term_arena_bytes: int | None=None) -> tuple[str, str]:
+    def materialize_nt(data: str, regime: RegimeLike, program: str, imports: Sequence[tuple[str, str]], premise_iris: Sequence[str], *, max_stored_facts: int | None=None, max_join_steps: int | None=None, max_term_arena_bytes: int | None=None, canonical_search: str, cancel: CancellationToken | None=None) -> CanonicalResult:
         ...
 
     @staticmethod
@@ -1424,23 +1436,23 @@ class entail:
         ...
 
     @staticmethod
-    def consistency(data: str, imports: Sequence[tuple[str, str]], premise_iris: Sequence[str], step_cap: int=..., work_cap: int=...) -> tuple[str, str]:
+    def consistency(data: str, imports: Sequence[tuple[str, str]], premise_iris: Sequence[str], step_cap: int=..., work_cap: int=..., *, canonical_search: str, cancel: CancellationToken | None=None) -> CanonicalResult:
         ...
 
     @staticmethod
-    def classify(data: str, step_cap: int=..., work_cap: int=...) -> tuple[str, str]:
+    def classify(data: str, step_cap: int=..., work_cap: int=..., *, canonical_search: str, cancel: CancellationToken | None=None) -> CanonicalResult:
         ...
 
     @staticmethod
-    def realize(data: str, step_cap: int=..., work_cap: int=...) -> tuple[str, str]:
+    def realize(data: str, step_cap: int=..., work_cap: int=..., *, canonical_search: str, cancel: CancellationToken | None=None) -> CanonicalResult:
         ...
 
     @staticmethod
-    def instances(data: str, class_: str, step_cap: int=..., work_cap: int=...) -> tuple[str, str]:
+    def instances(data: str, class_: str, step_cap: int=..., work_cap: int=..., *, canonical_search: str, cancel: CancellationToken | None=None) -> CanonicalResult:
         ...
 
     @staticmethod
-    def entails(data: str, axiom: str, step_cap: int=..., work_cap: int=...) -> tuple[str, str]:
+    def entails(data: str, axiom: str, step_cap: int=..., work_cap: int=..., *, canonical_search: str, cancel: CancellationToken | None=None) -> CanonicalResult:
         ...
 
     @staticmethod
@@ -1448,11 +1460,11 @@ class entail:
         ...
 
     @staticmethod
-    def extract_module(data: str, signature: str, method: str) -> tuple[str, str]:
+    def extract_module(data: str, signature: str, method: str, *, canonical_search: str, cancel: CancellationToken | None=None) -> CanonicalResult:
         ...
 
     @staticmethod
-    def justify(data: str, axiom: str) -> tuple[str, str]:
+    def justify(data: str, axiom: str, *, canonical_search: str, cancel: CancellationToken | None=None) -> CanonicalResult:
         ...
 
     @staticmethod
@@ -1460,11 +1472,11 @@ class entail:
         ...
 
     @staticmethod
-    def prove(data: str, service: str, argument: str=..., step_cap: int=..., work_cap: int=...) -> tuple[str, str, str]:
+    def prove(data: str, service: str, argument: str=..., step_cap: int=..., work_cap: int=..., *, canonical_search: str, cancel: CancellationToken | None=None) -> CanonicalResult:
         ...
 
     @staticmethod
-    def check_proof(data: str, service: str, argument: str, answer: str, certificate: str, proof: str) -> str:
+    def check_proof(data: str, service: str, argument: str, answer: str, certificate: str, proof: str, *, canonical_search: str, cancel: CancellationToken | None=None) -> CanonicalResult:
         ...
 
     @staticmethod
@@ -1492,31 +1504,31 @@ class entail:
         def records_proofs(self) -> bool:
             ...
 
-        def prove(self, service: str, argument: str=...) -> tuple[str, str, str]:
+        def prove(self, service: str, argument: str=..., *, canonical_search: str, cancel: CancellationToken | None=None) -> CanonicalResult:
             ...
 
-        def consistency(self) -> tuple[str, str]:
+        def consistency(self, *, canonical_search: str, cancel: CancellationToken | None=None) -> CanonicalResult:
             ...
 
-        def classify(self) -> tuple[str, str]:
+        def classify(self, *, canonical_search: str, cancel: CancellationToken | None=None) -> CanonicalResult:
             ...
 
-        def realize(self) -> tuple[str, str]:
+        def realize(self, *, canonical_search: str, cancel: CancellationToken | None=None) -> CanonicalResult:
             ...
 
-        def instances(self, class_: str) -> tuple[str, str]:
+        def instances(self, class_: str, *, canonical_search: str, cancel: CancellationToken | None=None) -> CanonicalResult:
             ...
 
-        def entails(self, axiom: str) -> tuple[str, str]:
+        def entails(self, axiom: str, *, canonical_search: str, cancel: CancellationToken | None=None) -> CanonicalResult:
             ...
 
         def profile(self) -> tuple[str, str]:
             ...
 
-        def extract_module(self, signature: str, method: str) -> tuple[str, str]:
+        def extract_module(self, signature: str, method: str, *, canonical_search: str, cancel: CancellationToken | None=None) -> CanonicalResult:
             ...
 
-        def justify(self, axiom: str) -> tuple[str, str]:
+        def justify(self, axiom: str, *, canonical_search: str, cancel: CancellationToken | None=None) -> CanonicalResult:
             ...
 
         def explain_conclusion(self, regime: RegimeLike, conclusion: str) -> tuple[str, str]:
@@ -1697,8 +1709,12 @@ class _OwnershipReport:
 
 class _SliceCatalog:
 
+    @property
+    def canonicalization_json(self) -> str:
+        ...
+
     @staticmethod
-    def discover(root: str, namespace: str) -> _SliceCatalog:
+    def discover(root: str, namespace: str, *, canonical_search: str, cancel: CancellationToken | None=None) -> _SliceCatalog:
         ...
 
     @property

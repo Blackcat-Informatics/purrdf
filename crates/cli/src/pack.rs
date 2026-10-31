@@ -24,9 +24,13 @@ use crate::source;
 /// — a bad magic/format, a section-digest mismatch, or an RDFC canonical-digest
 /// mismatch. The bytes are acquired through the immutable-input authority, so a
 /// hostile concurrent pathname writer cannot fault the check.
-pub(crate) fn verify(input: &str) -> Result<(), CliError> {
+pub(crate) fn verify(
+    input: &str,
+    canonical: &mut crate::canonical::Request,
+) -> Result<(), CliError> {
     let owner = source::acquire_pack_input(input)?;
-    let digest = verify_pack(owner.as_bytes())?;
+    let digest = verify_pack(owner.as_bytes(), canonical.control()?)?;
+    canonical.before_output()?;
     println!("{digest}");
     Ok(())
 }

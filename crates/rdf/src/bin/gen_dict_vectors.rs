@@ -82,6 +82,10 @@ fn main() {
             TIMESTAMP,
             false,
             (packaging_key(), "pack".to_string()),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
         )
         .unwrap_or_else(|err| panic!("compaction for {name} succeeds: {err:?}"));
         write_vector_and_expected(&vectors_dir.join(name), &pack);

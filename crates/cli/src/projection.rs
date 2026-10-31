@@ -32,6 +32,7 @@ impl ViewOp for ProjectOp<'_> {
     fn run<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
         self,
         view: &D,
+        _canonical: &mut crate::canonical::Request,
     ) -> Result<Self::Output, CliError> {
         Ok(if let Some(assets) = self.assets {
             project_archive_with_assets(view, self.profile.to_profile(), self.config, assets)?
@@ -56,6 +57,7 @@ pub(crate) fn run_project(
     output: &str,
     jsonld_options: Option<&JsonLdSerializeOptions>,
     ledger_target: &LedgerTarget,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<(), CliError> {
     if jsonld_options.is_some() {
         return Err(CliError::Usage(
@@ -89,8 +91,9 @@ pub(crate) fn run_project(
             config: &config,
             assets: assets.as_ref(),
         },
+        canonical,
     )?;
-    sink::write_out(output, &outcome.archive)?;
+    sink::write_out_with_request(output, &outcome.archive, canonical)?;
     ledger::surface(ledger_target, &outcome.loss_ledger)
 }
 
@@ -108,6 +111,7 @@ pub(crate) fn run_lift(
     output: &str,
     jsonld_options: Option<&JsonLdSerializeOptions>,
     ledger_target: &LedgerTarget,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<(), CliError> {
     let target_format = SourceFormat::Native(to.to_native());
     sink::validate_jsonld_options(target_format, jsonld_options)?;
@@ -128,6 +132,7 @@ pub(crate) fn run_lift(
         base,
         None,
         jsonld_options,
+        canonical,
     )?;
     merge_ledger(&mut outcome.loss_ledger, &serialization_ledger);
     ledger::surface(ledger_target, &outcome.loss_ledger)

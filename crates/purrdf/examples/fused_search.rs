@@ -203,8 +203,11 @@ fn artifact() -> (
 ) {
     let dimension = 2u32;
     let empty = RdfDatasetBuilder::new().freeze().expect("an empty dataset");
-    let (source, _) =
-        CertifiedEmbeddingSource::from_dataset(&empty).expect("the source pack seals");
+    let (source, _) = CertifiedEmbeddingSource::from_dataset(
+        &empty,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("the source pack seals");
 
     let mut targets = Vec::with_capacity(CORPUS.len());
     let mut bindings = Vec::with_capacity(CORPUS.len());

@@ -187,6 +187,10 @@ fn project_is_byte_deterministic_and_lift_round_trips_with_ledgers() {
 /// by name instead.
 #[test]
 fn base_with_pack_from_is_refused_by_name() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let input = write(&dir.path().join("input.ttl"), TURTLE);
     let config = write(&dir.path().join("config.json"), lpg_config());
@@ -194,7 +198,19 @@ fn base_with_pack_from_is_refused_by_name() {
     let pack_path = pack.to_str().expect("pack path");
 
     let packed = run(&[
-        "convert", "--from", "turtle", "--to", "pack", &input, pack_path,
+        "convert",
+        "--from",
+        "turtle",
+        "--to",
+        "pack",
+        &input,
+        pack_path,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert!(
         packed.status.success(),
@@ -215,6 +231,12 @@ fn base_with_pack_from_is_refused_by_name() {
         "https://example.org/base/",
         pack_path,
         out.to_str().expect("out path"),
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert!(
         !projected.status.success(),

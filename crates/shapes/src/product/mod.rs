@@ -856,8 +856,12 @@ impl PreparedShapes {
     /// identity cannot be established; [`ProductDimension::DepthLimit`] when the
     /// model nests past the codec's ceiling; [`ProductDimension::Malformed`] when
     /// the model is internally inconsistent.
-    pub fn to_product(&self, profile: &ShapesProfile) -> Result<Vec<u8>, ShapesProductError> {
-        self.to_product_bound(profile, &HostBindings::empty())
+    pub fn to_product(
+        &self,
+        profile: &ShapesProfile,
+        control: &mut purrdf_core::CanonicalizationControl<'_>,
+    ) -> Result<Vec<u8>, ShapesProductError> {
+        self.to_product_bound(profile, &HostBindings::empty(), control)
     }
 
     /// Write this preparation out as a prepared product bound to the FULL host
@@ -884,8 +888,9 @@ impl PreparedShapes {
         &self,
         profile: &ShapesProfile,
         host: &HostBindings<'_>,
+        control: &mut purrdf_core::CanonicalizationControl<'_>,
     ) -> Result<Vec<u8>, ShapesProductError> {
-        self.to_product_bound(profile, host)
+        self.to_product_bound(profile, host, control)
     }
 
     /// Write this preparation out as a prepared product, binding it to the build of
@@ -912,6 +917,7 @@ impl PreparedShapes {
         &self,
         profile: &ShapesProfile,
         implementation_identity: &[u8],
+        control: &mut purrdf_core::CanonicalizationControl<'_>,
     ) -> Result<Vec<u8>, ShapesProductError> {
         if implementation_identity.is_empty() {
             return Err(ShapesProductError::new(
@@ -931,6 +937,7 @@ impl PreparedShapes {
                 &EMPTY_PROPERTY_FUNCTIONS,
                 implementation_identity,
             ),
+            control,
         )
     }
 
@@ -947,6 +954,7 @@ impl PreparedShapes {
         &self,
         profile: &ShapesProfile,
         host: &HostBindings<'_>,
+        control: &mut purrdf_core::CanonicalizationControl<'_>,
     ) -> Result<Vec<u8>, ShapesProductError> {
         let implementation_identity = host.implementation_identity();
         if profile.id() != identity::PROFILE_ID {
@@ -1000,11 +1008,11 @@ impl PreparedShapes {
         // be two chances to disagree about one analysis.
         let classes = self.class_catalog()?;
         let ast_bytes = ast::encode_ast(shapes, &classes)?;
-        let dataset_bytes = dataset::encode_dataset(shapes.dataset())?;
+        let dataset_bytes = dataset::encode_dataset(shapes.dataset(), control)?;
         // The PRODUCER certifies; the consumer trusts the digest chain. This is the
         // one canonicalization in the whole codec that is not on a cold path, and it
         // is here because a product cannot state an identity it has not established.
-        let digest = dataset::certify_dataset(&dataset_bytes)?;
+        let digest = dataset::certify_dataset(&dataset_bytes, control)?;
         // The product binds the environment it was PREPARED against, which is
         // whatever the writer's host states. `to_product` passes the empty host, so a
         // product written that way still binds the empty relation registry and the
@@ -1604,8 +1612,11 @@ impl<'a> ShapesProductView<'a> {
     /// [`ProductDimension::DatasetIdentity`] when the dataset does not canonicalize
     /// to the digest the identity records, or when canonicalization refuses;
     /// otherwise the structural dimensions the dataset section reports.
-    pub fn certify(&self) -> Result<(), ShapesProductError> {
-        let certified = dataset::certify_dataset(self.section(SECTION_DATASET)?)?;
+    pub fn certify(
+        &self,
+        control: &mut purrdf_core::CanonicalizationControl<'_>,
+    ) -> Result<(), ShapesProductError> {
+        let certified = dataset::certify_dataset(self.section(SECTION_DATASET)?, control)?;
         identity::certify_dataset_component(self.declared_identity(), &certified)
     }
 

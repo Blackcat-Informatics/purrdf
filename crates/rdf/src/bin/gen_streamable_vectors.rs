@@ -85,6 +85,7 @@ fn main() {
         TIMESTAMP,
         false,
         (streamable_packaging_key(), "pack".to_string()),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
     .expect("streamable compaction over the frozen 25-streamable-source succeeds");
     write_vector(&vectors_dir.join("25b-streamable-compacted.gts"), &pack);

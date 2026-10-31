@@ -159,6 +159,7 @@ pub(crate) trait ViewOp {
     fn run<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
         self,
         view: &D,
+        canonical: &mut crate::canonical::Request,
     ) -> Result<Self::Output, CliError>;
 }
 
@@ -475,10 +476,13 @@ fn acquire_sealed_input(path: &str, what: &str) -> Result<ImmutableInput, CliErr
 /// callers keep the [`ImmutableInput`] in scope for the whole operation. This is the
 /// single acquisition seam the pipeline arms below and `convert`'s pack→pack byte
 /// passthrough route through.
-pub(crate) fn verified_pack_input(path: &str) -> Result<ImmutableInput, CliError> {
+pub(crate) fn verified_pack_input(
+    path: &str,
+    canonical: &mut crate::canonical::Request,
+) -> Result<ImmutableInput, CliError> {
     let input = acquire_pack_input(path)?;
     // Unconditional canonical integrity, once, over the stable bytes.
-    verify_pack(input.as_bytes())?;
+    verify_pack(input.as_bytes(), canonical.control()?)?;
     Ok(input)
 }
 
@@ -606,8 +610,9 @@ pub(crate) fn run_over_input<Op: ViewOp>(
     format: SourceFormat,
     base: Option<&str>,
     op: Op,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<Op::Output, CliError> {
-    run_over_input_with_transport(path, format, base, TransportPolicy::Detect, op)
+    run_over_input_with_transport(path, format, base, TransportPolicy::Detect, op, canonical)
 }
 
 /// [`run_over_input`] under an explicit [`TransportPolicy`].
@@ -622,20 +627,21 @@ pub(crate) fn run_over_input_with_transport<Op: ViewOp>(
     base: Option<&str>,
     policy: TransportPolicy,
     op: Op,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<Op::Output, CliError> {
     match format {
         SourceFormat::Native(rdf_format) => {
             let dataset = load_native(path, rdf_format, base, policy)?;
-            op.run(&*dataset)
+            op.run(&*dataset, canonical)
         }
         SourceFormat::Pack => {
-            let input = verified_pack_input(path)?;
+            let input = verified_pack_input(path, canonical)?;
             let view = PackView::from_bytes(input.as_bytes())?;
-            op.run(&view)
+            op.run(&view, canonical)
         }
         SourceFormat::Gts => {
             let (dataset, _envelope_ledger) = load_gts(path, policy)?;
-            op.run(&*dataset)
+            op.run(&*dataset, canonical)
         }
     }
 }
@@ -656,8 +662,10 @@ pub(crate) fn load_dataset(
     path: &str,
     format: SourceFormat,
     base: Option<&str>,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<Arc<RdfDataset>, CliError> {
-    load_dataset_reporting(path, format, base, TransportPolicy::Detect).map(|(dataset, _)| dataset)
+    load_dataset_reporting(path, format, base, TransportPolicy::Detect, canonical)
+        .map(|(dataset, _)| dataset)
 }
 
 /// [`load_dataset`] plus the ledger of what reading this source dropped.
@@ -669,6 +677,7 @@ pub(crate) fn load_dataset_reporting(
     format: SourceFormat,
     base: Option<&str>,
     policy: TransportPolicy,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<(Arc<RdfDataset>, LossLedger), CliError> {
     match format {
         SourceFormat::Native(rdf_format) => Ok((
@@ -676,7 +685,7 @@ pub(crate) fn load_dataset_reporting(
             LossLedger::new(),
         )),
         SourceFormat::Pack => {
-            let input = verified_pack_input(path)?;
+            let input = verified_pack_input(path, canonical)?;
             let view = PackView::from_bytes(input.as_bytes())?;
             Ok((dataset_from_view(&view)?, LossLedger::new()))
         }
@@ -693,6 +702,7 @@ pub(crate) fn serialize_input_to_nquads(
     path: &str,
     format: SourceFormat,
     base: Option<&str>,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<SerializeOutcome, CliError> {
     struct NQuadsOp;
 
@@ -702,6 +712,7 @@ pub(crate) fn serialize_input_to_nquads(
         fn run<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
             self,
             view: &D,
+            _canonical: &mut crate::canonical::Request,
         ) -> Result<Self::Output, CliError> {
             // No EGRESS base, and `None` is the right value rather than an omission:
             // `base` is the INGRESS base, which `run_over_input` has already applied
@@ -717,5 +728,5 @@ pub(crate) fn serialize_input_to_nquads(
         }
     }
 
-    run_over_input(path, format, base, NQuadsOp)
+    run_over_input(path, format, base, NQuadsOp, canonical)
 }

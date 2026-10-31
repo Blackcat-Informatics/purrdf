@@ -887,8 +887,18 @@ mod tests {
         }
         let back = deskolemize(&sk, AUTHORITY).expect("deskolemize");
         assert_eq!(
-            try_canonicalize(&back).unwrap().nquads,
-            try_canonicalize(&ds).unwrap().nquads,
+            try_canonicalize(
+                &back,
+                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+            )
+            .unwrap()
+            .nquads,
+            try_canonicalize(
+                &ds,
+                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+            )
+            .unwrap()
+            .nquads,
             "round trip must preserve the dataset up to canonical bytes"
         );
         assert_eq!(
@@ -904,8 +914,18 @@ mod tests {
         let a = skolemize(&ds, AUTHORITY).expect("skolemize");
         let b = skolemize(&ds, AUTHORITY).expect("skolemize");
         assert_eq!(
-            try_canonicalize(&a).unwrap().nquads,
-            try_canonicalize(&b).unwrap().nquads
+            try_canonicalize(
+                &a,
+                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+            )
+            .unwrap()
+            .nquads,
+            try_canonicalize(
+                &b,
+                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+            )
+            .unwrap()
+            .nquads
         );
     }
 
@@ -1235,16 +1255,40 @@ mod tests {
     #[test]
     fn skolemize_and_canonical_relabel_both_preserve_isomorphism_class() {
         let ds = hostile_dataset();
-        let relabeled = canonical_relabel(&ds).expect("relabel");
+        let relabeled = canonical_relabel(
+            &ds,
+            &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+        )
+        .expect("relabel");
         let round = deskolemize(&skolemize(&ds, AUTHORITY).expect("skolemize"), AUTHORITY)
             .expect("deskolemize");
         assert_eq!(
-            try_canonicalize(&relabeled).unwrap().nquads,
-            try_canonicalize(&ds).unwrap().nquads
+            try_canonicalize(
+                &relabeled,
+                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+            )
+            .unwrap()
+            .nquads,
+            try_canonicalize(
+                &ds,
+                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+            )
+            .unwrap()
+            .nquads
         );
         assert_eq!(
-            try_canonicalize(&round).unwrap().nquads,
-            try_canonicalize(&ds).unwrap().nquads
+            try_canonicalize(
+                &round,
+                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+            )
+            .unwrap()
+            .nquads,
+            try_canonicalize(
+                &ds,
+                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+            )
+            .unwrap()
+            .nquads
         );
     }
 
@@ -1301,7 +1345,11 @@ mod tests {
 
         let sk = skolemize(&ds, AUTHORITY).expect("skolemize");
         let desk = deskolemize(&sk, AUTHORITY).expect("deskolemize");
-        let relabeled = canonical_relabel(&ds).expect("relabel");
+        let relabeled = canonical_relabel(
+            &ds,
+            &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+        )
+        .expect("relabel");
         for (name, out) in [
             ("skolemize", &sk),
             ("deskolemize", &desk),
@@ -1341,7 +1389,11 @@ mod tests {
         assert_eq!(ds.content_ids().count(), 0);
 
         let sk = skolemize(&ds, AUTHORITY).expect("skolemize");
-        let relabeled = canonical_relabel(&ds).expect("relabel");
+        let relabeled = canonical_relabel(
+            &ds,
+            &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+        )
+        .expect("relabel");
         for (name, out) in [("skolemize", &sk), ("canonical_relabel", &relabeled)] {
             assert!(
                 out.content_id_scheme().is_none(),

@@ -162,8 +162,16 @@ fn rich_fixture() -> Arc<RdfDataset> {
 #[test]
 fn build_bytes_is_deterministic_for_a_rich_dataset() {
     let dataset = rich_fixture();
-    let a = PackBuilder::build_bytes(&dataset).expect("builds");
-    let b = PackBuilder::build_bytes(&dataset).expect("builds");
+    let a = PackBuilder::build_bytes(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("builds");
+    let b = PackBuilder::build_bytes(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("builds");
     assert_eq!(a, b, "PackBuilder::build_bytes must be byte-deterministic");
 }
 
@@ -184,7 +192,11 @@ fn build_bytes_is_deterministic_for_a_rich_dataset() {
 #[test]
 fn golden_bytes_match_committed_fixture() {
     let dataset = small_fixture();
-    let bytes = PackBuilder::build_bytes(&dataset).expect("builds");
+    let bytes = PackBuilder::build_bytes(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("builds");
     let golden = std::fs::read(GOLDEN_PATH).unwrap_or_else(|e| {
         panic!(
             "failed to read golden fixture {GOLDEN_PATH}: {e} — see \
@@ -208,14 +220,22 @@ fn golden_bytes_match_committed_fixture() {
 #[ignore = "regenerates the committed golden fixture; run explicitly with -- --ignored"]
 fn regenerate_pack_small_golden() {
     let dataset = small_fixture();
-    let bytes = PackBuilder::build_bytes(&dataset).expect("builds");
+    let bytes = PackBuilder::build_bytes(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("builds");
     std::fs::write(GOLDEN_PATH, &bytes).expect("writes the golden fixture file");
 }
 
 #[test]
 fn round_trip_exposes_capabilities_and_digest() {
     let dataset = rich_fixture();
-    let bytes = PackBuilder::build_bytes(&dataset).expect("builds");
+    let bytes = PackBuilder::build_bytes(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("builds");
 
     let view = PackView::from_bytes(&bytes).expect("a freshly built pack opens");
     assert_eq!(
@@ -245,7 +265,11 @@ fn round_trip_exposes_capabilities_and_digest() {
 #[test]
 fn from_bytes_rejects_a_corrupted_section_body() {
     let dataset = rich_fixture();
-    let bytes = PackBuilder::build_bytes(&dataset).expect("builds");
+    let bytes = PackBuilder::build_bytes(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("builds");
 
     // Flip one byte strictly inside the DICT section's body (the section
     // bytes start right after the fixed header + 3-entry directory; any
@@ -265,7 +289,11 @@ fn from_bytes_rejects_a_corrupted_section_body() {
 #[test]
 fn from_bytes_rejects_a_flipped_magic_byte() {
     let dataset = rich_fixture();
-    let bytes = PackBuilder::build_bytes(&dataset).expect("builds");
+    let bytes = PackBuilder::build_bytes(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("builds");
 
     let mut corrupted = bytes;
     corrupted[0] ^= 0xFF;
@@ -277,7 +305,11 @@ fn from_bytes_rejects_a_flipped_magic_byte() {
 #[test]
 fn from_bytes_rejects_truncated_input() {
     let dataset = small_fixture();
-    let bytes = PackBuilder::build_bytes(&dataset).expect("builds");
+    let bytes = PackBuilder::build_bytes(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("builds");
 
     let err = PackView::from_bytes(&bytes[..bytes.len() - 1])
         .expect_err("a truncated buffer must be rejected");
@@ -333,7 +365,11 @@ fn from_bytes_rejects_literal_datatype_not_referencing_an_iri() {
     b.push_quad(blank, p2, o2, None).unwrap();
 
     let dataset = b.freeze().expect("valid dataset");
-    let bytes = PackBuilder::build_bytes(&dataset).expect("builds");
+    let bytes = PackBuilder::build_bytes(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("builds");
 
     let view = PackView::from_bytes(&bytes).expect("a freshly built pack opens");
     let datatype_id = view
@@ -400,7 +436,11 @@ fn from_bytes_rejects_literal_datatype_not_referencing_an_iri() {
 #[test]
 fn from_bytes_rejects_unsupported_version() {
     let dataset = small_fixture();
-    let bytes = PackBuilder::build_bytes(&dataset).expect("builds");
+    let bytes = PackBuilder::build_bytes(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("builds");
 
     let mut corrupted = bytes;
     // Version is the u32 immediately after the 8-byte magic.
@@ -511,13 +551,25 @@ fn build_view_bytes_over_a_composite_equals_build_bytes_over_the_flat_dataset() 
         CompositeDatasetView::with_shared_scopes(vec![Arc::clone(&dataset)], ViewLimits::default())
             .expect("one shared-scope source composes");
 
-    let flat = PackBuilder::build_bytes(&dataset).expect("builds");
-    let shared = PackBuilder::build_view_bytes(&composite).expect("builds from the composite");
+    let flat = PackBuilder::build_bytes(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("builds");
+    let shared = PackBuilder::build_view_bytes(
+        &composite,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("builds from the composite");
     assert_eq!(
         flat, shared,
         "flat and composite pack bytes must be byte-identical"
     );
-    verify_pack(&shared).expect("a composite-built pack certifies its own identity");
+    verify_pack(
+        &shared,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("a composite-built pack certifies its own identity");
 }
 
 /// A delta snapshot packs as the flat dataset its effective content equals —
@@ -539,8 +591,22 @@ fn build_view_bytes_over_a_delta_equals_the_flat_dataset_it_snapshots() {
 
     let expected = view_parity_dataset(true);
     assert_eq!(
-        PackBuilder::build_view_bytes(&delta).expect("builds from the delta"),
-        PackBuilder::build_bytes(&expected).expect("builds"),
+        PackBuilder::build_view_bytes(
+            &delta,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .expect("builds from the delta"),
+        PackBuilder::build_bytes(
+            &expected,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .expect("builds"),
         "delta and flat pack bytes must be byte-identical"
     );
 }
@@ -570,8 +636,22 @@ fn build_view_bytes_over_a_graph_selection_equals_the_equivalent_flat_dataset() 
             .expect("a selection composes like any other source");
 
     assert_eq!(
-        PackBuilder::build_view_bytes(&selected).expect("builds from the selection"),
-        PackBuilder::build_bytes(&selected_graph_expectation()).expect("builds"),
+        PackBuilder::build_view_bytes(
+            &selected,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .expect("builds from the selection"),
+        PackBuilder::build_bytes(
+            &selected_graph_expectation(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .expect("builds"),
         "a packed selection must equal the packed flat projection"
     );
 }
@@ -591,8 +671,11 @@ fn a_view_that_faults_mid_read_never_yields_pack_bytes() {
         truncating.operation_status(),
         ViewOperationStatus::Ready { .. }
     ));
-    let err = PackBuilder::build_view_bytes(&truncating)
-        .expect_err("a truncated read must never be framed as a pack");
+    let err = PackBuilder::build_view_bytes(
+        &truncating,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect_err("a truncated read must never be framed as a pack");
     assert!(
         matches!(
             err,
@@ -607,8 +690,11 @@ fn a_view_that_faults_mid_read_never_yields_pack_bytes() {
     // (ii) BEFORE: a view that had already faulted is refused without reading.
     let spent = BudgetedView::new(Arc::clone(&dataset), 0);
     assert_eq!(spent.quads().count(), 0, "the budget is already gone");
-    let err = PackBuilder::build_view_bytes(&spent)
-        .expect_err("an already-faulted view must never be framed as a pack");
+    let err = PackBuilder::build_view_bytes(
+        &spent,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect_err("an already-faulted view must never be framed as a pack");
     assert!(
         matches!(
             err,
@@ -625,8 +711,22 @@ fn a_view_that_faults_mid_read_never_yields_pack_bytes() {
     // the over-refusal the two checkpoints must not commit.
     let generous = BudgetedView::new(Arc::clone(&dataset), usize::MAX);
     assert_eq!(
-        PackBuilder::build_view_bytes(&generous).expect("an intact read packs"),
-        PackBuilder::build_bytes(&dataset).expect("builds"),
+        PackBuilder::build_view_bytes(
+            &generous,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .expect("an intact read packs"),
+        PackBuilder::build_bytes(
+            &dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .expect("builds"),
         "an intact fallible view must pack exactly as its flat source does"
     );
 }

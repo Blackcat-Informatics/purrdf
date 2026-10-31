@@ -6,9 +6,9 @@ import { shaclEntail, shaclApplyRules, shaclEntailAsync, shaclApplyRulesAsync,
   shaclValidateToSarifAsync, shaclEvalNodeExprAsync, shaclProductValidateToSarifAsync,
   type AsyncShaclRuleOptions } from "@blackcatinformatics/purrdf";
 const controls: AsyncShaclRuleOptions = { now: "2000-01-01T00:00:00Z", entropySeed: 0n };
-shaclEntail("", "", undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, controls.now, controls.entropySeed);
+shaclEntail("", "", undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, controls.now, controls.entropySeed, "unlimited");
 shaclApplyRules("", "", undefined, undefined, undefined, true, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, controls.now, controls.entropySeed);
-shaclEntailAsync("", "", undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, controls);
+shaclEntailAsync("", "", undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, "unlimited", controls);
 shaclApplyRulesAsync("", "", undefined, undefined, undefined, true, undefined, undefined, undefined, undefined, undefined, undefined, undefined, controls);
 // @ts-expect-error Validation must reject coordinate-bearing variables.
 shaclValidateToSarifAsync("", "", undefined, undefined, undefined, undefined, undefined, undefined, controls);

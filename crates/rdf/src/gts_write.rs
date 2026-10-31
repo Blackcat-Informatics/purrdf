@@ -452,7 +452,15 @@ mod tests {
         let graph = roundtrip(dataset, &RdfLookaside::default(), profile);
         let bundle =
             crate::import_gts_graph(graph).expect("import the round-tripped GTS graph into the IR");
-        crate::ir::try_canonicalize(&bundle.dataset).unwrap().nquads
+        crate::ir::try_canonicalize(
+            &bundle.dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap()
+        .nquads
     }
 
     fn assert_nquads_eq(dataset: &RdfDataset, profile: &str, expected: &str) {

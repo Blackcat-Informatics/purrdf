@@ -146,7 +146,12 @@ fn canonical_ntriples(text: &str) -> String {
         None,
     )
     .expect("parse expected graph");
-    try_canonicalize(&dataset).unwrap().nquads
+    try_canonicalize(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap()
+    .nquads
 }
 
 fn compare_result(case: &RegressionCase, result: SparqlResult) -> Result<(), String> {
@@ -172,7 +177,15 @@ fn compare_result(case: &RegressionCase, result: SparqlResult) -> Result<(), Str
         )),
         (Expected::GraphNTriples(expected), SparqlResult::Graph(native_graph)) => {
             let expected = canonical_ntriples(expected);
-            let native = try_canonicalize(&native_graph).unwrap().nquads;
+            let native = try_canonicalize(
+                &native_graph,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .unwrap()
+            .nquads;
             if native == expected {
                 Ok(())
             } else {

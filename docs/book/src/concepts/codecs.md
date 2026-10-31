@@ -95,7 +95,8 @@ boundary ([Result Formats](../sparql/results.md)) and the RDF↔GTS boundary.
 Alongside the text codecs above, `purrdf-core` ships a **binary** codec for a
 different job: a read-only, query-the-compressed-form encoding of a whole
 dataset for large-scale reference bundles, not an interchange format with a
-media type. `PackBuilder::build_bytes(&dataset)` writes a self-contained,
+media type. `PackBuilder::build_bytes(&dataset, &mut control)` uses the caller's
+explicit canonical search policy and records its receipts. It writes a self-contained,
 byte-deterministic pack — a value dictionary, graph-partitioned succinct
 bitmap-triples, and RDF 1.2 side-tables (reifier bindings, statement
 annotations) — into one `Vec<u8>`. `PackView::from_bytes(&[u8])` opens it

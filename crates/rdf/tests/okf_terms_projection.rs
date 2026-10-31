@@ -167,7 +167,11 @@ fn resident_reordering_and_succinct_pack_are_byte_identical() {
     let resident = project_archive(dataset.as_ref(), ProjectionProfile::OkfTerms, &config)
         .expect("resident projection");
 
-    let pack = PackBuilder::build_bytes(dataset.as_ref()).expect("succinct pack");
+    let pack = PackBuilder::build_bytes(
+        dataset.as_ref(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("succinct pack");
     let view = PackView::from_bytes(&pack).expect("succinct view");
     let succinct =
         project_archive(&view, ProjectionProfile::OkfTerms, &config).expect("succinct projection");

@@ -53,7 +53,11 @@ fn public_graph_carriers_round_trip_without_hidden_vocabulary() {
             &dataset,
             &lift_lpg(&cypher_graph, &config)
                 .expect("Cypher lift")
-                .dataset
+                .dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
         )
         .unwrap()
     );
@@ -74,7 +78,11 @@ fn public_graph_carriers_round_trip_without_hidden_vocabulary() {
             &dataset,
             &lift_lpg(&graphml_graph, &config)
                 .expect("GraphML lift")
-                .dataset
+                .dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
         )
         .unwrap()
     );

@@ -23,18 +23,25 @@ choosing the hash), producing canonical blank-node labels and, one layer up in
 `purrdf-rdf`, canonical flat N-Quads over the frozen IR:
 
 ```rust
-use purrdf::{try_canonicalize, parse_dataset};
+use purrdf::{try_canonicalize, parse_dataset, CanonicalizationControl, SearchPolicy};
 
+let mut control = CanonicalizationControl::new(SearchPolicy::Unlimited, None);
 let ds = parse_dataset(b"_:source <https://example.org/name> \"Alice\" .", "application/n-triples", None)?;
 let renamed = parse_dataset(b"_:renamed <https://example.org/name> \"Alice\" .", "application/n-triples", None)?;
-let canon = try_canonicalize(&ds)?;
+let canon = try_canonicalize(&ds, &mut control)?;
 // Canonical labels are stable across runs, hosts, and language bindings.
-assert_eq!(canon.nquads, try_canonicalize(&renamed)?.nquads);
+assert_eq!(canon.nquads, try_canonicalize(&renamed, &mut control)?.nquads);
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
 Use canonicalization when you need a content identity for a graph: hashing,
 signing, deduplication, or comparing datasets produced by different writers.
+
+Every operation requires an explicit finite or unlimited search policy and accepts
+an optional caller stop signal through its control. Each constituent run records
+its own effective policy, configuration and charged work; the receipt array is
+not an aggregate ceiling. Profile version three preserves successful canonical
+bytes while making search policy explicit.
 
 ## Native relabeling with source attribution
 
@@ -47,17 +54,18 @@ When a compiler or analyzer must associate source nodes with that result, use
 the same rebuild, after one canonical-label search:
 
 ```rust
-use purrdf::{canonical_relabel_with_mapping, datasets_isomorphic, parse_dataset, TermRef};
+use purrdf::{canonical_relabel_with_mapping, datasets_isomorphic, parse_dataset, TermRef, CanonicalizationControl, SearchPolicy};
 
+let mut control = CanonicalizationControl::new(SearchPolicy::Unlimited, None);
 let source = parse_dataset(b"<https://example.org/alice> <https://example.org/knows> _:friend .", "application/n-triples", None)?;
 let source_node = source.term_id_by_iri("https://example.org/alice").ok_or("source IRI not interned")?;
-let result = canonical_relabel_with_mapping(&source)?;
+let result = canonical_relabel_with_mapping(&source, &mut control)?;
 let output_node = result.map_term(source_node).ok_or("source node not retained")?;
 let canonical_value = result.dataset().resolve(output_node);
 assert!(matches!(canonical_value, TermRef::Iri("https://example.org/alice")));
 // Associate source receipts and owner metadata with canonical_value here.
 let canonical_dataset = result.into_dataset();
-assert!(datasets_isomorphic(source.as_ref(), &canonical_dataset)?);
+assert!(datasets_isomorphic(source.as_ref(), &canonical_dataset, &mut control)?);
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
@@ -83,9 +91,9 @@ are holding is part of the identity:
 - **The flat form** — `canonical_flat_nquads` in `purrdf-rdf` rewrites the
   statement layer to plain `rdf:reifies` / annotation triples first and
   canonicalizes *that* triple set under conformant RDFC-1.0. This is what the
-  CLI's `convert --canonical`, the wasm `Dataset.canonicalize()` and the W3C
+  CLI's `convert --canonical`, the wasm `Dataset.canonicalize("unlimited")` and the W3C
   conformance gate run.
-- **The `purrdf-rdfc12` v2 profile** — `try_canonicalize` in `purrdf-core` keeps
+- **The `purrdf-rdfc12` v3 profile** — `try_canonicalize` in `purrdf-core` keeps
   the statement layer and lowers it into a reserved `urn:purrdf:rdfc:`
   namespace instead (any input already carrying that namespace is refused,
   unless it is written in one of the two shapes the profile itself emits —
@@ -99,7 +107,7 @@ are holding is part of the identity:
 
 ## Isomorphism
 
-`datasets_isomorphic(a, b)` decides whether two frozen datasets are
+`datasets_isomorphic(a, b, control)` decides whether two frozen datasets are
 RDF-structurally isomorphic: the same quads, reifier bindings, and annotations
 under a single blank-node bijection.
 Canonicalization gives the equivalent verdict — two datasets are isomorphic
@@ -110,7 +118,7 @@ against expected inferred graphs.
 
 ## Diff
 
-`dataset_diff(a, b)` produces a structural diff between two frozen datasets,
+`dataset_diff(a, b, control)` produces a structural diff between two frozen datasets,
 including an `isomorphic` verdict. For a human-facing review flow,
 `purrdf-rdf` additionally provides per-subject Symmetric-CBD extraction
 ("describe") and a review-friendly Turtle normalizer, so a graph change reads

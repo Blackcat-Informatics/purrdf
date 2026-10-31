@@ -18,7 +18,7 @@ import assert from "node:assert/strict";
 import { Dataset, QueryEngine, ready } from "../index.mjs";
 import init, { asyncStackRegionBytes } from "../pkg/purrdf_wasm.js";
 import { DATASETS, QUERIES } from "./fixtures/async-differential.mjs";
-
+import { canonicalValue } from "./fixtures/poisoned-surface.mjs";
 await ready();
 const exports = await init();
 const stackPointer = () => exports.purrdf_stack_pointer.value >>> 0;
@@ -65,7 +65,7 @@ function canonical(result, ordered) {
     case "ask":
       return { kind: "ask", boolean: result.boolean };
     case "graph":
-      return { kind: "graph", nquads: result.dataset.canonicalize() };
+      return { kind: "graph", nquads: canonicalValue(result.dataset.canonicalize("unlimited")) };
     default:
       throw new Error(`unexpected result kind ${result.kind}`);
   }

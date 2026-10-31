@@ -2519,7 +2519,13 @@ fn admit_allocation_is_independent_of_dataset_size() {
     let shapes = Arc::new(parse_shapes(&seam_shapes_source(), None).expect("seam shapes parse"));
     let prepared = PreparedShapes::new(shapes);
     let product = prepared
-        .to_product(&ShapesProfile::CORE)
+        .to_product(
+            &ShapesProfile::CORE,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
         .expect("the seam shapes graph encodes as a product");
     let host = HostBindings::empty();
 

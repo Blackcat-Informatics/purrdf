@@ -22,7 +22,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { ready, CancellationToken, Dataset, QueryEngine, governorDimensions } from "../index.mjs";
-
+import { canonicalValue } from "./fixtures/poisoned-surface.mjs";
 // One-time wasm instantiation before any test runs.
 await ready();
 
@@ -574,7 +574,7 @@ test("a governed UPDATE that fits its budget applies and reports a receipt", () 
 test("a tripped UPDATE applies NOTHING and leaves the dataset byte-identical", () => {
   const engine = new QueryEngine();
   const ds = Dataset.parse(TRIG, "trig");
-  const before = ds.canonicalize();
+  const before = canonicalValue(ds.canonicalize("unlimited"));
   const size = ds.size;
 
   const outcome = engine.updateGoverned(
@@ -587,13 +587,13 @@ test("a tripped UPDATE applies NOTHING and leaves the dataset byte-identical", (
   assert.equal(outcome.tripped.label, "fuel-exhausted");
   assert.equal(outcome.evidence.isComplete, false);
   assert.equal(ds.size, size);
-  assert.equal(ds.canonicalize(), before, "a tripped request is not a partial mutation");
+  assert.equal(canonicalValue(ds.canonicalize("unlimited")), before, "a tripped request is not a partial mutation");
 });
 
 test("a cancelled token stops an UPDATE as an outcome", () => {
   const engine = new QueryEngine();
   const ds = Dataset.parse(TRIG, "trig");
-  const before = ds.canonicalize();
+  const before = canonicalValue(ds.canonicalize("unlimited"));
   const cancel = new CancellationToken();
   cancel.cancel();
 
@@ -605,7 +605,7 @@ test("a cancelled token stops an UPDATE as an outcome", () => {
 
   assert.equal(outcome.isApplied, false);
   assert.equal(outcome.tripped.label, "cancelled");
-  assert.equal(ds.canonicalize(), before);
+  assert.equal(canonicalValue(ds.canonicalize("unlimited")), before);
 });
 
 test("updateGoverned refuses maxAnswers rather than ignoring a ceiling the caller set", () => {

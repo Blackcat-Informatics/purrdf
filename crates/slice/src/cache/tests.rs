@@ -89,7 +89,12 @@ fn write_slice(
 }
 
 fn discover(root: &Path) -> (SliceCatalog, Vec<crate::ownership::DependencyEdge>) {
-    let catalog = SliceCatalog::discover(root, test_vocab()).unwrap();
+    let catalog = SliceCatalog::discover(
+        root,
+        test_vocab(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let report = OwnershipAnalyzer::new(&catalog).analyze().unwrap();
     (catalog, report.edges)
 }

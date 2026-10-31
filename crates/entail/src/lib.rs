@@ -163,7 +163,7 @@ pub use owl_dl::proof::{
     MergeCause, MergeLicence, MergeReplay, MergeStep, NodeRef, PartialReplay, ProofAlternative,
     ProofAnswer, ProofFact, ProofGround, ProofRole, RefutationReplay, ReservedRef,
     TRUST_BASE_VERSION as DL_TRUST_BASE_VERSION, TrustBaseEntry, prove_consistency,
-    try_ontology_identity, try_ontology_identity_with_stop,
+    try_ontology_identity,
 };
 pub use owl_dl::query::{QNode, QTriple, materialize_dl_reported, materialize_dl_reported_until};
 pub use reasoner::{
@@ -1322,7 +1322,13 @@ mod tests {
                     1,
                 );
                 let error = if recorded {
-                    Reasoner::with_proofs(&source)
+                    Reasoner::with_proofs(
+                        &source,
+                        &mut purrdf_core::CanonicalizationControl::new(
+                            purrdf_core::RDFC_V2_CORPUS_POLICY,
+                            None,
+                        ),
+                    )
                 } else {
                     Reasoner::new(&source)
                 }
@@ -1400,17 +1406,37 @@ mod tests {
     fn proof_context_retains_native_source_failures_before_and_after_identity() {
         let data = dataset(&[(X, RDF_TYPE, A)]);
         let complete = FailingSource::new(Arc::clone(&data), false, usize::MAX);
-        try_ontology_identity(&complete).expect("complete identity");
+        try_ontology_identity(
+            &complete,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("complete identity");
         let identity_passes = complete.passes.get();
         assert!(identity_passes > 0);
-        DlProofContext::of_ontology(&complete).expect("complete checking context");
+        DlProofContext::of_ontology(
+            &complete,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("complete checking context");
 
         for fail_term in [false, true] {
             for fail_on_pass in [1, identity_passes + 1] {
                 let source = FailingSource::new(Arc::clone(&data), fail_term, fail_on_pass);
                 let cause = Arc::clone(&source.cause);
-                let error = DlProofContext::of_ontology(&source)
-                    .expect_err("an incomplete source cannot publish a checking context");
+                let error = DlProofContext::of_ontology(
+                    &source,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
+                )
+                .expect_err("an incomplete source cannot publish a checking context");
                 drop(source);
                 let native = match &error {
                     DlProofError::SourceRead(native)

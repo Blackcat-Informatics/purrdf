@@ -1619,7 +1619,15 @@ fn prepared_and_restored_callback_requests_agree_in_complete_reports() {
         );
         PreparedShapes::new(Arc::new(parse_shapes(&source, None).unwrap()))
     };
-    let bytes = prepared.to_product(&ShapesProfile::CORE).unwrap();
+    let bytes = prepared
+        .to_product(
+            &ShapesProfile::CORE,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
     let options = ValidationOptions::default()
         .with_conformance_disallows(ConformanceDisallows::new([Severity::Violation]).unwrap());
     let restored = ShapesProduct::open(&bytes)

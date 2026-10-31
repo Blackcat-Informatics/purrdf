@@ -281,7 +281,11 @@ pub(crate) fn effective_registry(vocab: &SliceVocab) -> Vec<(String, String)> {
 
 /// Build the merged DSL dataset: the shared `dsl/mappings/**/*.ttl` tree + the slice
 /// `mappings/*.ttl` artifacts (the `load_dsl` source set, sorted-path insertion).
-pub(crate) fn collect_dsl_store(root: &Path, vocab: &SliceVocab) -> Result<Dataset, SliceError> {
+pub(crate) fn collect_dsl_store(
+    root: &Path,
+    vocab: &SliceVocab,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<Dataset, SliceError> {
     let mut acc = DatasetAccumulator::new();
     let dsl_dir = root.join("dsl").join("mappings");
     let mut dsl_files: Vec<std::path::PathBuf> = Vec::new();
@@ -293,7 +297,7 @@ pub(crate) fn collect_dsl_store(root: &Path, vocab: &SliceVocab) -> Result<Datas
     }
     let slices_dir = root.join("slices");
     if slices_dir.is_dir() {
-        let catalog = SliceCatalog::discover(&slices_dir, vocab.clone())?;
+        let catalog = SliceCatalog::discover(&slices_dir, vocab.clone(), control)?;
         let mut slice_mappings: Vec<(std::path::PathBuf, Vec<u8>)> = Vec::new();
         for record in catalog.records() {
             for artifact in &record.artifacts {

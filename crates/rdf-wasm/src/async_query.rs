@@ -2294,17 +2294,39 @@ pub(crate) const SHACL_STARTS_ELSEWHERE: &str =
 /// take no ceiling, so neither does this. A stop is the job's error — a validation cut
 /// short has no report, and its partial one is never offered — read back off the state
 /// that latched it rather than out of the error text the stop unwound with.
+#[derive(Debug)]
+struct CanonicalJobStop<'a>(Option<&'a dyn StopSignal>);
+
+impl purrdf_core::StopSignal for CanonicalJobStop<'_> {
+    fn stopped(&self) -> bool {
+        self.0.is_some_and(|stop| stop.poll().is_some())
+    }
+}
+
 fn execute_shacl(request: ShaclRequest, run: &JobRun<'_>) -> JobOutcome {
     let state = Arc::new(GovernorState::new(&run.governors(QueryGovernors::METERED)));
     let outcome = {
         let _scope =
             purrdf_shapes::sparql::enter_execution_scope(Arc::clone(&state), run.sources());
-        run.evaluate(|| request.run_job())
+        run.evaluate(|| request.run_job(Some(&CanonicalJobStop(run.stop.as_deref()))))
     };
     run.record_evidence(&state.evidence());
     match state.tripped() {
         Some(tripped @ TrippedGovernor::Stopped { .. }) => {
-            JobOutcome::Failed(JobError::stopped(tripped))
+            let error = match outcome {
+                JobOutcome::Failed(original) => JobError::stopped_preserving(tripped, original),
+                JobOutcome::Refused(refusal) => {
+                    let error = JobError::stopped(tripped);
+                    match refusal.canonicalization_json() {
+                        Some(receipts) => error.with_canonicalization(receipts.to_owned(), None),
+                        None => error,
+                    }
+                }
+                JobOutcome::ShaclEntailment(value) => JobError::stopped(tripped)
+                    .with_canonicalization(value.canonicalization_json(), None),
+                _ => JobError::stopped(tripped),
+            };
+            JobOutcome::Failed(error)
         }
         _ => outcome,
     }
@@ -2488,7 +2510,21 @@ impl JobInner {
         // produced by a job whose effects cannot be trusted, and an update is never
         // committed from it.
         let outcome = match slots.fault() {
-            Some(fault) => JobOutcome::Failed(JobError::fault(fault)),
+            Some(fault) => {
+                let error = JobError::fault(fault);
+                let error = match outcome {
+                    JobOutcome::Failed(original) => error.preserving_canonicalization(original),
+                    JobOutcome::Refused(refusal) => match refusal.canonicalization_json() {
+                        Some(receipts) => error.with_canonicalization(receipts.to_owned(), None),
+                        None => error,
+                    },
+                    JobOutcome::ShaclEntailment(value) => {
+                        error.with_canonicalization(value.canonicalization_json(), None)
+                    }
+                    _ => error,
+                };
+                JobOutcome::Failed(error)
+            }
             None => outcome,
         };
         let status = match outcome {
@@ -2501,6 +2537,9 @@ impl JobInner {
                     JobError::message(refusal.code(SHACL_REFUSAL_CODE), refusal.to_js_string());
                 if let Some(receipt) = refusal.execution_receipt() {
                     error = error.with_execution_receipt(receipt.to_owned());
+                }
+                if let Some(receipts) = refusal.canonicalization_json() {
+                    error = error.with_canonicalization(receipts.to_owned(), None);
                 }
                 *self.error.borrow_mut() = Some(error);
                 *self.refusal.borrow_mut() = Some(refusal);
@@ -2834,6 +2873,38 @@ impl AsyncJob {
             .borrow()
             .as_ref()
             .and_then(JobError::execution_receipt_json)
+    }
+
+    /// Canonical-search receipts retained by this failed request, including [] before a run.
+    #[wasm_bindgen(getter, js_name = errorCanonicalizationJson)]
+    pub fn error_canonicalization_json(&self) -> Option<String> {
+        self.inner
+            .error
+            .borrow()
+            .as_ref()
+            .and_then(JobError::canonicalization_json)
+    }
+
+    /// Exact native fields from the retained canonicalization refusal.
+    #[wasm_bindgen(getter, js_name = errorNativeCauseJson)]
+    pub fn error_native_cause_json(&self) -> Result<Option<String>, JsError> {
+        self.inner
+            .error
+            .borrow()
+            .as_ref()
+            .map(JobError::native_cause_json)
+            .transpose()
+            .map(Option::flatten)
+    }
+
+    /// An owned native cause; its admission grant outlives the job handle.
+    #[wasm_bindgen(getter, js_name = errorNativeCause)]
+    pub fn error_native_cause(&self) -> Option<crate::canonical::CanonicalCause> {
+        self.inner
+            .error
+            .borrow()
+            .as_ref()
+            .and_then(JobError::native_cause)
     }
 
     /// The effect the job is suspended on, once; `undefined` when there is none.
@@ -7646,6 +7717,7 @@ mod tests {
             None,
             None,
             None,
+            "unlimited".to_owned(),
         )
         .into_request();
         let options_for = |opts: &Opts| {
@@ -7673,6 +7745,7 @@ mod tests {
                 None,
                 None,
                 None,
+                "unlimited".to_owned(),
             )
             .into_request(),
             options(),
@@ -7753,7 +7826,8 @@ mod tests {
         };
         let (s, d, b, i, docs, g, r, t, f, j) = entail();
         let (job, status) = run_shacl(
-            ShaclJobRequest::entail(s, d, b, i, docs, g, r, t, f, j).into_request(),
+            ShaclJobRequest::entail(s, d, b, i, docs, g, r, t, f, j, "unlimited".to_owned())
+                .into_request(),
             options(),
         );
         assert_eq!(status, RunStatus::Outcome);
@@ -7771,6 +7845,10 @@ mod tests {
             j,
             None,
             purrdf_validate::query::CoordinateInputs::default(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::SearchPolicy::Unlimited,
+                None,
+            ),
         )
         .expect("sync entry");
         assert!(entailed.ntriples().contains("<http://example.org/adult>"));
@@ -7868,8 +7946,18 @@ mod tests {
         assert_eq!(outcome.diagnostics(), evaluated.diagnostics());
         job.finish();
 
-        let product =
-            crate::shacl::pack_product_impl(&shapes, None, &[], &[], None).expect("packs");
+        let product = crate::shacl::pack_product_impl(
+            &shapes,
+            None,
+            &[],
+            &[],
+            None,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::SearchPolicy::Unlimited,
+                None,
+            ),
+        )
+        .expect("packs");
         for request in [
             ShaclJobRequest::product_validate_to_sarif(product.clone(), PEOPLE_NT.to_owned()),
             ShaclJobRequest::product_validate_to_sarif_rebuild(product, PEOPLE_NT.to_owned()),
@@ -7968,8 +8056,18 @@ mod tests {
 
     #[test]
     fn a_refused_product_job_keeps_the_refusal_class_and_a_valid_product_answers() {
-        let product =
-            crate::shacl::pack_product_impl(&core_shapes(), None, &[], &[], None).expect("packs");
+        let product = crate::shacl::pack_product_impl(
+            &core_shapes(),
+            None,
+            &[],
+            &[],
+            None,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::SearchPolicy::Unlimited,
+                None,
+            ),
+        )
+        .expect("packs");
         let mut corrupted = product.clone();
         let middle = corrupted.len() / 2;
         corrupted[middle] ^= 0xff;
@@ -8428,6 +8526,7 @@ mod tests {
                     None,
                     None,
                     None,
+                    "unlimited".to_owned(),
                 ),
                 ShaclJobRequest::apply_rules(
                     data.to_owned(),
@@ -8480,8 +8579,18 @@ mod tests {
                 job.finish();
             }
             let product = |bytes: usize| {
-                crate::shacl::pack_product_impl(&pattern_shapes(bytes), None, &[], &[], None)
-                    .expect("packs")
+                crate::shacl::pack_product_impl(
+                    &pattern_shapes(bytes),
+                    None,
+                    &[],
+                    &[],
+                    None,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::SearchPolicy::Unlimited,
+                        None,
+                    ),
+                )
+                .expect("packs")
             };
             let (job, status) = run_shacl(
                 ShaclJobRequest::product_validate_to_sarif(product(64 * 1024 + 1), data.to_owned())
@@ -8610,8 +8719,18 @@ ex:PatternShape a sh:NodeShape ;
             .expect("sync entry");
             assert_eq!(change.sarif(), sync.sarif(), "{law:?}");
             job.finish();
-            let product =
-                crate::shacl::pack_product_impl(shapes, None, &[], &[], None).expect("packed");
+            let product = crate::shacl::pack_product_impl(
+                shapes,
+                None,
+                &[],
+                &[],
+                None,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::SearchPolicy::Unlimited,
+                    None,
+                ),
+            )
+            .expect("packed");
             let (job, status) = run_shacl(
                 ShaclJobRequest::product_validate_to_sarif(product.clone(), data.to_owned())
                     .into_request(),
@@ -8668,7 +8787,8 @@ _:e shnex:filterShape [ sh:pattern "^(a)\\1$" ] ; shnex:nodes [ shnex:var "focus
             };
             let (a, b, c, d, e, f, g, h, i, j) = entail_args();
             let (job, status) = run_shacl(
-                ShaclJobRequest::entail(a, b, c, d, e, f, g, h, i, j).into_request(),
+                ShaclJobRequest::entail(a, b, c, d, e, f, g, h, i, j, "unlimited".to_owned())
+                    .into_request(),
                 &opts,
             );
             assert_eq!(status, RunStatus::Outcome, "{law:?}");
@@ -8691,6 +8811,10 @@ _:e shnex:filterShape [ sh:pattern "^(a)\\1$" ] ; shnex:nodes [ shnex:var "focus
                 j,
                 law.map(str::to_owned),
                 purrdf_validate::query::CoordinateInputs::default(),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::SearchPolicy::Unlimited,
+                    None,
+                ),
             )
             .expect("sync entry")
             .ntriples();

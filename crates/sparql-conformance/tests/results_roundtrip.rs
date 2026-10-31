@@ -121,7 +121,11 @@ impl Tally {
 ///
 /// Returns a message describing the mismatch, or the reason the fixture could
 /// not be categorized as SELECT or ASK JSON at all.
-fn roundtrip_srj(path: &Path, tally: &mut Tally) -> Result<(), String> {
+fn roundtrip_srj(
+    path: &Path,
+    tally: &mut Tally,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<(), String> {
     let bytes = std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
     match from_json(&bytes) {
         Ok(first) => {
@@ -132,7 +136,7 @@ fn roundtrip_srj(path: &Path, tally: &mut Tally) -> Result<(), String> {
             let second = from_json(&written.bytes)
                 .map_err(|e| format!("re-parse our own JSON output: {e}"))?;
             let second_result = as_solutions(second);
-            compare_results(&first_result, &second_result, true)
+            compare_results(&first_result, &second_result, true, control)
                 .map_err(|e| format!("SELECT round-trip mismatch: {e}"))
         }
         Err(select_err) => match from_json_boolean(&bytes) {
@@ -143,8 +147,13 @@ fn roundtrip_srj(path: &Path, tally: &mut Tally) -> Result<(), String> {
                     .map_err(|e| format!("re-serialize as JSON: {e}"))?;
                 let second_value = from_json_boolean(&written.bytes)
                     .map_err(|e| format!("re-parse our own JSON output: {e}"))?;
-                compare_results(&first_result, &SparqlResult::Boolean(second_value), false)
-                    .map_err(|e| format!("ASK round-trip mismatch: {e}"))
+                compare_results(
+                    &first_result,
+                    &SparqlResult::Boolean(second_value),
+                    false,
+                    control,
+                )
+                .map_err(|e| format!("ASK round-trip mismatch: {e}"))
             }
             Err(boolean_err) => Err(format!(
                 "fixture decodes as NEITHER SELECT nor ASK JSON — coverage gap, not a skip \
@@ -160,7 +169,11 @@ fn roundtrip_srj(path: &Path, tally: &mut Tally) -> Result<(), String> {
 ///
 /// Returns a message describing the mismatch, or the reason the fixture could
 /// not be categorized as SELECT or ASK XML at all.
-fn roundtrip_srx(path: &Path, tally: &mut Tally) -> Result<(), String> {
+fn roundtrip_srx(
+    path: &Path,
+    tally: &mut Tally,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<(), String> {
     let bytes = std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
     match from_xml(&bytes) {
         Ok(first) => {
@@ -171,7 +184,7 @@ fn roundtrip_srx(path: &Path, tally: &mut Tally) -> Result<(), String> {
             let second = from_xml(&written.bytes)
                 .map_err(|e| format!("re-parse our own XML output: {e}"))?;
             let second_result = as_solutions(second);
-            compare_results(&first_result, &second_result, true)
+            compare_results(&first_result, &second_result, true, control)
                 .map_err(|e| format!("SELECT round-trip mismatch: {e}"))
         }
         Err(select_err) => match from_xml_boolean(&bytes) {
@@ -182,8 +195,13 @@ fn roundtrip_srx(path: &Path, tally: &mut Tally) -> Result<(), String> {
                     .map_err(|e| format!("re-serialize as XML: {e}"))?;
                 let second_value = from_xml_boolean(&written.bytes)
                     .map_err(|e| format!("re-parse our own XML output: {e}"))?;
-                compare_results(&first_result, &SparqlResult::Boolean(second_value), false)
-                    .map_err(|e| format!("ASK round-trip mismatch: {e}"))
+                compare_results(
+                    &first_result,
+                    &SparqlResult::Boolean(second_value),
+                    false,
+                    control,
+                )
+                .map_err(|e| format!("ASK round-trip mismatch: {e}"))
             }
             Err(boolean_err) => Err(format!(
                 "fixture decodes as NEITHER SELECT nor ASK XML — coverage gap, not a skip \
@@ -198,6 +216,9 @@ fn roundtrip_srx(path: &Path, tally: &mut Tally) -> Result<(), String> {
 /// exact procedure and the coverage statement.
 #[test]
 fn every_vendored_results_fixture_round_trips() {
+    let mut control =
+        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
     let root = suite_root();
     let fixtures = results_fixtures(&root);
     assert!(
@@ -210,8 +231,8 @@ fn every_vendored_results_fixture_round_trips() {
     let mut failures: Vec<(PathBuf, String)> = Vec::new();
     for path in &fixtures {
         let outcome = match path.extension().and_then(|e| e.to_str()) {
-            Some("srj") => roundtrip_srj(path, &mut tally),
-            Some("srx") => roundtrip_srx(path, &mut tally),
+            Some("srj") => roundtrip_srj(path, &mut tally, &mut control),
+            Some("srx") => roundtrip_srx(path, &mut tally, &mut control),
             other => unreachable!("results_fixtures only collects srj/srx, got {other:?}"),
         };
         if let Err(msg) = outcome {

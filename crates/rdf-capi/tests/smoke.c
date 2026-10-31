@@ -93,6 +93,34 @@ static int contains_bytes(const uint8_t *haystack, size_t haystack_len,
     return 0;
 }
 
+/* Read the request's separate canonical evidence and release only owned buffers.
+ * Failure JSON is borrowed from the original error and lives until error_free. */
+static int consume_canonicalization(int32_t status, PurrdfBuffer **evidence,
+                                    const PurrdfError *error) {
+    int valid = 0;
+    if (status == PURRDF_STATUS_OK) {
+        const uint8_t *bytes = NULL;
+        size_t length = 0;
+        if (*evidence != NULL &&
+            purrdf_buffer_data(*evidence, &bytes, &length) == PURRDF_STATUS_OK) {
+            valid = length >= 2 && bytes[0] == '[' && bytes[length - 1] == ']';
+        }
+    } else {
+        const char *borrowed = purrdf_error_canonicalization_json(error);
+        if (*evidence == NULL && borrowed != NULL) {
+            size_t length = strlen(borrowed);
+            valid = length >= 2 && borrowed[0] == '[' && borrowed[length - 1] == ']';
+        }
+    }
+    purrdf_buffer_free(*evidence);
+    *evidence = NULL;
+    if (!valid) {
+        fprintf(stderr, "C smoke FAILED: canonical receipt ownership or JSON array\n");
+        return 1;
+    }
+    return 0;
+}
+
 /* ── The entailment golden vector, walked through the C ABI ──────────────────
  *
  * `crates/validate/tests/fixtures/regime-boundary.vectors` is the ONE artifact
@@ -141,6 +169,7 @@ static int run_vector_case(const char *regime, Slice input, Slice program,
     char *report_s = dup_slice(report);
     PurrdfBuffer *nquads = NULL;
     PurrdfBuffer *rendered = NULL;
+    PurrdfBuffer *canonical_evidence = NULL;
     PurrdfError *error = NULL;
     int failed = 1;
 
@@ -152,10 +181,14 @@ static int run_vector_case(const char *regime, Slice input, Slice program,
     const uint64_t max_facts = 4194304;
     const uint64_t max_steps = 1048576;
     const uint64_t max_arena = 16777216;
-    if (purrdf_entail_materialize_to_nquads(input_s, regime, program_s, NULL, NULL,
+    int32_t canonical_status = purrdf_entail_materialize_to_nquads(input_s, regime, program_s, NULL, NULL,
                                             0, NULL, 0, &max_facts, &max_steps, &max_arena,
-                                            &nquads, &rendered,
-                                            &error) != PURRDF_STATUS_OK) {
+                                            &nquads, &rendered, "unlimited", NULL, &canonical_evidence,
+                                            &error);
+    if (consume_canonicalization(canonical_status, &canonical_evidence, error) != 0) {
+        goto done;
+    }
+    if (canonical_status != PURRDF_STATUS_OK) {
         fprintf(stderr, "golden case (%s) did not materialize: %s\n", regime,
                 error == NULL ? "(no error)" : purrdf_error_message(error));
         goto done;
@@ -180,7 +213,8 @@ done:
     if (error != NULL) {
         purrdf_error_free(error);
     }
-    /* Two buffers out, two frees — the ownership contract the header states. */
+    purrdf_buffer_free(canonical_evidence);
+    /* The raw result buffers and canonical receipt have independent owners. */
     if (rendered != NULL) {
         purrdf_buffer_free(rendered);
     }
@@ -1156,6 +1190,7 @@ int main(int argc, char **argv) {
     const char *doc = "<http://a> <http://b> <http://c> .";
     PurrdfDataset *dataset = NULL;
     PurrdfError *error = NULL;
+    PurrdfBuffer *canonical_evidence = NULL;
     int rc = purrdf_parse((const uint8_t *)doc, strlen(doc), "text/turtle", NULL,
                           NULL, &dataset, &error);
     CHECK(rc == PURRDF_STATUS_OK && error == NULL && dataset != NULL, "parse");
@@ -1830,12 +1865,16 @@ int main(int argc, char **argv) {
         if (entry == 0) {
             rc = purrdf_shacl_entail_to_ntriples(coordinate_shapes, NULL, NULL, "",
                 NULL, NULL, 0, NULL, NULL, NULL, NULL, query_now, &query_seed, &receipt,
-                &rule_result, &rule_diagnostics, &error); purrdf_buffer_free(receipt); receipt = NULL;
+                &rule_result, &rule_diagnostics, "unlimited", NULL, &canonical_evidence, &error); purrdf_buffer_free(receipt); receipt = NULL;
+            CHECK(consume_canonicalization(rc, &canonical_evidence, error) == 0,
+                  "purrdf_shacl_entail_to_ntriples canonical receipt ownership");
         } else if (entry == 1) {
             rc = purrdf_shacl_entail_to_ntriples_xpath_regex(coordinate_shapes,
                 NULL, NULL, "", NULL, NULL, 0, NULL, NULL, NULL, NULL,
                 "xpath-3.1-2017-03-21", query_now, &query_seed, &receipt,
-                &rule_result, &rule_diagnostics, &error); purrdf_buffer_free(receipt); receipt = NULL;
+                &rule_result, &rule_diagnostics, "unlimited", NULL, &canonical_evidence, &error); purrdf_buffer_free(receipt); receipt = NULL;
+            CHECK(consume_canonicalization(rc, &canonical_evidence, error) == 0,
+                  "purrdf_shacl_entail_to_ntriples_xpath_regex canonical receipt ownership");
         } else if (entry == 2) {
             rc = purrdf_shacl_apply_rules("", coordinate_shapes, NULL, NULL, NULL,
                 NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, query_now, &query_seed, &receipt,
@@ -2094,7 +2133,9 @@ int main(int argc, char **argv) {
     size_t clen = 0;
 
     rc = purrdf_entail_consistency(taxonomy, NULL, NULL, 0, NULL, 0, 0, 0, &answer,
-                                   &certificate, &error);
+                                   &certificate, "unlimited", NULL, &canonical_evidence, &error);
+    CHECK(consume_canonicalization(rc, &canonical_evidence, error) == 0,
+          "purrdf_entail_consistency canonical receipt ownership");
     CHECK(rc == PURRDF_STATUS_OK && answer != NULL && certificate != NULL,
           "entail_consistency");
     purrdf_buffer_data(answer, &abytes, &alen);
@@ -2108,7 +2149,9 @@ int main(int argc, char **argv) {
     purrdf_buffer_free(certificate);
     purrdf_buffer_free(answer);
 
-    rc = purrdf_entail_entails(taxonomy, chain_axiom, 0, 0, &answer, &certificate, &error);
+    rc = purrdf_entail_entails(taxonomy, chain_axiom, 0, 0, &answer, &certificate, "unlimited", NULL, &canonical_evidence, &error);
+    CHECK(consume_canonicalization(rc, &canonical_evidence, error) == 0,
+          "purrdf_entail_entails canonical receipt ownership");
     CHECK(rc == PURRDF_STATUS_OK, "entail_entails");
     purrdf_buffer_data(answer, &abytes, &alen);
     CHECK(alen > strlen("entails true\n") &&
@@ -2119,8 +2162,10 @@ int main(int argc, char **argv) {
 
     /* a narrowed step cap answers `unknown`, never `false`: the third
      * completeness state, reachable through the C ABI. */
-    rc = purrdf_entail_entails(taxonomy, chain_axiom, 1, 0, &answer, &certificate,
+    rc = purrdf_entail_entails(taxonomy, chain_axiom, 1, 0, &answer, &certificate, "unlimited", NULL, &canonical_evidence,
                                &error);
+    CHECK(consume_canonicalization(rc, &canonical_evidence, error) == 0,
+          "purrdf_entail_entails canonical receipt ownership");
     CHECK(rc == PURRDF_STATUS_OK, "entail_entails under a narrowed cap");
     purrdf_buffer_data(answer, &abytes, &alen);
     CHECK(alen > strlen("entails unknown\n") &&
@@ -2135,8 +2180,10 @@ int main(int argc, char **argv) {
     /* the SECOND cap, narrowed the same way. A round is a pass rather than a
      * unit of cost, so this one bounds the work done inside a round — and it
      * reaches the same three-valued answer through the C ABI. */
-    rc = purrdf_entail_entails(taxonomy, chain_axiom, 0, 1, &answer, &certificate,
+    rc = purrdf_entail_entails(taxonomy, chain_axiom, 0, 1, &answer, &certificate, "unlimited", NULL, &canonical_evidence,
                                &error);
+    CHECK(consume_canonicalization(rc, &canonical_evidence, error) == 0,
+          "purrdf_entail_entails canonical receipt ownership");
     CHECK(rc == PURRDF_STATUS_OK, "entail_entails under a narrowed work cap");
     purrdf_buffer_data(answer, &abytes, &alen);
     CHECK(alen > strlen("entails unknown\n") &&
@@ -2149,7 +2196,9 @@ int main(int argc, char **argv) {
     purrdf_buffer_free(certificate);
     purrdf_buffer_free(answer);
 
-    rc = purrdf_entail_classify(taxonomy, 0, 0, &answer, &certificate, &error);
+    rc = purrdf_entail_classify(taxonomy, 0, 0, &answer, &certificate, "unlimited", NULL, &canonical_evidence, &error);
+    CHECK(consume_canonicalization(rc, &canonical_evidence, error) == 0,
+          "purrdf_entail_classify canonical receipt ownership");
     CHECK(rc == PURRDF_STATUS_OK, "entail_classify");
     purrdf_buffer_data(answer, &abytes, &alen);
     CHECK(contains_bytes(abytes, alen, "subclass <http://example.org/A> <http://example.org/C>\n"),
@@ -2157,13 +2206,17 @@ int main(int argc, char **argv) {
     purrdf_buffer_free(certificate);
     purrdf_buffer_free(answer);
 
-    rc = purrdf_entail_realize(taxonomy, 0, 0, &answer, &certificate, &error);
+    rc = purrdf_entail_realize(taxonomy, 0, 0, &answer, &certificate, "unlimited", NULL, &canonical_evidence, &error);
+    CHECK(consume_canonicalization(rc, &canonical_evidence, error) == 0,
+          "purrdf_entail_realize canonical receipt ownership");
     CHECK(rc == PURRDF_STATUS_OK, "entail_realize");
     purrdf_buffer_free(certificate);
     purrdf_buffer_free(answer);
 
     rc = purrdf_entail_instances(taxonomy, "<http://example.org/C>", 0, 0, &answer,
-                                 &certificate, &error);
+                                 &certificate, "unlimited", NULL, &canonical_evidence, &error);
+    CHECK(consume_canonicalization(rc, &canonical_evidence, error) == 0,
+          "purrdf_entail_instances canonical receipt ownership");
     CHECK(rc == PURRDF_STATUS_OK, "entail_instances");
     purrdf_buffer_data(answer, &abytes, &alen);
     CHECK(alen == strlen("instance <http://example.org/x>\n") &&
@@ -2184,7 +2237,9 @@ int main(int argc, char **argv) {
     purrdf_buffer_free(answer);
 
     rc = purrdf_entail_extract_module(taxonomy, "<http://example.org/A>\n", "bot",
-                                      &answer, &certificate, &error);
+                                      &answer, &certificate, "unlimited", NULL, &canonical_evidence, &error);
+    CHECK(consume_canonicalization(rc, &canonical_evidence, error) == 0,
+          "purrdf_entail_extract_module canonical receipt ownership");
     CHECK(rc == PURRDF_STATUS_OK, "entail_extract_module");
     purrdf_buffer_data(certificate, &cbytes, &clen);
     CHECK(contains_bytes(cbytes, clen, "method BOT\n"),
@@ -2192,7 +2247,9 @@ int main(int argc, char **argv) {
     purrdf_buffer_free(certificate);
     purrdf_buffer_free(answer);
 
-    rc = purrdf_entail_justify(taxonomy, chain_axiom, &answer, &certificate, &error);
+    rc = purrdf_entail_justify(taxonomy, chain_axiom, &answer, &certificate, "unlimited", NULL, &canonical_evidence, &error);
+    CHECK(consume_canonicalization(rc, &canonical_evidence, error) == 0,
+          "purrdf_entail_justify canonical receipt ownership");
     CHECK(rc == PURRDF_STATUS_OK, "entail_justify");
     purrdf_buffer_data(certificate, &cbytes, &clen);
     CHECK(contains_bytes(cbytes, clen, "sufficient true\n") &&
@@ -2217,8 +2274,10 @@ int main(int argc, char **argv) {
     PurrdfError *dl_error = NULL;
     answer = NULL;
     certificate = NULL;
-    rc = purrdf_entail_instances(taxonomy, "not a term", 0, 0, &answer, &certificate,
+    rc = purrdf_entail_instances(taxonomy, "not a term", 0, 0, &answer, &certificate, "unlimited", NULL, &canonical_evidence,
                                  &dl_error);
+    CHECK(consume_canonicalization(rc, &canonical_evidence, dl_error) == 0,
+          "purrdf_entail_instances canonical receipt ownership");
     CHECK(rc == PURRDF_STATUS_PARSE_ERROR, "a malformed class term is refused");
     CHECK(answer == NULL && certificate == NULL, "a failing DL call frees nothing");
     CHECK(dl_error != NULL && purrdf_error_message(dl_error) != NULL,
@@ -2241,25 +2300,33 @@ int main(int argc, char **argv) {
     PurrdfBuffer *s_answer = NULL;
     PurrdfBuffer *s_cert = NULL;
 
-    rc = purrdf_reasoner_consistency(session, &s_answer, &s_cert, &error);
+    rc = purrdf_reasoner_consistency(session, &s_answer, &s_cert, "unlimited", NULL, &canonical_evidence, &error);
+    CHECK(consume_canonicalization(rc, &canonical_evidence, error) == 0,
+          "purrdf_reasoner_consistency canonical receipt ownership");
     CHECK(rc == PURRDF_STATUS_OK, "reasoner_consistency");
     purrdf_buffer_data(s_answer, &cbytes, &clen);
     CHECK(contains_bytes(cbytes, clen, "consistency true"), "the session decides");
     purrdf_buffer_free(s_answer);
     purrdf_buffer_free(s_cert);
 
-    rc = purrdf_reasoner_classify(session, &s_answer, &s_cert, &error);
+    rc = purrdf_reasoner_classify(session, &s_answer, &s_cert, "unlimited", NULL, &canonical_evidence, &error);
+    CHECK(consume_canonicalization(rc, &canonical_evidence, error) == 0,
+          "purrdf_reasoner_classify canonical receipt ownership");
     CHECK(rc == PURRDF_STATUS_OK, "reasoner_classify");
     purrdf_buffer_free(s_answer);
     purrdf_buffer_free(s_cert);
 
-    rc = purrdf_reasoner_realize(session, &s_answer, &s_cert, &error);
+    rc = purrdf_reasoner_realize(session, &s_answer, &s_cert, "unlimited", NULL, &canonical_evidence, &error);
+    CHECK(consume_canonicalization(rc, &canonical_evidence, error) == 0,
+          "purrdf_reasoner_realize canonical receipt ownership");
     CHECK(rc == PURRDF_STATUS_OK, "reasoner_realize");
     purrdf_buffer_free(s_answer);
     purrdf_buffer_free(s_cert);
 
     rc = purrdf_reasoner_instances(session, "<http://example.org/C>", &s_answer,
-                                   &s_cert, &error);
+                                   &s_cert, "unlimited", NULL, &canonical_evidence, &error);
+    CHECK(consume_canonicalization(rc, &canonical_evidence, error) == 0,
+          "purrdf_reasoner_instances canonical receipt ownership");
     CHECK(rc == PURRDF_STATUS_OK, "reasoner_instances");
     purrdf_buffer_free(s_answer);
     purrdf_buffer_free(s_cert);
@@ -2268,7 +2335,9 @@ int main(int argc, char **argv) {
         "<http://example.org/A> "
         "<http://www.w3.org/2000/01/rdf-schema#subClassOf> "
         "<http://example.org/C> .\n",
-        &s_answer, &s_cert, &error);
+        &s_answer, &s_cert, "unlimited", NULL, &canonical_evidence, &error);
+    CHECK(consume_canonicalization(rc, &canonical_evidence, error) == 0,
+          "purrdf_reasoner_entails canonical receipt ownership");
     CHECK(rc == PURRDF_STATUS_OK, "reasoner_entails");
     purrdf_buffer_free(s_answer);
     purrdf_buffer_free(s_cert);
@@ -2279,14 +2348,18 @@ int main(int argc, char **argv) {
     purrdf_buffer_free(s_cert);
 
     rc = purrdf_reasoner_extract_module(session, "<http://example.org/C>", "star",
-                                        &s_answer, &s_cert, &error);
+                                        &s_answer, &s_cert, "unlimited", NULL, &canonical_evidence, &error);
+    CHECK(consume_canonicalization(rc, &canonical_evidence, error) == 0,
+          "purrdf_reasoner_extract_module canonical receipt ownership");
     CHECK(rc == PURRDF_STATUS_OK, "reasoner_extract_module");
     purrdf_buffer_free(s_answer);
     purrdf_buffer_free(s_cert);
 
     /* The SAME question the first call answered, now after six siblings ran on
        this handle: the session must still say `consistency true`. */
-    rc = purrdf_reasoner_consistency(session, &s_answer, &s_cert, &error);
+    rc = purrdf_reasoner_consistency(session, &s_answer, &s_cert, "unlimited", NULL, &canonical_evidence, &error);
+    CHECK(consume_canonicalization(rc, &canonical_evidence, error) == 0,
+          "purrdf_reasoner_consistency canonical receipt ownership");
     CHECK(rc == PURRDF_STATUS_OK, "reasoner_consistency after siblings");
     purrdf_buffer_data(s_answer, &cbytes, &clen);
     CHECK(contains_bytes(cbytes, clen, "consistency true"),
@@ -2298,8 +2371,10 @@ int main(int argc, char **argv) {
     PurrdfError *sess_error = NULL;
     s_answer = NULL;
     s_cert = NULL;
-    rc = purrdf_reasoner_instances(session, "not a term", &s_answer, &s_cert,
+    rc = purrdf_reasoner_instances(session, "not a term", &s_answer, &s_cert, "unlimited", NULL, &canonical_evidence,
                                    &sess_error);
+    CHECK(consume_canonicalization(rc, &canonical_evidence, sess_error) == 0,
+          "purrdf_reasoner_instances canonical receipt ownership");
     CHECK(rc == PURRDF_STATUS_PARSE_ERROR, "the session refuses a malformed term");
     CHECK(s_answer == NULL && s_cert == NULL, "a failing session call frees nothing");
     purrdf_error_free(sess_error);

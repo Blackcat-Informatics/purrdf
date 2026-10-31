@@ -462,7 +462,15 @@ fn result_image(result: &SparqlResult) -> String {
         SparqlResult::Graph(graph) => {
             format!(
                 "graph\n{}",
-                purrdf_core::try_canonicalize(graph).unwrap().nquads
+                purrdf_core::try_canonicalize(
+                    graph,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
+                )
+                .unwrap()
+                .nquads
             )
         }
         SparqlResult::Solutions {
@@ -471,7 +479,15 @@ fn result_image(result: &SparqlResult) -> String {
             aux,
         } => format!(
             "solutions {variables:?} {rows:?}\naux\n{}",
-            purrdf_core::try_canonicalize(aux).unwrap().nquads
+            purrdf_core::try_canonicalize(
+                aux,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .nquads
         ),
     }
 }

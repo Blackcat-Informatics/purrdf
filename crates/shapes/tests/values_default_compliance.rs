@@ -80,7 +80,12 @@ fn entail(shapes_ttl: &str, data_ttl: &str) -> String {
         &turtle::loads(PREFIXES, shapes_ttl),
     )
     .expect("rules run");
-    try_canonicalize(entailed.as_ref()).unwrap().nquads
+    try_canonicalize(
+        entailed.as_ref(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap()
+    .nquads
 }
 
 fn ex(local: &str) -> String {
@@ -574,7 +579,13 @@ fn a_prepared_product_carries_computed_values() {
     );
     let fresh = PreparedShapes::new(Arc::new(turtle::loads(PREFIXES, &shapes_ttl)));
     let bytes = fresh
-        .to_product(&ShapesProfile::CORE)
+        .to_product(
+            &ShapesProfile::CORE,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
         .expect("the shapes graph packs");
     let restored = ShapesProduct::open(&bytes)
         .expect("the product opens")
@@ -603,6 +614,10 @@ fn a_prepared_product_carries_computed_values() {
             )
             .expect("rules run")
             .as_ref(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
         )
         .unwrap()
         .nquads
@@ -701,12 +716,18 @@ fn a_rule_s_own_sh_deactivated_is_a_boolean() {
     };
     let error = run("[ sh:path ex:skip ]").expect_err("a node expression is no boolean literal");
     assert!(error.contains("Inference Rules"), "{error}");
-    let off = try_canonicalize(run("true").expect("a boolean loads").as_ref())
-        .unwrap()
-        .nquads;
+    let off = try_canonicalize(
+        run("true").expect("a boolean loads").as_ref(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap()
+    .nquads;
     assert!(!off.contains("seen"), "{off}");
-    let on = try_canonicalize(run("false").expect("a boolean loads").as_ref())
-        .unwrap()
-        .nquads;
+    let on = try_canonicalize(
+        run("false").expect("a boolean loads").as_ref(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap()
+    .nquads;
     assert!(on.contains("seen"), "{on}");
 }

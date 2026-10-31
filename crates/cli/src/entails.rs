@@ -203,6 +203,7 @@ pub(crate) fn run(
     output: &str,
     ledger_target: &LedgerTarget,
     report_target: &ReportTarget,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<(), CliError> {
     // Refuse the two global document flags, which name outputs this command does not produce.
     //
@@ -244,7 +245,7 @@ pub(crate) fn run(
     // Everything is read and transcoded BEFORE the boundary is called, so an unreadable
     // import fails against the file the operator named rather than as a refusal attributed
     // to the premise's `owl:imports`.
-    let premise = read_as_nquads(options.premise, "--premise", options)?;
+    let premise = read_as_nquads(options.premise, "--premise", options, canonical)?;
     // The IRI the premise document was read FROM — the base it parsed under, which is its
     // `file://` retrieval IRI or `--base`. An `owl:imports` of that IRI names the premise
     // itself, so the boundary resolves it in place rather than refusing it as missing. A
@@ -256,7 +257,7 @@ pub(crate) fn run(
         SourceFormat::Pack | SourceFormat::Gts => None,
     };
     let premise_iris: Vec<&str> = premise_base.as_deref().into_iter().collect();
-    let imports = read_imports(&import_pairs, options)?;
+    let imports = read_imports(&import_pairs, options, canonical)?;
     let table: Vec<(&str, &str)> = imports
         .iter()
         .map(|(iri, document)| (iri.as_str(), document.as_str()))
@@ -266,7 +267,7 @@ pub(crate) fn run(
 
     let answer: ReasoningAnswer = match question {
         Question::Conclusion { path, verify } => {
-            let conclusion = read_as_nquads(path, "--conclusion", options)?;
+            let conclusion = read_as_nquads(path, "--conclusion", options, canonical)?;
             let decide = if verify {
                 verify_entailment_to_string
             } else {
@@ -299,8 +300,8 @@ pub(crate) fn run(
     // The verdict goes to the sink and the certificate goes to `--report`: this command
     // answers a question, and the evidence of what produced the answer is a second output
     // rather than a discarded one.
-    report::surface_rendered(report_target, answer.certificate())?;
-    sink::write_out(output, answer.answer().as_bytes())
+    report::surface_rendered(report_target, answer.certificate(), canonical)?;
+    sink::write_out_with_request(output, answer.answer().as_bytes(), canonical)
 }
 
 /// The question the flags name, as the closed [`Question`].
@@ -379,13 +380,14 @@ pub(crate) fn refuse_unreached_pairs(
 fn read_imports(
     pairs: &[ImportPair<'_>],
     options: &EntailsOptions<'_>,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<Vec<(String, String)>, CliError> {
     let mut resolved = Vec::with_capacity(pairs.len());
     for pair in pairs {
         let what = format!("--import {}", pair.iri);
         resolved.push((
             pair.iri.to_owned(),
-            read_as_nquads(pair.path, &what, options)?,
+            read_as_nquads(pair.path, &what, options, canonical)?,
         ));
     }
     Ok(resolved)
@@ -450,11 +452,12 @@ fn read_as_nquads(
     path: &str,
     what: &str,
     options: &EntailsOptions<'_>,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<String, CliError> {
     let format = format::resolve(options.from, path)?;
     // A pack crosses the N-Quads boundary as a zero-copy `PackView`, not a rebuilt
     // owned dataset; a text source parses to an `RdfDataset`.
-    let outcome = source::serialize_input_to_nquads(path, format, options.base)?;
+    let outcome = source::serialize_input_to_nquads(path, format, options.base, canonical)?;
     if outcome.statement_rows_dropped > 0 || outcome.directional_literals_dropped > 0 {
         return Err(CliError::Runtime(format!(
             "{what} {path}: reading this document into the entailment boundary's N-Quads \

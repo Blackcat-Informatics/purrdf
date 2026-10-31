@@ -272,13 +272,14 @@ pub fn run(
     workload: &str,
     profile: &Profile,
     window: &WholeProcessWindow,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<Vec<Metric>, String> {
     let metrics = match workload {
         "roundtrip" => roundtrip(profile, window),
         "governed_query" => governed_query(profile),
         "shacl" => shacl(profile),
         "gts" => gts(profile),
-        "pack_paged" => pack_paged(profile),
+        "pack_paged" => pack_paged(profile, control),
         other => return Err(format!("unknown workload {other:?}")),
     }?;
     check_metric_roster(workload, &metrics)?;
@@ -627,11 +628,14 @@ fn gts(profile: &Profile) -> Result<Vec<Metric>, String> {
 /// A query touching every page of the paged tier (each page holds one graph).
 const PAGED_SCAN_QUERY: &str = "SELECT ?g ?o WHERE { GRAPH ?g { ?s <https://example.org/p> ?o } }";
 
-fn pack_paged(profile: &Profile) -> Result<Vec<Metric>, String> {
+fn pack_paged(
+    profile: &Profile,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<Vec<Metric>, String> {
     // Pack leg: build, reopen zero-copy, query through the pack view.
     let dataset = keystone_base(profile.groups);
-    let pack_bytes =
-        purrdf_core::PackBuilder::build_bytes(&dataset).map_err(|e| format!("pack build: {e}"))?;
+    let pack_bytes = purrdf_core::PackBuilder::build_bytes(&dataset, control)
+        .map_err(|e| format!("pack build: {e}"))?;
     let view =
         purrdf_core::PackView::from_bytes(&pack_bytes).map_err(|e| format!("pack open: {e}"))?;
     let engine = NativeSparqlEngine::new();
@@ -964,8 +968,16 @@ mod tests {
         // never what any of them cost.
         let window = WholeProcessWindow::open();
         for workload in WORKLOADS {
-            let metrics = run(workload, smoke, &window)
-                .unwrap_or_else(|e| panic!("workload {workload} failed: {e}"));
+            let metrics = run(
+                workload,
+                smoke,
+                &window,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .unwrap_or_else(|e| panic!("workload {workload} failed: {e}"));
             assert!(!metrics.is_empty(), "{workload} reported no metrics");
         }
     }

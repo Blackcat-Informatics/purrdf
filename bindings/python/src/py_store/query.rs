@@ -1329,6 +1329,12 @@ pub struct PyCancellationToken {
     flag: CancellationFlag,
 }
 
+impl purrdf_core::StopSignal for PyCancellationToken {
+    fn stopped(&self) -> bool {
+        self.flag.is_cancelled()
+    }
+}
+
 #[pymethods]
 impl PyCancellationToken {
     /// `CancellationToken()` — a fresh, uncancelled token. A written-out function

@@ -2581,7 +2581,15 @@ mod tests {
     }
 
     fn canon(ds: &RdfDataset) -> String {
-        ::purrdf_rdf::try_canonicalize(ds).unwrap().nquads
+        ::purrdf_rdf::try_canonicalize(
+            ds,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap()
+        .nquads
     }
 
     // ── Parsing ────────────────────────────────────────────────────────────────

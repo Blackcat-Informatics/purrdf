@@ -1891,7 +1891,15 @@ mod tests {
         )
         .expect("the fixture's collections are well formed")
         .0;
-        let nquads = purrdf_core::try_canonicalize(&closed).unwrap().nquads;
+        let nquads = purrdf_core::try_canonicalize(
+            &closed,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap()
+        .nquads;
         assert!(
             !nquads.contains(crate::lists::INTERNAL_SIGIL),
             "an internal id reached the serialized closure:\n{nquads}"
@@ -1993,7 +2001,15 @@ mod tests {
         let closed = close(&ds, Regime::OwlRl, &EvalOptions::default(), None)
             .expect("owl-rl closes it")
             .0;
-        let nquads = purrdf_core::try_canonicalize(&closed).unwrap().nquads;
+        let nquads = purrdf_core::try_canonicalize(
+            &closed,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap()
+        .nquads;
         let labels: BTreeSet<&str> = nquads
             .split_whitespace()
             .filter(|token| token.starts_with("_:"))

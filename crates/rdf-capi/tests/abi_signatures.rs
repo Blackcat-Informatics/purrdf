@@ -325,7 +325,8 @@ fn the_signatures_the_minor_bump_paid_for_are_the_ones_that_shipped() {
             // `0.8.0` (unshipped) inserted the shapes graph's `owl:imports` table
             // before the out-parameters, the nullable shapes-graph IRI after the base, and
             // the four nullable rule-evaluation limits after the import table, and the
-            // nullable diagnostics out-buffer before `out_error`.
+            // nullable diagnostics out-buffer before `out_error`. ABI 0.17 adds the
+            // explicit canonical policy, cancellation and separate receipt output.
             "int32_t purrdf_shacl_entail_to_ntriples(const char *shapes_ttl, \
              const char *shapes_base_iri, const char *shapes_graph_iri, const char *data_nt, \
              const char *const *import_iris, const char *const *import_documents, \
@@ -333,7 +334,9 @@ fn the_signatures_the_minor_bump_paid_for_are_the_ones_that_shipped() {
              const uint64_t *max_generated_terms, const uint64_t *max_stored_facts, \
              const uint64_t *max_join_steps, const char *now, const uint64_t *entropy_seed, \
              PurrdfBuffer **out_receipt, PurrdfBuffer **out_buffer, \
-             PurrdfBuffer **out_diagnostics, PurrdfError **out_error)"
+             PurrdfBuffer **out_diagnostics, const char *canonical_search, \
+             const PurrdfCancellation *cancellation, \
+             PurrdfBuffer **out_canonicalization_json, PurrdfError **out_error)"
                 .to_owned(),
         ),
         (

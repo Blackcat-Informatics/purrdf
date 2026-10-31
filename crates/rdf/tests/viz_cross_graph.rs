@@ -175,8 +175,20 @@ fn parsed_added_and_explicit_inputs_share_cross_graph_visual_roles() {
         assert_eq!(dataset.annotations().count(), 0);
     }
     assert_eq!(
-        canonical_flat_nquads(&parsed),
-        canonical_flat_nquads(&added)
+        canonical_flat_nquads(
+            &parsed,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        ),
+        canonical_flat_nquads(
+            &added,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
     );
     let spec = VizSpec::default();
     let model = project_dataset(&parsed, &spec).expect("project");
@@ -258,8 +270,20 @@ fn removing_and_restoring_reification_updates_roles_without_changing_properties(
     assert!(mutable.insert(declaration).expect("restore"));
     let restored = mutable.freeze().expect("freeze");
     assert_eq!(
-        canonical_flat_nquads(&restored),
-        canonical_flat_nquads(&parsed)
+        canonical_flat_nquads(
+            &restored,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        ),
+        canonical_flat_nquads(
+            &parsed,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
     );
     assert_eq!(
         project_dataset(&restored, &spec).expect("restored"),

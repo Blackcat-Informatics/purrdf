@@ -54,13 +54,28 @@ fn convert(args: &[&str]) -> (String, String) {
 
 #[test]
 fn a_pack_round_trip_keeps_iri_and_blank_named_empty_graphs() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let source = write_file(dir, "in.trig", DECLARED_TRIG);
     let pack = path(dir, "x.pack");
     let back = path(dir, "back.trig");
 
-    let (packed, ledger) = convert(&[&source, &pack, "--to", "pack"]);
+    let (packed, ledger) = convert(&[
+        &source,
+        &pack,
+        "--to",
+        "pack",
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(
         !packed.is_empty(),
         "the pack output must exist and hold the dataset"
@@ -69,7 +84,20 @@ fn a_pack_round_trip_keeps_iri_and_blank_named_empty_graphs() {
         !ledger.contains("\"code\""),
         "a pack carries declared graphs, so nothing is lost; got:\n{ledger}"
     );
-    let (trig, ledger) = convert(&[&pack, &back, "--from", "pack", "--to", "trig"]);
+    let (trig, ledger) = convert(&[
+        &pack,
+        &back,
+        "--from",
+        "pack",
+        "--to",
+        "trig",
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(!ledger.contains("\"code\""), "got:\n{ledger}");
     assert!(
         trig.contains("<http://example.org/empty> {"),
@@ -85,17 +113,38 @@ fn a_pack_round_trip_keeps_iri_and_blank_named_empty_graphs() {
 
 #[test]
 fn a_query_over_a_pack_enumerates_its_declared_empty_graphs() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let source = write_file(dir, "in.trig", DECLARED_TRIG);
     let pack = path(dir, "x.pack");
-    convert(&[&source, &pack, "--to", "pack"]);
+    convert(&[
+        &source,
+        &pack,
+        "--to",
+        "pack",
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
 
     let out = run(&[
         "query",
         "--data",
         &pack,
         "SELECT (COUNT(?g) AS ?n) WHERE { GRAPH ?g { } }",
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert!(out.status.success(), "stderr:\n{}", stderr(&out));
     let body = support::stdout(&out);
@@ -147,13 +196,34 @@ fn targets_without_an_empty_graph_spelling_report_each_dropped_graph() {
 
 #[test]
 fn trix_and_pack_sources_name_themselves_on_each_dropped_graph() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_conditional_1 = canonical_receipt_dir
+        .path()
+        .join("conditional-request-1.json");
+    let canonical_conditional_2 = canonical_receipt_dir
+        .path()
+        .join("conditional-request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let source = write_file(dir, "in.trig", DECLARED_TRIG);
     for (codec, extension) in [("trix", "trix"), ("pack", "pack")] {
         // Both carriers keep the declared empty graphs, so writing them records nothing.
         let carrier = path(dir, &format!("carrier.{extension}"));
-        let (carried, written) = convert(&[&source, &carrier, "--to", codec]);
+        let (carried, written) = {
+            let mut arguments = vec![&source, &carrier, "--to", codec];
+            if codec == "pack" {
+                arguments.extend([
+                    "--canonical-search",
+                    "unlimited",
+                    "--canonicalization-receipts",
+                    canonical_conditional_1
+                        .to_str()
+                        .expect("UTF-8 canonical receipt path"),
+                ]);
+            }
+            convert(&arguments)
+        };
         assert!(
             !carried.is_empty(),
             "{codec}: the carrier output must exist"
@@ -166,7 +236,20 @@ fn trix_and_pack_sources_name_themselves_on_each_dropped_graph() {
         // Converting the carrier to N-Quads drops each one, recorded as the registered,
         // intentional loss of that source codec.
         let output = path(dir, &format!("from-{codec}.nq"));
-        let (quads, ledger) = convert(&[&carrier, &output, "--from", codec, "--to", "nquads"]);
+        let (quads, ledger) = {
+            let mut arguments = vec![&carrier, &output, "--from", codec, "--to", "nquads"];
+            if codec == "pack" {
+                arguments.extend([
+                    "--canonical-search",
+                    "unlimited",
+                    "--canonicalization-receipts",
+                    canonical_conditional_2
+                        .to_str()
+                        .expect("UTF-8 canonical receipt path"),
+                ]);
+            }
+            convert(&arguments)
+        };
         assert!(
             quads.contains("<http://example.org/g1>"),
             "{codec} -> nquads: the populated graph's rows are written; got:\n{quads}"
@@ -185,6 +268,11 @@ fn trix_and_pack_sources_name_themselves_on_each_dropped_graph() {
 
 #[test]
 fn targets_that_spell_empty_graphs_and_datasets_without_them_report_nothing_new() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_conditional_1 = canonical_receipt_dir
+        .path()
+        .join("conditional-request-1.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let declared = write_file(dir, "declared.trig", DECLARED_TRIG);
@@ -196,7 +284,20 @@ fn targets_that_spell_empty_graphs_and_datasets_without_them_report_nothing_new(
         ("pack", "pack"),
     ] {
         let output = path(dir, &format!("declared-out.{extension}"));
-        let (written, ledger) = convert(&[&declared, &output, "--to", target]);
+        let (written, ledger) = {
+            let mut arguments = vec![&declared[..], &output[..], "--to", target];
+            if target == "pack" {
+                arguments.extend([
+                    "--canonical-search",
+                    "unlimited",
+                    "--canonicalization-receipts",
+                    canonical_conditional_1
+                        .to_str()
+                        .expect("UTF-8 canonical receipt path"),
+                ]);
+            }
+            convert(&arguments)
+        };
         assert!(!written.is_empty(), "{target}: the output must exist");
         assert!(
             !ledger.contains(LOSS_CODE),

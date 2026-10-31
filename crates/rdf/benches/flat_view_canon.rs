@@ -185,7 +185,12 @@ fn delta_view(base: &Arc<RdfDataset>) -> DeltaDatasetView {
 fn owned_route(dataset: &RdfDataset, hash: CanonHash) -> Canonicalized {
     let quads = flat_rdf_quads_from_dataset(dataset);
     let refrozen = flat_dataset_from_quads(&quads).expect("the flattened quads refreeze");
-    try_canonicalize_with(&refrozen, hash).unwrap()
+    try_canonicalize_with(
+        &refrozen,
+        hash,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap()
 }
 
 /// The owned route over a view that is not already a concrete `RdfDataset`: an
@@ -200,7 +205,12 @@ fn owned_route_over_view<D: DatasetView>(view: &D, hash: CanonHash) -> Canonical
 /// The borrowed route: [`try_canonicalize_flat_view`] straight over `view`, no
 /// freeze, whatever `D` happens to be.
 fn borrowed_route<D: FallibleDatasetView>(view: &D, hash: CanonHash) -> Canonicalized<D::Id> {
-    try_canonicalize_flat_view(view, hash).expect("the view admits under the flat presentation")
+    try_canonicalize_flat_view(
+        view,
+        hash,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("the view admits under the flat presentation")
 }
 
 /// Register every owned-vs-borrowed comparison group. Each shape's pair is

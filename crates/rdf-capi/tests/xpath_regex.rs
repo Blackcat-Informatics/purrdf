@@ -782,6 +782,9 @@ fn product(shapes: &str) -> Vec<u8> {
             std::ptr::null(),
             0,
             &raw mut buffer,
+            c"1000000".as_ptr(),
+            std::ptr::null(),
+            &mut receipt::Output::default().0,
             &raw mut error,
         )
     };
@@ -1155,6 +1158,9 @@ fn entail(regex: Option<&str>, legacy: bool, pattern: &str) -> Result<String, Fa
                 &mut receipt::Output::default().0,
                 &raw mut buffer,
                 std::ptr::null_mut(),
+                c"1000000".as_ptr(),
+                std::ptr::null(),
+                &mut receipt::Output::default().0,
                 &raw mut error,
             )
         } else {
@@ -1176,6 +1182,9 @@ fn entail(regex: Option<&str>, legacy: bool, pattern: &str) -> Result<String, Fa
                 &mut receipt::Output::default().0,
                 &raw mut buffer,
                 std::ptr::null_mut(),
+                c"1000000".as_ptr(),
+                std::ptr::null(),
+                &mut receipt::Output::default().0,
                 &raw mut error,
             )
         }

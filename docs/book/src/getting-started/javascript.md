@@ -73,10 +73,14 @@ const hello = f.directionalLiteral("مرحبا", "ar", "rtl");
   iteration (`for (const quad of dataset)`). Formats: `turtle`, `ntriples`,
   `nquads`, `trig`, `rdfxml` (or their media types); `serialize` additionally
   accepts `jsonld`.
-- **Graph identity** — `Dataset.canonicalize()` returns the RDFC-1.0 canonical,
-  flat N-Quads for the graph; `Dataset.isomorphic(other)` decides RDF graph
-  equality under blank-node relabeling (an exact oracle backed by full RDFC-1.0
-  canonicalization).
+- **Graph identity** — `Dataset.canonicalize("unlimited")` returns a
+  `CanonicalResult` whose `.value` is the RDFC-1.0 canonical flat N-Quads.
+  `Dataset.isomorphic(other, "unlimited")` returns the same envelope around its
+  exact RDF graph-equality verdict. Both require an explicit search policy:
+  `"unlimited"` or canonical unsigned decimal `u64` text. The result's
+  `.canonicalizationJson` retains the constituent run receipts; call `.free()`
+  on the envelope after reading its fields. Either method also accepts a
+  cancellation token.
 - **Graph/tabular/research-object carriers** — `Dataset.project(profile, configJson)` returns
   canonical USTAR bytes and loss-ledger JSON; `Dataset.projectWithAssets("ro-crate-1.3",
   configJson, payloadArchive)` adds bounded attached RO-Crate payloads;

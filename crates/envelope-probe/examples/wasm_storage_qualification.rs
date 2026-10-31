@@ -145,7 +145,15 @@ pub fn qualify_resident_envelope(actual_hundred_thousand: bool) -> Result<String
     );
     for (index, workload) in WORKLOADS.iter().enumerate() {
         let window = WholeProcessWindow::open();
-        let result = run(workload, profile, &window);
+        let result = run(
+            workload,
+            profile,
+            &window,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        );
         let measured = window.close();
         let metrics = result.map_err(|error| JsError::new(&error))?;
         if actual_hundred_thousand

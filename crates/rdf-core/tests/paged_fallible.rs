@@ -578,7 +578,11 @@ fn flat_view_canon_over_a_paged_view_ready_at_start_then_faulting_mid_drain_is_n
         "the view must certify Ready before any row is drained"
     );
 
-    match try_canonicalize_flat_view(&view, CanonHash::Sha256) {
+    match try_canonicalize_flat_view(
+        &view,
+        CanonHash::Sha256,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    ) {
         Err(ViewCanonError::NotReady {
             checkpoint,
             error,
@@ -628,7 +632,11 @@ fn flat_view_canon_over_a_paged_view_already_failed_before_the_drain_does_no_wor
     let calls_before_canon = provider.calls.load(Ordering::Relaxed);
 
     let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
-    match try_canonicalize_flat_view(&view, CanonHash::Sha256) {
+    match try_canonicalize_flat_view(
+        &view,
+        CanonHash::Sha256,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    ) {
         Err(ViewCanonError::NotReady {
             checkpoint,
             error,

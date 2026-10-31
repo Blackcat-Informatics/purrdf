@@ -17,7 +17,11 @@ fn embedding_attachment_failures_keep_original_pack_causes_after_input_drop() {
         SourceAttachmentError,
     };
     let dataset = RdfDatasetBuilder::new().freeze().unwrap();
-    let (_, mut bytes) = CertifiedEmbeddingSource::from_dataset(&dataset).unwrap();
+    let (_, mut bytes) = CertifiedEmbeddingSource::from_dataset(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     bytes[8..12].copy_from_slice(&u32::MAX.to_le_bytes());
     let contract = ExternalBindingContract {
         role: "https://example.org/role/source".into(),
@@ -27,10 +31,19 @@ fn embedding_attachment_failures_keep_original_pack_causes_after_input_drop() {
         policy_reference: None,
     };
     let scope = ExternalScope::Source(ContentDigest::of(b"owner"));
-    let source = CertifiedEmbeddingSource::certify(EmbeddingSource::Purrpck(&bytes)).unwrap_err();
-    let external: SourceAttachmentError = purrdf::bind_external_pack(scope, &bytes, &contract)
-        .unwrap_err()
-        .into();
+    let source = CertifiedEmbeddingSource::certify(
+        EmbeddingSource::Purrpck(&bytes),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap_err();
+    let external: SourceAttachmentError = purrdf::bind_external_pack(
+        scope,
+        &bytes,
+        &contract,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap_err()
+    .into();
     drop(bytes);
     drop(dataset);
     drop(contract);

@@ -502,7 +502,13 @@ fn a_product_holds_every_graph_it_absorbed() {
     let lib_document = linked_document("LibShape", "p", "");
     assert!(!lib_document.contains("Ontology") && !lib_document.contains("ShapesGraph"));
     let table: &[(&str, &str)] = &[(lib, &lib_document)];
-    let product = pack_shapes_product(&importer, Some(base), table).expect("packed");
+    let product = pack_shapes_product(
+        &importer,
+        Some(base),
+        table,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("packed");
     let options = SarifOptions::default();
     for held in [lib, declared, base] {
         for (lane, sarif) in [
@@ -529,7 +535,13 @@ fn a_product_holds_every_graph_it_absorbed() {
 
     // The neighbour that lacks the document: packed from the supplied shapes alone, it
     // holds no `lib`, and the same data is refused naming it.
-    let bare = pack_shapes_product(LOCAL_SHAPES, Some(base), &[]).expect("packed");
+    let bare = pack_shapes_product(
+        LOCAL_SHAPES,
+        Some(base),
+        &[],
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("packed");
     let refused = validate_with_shapes_product(&bare, &linking(&[lib]), &options)
         .expect_err("the bare product does not hold lib");
     assert_eq!(

@@ -452,6 +452,12 @@ pub struct CancellationToken {
     flag: CancellationFlag,
 }
 
+impl purrdf_core::StopSignal for CancellationToken {
+    fn stopped(&self) -> bool {
+        self.flag.is_cancelled()
+    }
+}
+
 #[wasm_bindgen]
 impl CancellationToken {
     /// A fresh, uncancelled token.
