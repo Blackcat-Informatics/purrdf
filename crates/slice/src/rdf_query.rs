@@ -543,13 +543,11 @@ impl Dataset {
     ///
     /// # Errors
     /// Retains native storage, structural and canonicalization refusals.
-    pub fn canonical_nquads_flat(&self) -> Result<String, purrdf_rdf::CanonError> {
-        let mut builder = RdfDatasetBuilder::new();
-        for quad in purrdf_rdf::flat_rdf_quads(&self.ds) {
-            builder.push_owned_quad(&quad)?;
-        }
-        let frozen = builder.freeze()?;
-        Ok(purrdf_rdf::try_canonicalize(&frozen)?.nquads)
+    pub fn canonical_nquads_flat(
+        &self,
+        control: &mut purrdf_core::CanonicalizationControl<'_>,
+    ) -> Result<String, purrdf_rdf::CanonError> {
+        purrdf_rdf::canonical_flat_nquads(&self.ds, control)
     }
 
     /// Build a frozen [`RdfDataset`] from a flat owned-quad set (`push_owned_quad`,
@@ -955,7 +953,10 @@ mod tests {
     fn flat_lines(trig: &str) -> Vec<String> {
         let ds = Dataset::parse(trig.as_bytes(), "application/trig", None, "test").unwrap();
         let mut lines: Vec<String> = ds
-            .canonical_nquads_flat()
+            .canonical_nquads_flat(&mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ))
             .unwrap()
             .lines()
             .map(str::to_owned)

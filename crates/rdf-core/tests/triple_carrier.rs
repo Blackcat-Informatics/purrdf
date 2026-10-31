@@ -223,8 +223,18 @@ fn owned_transfer_preserves_lexical_owner_and_flat_statement_identity() {
     let (quad, [s, p, o, reifier]) = statement_fixture("claim", BlankScope(71));
     let nesting_bound = quad.triple_term_nesting_bound();
     assert_eq!(nesting_bound, Some(purrdf_events::MAX_TERM_NESTING_DEPTH));
-    let before = try_canonicalize_flat_view(&quad, CanonHash::Sha256).unwrap();
-    let digest = try_flat_digest_view(&quad, CanonHash::Sha256).unwrap();
+    let before = try_canonicalize_flat_view(
+        &quad,
+        CanonHash::Sha256,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
+    let digest = try_flat_digest_view(
+        &quad,
+        CanonHash::Sha256,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let TermRef::Iri(iri) = quad.resolve(p) else {
         panic!("predicate IRI")
     };
@@ -277,13 +287,28 @@ fn owned_transfer_preserves_lexical_owner_and_flat_statement_identity() {
         annotation_count
     );
     assert_eq!(
-        try_canonicalize_flat_view(&read, CanonHash::Sha256)
-            .unwrap()
-            .nquads,
+        try_canonicalize_flat_view(
+            &read,
+            CanonHash::Sha256,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+        .nquads,
         before.nquads
     );
     assert_eq!(
-        try_flat_digest_view(&read, CanonHash::Sha256).unwrap(),
+        try_flat_digest_view(
+            &read,
+            CanonHash::Sha256,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap(),
         digest
     );
     assert!(read.read_error().is_none());
@@ -297,25 +322,55 @@ fn owned_transfer_preserves_lexical_owner_and_flat_statement_identity() {
         }
     ));
     assert_eq!(
-        try_canonicalize_flat_view(&relabeled, CanonHash::Sha256)
-            .unwrap()
-            .nquads,
+        try_canonicalize_flat_view(
+            &relabeled,
+            CanonHash::Sha256,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+        .nquads,
         before.nquads
     );
     assert_eq!(
-        try_flat_digest_view(&relabeled, CanonHash::Sha256).unwrap(),
+        try_flat_digest_view(
+            &relabeled,
+            CanonHash::Sha256,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap(),
         digest
     );
     let relabeled = TripleDataset::try_from(relabeled).unwrap();
     let relabeled_read = relabeled.read().unwrap();
     assert_eq!(
-        try_canonicalize_flat_view(&relabeled_read, CanonHash::Sha256)
-            .unwrap()
-            .nquads,
+        try_canonicalize_flat_view(
+            &relabeled_read,
+            CanonHash::Sha256,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+        .nquads,
         before.nquads
     );
     assert_eq!(
-        try_flat_digest_view(&relabeled_read, CanonHash::Sha256).unwrap(),
+        try_flat_digest_view(
+            &relabeled_read,
+            CanonHash::Sha256,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap(),
         digest
     );
     assert!(relabeled_read.read_error().is_none());

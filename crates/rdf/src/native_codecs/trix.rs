@@ -521,7 +521,15 @@ mod tests {
             .expect("serialize trix");
         let reparsed = parse_dataset(&trix, "application/trix", None).expect("re-parse trix");
         assert!(
-            datasets_isomorphic(&ds, &reparsed).unwrap(),
+            datasets_isomorphic(
+                &ds,
+                &reparsed,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap(),
             "TriX round-trip must be isomorphic; produced:\n{}",
             String::from_utf8_lossy(&trix)
         );

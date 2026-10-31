@@ -47,8 +47,9 @@ use purrdf_sparql_eval::{
 /// let data = "<http://example.org/tom> \
 ///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .\n";
 /// let mut session = ReasonerSession::open(data, 0, 0).expect("parses");
-/// assert_eq!(session.consistency().expect("decides").answer(), "consistency true\n");
-/// let hierarchy = session.classify().expect("decides"); // no second parse
+/// let mut canonical = purrdf::CanonicalizationControl::new(purrdf::RDFC_V2_CORPUS_POLICY, None);
+/// assert_eq!(session.consistency(&mut canonical).expect("decides").answer(), "consistency true\n");
+/// let hierarchy = session.classify(&mut canonical).expect("decides"); // no second parse
 /// assert!(hierarchy.certificate().starts_with("purrdf-dl-certificate 1\n"));
 /// ```
 pub use purrdf_validate::regime::ReasonerSession;

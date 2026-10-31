@@ -47,6 +47,8 @@ use crate::imports::ShapesImportError;
 /// Why a shapes-graph entry point refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShapesError {
+    /// Original native refusal while canonicalizing caller-derived output.
+    Canonical(purrdf_core::CanonError),
     /// Original rule failure with the contexts observed before refusal.
     RuleExecution(Box<crate::rules::RuleExecutionError>),
     /// A recursive shapes catalog requires an explicit recursion semantics.
@@ -117,6 +119,7 @@ impl ShapesError {
             | Self::UnsupportedTarget(_)
             | Self::SparqlTargetDisagreement(_)
             | Self::Storage(_)
+            | Self::Canonical(_)
             | Self::Processor(_)
             | Self::Invalid(_) => None,
         }
@@ -139,6 +142,7 @@ impl ShapesError {
             | Self::UnsupportedTarget(_)
             | Self::SparqlTargetDisagreement(_)
             | Self::Storage(_)
+            | Self::Canonical(_)
             | Self::Processor(_)
             | Self::Invalid(_) => None,
         }
@@ -161,6 +165,7 @@ impl ShapesError {
             | Self::UnsupportedTarget(_)
             | Self::SparqlTargetDisagreement(_)
             | Self::Storage(_)
+            | Self::Canonical(_)
             | Self::Processor(_)
             | Self::Invalid(_) => None,
         }
@@ -183,6 +188,7 @@ impl ShapesError {
             | Self::Prebinding(_)
             | Self::SparqlTargetDisagreement(_)
             | Self::Storage(_)
+            | Self::Canonical(_)
             | Self::Processor(_)
             | Self::Invalid(_) => None,
         }
@@ -205,6 +211,7 @@ impl ShapesError {
             | Self::Prebinding(_)
             | Self::UnsupportedTarget(_)
             | Self::Storage(_)
+            | Self::Canonical(_)
             | Self::Processor(_)
             | Self::Invalid(_) => None,
         }
@@ -227,6 +234,7 @@ impl ShapesError {
             | Self::UnsupportedTarget(_)
             | Self::SparqlTargetDisagreement(_)
             | Self::Storage(_)
+            | Self::Canonical(_)
             | Self::Processor(_)
             | Self::Invalid(_) => None,
         }
@@ -268,7 +276,9 @@ impl ShapesError {
     pub const fn failure_class(&self) -> FailureClass {
         match self {
             Self::Invalid(_) => FailureClass::Evaluation,
-            Self::Storage(_) | Self::Processor(_) | Self::Preparation(_) => FailureClass::Processor,
+            Self::Storage(_) | Self::Canonical(_) | Self::Processor(_) | Self::Preparation(_) => {
+                FailureClass::Processor
+            }
             Self::RuleExecution(error) => error.failure_class(),
             Self::Imports(_)
             | Self::Recursion(_)
@@ -305,6 +315,7 @@ impl ShapesError {
             | Self::UnsupportedTarget(_)
             | Self::SparqlTargetDisagreement(_)
             | Self::Storage(_)
+            | Self::Canonical(_)
             | Self::Invalid(_) => None,
         }
     }
@@ -474,6 +485,7 @@ impl fmt::Display for ShapesError {
             Self::Preparation(refusal) => refusal.fmt(f),
             Self::Recursion(refusal) => refusal.fmt(f),
             Self::Storage(error) => error.fmt(f),
+            Self::Canonical(error) => error.fmt(f),
             Self::Imports(error) => error.fmt(f),
             Self::ShaclJs(refusal) => refusal.fmt(f),
             Self::IllFormed(refusal) => refusal.fmt(f),
@@ -493,6 +505,7 @@ impl std::error::Error for ShapesError {
             Self::Preparation(refusal) => Some(refusal),
             Self::Recursion(refusal) => Some(refusal),
             Self::Storage(error) => Some(error),
+            Self::Canonical(error) => Some(error),
             Self::Imports(error) => Some(error),
             Self::ShaclJs(refusal) => Some(refusal),
             Self::IllFormed(refusal) => Some(refusal),

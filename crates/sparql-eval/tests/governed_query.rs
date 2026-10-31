@@ -1341,7 +1341,11 @@ fn statement_scan_defaults_remain_visible_in_explain() {
         SegmentedLayerMetadata, SegmentedReadLimits, SegmentedSession, SegmentedStack,
     };
     let dataset = statement_claims(64);
-    let bytes = PackBuilder::build_view_bytes(dataset.as_ref()).unwrap();
+    let bytes = PackBuilder::build_view_bytes(
+        dataset.as_ref(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let pack = PackView::from_bytes(&bytes).unwrap();
     let image = SegmentedImage::from_pack_v1(
         &bytes,

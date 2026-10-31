@@ -109,6 +109,9 @@ fn query_is_top_level_ordered(query_text: &str) -> bool {
 
 #[test]
 fn cost_and_structural_planner_produce_identical_results() {
+    let mut control =
+        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
     let manifests = suite_manifests();
     assert!(
         manifests.len() >= 10,
@@ -188,6 +191,7 @@ fn cost_and_structural_planner_produce_identical_results() {
                 &cost_result,
                 &structural_result,
                 ordered,
+                &mut control,
             ) {
                 mismatches.push((case.iri, format!("result mismatch: {msg}")));
             }

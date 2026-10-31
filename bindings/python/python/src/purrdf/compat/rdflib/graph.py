@@ -703,11 +703,11 @@ class Graph:
         for subj in self.subjects(predicate, object):
             yield from self.transitive_subjects(predicate, subj, remember)
 
-    def isomorphic(self, other: Graph) -> bool:
+    def isomorphic(self, other: Graph, *, canonical_search: str) -> bool:
         """Return whether this graph is isomorphic to ``other`` (RDFC-1.0)."""
         from .compare import isomorphic
 
-        return isomorphic(self, other)
+        return isomorphic(self, other, canonical_search=canonical_search)
 
     # ── graph topology / views ─────────────────────────────────────────────────────
 

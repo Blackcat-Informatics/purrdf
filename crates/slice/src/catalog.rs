@@ -203,13 +203,44 @@ impl SliceCatalog {
     /// Recursively discover all slice directories under `root` (directories
     /// containing a `manifest.ttl`) and load each one, interpreting manifests
     /// with the caller's `vocab`.
-    pub fn discover(root: &Path, vocab: SliceVocab) -> Result<Self, SliceError> {
+    pub fn discover(
+        root: &Path,
+        vocab: SliceVocab,
+        control: &mut purrdf_core::CanonicalizationControl<'_>,
+    ) -> Result<Self, SliceError> {
         let dirs = find_slice_dirs(root)?;
-        let records: Result<Vec<_>, _> = dirs
-            .par_iter()
-            .map(|dir| Self::from_slice_dir(dir, &vocab))
-            .collect();
-        let records = records?;
+        let completed = std::sync::Mutex::new(Vec::new());
+        // The unit error only stops dispatch. Every started task first retains its
+        // actual result and completed evidence, including an original native error.
+        let _dispatch = dirs.par_iter().enumerate().try_for_each(|(index, dir)| {
+            let mut child = control.fork();
+            let result = Self::from_slice_dir(dir, &vocab, &mut child);
+            let failed = result.is_err();
+            completed
+                .lock()
+                .expect("catalog receipt lock is not held during task execution")
+                .push((index, result, child));
+            if failed { Err(()) } else { Ok(()) }
+        });
+        let mut completed = completed
+            .into_inner()
+            .expect("catalog receipt lock is not held during task execution");
+        completed.sort_unstable_by_key(|(index, _, _)| *index);
+        let mut records = Vec::new();
+        let mut first_error = None;
+        for (_, result, child) in completed {
+            control.append_completed(child);
+            match result {
+                Ok(record) => records.push(record),
+                Err(error) if first_error.is_none() => first_error = Some(error),
+                Err(_) => {}
+            }
+        }
+        // Directory order chooses among actual failed tasks. Unstarted tasks have
+        // neither fabricated results nor receipts; no partial catalog is published.
+        if let Some(error) = first_error {
+            return Err(error);
+        }
         Ok(Self { records, vocab })
     }
 
@@ -219,7 +250,11 @@ impl SliceCatalog {
     }
 
     /// Load a single slice from `dir` (which must contain `manifest.ttl`).
-    pub fn from_slice_dir(dir: &Path, vocab: &SliceVocab) -> Result<SliceRecord, SliceError> {
+    pub fn from_slice_dir(
+        dir: &Path,
+        vocab: &SliceVocab,
+        control: &mut purrdf_core::CanonicalizationControl<'_>,
+    ) -> Result<SliceRecord, SliceError> {
         let manifest_path = dir.join("manifest.ttl");
         let manifest_bytes = std::fs::read(&manifest_path).map_err(SliceError::from)?;
 
@@ -238,7 +273,7 @@ impl SliceCatalog {
         let manifest_graph = Arc::new(dataset.into_inner());
 
         // Discover all artifacts.
-        let artifacts = discover_artifacts(dir)?;
+        let artifacts = discover_artifacts(dir, control)?;
 
         Ok(SliceRecord {
             manifest,
@@ -376,9 +411,12 @@ fn literal_value(term: &Object) -> String {
 
 // ── Artifact discovery ────────────────────────────────────────────────────────
 
-fn discover_artifacts(dir: &Path) -> Result<Vec<ArtifactRecord>, SliceError> {
+fn discover_artifacts(
+    dir: &Path,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<Vec<ArtifactRecord>, SliceError> {
     let mut artifacts = Vec::new();
-    collect_artifacts(dir, dir, &mut artifacts)?;
+    collect_artifacts(dir, dir, &mut artifacts, control)?;
     artifacts.sort_by(|a, b| a.logical_path.cmp(&b.logical_path));
     Ok(artifacts)
 }
@@ -387,6 +425,7 @@ fn collect_artifacts(
     root: &Path,
     current: &Path,
     out: &mut Vec<ArtifactRecord>,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<(), SliceError> {
     for entry in std::fs::read_dir(current).map_err(SliceError::from)? {
         let entry = entry.map_err(SliceError::from)?;
@@ -394,7 +433,7 @@ fn collect_artifacts(
         let file_type = entry.file_type().map_err(SliceError::from)?;
 
         if file_type.is_dir() {
-            collect_artifacts(root, &path, out)?;
+            collect_artifacts(root, &path, out, control)?;
             continue;
         }
 
@@ -448,7 +487,7 @@ fn collect_artifacts(
         // `ownership::parse_rdf_artifact` performs, whose own doctrine is to fail loudly;
         // the two now agree.
         let semantic_digest = if is_rdf_file(&logical_path) {
-            Some(compute_semantic_digest(&content, &path)?)
+            Some(compute_semantic_digest(&content, &path, control)?)
         } else {
             None
         };
@@ -477,29 +516,32 @@ fn hex_sha256(bytes: &[u8]) -> String {
 /// Every failure is propagated and names the artifact: a file the extension declares to
 /// be RDF that does not parse, has no derivable retrieval IRI, or does not canonicalize
 /// is a defect in the slice, not an artifact without a semantic identity.
-fn compute_semantic_digest(bytes: &[u8], path: &Path) -> Result<String, SliceError> {
+fn compute_semantic_digest(
+    bytes: &[u8],
+    path: &Path,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<String, SliceError> {
     let dataset = Dataset::parse_file(bytes, path)?;
 
-    // Canonicalize blank-node labels BEFORE digesting. Parsing assigns blank-node IDs
-    // non-deterministically, so a plain sorted-N-Triples digest would differ
-    // run-to-run for any artifact that uses blank nodes (e.g. SHACL property shapes,
-    // OWL restrictions). Canonicalization makes the *semantic* digest a stable
-    // function of the graph's identity ( §12 — semantic, path-independent,
-    // deterministic keys).
-    //
-    // Native full RDFC-1.0: the `canonical_nquads_flat` projection flattens the
-    // RDF 1.2 statement overlay back to plain `rdf:reifies`/annotation triples and
-    // canonicalizes that flat set.
-    let canonical = dataset
-        .canonical_nquads_flat()
-        .map_err(|error| match error {
-            purrdf_rdf::CanonError::Storage(storage) => SliceError::Storage(storage),
-            cause => SliceError::Canonicalize {
-                path: path.to_path_buf(),
-                cause: Box::new(cause),
-            },
-        })?;
-    Ok(hex_sha256(canonical.as_bytes()))
+    // Canonical label search and digest output share one measured native run.
+    let digest = match purrdf_core::try_flat_digest_view(
+        dataset.inner(),
+        purrdf_core::CanonHash::Sha256,
+        control,
+    ) {
+        Ok(digest) => digest,
+        Err(purrdf_core::ViewCanonError::Refused(cause)) => {
+            return Err(match cause {
+                purrdf_core::CanonError::Storage(storage) => SliceError::Storage(storage),
+                cause => SliceError::Canonicalize {
+                    path: path.to_path_buf(),
+                    cause: Box::new(cause),
+                },
+            });
+        }
+        Err(purrdf_core::ViewCanonError::NotReady { error, .. }) => match error {},
+    };
+    Ok(digest.to_hex())
 }
 
 // Artifact classification is deliberately byte-exact on lowercase extensions.
@@ -683,10 +725,24 @@ ex:subject ex:predicate ex:object .
         std::fs::write(&ttl_path, turtle_bytes).expect("write the Turtle artifact");
         std::fs::write(&nt_path, nt_bytes).expect("write the N-Triples artifact");
 
-        let digest_ttl = compute_semantic_digest(turtle_bytes, &ttl_path)
-            .expect("Turtle semantic digest must not fail");
-        let digest_nt = compute_semantic_digest(nt_bytes, &nt_path)
-            .expect("N-Triples semantic digest must not fail");
+        let digest_ttl = compute_semantic_digest(
+            turtle_bytes,
+            &ttl_path,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("Turtle semantic digest must not fail");
+        let digest_nt = compute_semantic_digest(
+            nt_bytes,
+            &nt_path,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("N-Triples semantic digest must not fail");
 
         assert!(
             !digest_ttl.is_empty(),
@@ -712,8 +768,15 @@ ex:subject ex:predicate ex:object .
         let relative = b"<> <https://example.org/declares> <thing> .\n";
         std::fs::write(&path, relative).expect("write the artifact");
 
-        let digest = compute_semantic_digest(relative, &path)
-            .expect("a relative-IRI artifact resolves under its own retrieval IRI");
+        let digest = compute_semantic_digest(
+            relative,
+            &path,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("a relative-IRI artifact resolves under its own retrieval IRI");
         assert_ne!(digest, "");
 
         // The digest is of the RESOLVED graph: writing the same document with the
@@ -728,8 +791,15 @@ ex:subject ex:predicate ex:object .
         std::fs::write(&expanded_path, &expanded).expect("write the expanded artifact");
         assert_eq!(
             digest,
-            compute_semantic_digest(expanded.as_bytes(), &expanded_path)
-                .expect("absolute artifact digests"),
+            compute_semantic_digest(
+                expanded.as_bytes(),
+                &expanded_path,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .expect("absolute artifact digests"),
             "the relative form must denote exactly what the resolved form denotes"
         );
     }
@@ -745,7 +815,15 @@ ex:subject ex:predicate ex:object .
             let dir = purrdf_testkit::TempDir::for_unit_test().expect("tempdir");
             let path = dir.path().join(name);
             std::fs::write(&path, absolute).expect("write");
-            compute_semantic_digest(absolute, &path).expect("digest")
+            compute_semantic_digest(
+                absolute,
+                &path,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .expect("digest")
         };
         assert_eq!(digest_at("one.ttl"), digest_at("two.ttl"));
     }

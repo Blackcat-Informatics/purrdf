@@ -195,7 +195,16 @@ fn a_validation_resource_refusal_writes_no_log_and_the_neighbour_does() {
 #[test]
 fn product_validation_follows_the_selected_law() {
     for (pattern, value, xpath20, xpath31) in CASES {
-        let product = pack_shapes_product(&pattern_shapes(pattern), None, &[]).unwrap();
+        let product = pack_shapes_product(
+            &pattern_shapes(pattern),
+            None,
+            &[],
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         for (law, expected) in [(Profile::Xpath20, xpath20), (Profile::Xpath31, xpath31)] {
             for log in [
                 validate_with_shapes_product_with_xpath_regex(
@@ -219,7 +228,13 @@ fn product_validation_follows_the_selected_law() {
             }
         }
     }
-    let product = pack_shapes_product(&pattern_shapes(BACKREFERENCE), None, &[]).unwrap();
+    let product = pack_shapes_product(
+        &pattern_shapes(BACKREFERENCE),
+        None,
+        &[],
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     assert_eq!(
         validate_with_shapes_product_with_xpath_regex(
             &product,
@@ -249,8 +264,20 @@ fn product_validation_follows_the_selected_law() {
 fn a_product_refusal_keeps_its_dimension_and_a_law_refusal_is_its_own() {
     // One byte over the 64 KiB production source bound, and exactly the bound.
     let (over, at) = ("a".repeat(64 * 1024 + 1), "a".repeat(64 * 1024));
-    let product = pack_shapes_product(&pattern_shapes(&over), None, &[]).unwrap();
-    let neighbour = pack_shapes_product(&pattern_shapes(&at), None, &[]).unwrap();
+    let product = pack_shapes_product(
+        &pattern_shapes(&over),
+        None,
+        &[],
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
+    let neighbour = pack_shapes_product(
+        &pattern_shapes(&at),
+        None,
+        &[],
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let wrong = [0_u8; 32];
     for law in Profile::ALL {
         assert!(matches!(
@@ -322,9 +349,20 @@ fn entail(
         max_join_steps: None,
         host: purrdf_validate::RulesHost::Rust,
     };
-    let selected = entail_to_ntriples_with_xpath_regex(&request, law)?;
+    let selected = entail_to_ntriples_with_xpath_regex(
+        &request,
+        law,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )?;
     if law.is_none() {
-        let compatibility = entail_to_ntriples(&request).unwrap();
+        let compatibility = entail_to_ntriples(
+            &request,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         assert_eq!(
             (&selected.ntriples, &selected.diagnostics),
             (&compatibility.ntriples, &compatibility.diagnostics),
@@ -551,13 +589,29 @@ fn configured_rule_coordinates_preserve_dispatch_and_request_limits() {
             host: RulesHost::Python,
         };
         let outcome = without_host_clock_or_entropy(|| {
-            entail_to_ntriples_with_coordinates(&request, profile, coordinates())
+            entail_to_ntriples_with_coordinates(
+                &request,
+                profile,
+                coordinates(),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
         })
         .unwrap();
         assert!(outcome.ntriples.contains(NOW));
         request.max_stored_facts = Some(0);
-        let error =
-            entail_to_ntriples_with_coordinates(&request, profile, coordinates()).unwrap_err();
+        let error = entail_to_ntriples_with_coordinates(
+            &request,
+            profile,
+            coordinates(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap_err();
         assert!(error.to_string().contains("entail(max_stored_facts=...)"));
     }
 }

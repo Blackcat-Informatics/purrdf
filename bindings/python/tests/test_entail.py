@@ -44,16 +44,16 @@ def test_entail_is_callable() -> None:
 
 
 def test_entail_materializes_inferred_triple() -> None:
-    out = purrdf.shapes.entail(_SHAPES, _DATA)["ntriples"]
+    out = purrdf.shapes.entail(_SHAPES, _DATA, canonical_search="1000000").value["ntriples"]
     assert _INFERRED in out, f"inferred triple missing from:\n{out}"
     # The base fact survives into the materialized dataset.
     assert _BASE in out, f"base triple missing from:\n{out}"
 
 
 def test_entail_is_deterministic() -> None:
-    assert purrdf.shapes.entail(_SHAPES, _DATA) == purrdf.shapes.entail(_SHAPES, _DATA)
+    assert purrdf.shapes.entail(_SHAPES, _DATA, canonical_search="1000000").value == purrdf.shapes.entail(_SHAPES, _DATA, canonical_search="1000000").value
 
 
 def test_entail_rejects_malformed_shapes() -> None:
     with pytest.raises(ValueError):
-        purrdf.shapes.entail("@@@ not turtle", _DATA)
+        purrdf.shapes.entail("@@@ not turtle", _DATA, canonical_search="1000000").value

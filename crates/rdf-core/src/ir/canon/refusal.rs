@@ -293,8 +293,12 @@ mod tests {
         ] {
             let source = view(capability, true);
             assert!(source.storage_live_budget().is_none());
-            let error =
-                super::super::try_canonicalize_view(&source, CanonHash::Sha256).unwrap_err();
+            let error = super::super::try_canonicalize_view(
+                &source,
+                CanonHash::Sha256,
+                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+            )
+            .unwrap_err();
             drop(source);
             match capability {
                 Capability::Granted => {
@@ -339,7 +343,17 @@ mod tests {
             }
             if !matches!(capability, Capability::SourceRefused) {
                 let healthy = view(capability, false);
-                assert!(super::super::try_canonicalize_view(&healthy, CanonHash::Sha256).is_ok());
+                assert!(
+                    super::super::try_canonicalize_view(
+                        &healthy,
+                        CanonHash::Sha256,
+                        &mut crate::CanonicalizationControl::new(
+                            crate::RDFC_V2_CORPUS_POLICY,
+                            None
+                        )
+                    )
+                    .is_ok()
+                );
             }
         }
     }

@@ -542,7 +542,7 @@ def expression_shapes(pattern: str) -> str:
 
 
 def tool_entail(pattern: str, value: str, law: str | None) -> bool:
-    out = shapes.entail(rule_shapes(pattern), data_nt(value), xpath_regex=law)
+    out = shapes.entail(rule_shapes(pattern), data_nt(value), xpath_regex=law, canonical_search="1000000").value
     return HIT in str(out["ntriples"])
 
 

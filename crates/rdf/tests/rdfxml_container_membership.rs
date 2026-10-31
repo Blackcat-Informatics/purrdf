@@ -21,7 +21,15 @@ fn assert_expansion(xml: &str, expected: &str) {
     let expected = dataset_from_bytes(expected.as_bytes(), NativeRdfFormat::Turtle)
         .expect("expanded membership graph");
     assert!(
-        datasets_isomorphic(&actual, &expected).expect("graph comparison"),
+        datasets_isomorphic(
+            &actual,
+            &expected,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .expect("graph comparison"),
         "membership expansion differs for {xml}"
     );
 }

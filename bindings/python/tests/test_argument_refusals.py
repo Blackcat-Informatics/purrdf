@@ -39,9 +39,9 @@ PREMISE_CALLS = [
     ),
     (
         "materialize_nt",
-        lambda iris: entail.materialize_nt(DOC, entail.Regime.RDFS, "", [], iris),
+        lambda iris: entail.materialize_nt(DOC, entail.Regime.RDFS, "", [], iris, canonical_search="1000000").value,
     ),
-    ("consistency", lambda iris: entail.consistency(DOC, [], iris)),
+    ("consistency", lambda iris: entail.consistency(DOC, [], iris, canonical_search="1000000").value),
     (
         "certain_answers",
         lambda iris: entail.certain_answers(entail.Regime.RDFS, DOC, PATTERN, [], iris),

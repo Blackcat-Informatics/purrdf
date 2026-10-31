@@ -177,10 +177,26 @@ fn bench_named_graphs(c: &mut Bench) {
         let ds = build_graph_heavy_dataset(declared);
         group.bench_function(format!("build_bytes_{label}"), |b| {
             b.iter(|| {
-                std::hint::black_box(PackBuilder::build_bytes(&ds).expect("graph-heavy packs"))
+                std::hint::black_box(
+                    PackBuilder::build_bytes(
+                        &ds,
+                        &mut purrdf_core::CanonicalizationControl::new(
+                            purrdf_core::RDFC_V2_CORPUS_POLICY,
+                            None,
+                        ),
+                    )
+                    .expect("graph-heavy packs"),
+                )
             });
         });
-        let bytes = PackBuilder::build_bytes(&ds).expect("graph-heavy packs");
+        let bytes = PackBuilder::build_bytes(
+            &ds,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("graph-heavy packs");
         let pack = PackView::from_bytes(&bytes).expect("pack opens");
         println!(
             "[pack_query_named_graphs] {label}: {} named graphs, {} pack bytes",
@@ -218,7 +234,14 @@ fn bench_build_bytes(c: &mut Bench) {
     group.bench_function("build_bytes", |b| {
         b.iter(|| {
             std::hint::black_box(
-                PackBuilder::build_bytes(&ds).expect("representative dataset packs"),
+                PackBuilder::build_bytes(
+                    &ds,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
+                )
+                .expect("representative dataset packs"),
             )
         });
     });
@@ -229,7 +252,11 @@ fn bench_build_bytes(c: &mut Bench) {
 /// section-digest verification plus dictionary decode).
 fn bench_from_bytes(c: &mut Bench) {
     let ds = build_dataset();
-    let bytes = PackBuilder::build_bytes(&ds).expect("representative dataset packs");
+    let bytes = PackBuilder::build_bytes(
+        &ds,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("representative dataset packs");
     let mut group = c.benchmark_group("pack_query_from_bytes");
     group.bench_function("from_bytes", |b| {
         b.iter(|| std::hint::black_box(PackView::from_bytes(&bytes).expect("pack opens")));
@@ -241,7 +268,11 @@ fn bench_from_bytes(c: &mut Bench) {
 /// `RdfDataset` without passing through an RDF text serialization.
 fn bench_restore_pack(c: &mut Bench) {
     let ds = build_dataset();
-    let bytes = PackBuilder::build_bytes(&ds).expect("representative dataset packs");
+    let bytes = PackBuilder::build_bytes(
+        &ds,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("representative dataset packs");
     let mut group = c.benchmark_group("pack_query_restore");
     group.bench_function("restore_pack", |b| {
         b.iter(|| std::hint::black_box(restore_pack(&bytes).expect("pack restores")));
@@ -253,7 +284,11 @@ fn bench_restore_pack(c: &mut Bench) {
 /// warm [`PackView`], for the four representative shapes [`build_dataset`] sets up.
 fn bench_quads_for_pattern(c: &mut Bench) {
     let ds = build_dataset();
-    let bytes = PackBuilder::build_bytes(&ds).expect("representative dataset packs");
+    let bytes = PackBuilder::build_bytes(
+        &ds,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("representative dataset packs");
     let pack = PackView::from_bytes(&bytes).expect("pack opens");
 
     let p_id = pack
@@ -311,10 +346,25 @@ fn bench_quads_for_pattern(c: &mut Bench) {
 /// reconstruct-and-recompute over already-built pack bytes.
 fn bench_verify_pack(c: &mut Bench) {
     let ds = build_dataset();
-    let bytes = PackBuilder::build_bytes(&ds).expect("representative dataset packs");
+    let bytes = PackBuilder::build_bytes(
+        &ds,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("representative dataset packs");
     let mut group = c.benchmark_group("pack_query_verify");
     group.bench_function("verify_pack", |b| {
-        b.iter(|| std::hint::black_box(verify_pack(&bytes).expect("pack verifies")));
+        b.iter(|| {
+            std::hint::black_box(
+                verify_pack(
+                    &bytes,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
+                )
+                .expect("pack verifies"),
+            )
+        });
     });
     group.finish();
 }

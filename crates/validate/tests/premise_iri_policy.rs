@@ -21,7 +21,10 @@ const PATTERN: &str = "?s <http://example.org/p> ?o .\n";
 const REFUSED: [&str; 4] = ["::bad", "lib", "../lib", ""];
 
 /// Every service that takes `premise_iris`, run over `premise` with nothing imported.
-fn every_service(premise: &str) -> [(&'static str, Result<(), String>); 5] {
+fn every_service(
+    premise: &str,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> [(&'static str, Result<(), String>); 5] {
     let limits = MaterializeLimits::default();
     let premise_iris = [premise];
     [
@@ -31,12 +34,23 @@ fn every_service(premise: &str) -> [(&'static str, Result<(), String>); 5] {
         ),
         (
             "materialize_to_nquads_string_with",
-            materialize_to_nquads_string_with("rdfs", DOC, "", &[], &premise_iris, &limits)
-                .map(drop),
+            materialize_to_nquads_string_with(
+                "rdfs",
+                DOC,
+                "",
+                &[],
+                &premise_iris,
+                &limits,
+                control,
+            )
+            .map(drop)
+            .map_err(|error| error.to_string()),
         ),
         (
             "consistency_to_string",
-            consistency_to_string(DOC, &[], &premise_iris, 0, 0).map(drop),
+            consistency_to_string(DOC, &[], &premise_iris, 0, 0, control)
+                .map(drop)
+                .map_err(|error| error.to_string()),
         ),
         (
             "certain_answers_to_string",
@@ -52,7 +66,13 @@ fn every_service(premise: &str) -> [(&'static str, Result<(), String>); 5] {
 #[test]
 fn a_premise_iri_that_is_not_absolute_is_refused_by_every_service() {
     for premise in REFUSED {
-        for (service, outcome) in every_service(premise) {
+        for (service, outcome) in every_service(
+            premise,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        ) {
             let error = outcome.expect_err(&format!("{service} accepted premise IRI {premise:?}"));
             assert!(
                 error.contains("premise IRI") && error.contains(&format!("{premise:?}")),
@@ -64,7 +84,10 @@ fn a_premise_iri_that_is_not_absolute_is_refused_by_every_service() {
 
 #[test]
 fn an_absolute_premise_iri_is_accepted_by_every_service() {
-    for (service, outcome) in every_service(ONTOLOGY) {
+    for (service, outcome) in every_service(
+        ONTOLOGY,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    ) {
         outcome.unwrap_or_else(|error| panic!("{service} refused {ONTOLOGY:?}: {error}"));
     }
     // And an import of the premise's own IRI still resolves in place, which is what the

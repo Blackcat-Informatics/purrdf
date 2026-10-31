@@ -577,12 +577,26 @@ fn triple_default_queries_preserve_bags_unbound_cells_paths_and_graph_results() 
                 assert_eq!(actual.boolean(), Some(expected), "{query}");
             }
             SparqlResult::Graph(expected) => assert_eq!(
-                try_canonicalize_flat_view(actual.graph().unwrap(), CanonHash::Sha256)
-                    .unwrap()
-                    .nquads,
-                try_canonicalize_flat_view(expected.as_ref(), CanonHash::Sha256)
-                    .unwrap()
-                    .nquads,
+                try_canonicalize_flat_view(
+                    actual.graph().unwrap(),
+                    CanonHash::Sha256,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
+                )
+                .unwrap()
+                .nquads,
+                try_canonicalize_flat_view(
+                    expected.as_ref(),
+                    CanonHash::Sha256,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
+                )
+                .unwrap()
+                .nquads,
                 "{query}"
             ),
         }

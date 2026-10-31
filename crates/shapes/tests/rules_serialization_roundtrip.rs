@@ -53,7 +53,12 @@ fn sparql_rule_entailment_roundtrips_through_text_serialization() {
         "the rule must derive property-shape triples for both foci"
     );
 
-    let canonical_entailed = try_canonicalize(entailed.as_ref()).unwrap().nquads;
+    let canonical_entailed = try_canonicalize(
+        entailed.as_ref(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap()
+    .nquads;
     for media in ["text/turtle", "application/n-triples"] {
         let bytes = serialize_dataset(entailed.as_ref(), media, SerializeGraph::Dataset)
             .unwrap_or_else(|e| panic!("{media} serialization must succeed: {e}"));
@@ -61,7 +66,15 @@ fn sparql_rule_entailment_roundtrips_through_text_serialization() {
             .unwrap_or_else(|e| panic!("{media} re-parse must succeed: {e}"));
         assert_eq!(
             canonical_entailed,
-            try_canonicalize(reparsed.as_ref()).unwrap().nquads,
+            try_canonicalize(
+                reparsed.as_ref(),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .nquads,
             "{media} round-trip must preserve the entailed dataset"
         );
     }

@@ -1968,8 +1968,22 @@ mod tests {
         // `sources` fixture — never caller-supplied and never reachable through a
         // binding, so the panicking wrapper is sound here.
         assert_eq!(
-            crate::canonical_flat_nquads(&actual).unwrap(),
-            crate::canonical_flat_nquads(&expected).unwrap(),
+            crate::canonical_flat_nquads(
+                &actual,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap(),
+            crate::canonical_flat_nquads(
+                &expected,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap(),
         );
     }
 

@@ -189,6 +189,9 @@ fn every_data_r2_leaf_and_the_root_closure_have_the_exact_pinned_inventory() {
 /// entry the upstream group leaves out is graded against the reading it lost to.
 #[test]
 fn every_vendored_data_r2_file_is_listed_or_an_exact_unlisted_remainder() {
+    let mut control =
+        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
     use purrdf_sparql_conformance::manifest::{self, ExpectedResult, TestKind};
     use std::path::PathBuf;
     /// The upstream manifest `open-world/sameTerm-manifest.ttl`, which no
@@ -355,13 +358,13 @@ fn every_vendored_data_r2_file_is_listed_or_an_exact_unlisted_remainder() {
         })
         .expect("the listed reading");
     let outcome = purrdf_sparql_conformance::run::run(&listed_reading, None).expect("evaluation");
-    purrdf_sparql_conformance::compare::compare(&listed_reading, &outcome)
+    purrdf_sparql_conformance::compare::compare(&listed_reading, &outcome, &mut control)
         .expect("the SPARQL 1.1 reading passes");
     let mut simplified = listed_reading;
     simplified.iri = simplified.iri.replace("-not-simplified", "-simplified");
     simplified.expected = ExpectedResult::ResultSetRdf(root.join(UNLISTED_ENTRY[0]));
     assert!(
-        purrdf_sparql_conformance::compare::compare(&simplified, &outcome).is_err(),
+        purrdf_sparql_conformance::compare::compare(&simplified, &outcome, &mut control).is_err(),
         "the reading SPARQL 1.1 settled against does not hold"
     );
     eprintln!(
@@ -389,6 +392,9 @@ fn every_vendored_data_r2_file_is_listed_or_an_exact_unlisted_remainder() {
 /// exact multiset of terms, and only the frozen order disagrees.
 #[test]
 fn the_extended_sort_case_is_graded_against_the_sparql12_order() {
+    let mut control =
+        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+
     use purrdf_core::{SparqlResult, TermValue};
     use purrdf_sparql_conformance::{compare, manifest, rs_resultset, run};
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("suite/w3c-sparql10");
@@ -451,7 +457,7 @@ fn the_extended_sort_case_is_graded_against_the_sparql12_order() {
         "the frozen order puts a value before a smaller one"
     );
     assert!(
-        compare::compare(case, &outcome).is_err(),
+        compare::compare(case, &outcome, &mut control).is_err(),
         "the frozen SPARQL 1.0 order cannot hold under RDF 1.2"
     );
     eprintln!(

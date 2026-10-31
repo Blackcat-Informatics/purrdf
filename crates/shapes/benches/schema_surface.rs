@@ -191,7 +191,16 @@ fn bench_schema_surface(c: &mut Bench) {
                 shaped.ontology.as_ref(),
                 SchemaSurfaceMode::ShapedOnly,
             );
-            black_box(compile_schema(&request).expect("shaped-only compilation"));
+            black_box(
+                compile_schema(
+                    &request,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
+                )
+                .expect("shaped-only compilation"),
+            );
         });
     });
     group.bench_function("ontology_sparse_256_classes_256_properties", |bencher| {
@@ -202,7 +211,16 @@ fn bench_schema_surface(c: &mut Bench) {
                 sparse.ontology.as_ref(),
                 SchemaSurfaceMode::OntologyComplete,
             );
-            black_box(compile_schema(&request).expect("sparse ontology compilation"));
+            black_box(
+                compile_schema(
+                    &request,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
+                )
+                .expect("sparse ontology compilation"),
+            );
         });
     });
     group.bench_function("ontology_dense_128_classes_256_properties", |bencher| {
@@ -213,7 +231,16 @@ fn bench_schema_surface(c: &mut Bench) {
                 dense.ontology.as_ref(),
                 SchemaSurfaceMode::OntologyComplete,
             );
-            black_box(compile_schema(&request).expect("dense ontology compilation"));
+            black_box(
+                compile_schema(
+                    &request,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
+                )
+                .expect("dense ontology compilation"),
+            );
         });
     });
     group.bench_function(
@@ -228,7 +255,16 @@ fn bench_schema_surface(c: &mut Bench) {
                     restricted.ontology.as_ref(),
                     SchemaSurfaceMode::OntologyComplete,
                 );
-                black_box(compile_schema(&request).expect("restricted ontology compilation"));
+                black_box(
+                    compile_schema(
+                        &request,
+                        &mut purrdf_core::CanonicalizationControl::new(
+                            purrdf_core::RDFC_V2_CORPUS_POLICY,
+                            None,
+                        ),
+                    )
+                    .expect("restricted ontology compilation"),
+                );
             });
         },
     );
@@ -245,7 +281,16 @@ fn bench_schema_surface(c: &mut Bench) {
                     shared.ontology.as_ref(),
                     SchemaSurfaceMode::OntologyComplete,
                 );
-                black_box(compile_schema(&request).expect("shared restriction compilation"));
+                black_box(
+                    compile_schema(
+                        &request,
+                        &mut purrdf_core::CanonicalizationControl::new(
+                            purrdf_core::RDFC_V2_CORPUS_POLICY,
+                            None,
+                        ),
+                    )
+                    .expect("shared restriction compilation"),
+                );
             });
         },
     );
@@ -280,7 +325,16 @@ fn bench_schema_surface(c: &mut Bench) {
                     large.ontology.as_ref(),
                     SchemaSurfaceMode::OntologyComplete,
                 );
-                black_box(compile_schema(&request).expect("large ontology compilation"));
+                black_box(
+                    compile_schema(
+                        &request,
+                        &mut purrdf_core::CanonicalizationControl::new(
+                            purrdf_core::RDFC_V2_CORPUS_POLICY,
+                            None,
+                        ),
+                    )
+                    .expect("large ontology compilation"),
+                );
             });
         });
     }
@@ -293,12 +347,15 @@ fn bench_schema_surface(c: &mut Bench) {
 /// re-walked every reference path, exponential in such a chain.
 fn bench_ontology_emitters(c: &mut Bench) {
     let tree = fixture(400, 2, Density::Tree, false);
-    let compiled = compile_schema(&SchemaCompileRequest::new(
-        &tree.shapes,
-        &tree.namespaces,
-        tree.ontology.as_ref(),
-        SchemaSurfaceMode::OntologyComplete,
-    ))
+    let compiled = compile_schema(
+        &SchemaCompileRequest::new(
+            &tree.shapes,
+            &tree.namespaces,
+            tree.ontology.as_ref(),
+            SchemaSurfaceMode::OntologyComplete,
+        ),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
     .expect("tree ontology compilation")
     .compiled;
     let graphql =
@@ -368,12 +425,18 @@ fn bench_linkml_import_scaling(c: &mut Bench) {
     group.sample_size(10);
     for classes in [250, 500, 1_000] {
         let sparse = fixture(classes, classes / 16, Density::Sparse, false);
-        let compiled = compile_schema(&SchemaCompileRequest::new(
-            &sparse.shapes,
-            &sparse.namespaces,
-            sparse.ontology.as_ref(),
-            SchemaSurfaceMode::OntologyComplete,
-        ))
+        let compiled = compile_schema(
+            &SchemaCompileRequest::new(
+                &sparse.shapes,
+                &sparse.namespaces,
+                sparse.ontology.as_ref(),
+                SchemaSurfaceMode::OntologyComplete,
+            ),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
         .expect("sparse ontology compilation")
         .compiled;
         let package = purrdf_shapes::emit_linkml(&compiled, &linkml).expect("LinkML");
@@ -427,13 +490,28 @@ fn bench_input_width_scaling(c: &mut Bench) {
             format!("compile_{classes}_classes_{properties}_properties"),
             |bencher| {
                 bencher.iter(|| {
-                    black_box(compile_schema(&request).expect("input-derived compilation"))
+                    black_box(
+                        compile_schema(
+                            &request,
+                            &mut purrdf_core::CanonicalizationControl::new(
+                                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                                None,
+                            ),
+                        )
+                        .expect("input-derived compilation"),
+                    )
                 });
             },
         );
-        let compiled = compile_schema(&request)
-            .expect("untimed schema compilation")
-            .compiled;
+        let compiled = compile_schema(
+            &request,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("untimed schema compilation")
+        .compiled;
         group.bench_function(format!("typescript_{classes}_definitions"), |bencher| {
             bencher.iter(|| {
                 black_box(

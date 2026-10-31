@@ -124,7 +124,11 @@ fn bench_graph_constant_membership(c: &mut Bench) {
         ViewLimits::default(),
     )
     .expect("two sources compose");
-    let bytes = pack_bytes(&frozen);
+    let bytes = pack_bytes(
+        &frozen,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("the fixture is admitted under its explicit search policy");
     let pack = PackView::from_bytes(&bytes).expect("the pack opens");
 
     let mut group = c.benchmark_group("graph_constant_membership");

@@ -48,7 +48,15 @@ fn products_preserve_same_named_function_bodies_in_their_original_domains() {
             severity: None,
         });
     let prepared = PreparedShapes::new(Arc::new(shapes));
-    let bytes = prepared.to_product(&ShapesProfile::CORE).unwrap();
+    let bytes = prepared
+        .to_product(
+            &ShapesProfile::CORE,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
     let restored = ShapesProduct::open(&bytes)
         .unwrap()
         .admit(&ShapesProfile::CORE, &HostBindings::empty())
@@ -76,7 +84,18 @@ fn products_preserve_same_named_function_bodies_in_their_original_domains() {
             ))
         );
     }
-    assert_eq!(restored.to_product(&ShapesProfile::CORE).unwrap(), bytes);
+    assert_eq!(
+        restored
+            .to_product(
+                &ShapesProfile::CORE,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap(),
+        bytes
+    );
 }
 
 #[test]
@@ -99,7 +118,15 @@ fn a_product_keeps_definitions_reached_only_through_an_exported_root() {
     assert!(!original.conforms);
     assert_eq!(original.results.len(), 1);
 
-    let bytes = prepared.to_product(&ShapesProfile::CORE).unwrap();
+    let bytes = prepared
+        .to_product(
+            &ShapesProfile::CORE,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
     let restored = ShapesProduct::open(&bytes)
         .unwrap()
         .admit(&ShapesProfile::CORE, &HostBindings::empty())
@@ -186,14 +213,33 @@ fn products_keep_same_named_definitions_in_distinct_retained_domains() {
             ),
         ];
         assert_eq!(locations(&before), expected);
-        let bytes = prepared.to_product(&ShapesProfile::CORE).unwrap();
+        let bytes = prepared
+            .to_product(
+                &ShapesProfile::CORE,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .unwrap();
         let restored = ShapesProduct::open(&bytes)
             .unwrap()
             .admit(&ShapesProfile::CORE, &HostBindings::empty())
             .unwrap();
         let after = restored.bind_dataset(&data).unwrap().validate().unwrap();
         assert_eq!(locations(&after), expected);
-        assert_eq!(restored.to_product(&ShapesProfile::CORE).unwrap(), bytes);
+        assert_eq!(
+            restored
+                .to_product(
+                    &ShapesProfile::CORE,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
+                )
+                .unwrap(),
+            bytes
+        );
     }
 }
 
@@ -208,7 +254,15 @@ fn products_keep_declarations_when_no_shape_root_is_exported() {
     .unwrap();
     shapes.node_shapes.clear();
     let prepared = PreparedShapes::new(Arc::new(shapes));
-    let bytes = prepared.to_product(&ShapesProfile::CORE).unwrap();
+    let bytes = prepared
+        .to_product(
+            &ShapesProfile::CORE,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
     let restored = ShapesProduct::open(&bytes)
         .unwrap()
         .admit(&ShapesProfile::CORE, &HostBindings::empty())
@@ -235,7 +289,18 @@ fn products_keep_declarations_when_no_shape_root_is_exported() {
             ))
         );
     }
-    assert_eq!(restored.to_product(&ShapesProfile::CORE).unwrap(), bytes);
+    assert_eq!(
+        restored
+            .to_product(
+                &ShapesProfile::CORE,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap(),
+        bytes
+    );
 }
 
 #[test]
@@ -266,8 +331,24 @@ fn product_identity_changes_with_the_exported_root_set() {
             .unwrap()
             .conforms
     );
-    let first = original.to_product(&ShapesProfile::CORE).unwrap();
-    let second = empty.to_product(&ShapesProfile::CORE).unwrap();
+    let first = original
+        .to_product(
+            &ShapesProfile::CORE,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
+    let second = empty
+        .to_product(
+            &ShapesProfile::CORE,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
     assert_ne!(
         ShapesProduct::open(&first)
             .unwrap()
@@ -343,7 +424,15 @@ fn where_products_keep_blank_operands_in_their_original_domains() {
             let mut shapes = first.unwrap();
             shapes.node_shapes = roots;
             let prepared = PreparedShapes::new(Arc::new(shapes));
-            let bytes = prepared.to_product(&ShapesProfile::CORE).unwrap();
+            let bytes = prepared
+                .to_product(
+                    &ShapesProfile::CORE,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
+                )
+                .unwrap();
             let restored = ShapesProduct::open(&bytes)
                 .unwrap()
                 .admit_with_options(&ShapesProfile::CORE, &HostBindings::empty(), &request)
@@ -385,7 +474,18 @@ fn where_products_keep_blank_operands_in_their_original_domains() {
                     ]
                 );
             }
-            assert_eq!(restored.to_product(&ShapesProfile::CORE).unwrap(), bytes);
+            assert_eq!(
+                restored
+                    .to_product(
+                        &ShapesProfile::CORE,
+                        &mut purrdf_core::CanonicalizationControl::new(
+                            purrdf_core::RDFC_V2_CORPUS_POLICY,
+                            None
+                        )
+                    )
+                    .unwrap(),
+                bytes
+            );
         }
     }
 }
@@ -485,7 +585,15 @@ fn where_products_keep_equal_blank_labels_in_distinct_rdf_scopes() {
             )
             .unwrap();
             let prepared = PreparedShapes::new(Arc::new(shapes));
-            let bytes = prepared.to_product(&ShapesProfile::CORE).unwrap();
+            let bytes = prepared
+                .to_product(
+                    &ShapesProfile::CORE,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
+                )
+                .unwrap();
             for (graph, iri, literal) in [
                 (
                     "<http://example.org/a> <http://example.org/p> \"value\" .",
@@ -559,7 +667,18 @@ fn where_products_keep_equal_blank_labels_in_distinct_rdf_scopes() {
                             .unwrap(),
                         expected
                     );
-                    assert_eq!(restored.to_product(&ShapesProfile::CORE).unwrap(), bytes);
+                    assert_eq!(
+                        restored
+                            .to_product(
+                                &ShapesProfile::CORE,
+                                &mut purrdf_core::CanonicalizationControl::new(
+                                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                                    None
+                                )
+                            )
+                            .unwrap(),
+                        bytes
+                    );
                 }
             }
         }

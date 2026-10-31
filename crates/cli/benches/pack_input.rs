@@ -63,7 +63,18 @@ fn verification(c: &mut Bench) {
     let (_file, bytes) = support::large_pack();
     let mut group = c.benchmark_group("pack_verification");
     group.bench_function("verify_pack", |b| {
-        b.iter(|| black_box(verify_pack(black_box(&bytes)).expect("verify")));
+        b.iter(|| {
+            black_box(
+                verify_pack(
+                    black_box(&bytes),
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
+                )
+                .expect("verify"),
+            )
+        });
     });
     group.finish();
 }

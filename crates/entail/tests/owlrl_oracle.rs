@@ -862,7 +862,12 @@ fn build(fixture: &Fixture) -> Arc<RdfDataset> {
 /// `fixture`'s canonical N-Quads input — degenerate N-Triples, since every fixture lives
 /// entirely in the default graph.
 fn input_text(fixture: &Fixture) -> String {
-    try_canonicalize(&build(fixture)).unwrap().nquads
+    try_canonicalize(
+        &build(fixture),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap()
+    .nquads
 }
 
 /// The committed corpus file's full text: an N-Triples `#`-comment header (the grammar
@@ -891,12 +896,15 @@ fn purrdf_closure_lines(fixture: &Fixture) -> BTreeSet<String> {
     let ds = build(fixture);
     let (closed, _report) = materialize(&ds, Materialization::OwlRl)
         .unwrap_or_else(|e| panic!("{}: OWL-RL materialization refused: {e}", fixture.name));
-    try_canonicalize(&closed)
-        .unwrap()
-        .nquads
-        .lines()
-        .map(ToOwned::to_owned)
-        .collect()
+    try_canonicalize(
+        &closed,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap()
+    .nquads
+    .lines()
+    .map(ToOwned::to_owned)
+    .collect()
 }
 
 // ── Corpus paths ────────────────────────────────────────────────────────────────

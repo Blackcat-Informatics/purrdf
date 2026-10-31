@@ -247,10 +247,23 @@ fn every_boundary_entry_point_refuses_without_the_table_and_applies_it_with() {
             .expect("the change path applies the import");
     assert!(sarif.contains("MinCountConstraintComponent"), "{sarif}");
 
-    let refused =
-        entail_to_ntriples_string(IMPORTER, None, DATA, &[]).expect_err("entailment refuses");
+    let refused = entail_to_ntriples_string(
+        IMPORTER,
+        None,
+        DATA,
+        &[],
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect_err("entailment refuses");
     assert_unresolved(&refused, "entail_to_ntriples_string");
-    let entailed = entail_to_ntriples_string(IMPORTER, None, DATA, TABLE).expect("entails");
+    let entailed = entail_to_ntriples_string(
+        IMPORTER,
+        None,
+        DATA,
+        TABLE,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("entails");
     assert!(entailed.contains(INFERRED), "{entailed}");
 
     let rules = |imports: &[(&str, &str)]| {
@@ -301,7 +314,13 @@ fn every_boundary_entry_point_refuses_without_the_table_and_applies_it_with() {
     let report = lint_shapes_ttl(IMPORTER, None, TABLE).expect("lints the closure");
     assert!(report.load_error().is_none(), "{}", report.render());
 
-    let refusal = pack_shapes_product(IMPORTER, None, &[]).expect_err("pack refuses");
+    let refusal = pack_shapes_product(
+        IMPORTER,
+        None,
+        &[],
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect_err("pack refuses");
     assert_eq!(refusal.import_error(), Some(&unresolved()));
     assert!(
         matches!(
@@ -310,7 +329,13 @@ fn every_boundary_entry_point_refuses_without_the_table_and_applies_it_with() {
         ),
         "the product boundary carries the same typed error: {refusal:?}"
     );
-    let product = pack_shapes_product(IMPORTER, None, TABLE).expect("packs the closure");
+    let product = pack_shapes_product(
+        IMPORTER,
+        None,
+        TABLE,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("packs the closure");
     let sarif = validate_with_shapes_product(&product, DATA, &options).expect("restores");
     assert!(
         sarif.contains("MinCountConstraintComponent"),

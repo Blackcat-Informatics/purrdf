@@ -137,7 +137,7 @@ the IRI failure without parsing English. The error message and the record's
   When an error out-pointer is supplied, a failure stores an owned `PurrdfError`
   there.
 - **SemVer-frozen ABI.** The status enum is append-only; new fields/functions are
-  additive. The current ABI is **0.16.0 (beta)** — the freeze *discipline* is in
+  additive. The current ABI is **0.17.0 (beta)** — the freeze *discipline* is in
   place, but the version stays pre-1.0 until a real C consumer and the rdflib
   shim exercise it. `purrdf_abi_version` reports it.
 - **An incompatible change is declared, not smuggled.** Pre-1.0 the project
@@ -288,6 +288,18 @@ the IRI failure without parsing English. The error message and the record's
   No context means `state: "not-started"`; an UPDATE without a WHERE context can
   still apply. The effective seed is a decimal string and unavailable identities
   are explicit JSON nulls. Rule receipts include ordered query contexts.
+
+  `0.16.0` → `0.17.0` adds required `canonical_search`, nullable `cancellation`,
+  and required `out_canonicalization_json` before `out_error` on every existing
+  canonicalizing entailment, session, SHACL entailment, product encode and product
+  certify export. Rebuild affected callers. Supply `unlimited` or an unsigned
+  decimal `u64` without leading zeros. Every constituent run has its own ceiling
+  and receipt; the receipt array makes no aggregate work-limit claim.
+  Free the separate evidence buffer with `purrdf_buffer_free`. Failed requests
+  expose it through `purrdf_error_canonicalization_json`; native cause fields are
+  available through `purrdf_error_native_cause_json`. Both strings and the original
+  native cause remain owned by the error until `purrdf_error_free`. Required output
+  slots must be non-null and all output slots must be distinct.
 
 ## Shapes-graph tools
 

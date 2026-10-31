@@ -128,7 +128,17 @@ mod tests {
             Some("http://example.org/"),
         )
         .expect("expected RDF");
-        assert!(datasets_isomorphic(&outcome.dataset, &expected).unwrap());
+        assert!(
+            datasets_isomorphic(
+                &outcome.dataset,
+                &expected,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+        );
     }
 
     #[test]

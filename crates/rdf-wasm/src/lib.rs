@@ -90,6 +90,8 @@ use wasm_bindgen::prelude::*;
 //   * `xsd`     — the XSD value space: exact canonical lexical forms and value-space
 //                 comparison (`xsdCanonicalLexical`/`xsdValueCompare`)
 mod async_query;
+mod canonical;
+pub use canonical::{CanonicalCause, CanonicalResult};
 mod codec;
 mod convert;
 mod dataset;

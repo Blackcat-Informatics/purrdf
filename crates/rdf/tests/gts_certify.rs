@@ -180,11 +180,18 @@ fn faithful_repack_verifies_all_ok() {
         TIMESTAMP,
         false,
         (fixed_key(7), "pack".to_string()),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
     .expect("compact_and_certify succeeds on a clean signed source");
 
     let ring = keyring(&[("author", 1), ("pack", 7)]);
-    let report = verify_compaction(&source, &pack, &ring).expect("verify_compaction succeeds");
+    let report = verify_compaction(
+        &source,
+        &pack,
+        &ring,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("verify_compaction succeeds");
     assert!(
         report.all_ok(),
         "a faithful repack must pass every check: {report:?}"
@@ -216,12 +223,18 @@ fn content_mutation_breaks_refold_equivalence() {
         TIMESTAMP,
         false,
         (fixed_key(7), "pack".to_string()),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
     .expect("compact_and_certify succeeds");
 
     let ring = keyring(&[("author", 1), ("pack", 7)]);
-    let report = verify_compaction(&mutated_source, &pack, &ring)
-        .expect("verify_compaction still produces a report");
+    let report = verify_compaction(
+        &mutated_source,
+        &pack,
+        &ring,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("verify_compaction still produces a report");
     assert!(
         !report.refold_equivalent,
         "a real content change (not the same pre) must flip refold_equivalent to false \
@@ -239,6 +252,7 @@ fn codec_recompression_preserves_refold_equivalence() {
         TIMESTAMP,
         false,
         (fixed_key(7), "pack-trained".to_string()),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
     .expect("trained-dict compaction succeeds");
     let (raw, cert_raw) = compact_and_certify(
@@ -247,6 +261,7 @@ fn codec_recompression_preserves_refold_equivalence() {
         TIMESTAMP,
         false,
         (fixed_key(9), "pack-raw".to_string()),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
     .expect("raw-content-dict compaction succeeds");
 
@@ -266,14 +281,30 @@ fn codec_recompression_preserves_refold_equivalence() {
 
     let ring = keyring(&[("author", 1), ("pack-trained", 7), ("pack-raw", 9)]);
     assert!(
-        verify_compaction(&source, &trained, &ring)
-            .expect("verify_compaction succeeds")
-            .refold_equivalent
+        verify_compaction(
+            &source,
+            &trained,
+            &ring,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .expect("verify_compaction succeeds")
+        .refold_equivalent
     );
     assert!(
-        verify_compaction(&source, &raw, &ring)
-            .expect("verify_compaction succeeds")
-            .refold_equivalent
+        verify_compaction(
+            &source,
+            &raw,
+            &ring,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .expect("verify_compaction succeeds")
+        .refold_equivalent
     );
 }
 
@@ -286,6 +317,7 @@ fn broken_seam_is_detected_without_erroring() {
         TIMESTAMP,
         false,
         (fixed_key(7), "pack".to_string()),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
     .expect("compact_and_certify succeeds");
 
@@ -300,8 +332,13 @@ fn broken_seam_is_detected_without_erroring() {
     assert_ne!(corrupted, pack);
 
     let ring = keyring(&[("author", 1), ("pack", 7)]);
-    let report = verify_compaction(&source, &corrupted, &ring)
-        .expect("a damaged trailing frame still yields a report, not an error");
+    let report = verify_compaction(
+        &source,
+        &corrupted,
+        &ring,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("a damaged trailing frame still yields a report, not an error");
     assert!(
         !report.seam_chain_ok,
         "a corrupted frame must be reported as a broken seam: {report:?}"
@@ -351,6 +388,7 @@ fn accretive_tail_after_pack_chains_cleanly_across_the_seam() {
         TIMESTAMP,
         false,
         (fixed_key(7), "pack".to_string()),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
     .expect("compact_and_certify succeeds");
 
@@ -393,8 +431,13 @@ fn accretive_tail_after_pack_chains_cleanly_across_the_seam() {
     );
 
     let ring = keyring(&[("author", 1), ("pack", 7)]);
-    let report = verify_compaction(&source, &composite, &ring)
-        .expect("verify_compaction succeeds across a genuine pack/tail seam");
+    let report = verify_compaction(
+        &source,
+        &composite,
+        &ring,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("verify_compaction succeeds across a genuine pack/tail seam");
     assert!(
         report.seam_chain_ok,
         "an intact pack+accretive-tail chain must report seam_chain_ok = true: {report:?}"
@@ -416,6 +459,7 @@ fn torn_tail_prev_breaks_seam_chain_ok_without_erroring() {
         TIMESTAMP,
         false,
         (fixed_key(7), "pack".to_string()),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
     .expect("compact_and_certify succeeds");
 
@@ -444,8 +488,13 @@ fn torn_tail_prev_breaks_seam_chain_ok_without_erroring() {
     );
 
     let ring = keyring(&[("author", 1), ("pack", 7)]);
-    let report = verify_compaction(&source, &composite, &ring)
-        .expect("a torn pack/tail seam still yields a report, not an error");
+    let report = verify_compaction(
+        &source,
+        &composite,
+        &ring,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("a torn pack/tail seam still yields a report, not an error");
     assert!(
         !report.seam_chain_ok,
         "a torn tail->pack chain link must be reported as a broken seam: {report:?}"
@@ -461,14 +510,20 @@ fn missing_authorship_key_fails_signatures_verify_but_full_keyring_succeeds() {
         TIMESTAMP,
         false,
         (fixed_key(7), "pack".to_string()),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
     .expect("compact_and_certify succeeds");
 
     // A keyring that resolves the packaging key but has rotated past (or
     // never had) the original authorship key.
     let partial_ring = keyring(&[("pack", 7)]);
-    let partial =
-        verify_compaction(&source, &pack, &partial_ring).expect("verify_compaction succeeds");
+    let partial = verify_compaction(
+        &source,
+        &pack,
+        &partial_ring,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("verify_compaction succeeds");
     assert!(
         !partial.signatures_verify,
         "a keyring missing the authorship kid must fail signatures_verify"
@@ -480,7 +535,13 @@ fn missing_authorship_key_fails_signatures_verify_but_full_keyring_succeeds() {
 
     // Full (rotation-capable) keyring resolves both.
     let full_ring = keyring(&[("author", 1), ("pack", 7)]);
-    let full = verify_compaction(&source, &pack, &full_ring).expect("verify_compaction succeeds");
+    let full = verify_compaction(
+        &source,
+        &pack,
+        &full_ring,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("verify_compaction succeeds");
     assert!(
         full.signatures_verify,
         "the full keyring resolves the carried authorship signatures: {full:?}"
@@ -496,6 +557,7 @@ fn compose_chains_matching_certificates_and_rejects_mismatched_ones() {
         TIMESTAMP,
         false,
         (fixed_key(7), "pack1".to_string()),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
     .expect("first compaction succeeds");
     let (_pack2, cert_bc) = compact_and_certify(
@@ -504,6 +566,7 @@ fn compose_chains_matching_certificates_and_rejects_mismatched_ones() {
         TIMESTAMP,
         false,
         (fixed_key(9), "pack2".to_string()),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
     .expect("second compaction (of the first pack) succeeds");
 
@@ -537,6 +600,7 @@ fn compose_chains_matching_certificates_and_rejects_mismatched_ones() {
         TIMESTAMP,
         false,
         (fixed_key(11), "pack3".to_string()),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
     .expect("unrelated compaction succeeds");
     assert!(
@@ -613,6 +677,7 @@ fn signatures_survive_two_repacks_and_key_rotation() {
         TIMESTAMP,
         false,
         (fixed_key(7), "packaging1".to_string()),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
     .expect("first compaction succeeds");
 
@@ -626,6 +691,7 @@ fn signatures_survive_two_repacks_and_key_rotation() {
         TIMESTAMP,
         false,
         (fixed_key(9), "packaging2".to_string()),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
     .expect("second compaction (a repack of the first pack) succeeds");
     assert_ne!(
@@ -639,8 +705,13 @@ fn signatures_survive_two_repacks_and_key_rotation() {
         ("packaging1", 7),
         ("packaging2", 9),
     ]);
-    let report = verify_compaction(&source, &pack2, &full_ring)
-        .expect("verify_compaction succeeds across two repacks");
+    let report = verify_compaction(
+        &source,
+        &pack2,
+        &full_ring,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("verify_compaction succeeds across two repacks");
     assert!(
         report.signatures_bound,
         "the ORIGINAL authorship signatures (both keys, across the rotation) must remain \
@@ -689,8 +760,13 @@ fn signatures_survive_two_repacks_and_key_rotation() {
     // stay true — the binding is structural (an MMR commitment), entirely
     // independent of whether a verifier happens to hold the signing key.
     let partial_ring = keyring(&[("authorB", 2), ("packaging2", 9)]);
-    let partial = verify_compaction(&source, &pack2, &partial_ring)
-        .expect("verify_compaction succeeds even with a partial keyring");
+    let partial = verify_compaction(
+        &source,
+        &pack2,
+        &partial_ring,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("verify_compaction succeeds even with a partial keyring");
     assert!(
         !partial.signatures_verify,
         "a keyring missing authorA must fail signatures_verify: {partial:?}"
@@ -714,6 +790,7 @@ fn certificate_canonical_cbor_round_trips_and_is_deterministic() {
         TIMESTAMP,
         false,
         (fixed_key(7), "pack".to_string()),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
     .expect("compact_and_certify succeeds");
 
@@ -741,6 +818,7 @@ fn certificate_cbor_with_trailing_bytes_is_refused_and_the_exact_item_is_accepte
         TIMESTAMP,
         false,
         (fixed_key(7), "pack".to_string()),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
     .expect("compact_and_certify succeeds");
     let exact = cert.to_canonical_cbor();
@@ -842,6 +920,7 @@ fn term_suppression_commutes_through_compaction() {
         TIMESTAMP,
         false,
         (fixed_key(7), "pack".to_string()),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
     .expect("compaction of a term-suppressing source succeeds");
     let post_fold = read(&pack, true, None);
@@ -850,16 +929,38 @@ fn term_suppression_commutes_through_compaction() {
     // RAW digest ignores suppressions entirely — the suppressed bytes are
     // retained either way, so refold_equivalent stays true.
     assert_eq!(
-        refold_digest(&pre_fold).expect("pre raw digest"),
-        refold_digest(&post_fold).expect("post raw digest"),
+        refold_digest(
+            &pre_fold,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .expect("pre raw digest"),
+        refold_digest(
+            &post_fold,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .expect("post raw digest"),
         "the raw refold digest must stay equal (bytes are retained, never deleted)"
     );
 
     // EFFECTIVE digest: the suppression↔compaction commuting square — the
     // compactor carried the suppression forward, so the view a
     // suppression-aware consumer sees is preserved too.
-    let pre_eff = effective_digest(&pre_fold).expect("pre effective digest");
-    let post_eff = effective_digest(&post_fold).expect("post effective digest");
+    let pre_eff = effective_digest(
+        &pre_fold,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("pre effective digest");
+    let post_eff = effective_digest(
+        &post_fold,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("post effective digest");
     assert_eq!(
         pre_eff, post_eff,
         "effective_digest must commute through a faithful compaction"
@@ -870,20 +971,43 @@ fn term_suppression_commutes_through_compaction() {
     // it is not just silently equal to the raw digest.
     let unsuppressed = source_with_term_suppression(1, "author", false);
     let unsuppressed_fold = read(&unsuppressed, true, None);
-    let unsuppressed_eff =
-        effective_digest(&unsuppressed_fold).expect("unsuppressed effective digest");
+    let unsuppressed_eff = effective_digest(
+        &unsuppressed_fold,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("unsuppressed effective digest");
     assert_ne!(
         pre_eff, unsuppressed_eff,
         "the term suppression must actually change the effective view"
     );
     assert_eq!(
-        refold_digest(&pre_fold).expect("suppressed raw digest"),
-        refold_digest(&unsuppressed_fold).expect("unsuppressed raw digest"),
+        refold_digest(
+            &pre_fold,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .expect("suppressed raw digest"),
+        refold_digest(
+            &unsuppressed_fold,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .expect("unsuppressed raw digest"),
         "sanity: the RAW digest does NOT depend on suppression, only the EFFECTIVE one does"
     );
 
     let ring = keyring(&[("author", 1), ("pack", 7)]);
-    let report = verify_compaction(&source, &pack, &ring).expect("verify_compaction succeeds");
+    let report = verify_compaction(
+        &source,
+        &pack,
+        &ring,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("verify_compaction succeeds");
     assert!(
         report.suppressions_ok,
         "a faithful term-suppression carry must pass suppressions_ok: {report:?}"
@@ -902,19 +1026,42 @@ fn quad_suppression_commutes_through_compaction() {
         TIMESTAMP,
         false,
         (fixed_key(7), "pack".to_string()),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
     .expect("compaction of a quad-suppressing source succeeds");
     let post_fold = read(&pack, true, None);
     assert!(post_fold.diagnostics.is_empty(), "pack folds cleanly");
 
     assert_eq!(
-        refold_digest(&pre_fold).expect("pre raw digest"),
-        refold_digest(&post_fold).expect("post raw digest"),
+        refold_digest(
+            &pre_fold,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .expect("pre raw digest"),
+        refold_digest(
+            &post_fold,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .expect("post raw digest"),
         "the raw refold digest must stay equal (bytes are retained, never deleted)"
     );
 
-    let pre_eff = effective_digest(&pre_fold).expect("pre effective digest");
-    let post_eff = effective_digest(&post_fold).expect("post effective digest");
+    let pre_eff = effective_digest(
+        &pre_fold,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("pre effective digest");
+    let post_eff = effective_digest(
+        &post_fold,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("post effective digest");
     assert_eq!(
         pre_eff, post_eff,
         "effective_digest must commute through a faithful compaction"
@@ -922,15 +1069,24 @@ fn quad_suppression_commutes_through_compaction() {
 
     let unsuppressed = source_with_quad_suppression(1, "author", false);
     let unsuppressed_fold = read(&unsuppressed, true, None);
-    let unsuppressed_eff =
-        effective_digest(&unsuppressed_fold).expect("unsuppressed effective digest");
+    let unsuppressed_eff = effective_digest(
+        &unsuppressed_fold,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("unsuppressed effective digest");
     assert_ne!(
         pre_eff, unsuppressed_eff,
         "the quad suppression must actually change the effective view"
     );
 
     let ring = keyring(&[("author", 1), ("pack", 7)]);
-    let report = verify_compaction(&source, &pack, &ring).expect("verify_compaction succeeds");
+    let report = verify_compaction(
+        &source,
+        &pack,
+        &ring,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("verify_compaction succeeds");
     assert!(
         report.suppressions_ok,
         "a faithful quad-suppression carry must pass suppressions_ok: {report:?}"
@@ -946,15 +1102,24 @@ fn dropping_the_carried_suppression_flips_suppressions_ok_to_false() {
         TIMESTAMP,
         false,
         (fixed_key(7), "pack".to_string()),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
     .expect("compaction succeeds");
 
     // Sanity: the faithful pack passes before we mangle it.
     let ring = keyring(&[("author", 1), ("pack", 7)]);
     assert!(
-        verify_compaction(&source, &pack, &ring)
-            .expect("verify_compaction succeeds")
-            .suppressions_ok,
+        verify_compaction(
+            &source,
+            &pack,
+            &ring,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .expect("verify_compaction succeeds")
+        .suppressions_ok,
         "the faithful pack must pass suppressions_ok before mangling"
     );
 
@@ -970,8 +1135,13 @@ fn dropping_the_carried_suppression_flips_suppressions_ok_to_false() {
         .expect("deterministic writer builds from the mangled fold")
         .into_bytes();
 
-    let report = verify_compaction(&source, &mangled, &ring)
-        .expect("verify_compaction still produces a report for the mangled pack");
+    let report = verify_compaction(
+        &source,
+        &mangled,
+        &ring,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("verify_compaction still produces a report for the mangled pack");
     assert!(
         !report.suppressions_ok,
         "dropping the carried suppression must be detected: {report:?}"
@@ -1003,7 +1173,22 @@ fn verify_compaction_fails_closed_on_symmetric_poison_content() {
         "poison fixture must fold cleanly: {:?}",
         folded.diagnostics
     );
-    for digest in [refold_digest(&folded), effective_digest(&folded)] {
+    for digest in [
+        refold_digest(
+            &folded,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        ),
+        effective_digest(
+            &folded,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        ),
+    ] {
         assert!(matches!(
             digest,
             Err(CertifyError::CanonRefused(CanonError::BudgetExceeded(refusal)))
@@ -1016,7 +1201,12 @@ fn verify_compaction_fails_closed_on_symmetric_poison_content() {
     // the poison pre-bytes alone are enough to exercise the failure path.
     // Re-folding the SAME poison bytes as "post" keeps the fixture minimal
     // and self-contained (no dependency on a separate valid pack).
-    match verify_compaction(&poison, &poison, &ring) {
+    match verify_compaction(
+        &poison,
+        &poison,
+        &ring,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    ) {
         // Matched to the BUDGET refusal specifically, not to `CanonRefused` as a whole:
         // canonicalization now has a second refusal (reserved vocabulary), and a test
         // that accepted either would pass if this fixture ever started failing for the
@@ -1092,14 +1282,20 @@ fn manifestation_typed_content_node_mutation_is_not_masked_by_projection() {
         TIMESTAMP,
         false,
         (fixed_key(7), "pack".to_string()),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
     .expect(
         "compact_and_certify succeeds on a source carrying a reserved-class-typed content node",
     );
 
     let ring = keyring(&[("author", 1), ("pack", 7)]);
-    let report = verify_compaction(&mutated_source, &pack, &ring)
-        .expect("verify_compaction still produces a report");
+    let report = verify_compaction(
+        &mutated_source,
+        &pack,
+        &ring,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("verify_compaction still produces a report");
     assert!(
         !report.refold_equivalent,
         "a real content mutation on a blank node that merely happens to be typed with a \
@@ -1132,12 +1328,18 @@ fn verify_compaction_accepts_large_non_symmetric_content() {
         TIMESTAMP,
         false,
         (fixed_key(7), "pack".to_string()),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
     .expect("compact_and_certify must not treat a large non-symmetric graph as poison");
 
     let ring = keyring(&[("author", 1), ("pack", 7)]);
-    let report = verify_compaction(&source, &pack, &ring)
-        .expect("verify_compaction must not fail closed on a legitimate large graph");
+    let report = verify_compaction(
+        &source,
+        &pack,
+        &ring,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("verify_compaction must not fail closed on a legitimate large graph");
     assert!(
         report.all_ok(),
         "a faithful repack of a large non-symmetric content graph must still verify: {report:?}"

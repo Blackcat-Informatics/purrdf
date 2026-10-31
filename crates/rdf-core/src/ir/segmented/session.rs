@@ -2387,9 +2387,12 @@ mod operation_tests {
             .open_session(SegmentedReadLimits::new(2_000_000, 1, 100, 1_000_000, 2))
             .unwrap();
         let budget = Arc::downgrade(&session.budget);
-        let CanonError::ReservedVocabulary(refusal) =
-            try_canonicalize_view(&session, CanonHash::Sha256).unwrap_err()
-        else {
+        let CanonError::ReservedVocabulary(refusal) = try_canonicalize_view(
+            &session,
+            CanonHash::Sha256,
+            &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+        )
+        .unwrap_err() else {
             panic!("the reserved IRI must be refused");
         };
         let duplicate = refusal.clone();

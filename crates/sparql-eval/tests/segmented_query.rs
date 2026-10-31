@@ -1346,7 +1346,14 @@ fn persisted_reifier_limit_bounds_touched_terms_and_full_count_matches() {
                 .unwrap();
         }
         let resident = builder.freeze().unwrap();
-        let packed = PackBuilder::build_view_bytes(resident.as_ref()).unwrap();
+        let packed = PackBuilder::build_view_bytes(
+            resident.as_ref(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         for (block_bytes, records_per_block) in [(4096, 32), (4096, 64), (4096, 128), (8192, 128)] {
             let built = SegmentedImage::from_pack_v1(
                 &packed,
@@ -2189,7 +2196,14 @@ fn authenticated_annotation_ranges_reduce_cold_reads_and_keep_exact_filter() {
     }
     let resident = builder.freeze().unwrap();
     let image = SegmentedImage::from_pack_v1(
-        &PackBuilder::build_bytes(&resident).unwrap(),
+        &PackBuilder::build_bytes(
+            &resident,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap(),
         SegmentedBuildLimits::new(8192, 2_000_000, 8192, 1024, 16).unwrap(),
     )
     .unwrap();

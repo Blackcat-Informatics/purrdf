@@ -51,7 +51,7 @@ _DATA = (
 
 
 def _product(shapes_ttl: str) -> purrdf.shapes.ShapesProduct:
-    return purrdf.shapes.ShapesProduct.open(purrdf.shapes.pack_product(shapes_ttl))
+    return purrdf.shapes.ShapesProduct.open(purrdf.shapes.pack_product(shapes_ttl, canonical_search="1000000").value)
 
 
 def test_a_product_that_is_not_the_expected_one_is_refused() -> None:

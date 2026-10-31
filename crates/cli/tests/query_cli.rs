@@ -48,6 +48,10 @@ const DATA_TTL: &str = concat!(
 /// identical data yields byte-identical, non-vacuous results — file/pack query parity.
 #[test]
 fn select_file_and_pack_are_byte_identical_and_non_vacuous() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(dir, "data.ttl", DATA_TTL);
@@ -68,13 +72,40 @@ fn select_file_and_pack_are_byte_identical_and_non_vacuous() {
 
     // (b) Build a pack from the same data, then query it (mmap'd, zero-copy).
     let pack = write_file(dir, "data.purrpck", "");
-    let build = run(&["convert", "--from", "turtle", "--to", "pack", &ttl, &pack]);
+    let build = run(&[
+        "convert",
+        "--from",
+        "turtle",
+        "--to",
+        "pack",
+        &ttl,
+        &pack,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(
         build.status.success(),
         "building the pack must exit 0; stderr:\n{}",
         stderr(&build)
     );
-    let pack_out = run(&["query", "--data", &pack, "--results-format", "json", query]);
+    let pack_out = run(&[
+        "query",
+        "--data",
+        &pack,
+        "--results-format",
+        "json",
+        query,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(
         pack_out.status.success(),
         "query over the pack must exit 0; stderr:\n{}",
@@ -461,6 +492,9 @@ fn base_resolves_relative_iris_in_the_data() {
 /// pack integrity verifier rejects it before any view is opened.
 #[test]
 fn corrupt_pack_fails_closed() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let bad = write_file(dir, "bad.purrpck", "not a pack file at all — pure garbage");
@@ -472,6 +506,12 @@ fn corrupt_pack_fails_closed() {
         "--results-format",
         "json",
         "SELECT ?s WHERE { ?s ?p ?o }",
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert!(
         !out.status.success(),
@@ -3268,17 +3308,51 @@ fn parse_refusals_render_each_condition_in_its_exact_words() {
 /// and execution routes, including the reasoner's options rebinding.
 #[test]
 fn supplied_coordinates_replay_across_query_routes_and_sources() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_conditional_1 = canonical_receipt_dir
+        .path()
+        .join("conditional-request-1.json");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let ttl = write_file(dir.path(), "coordinates.ttl", DATA_TTL);
     let pack = write_file(dir.path(), "coordinates.purrpck", "");
-    let built = run(&["convert", "--from", "turtle", "--to", "pack", &ttl, &pack]);
+    let built = run(&[
+        "convert",
+        "--from",
+        "turtle",
+        "--to",
+        "pack",
+        &ttl,
+        &pack,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(built.status.success(), "{}", stderr(&built));
     let time = "2020-01-02T03:04:05.12345678901234567890123456789+05:30";
     let other_time = "-0001-02-03T04:05:06.98765432109876543210987654321-04:00";
     let query = "SELECT (NOW() AS ?now) (RAND() AS ?rand) (UUID() AS ?uuid) \
                  (STRUUID() AS ?str) WHERE { ?s <http://example.org/knows> ?o }";
-    let answer = |source: &str, now: Option<&str>, seed: Option<&str>, lane: &[&str]| {
+    let answer = |source: &str,
+                  now: Option<&str>,
+                  seed: Option<&str>,
+                  lane: &[&str],
+                  canonical_search: Option<&str>| {
         let mut args = vec!["query", "--data", source, "--results-format", "tsv"];
+        if let Some(policy) = canonical_search {
+            args.extend([
+                "--canonical-search",
+                policy,
+                "--canonicalization-receipts",
+                canonical_conditional_1
+                    .to_str()
+                    .expect("UTF-8 canonical receipt path"),
+            ]);
+        }
         if let Some(now) = now {
             args.extend(["--now", now]);
         }
@@ -3294,31 +3368,34 @@ fn supplied_coordinates_replay_across_query_routes_and_sources() {
         assert_eq!(lines.len(), 2, "one real source row: {body}");
         lines[1].split('\t').map(str::to_owned).collect::<Vec<_>>()
     };
-    let first = answer(&ttl, Some(time), Some("0"), &[]);
+    let first = answer(&ttl, Some(time), Some("0"), &[], None);
     assert_eq!(first.len(), 4);
     assert!(first[0].contains(time), "exact time: {first:?}");
     assert!(first[2].contains("urn:uuid:"));
-    for source in [&ttl, &pack] {
+    for (source, canonical_search) in [(&ttl, None), (&pack, Some("unlimited"))] {
         for lane in [
             &[][..],
             &["--fuel", "1000000"][..],
             &["--entailment", "rdfs"][..],
         ] {
-            assert_eq!(answer(source, Some(time), Some("0"), lane), first);
+            assert_eq!(
+                answer(source, Some(time), Some("0"), lane, canonical_search),
+                first
+            );
         }
     }
-    let changed_time = answer(&ttl, Some(other_time), Some("0"), &[]);
+    let changed_time = answer(&ttl, Some(other_time), Some("0"), &[], None);
     assert!(changed_time[0].contains(other_time));
     assert_eq!(changed_time[1..], first[1..]);
-    let changed_seed = answer(&ttl, Some(time), Some("1"), &[]);
+    let changed_seed = answer(&ttl, Some(time), Some("1"), &[], None);
     assert_eq!(changed_seed[0], first[0]);
     for column in 1..4 {
         assert_ne!(changed_seed[column], first[column]);
     }
-    let time_only = answer(&ttl, Some(time), None, &[]);
+    let time_only = answer(&ttl, Some(time), None, &[], None);
     assert_eq!(time_only[0], first[0]);
     assert!(time_only.iter().all(|cell| !cell.is_empty()));
-    let seed_only = answer(&ttl, None, Some("0"), &[]);
+    let seed_only = answer(&ttl, None, Some("0"), &[], None);
     assert_eq!(seed_only[1..], first[1..]);
     assert_ne!(seed_only[0], "");
 

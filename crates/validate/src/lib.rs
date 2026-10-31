@@ -74,12 +74,14 @@
 #![forbid(unsafe_code)]
 
 pub mod build;
+pub mod canonical;
 pub mod complete;
 pub mod entail;
 pub mod expr_selector;
 pub mod geo;
 pub mod governors;
 pub mod model;
+pub mod native_error;
 pub mod path_syntax;
 pub mod product;
 pub mod query;

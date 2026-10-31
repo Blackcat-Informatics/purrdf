@@ -208,7 +208,11 @@ pub(crate) struct ShexOptions<'a> {
 }
 
 /// Run the `shex` subcommand.
-pub(crate) fn run(options: &ShexOptions<'_>, ledger_target: &LedgerTarget) -> Result<(), CliError> {
+pub(crate) fn run(
+    options: &ShexOptions<'_>,
+    ledger_target: &LedgerTarget,
+    canonical: &mut crate::canonical::Request,
+) -> Result<(), CliError> {
     // Refuse the two global document flags, which name outputs this command does not produce.
     //
     // `--loss-ledger` records what a CONVERSION dropped, and this command converts nothing: the
@@ -238,7 +242,7 @@ pub(crate) fn run(options: &ShexOptions<'_>, ledger_target: &LedgerTarget) -> Re
     let data_format = format::resolve(options.from, options.data)?;
     // No `--base` refusal here, unlike every other subcommand: see the module documentation
     // for why this run's base can never be inert.
-    let data = source::load_dataset(options.data, data_format, options.base)?;
+    let data = source::load_dataset(options.data, data_format, options.base, canonical)?;
 
     let schema_base = schema_base(options.schema)?;
     let schema = read_schema(options.schema, options.schema_from, schema_base.as_deref())?;
@@ -294,7 +298,7 @@ pub(crate) fn run(options: &ShexOptions<'_>, ledger_target: &LedgerTarget) -> Re
 
     let mut json = result.to_result_json();
     json.push('\n');
-    sink::write_out(options.output, json.as_bytes())?;
+    sink::write_out_with_request(options.output, json.as_bytes(), canonical)?;
     surface_verdict(&result);
     Ok(())
 }

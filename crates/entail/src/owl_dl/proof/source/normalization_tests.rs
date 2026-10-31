@@ -40,10 +40,13 @@ fn both_sides_split_without_renumbering_or_replacing_the_original_source() {
     f.edge(union, rdfs::SUB_CLASS_OF, intersection);
     f.edge(e, rdfs::SUB_CLASS_OF, g);
     let input = f.freeze();
-    let ctx = Reasoner::with_proofs(&input)
-        .unwrap()
-        .proof_context()
-        .unwrap();
+    let ctx = Reasoner::with_proofs(
+        &input,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap()
+    .proof_context()
+    .unwrap();
     let mut split = 0;
     let mut other = 0;
     for index in 0..ctx.clause_count() {
@@ -95,10 +98,13 @@ fn internalization_partial_absorption_and_range_keep_separate_source_licenses() 
     f.edge(partial, owl::INTERSECTION_OF, members);
     f.edge(partial, rdfs::SUB_CLASS_OF, d);
     f.edge(p, rdfs::RANGE, a);
-    let ctx = Reasoner::with_proofs(&f.freeze())
-        .unwrap()
-        .proof_context()
-        .unwrap();
+    let ctx = Reasoner::with_proofs(
+        &f.freeze(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap()
+    .proof_context()
+    .unwrap();
     let mut formulas = ctx.internalized_axioms();
     assert_eq!(formulas.len(), 1);
     let (formula, origin) = formulas.next().unwrap();
@@ -144,10 +150,13 @@ fn equivalent_and_subclass_axioms_do_not_lose_their_distinct_original_spellings(
     let b = f.name("B");
     f.edge(a, rdfs::SUB_CLASS_OF, b);
     f.edge(a, owl::EQUIVALENT_CLASS, b);
-    let ctx = Reasoner::with_proofs(&f.freeze())
-        .unwrap()
-        .proof_context()
-        .unwrap();
+    let ctx = Reasoner::with_proofs(
+        &f.freeze(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap()
+    .proof_context()
+    .unwrap();
     let mut equivalences = 0;
     let mut subclasses = 0;
     for index in 0..ctx.clause_count() {

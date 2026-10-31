@@ -3819,8 +3819,18 @@ mod tests {
         let ba = RdfDataset::union(&[&c, &a]).unwrap();
         assert_eq!(ab.quad_count(), 2, "both quads survive the union");
         assert_eq!(
-            try_canonicalize(&ab).unwrap().nquads,
-            try_canonicalize(&ba).unwrap().nquads,
+            try_canonicalize(
+                &ab,
+                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+            )
+            .unwrap()
+            .nquads,
+            try_canonicalize(
+                &ba,
+                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+            )
+            .unwrap()
+            .nquads,
             "union is order-independent up to isomorphism"
         );
     }
@@ -3941,8 +3951,18 @@ mod tests {
         };
         let u = RdfDataset::union(&[&ds]).unwrap();
         assert_eq!(
-            try_canonicalize(&ds).unwrap().nquads,
-            try_canonicalize(&u).unwrap().nquads,
+            try_canonicalize(
+                &ds,
+                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+            )
+            .unwrap()
+            .nquads,
+            try_canonicalize(
+                &u,
+                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+            )
+            .unwrap()
+            .nquads,
             "single-input union is isomorphic to the input"
         );
     }

@@ -131,7 +131,15 @@ fn three_directly_nested_sub_selects_answer_exactly() {
         panic!("a CONSTRUCT answers with a graph");
     };
     assert_eq!(
-        purrdf_core::try_canonicalize(&graph).unwrap().nquads,
+        purrdf_core::try_canonicalize(
+            &graph,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+        .nquads,
         format!("<{EX}s1> <{EX}q> \"1\"^^<http://www.w3.org/2001/XMLSchema#integer> .\n")
     );
     for (value, expected) in [("2", &["s1", "s2"][..]), ("3", &[][..])] {

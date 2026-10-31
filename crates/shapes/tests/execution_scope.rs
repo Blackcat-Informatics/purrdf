@@ -374,8 +374,22 @@ ex:PersonRule a sh:NodeShape ;
     };
     assert_eq!(quiet.tripped(), None);
     assert_eq!(
-        purrdf_rdf::canonical_flat_nquads(entailed.as_ref()).expect("canonical"),
-        purrdf_rdf::canonical_flat_nquads(baseline.as_ref()).expect("canonical"),
+        purrdf_rdf::canonical_flat_nquads(
+            entailed.as_ref(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .expect("canonical"),
+        purrdf_rdf::canonical_flat_nquads(
+            baseline.as_ref(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .expect("canonical"),
         "a quiet signal changes nothing entailed"
     );
 
