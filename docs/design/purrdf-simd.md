@@ -903,6 +903,11 @@ Every bench file under `crates/*/benches/` (support modules excluded) and the §
 rows whose code it exercises. `make simd-asm` fails when a bench file has no row, a
 row names no site, or a site id is not a §4.1 row.
 
+`gts_import_alloc` reports current-thread allocation demand for the public import.
+Its mapped sites identify the shared canonical CBOR and hashing code exercised;
+the probe makes no SIMD throughput claim. Input construction and output verification
+remain outside its measured allocation window.
+
 <!-- simd-asm:benches:begin -->
 | bench | sites |
 |---|---|
@@ -939,6 +944,7 @@ row names no site, or a site id is not a §4.1 row.
 | `crates/purrdf/benches/multimodal_on_demand_read.rs` | facade.multimodal-read, retrieval.fusion-frontier, retrieval.rrf, text.bm25f, hnsw.search-build, hnsw.distance-cache, distance.exact.dot, distance.exact.sqeuclid |
 | `crates/rdf/benches/flat_view_canon.rs` | core.canon-escape |
 | `crates/rdf/benches/gts_ingest.rs` | gts.cbor-writer, blake3.hash-many-dispatch, lex.find-byte2-line-split |
+| `crates/rdf/benches/gts_import_alloc.rs` | gts.cbor-writer, blake3.hash-many-dispatch, blake3.single-block |
 | `crates/rdf/benches/gts_selected_blobs.rs` | gts.cbor-writer, blake3.hash-many-dispatch |
 | `crates/rdf/benches/jsonld_alloc.rs` | json.parser-string |
 | `crates/rdf/benches/native_codecs.rs` | lex.find-byte2-line-split, rdf.escape-scan, rdf.sort-canonical, sparql.lexer-trivia |
