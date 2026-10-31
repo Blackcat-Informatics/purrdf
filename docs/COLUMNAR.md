@@ -16,6 +16,37 @@ Every table is flat. The only Parquet physical types are `INT64` and
 columns contain one value per row. Optional columns use definition level 0 for
 null and 1 for present.
 
+## Exact-file source manifest
+
+PURREMB `source_format = 2` binds the actual five-file schema v1 set through
+the following canonical binary manifest. All integers are unsigned little-endian.
+
+| Field | Encoding |
+| --- | --- |
+| Magic | Eight ASCII bytes `PURRCOLM` |
+| Manifest version | `u32`, value `1` |
+| Table count | `u32`, value `5` |
+| Each file record | `u64` filename byte length, UTF-8 filename bytes, `u64` actual file byte length, raw 32-byte SHA-256 of all actual file bytes |
+
+Records occur exactly in `Table::ALL` order: `terms.parquet`, `quads.parquet`,
+`reifiers.parquet`, `annotations.parquet`, `blobs.parquet`. Filename framing is
+`purrdf_hash::frame::frame_le`; there is no padding or trailing data. Every file
+is included, including valid zero-row Parquet files. An absent file is not an
+empty table.
+
+`source_manifest` computes these bytes from `ParquetFiles`; it does not validate
+Parquet or certify RDF. Certification completes the strict native reader,
+including every blob digest, then independently canonicalizes the reconstructed
+RDF dataset using the `purrdf-rdfc12` profile. PURREMB stores the manifest byte
+length and `SHA256(manifest bytes)`, separately from that certified RDF digest.
+
+`read_with_ordinals` completes the same strict read as `read` while retaining
+only requested original zero-based term, quad, reifier and annotation rows.
+Evidence uses the reader's explicit source-dictionary-to-kernel map and remains
+bound to its reconstructed dataset. Neither kernel IDs nor final iteration order
+are source ordinals. An empty request retains no statement-row evidence;
+fulfilling a request never skips validation of later rows, tables or blobs.
+
 ## Projection failures
 
 Native integrity refusals retain their original `ContentStoreError` in
