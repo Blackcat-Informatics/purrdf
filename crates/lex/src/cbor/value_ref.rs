@@ -7,6 +7,18 @@ use super::decode::{BorrowedChildren, BorrowedEntries, BorrowedItem};
 use super::{DecodeError, Value, head};
 use std::borrow::Cow;
 
+// Both cursor types preserve the underlying iterator's cardinality guarantees.
+macro_rules! cursor_size_hint {
+    () => {
+        fn size_hint(&self) -> (usize, Option<usize>) {
+            match self {
+                Self::Owned(items) => items.size_hint(),
+                Self::Encoded(items) => items.size_hint(),
+            }
+        }
+    };
+}
+
 #[derive(Clone, Copy, Debug)]
 /// A value borrowed from an owned tree or its validated source bytes.
 pub enum ValueRef<'a> {
@@ -202,12 +214,7 @@ pub enum Values<'a> {
 
 impl<'a> Iterator for Values<'a> {
     type Item = Result<ValueRef<'a>, DecodeError>;
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        match self {
-            Self::Owned(items) => items.size_hint(),
-            Self::Encoded(items) => items.size_hint(),
-        }
-    }
+    cursor_size_hint!();
     fn next(&mut self) -> Option<Self::Item> {
         match self {
             Self::Owned(items) => items.next().map(|item| Ok(ValueRef::Owned(item))),
@@ -253,12 +260,7 @@ pub enum Entries<'a> {
 
 impl<'a> Iterator for Entries<'a> {
     type Item = Result<(ValueRef<'a>, ValueRef<'a>), DecodeError>;
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        match self {
-            Self::Owned(entries) => entries.size_hint(),
-            Self::Encoded(entries) => entries.size_hint(),
-        }
-    }
+    cursor_size_hint!();
     fn next(&mut self) -> Option<Self::Item> {
         match self {
             Self::Owned(entries) => entries
