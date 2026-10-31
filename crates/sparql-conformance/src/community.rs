@@ -753,7 +753,7 @@ impl Corpus {
                     }
                 }
                 Err(error) => {
-                    records.push(record("native/prepared/bind", grade(Err(error), control)))
+                    records.push(record("native/prepared/bind", grade(Err(error), control)));
                 }
             }
             match purrdf_validate::prepared_to_product(&prepared, control) {
