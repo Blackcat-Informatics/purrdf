@@ -270,24 +270,365 @@ impl<R: Read + ?Sized> Source for Stream<'_, R> {
 }
 
 /// An array, map or tag whose items are still being read.
-enum Open {
+/// One complete encoded CBOR item, relative to the current input slice.
+type ItemSpan = (usize, usize);
+
+trait DecodeOutput {
+    type Item;
+    type Array: Default;
+    type Map: Default;
+
+    fn scalar(&mut self, value: Value, span: ItemSpan, depth: usize) -> Self::Item;
+    fn push_array(&mut self, array: &mut Self::Array, item: Self::Item);
+    fn push_map(&mut self, map: &mut Self::Map, key: Self::Item, value: Self::Item);
+    fn array(&mut self, array: Self::Array, span: ItemSpan, depth: usize) -> Self::Item;
+    fn map(&mut self, map: Self::Map, span: ItemSpan, depth: usize) -> Self::Item;
+    fn tag(&mut self, tag: u64, item: Self::Item, span: ItemSpan, depth: usize) -> Self::Item;
+}
+
+struct OwnedOutput;
+
+impl DecodeOutput for OwnedOutput {
+    type Item = Value;
+    type Array = Vec<Value>;
+    type Map = Vec<(Value, Value)>;
+
+    fn scalar(&mut self, value: Value, _: ItemSpan, _: usize) -> Value {
+        value
+    }
+    fn push_array(&mut self, array: &mut Self::Array, item: Value) {
+        array.push(item);
+    }
+    fn push_map(&mut self, map: &mut Self::Map, key: Value, value: Value) {
+        map.push((key, value));
+    }
+    fn array(&mut self, array: Self::Array, _: ItemSpan, _: usize) -> Value {
+        Value::Array(array)
+    }
+    fn map(&mut self, map: Self::Map, _: ItemSpan, _: usize) -> Value {
+        Value::Map(map)
+    }
+    fn tag(&mut self, tag: u64, item: Value, _: ItemSpan, _: usize) -> Value {
+        Value::Tag(tag, Box::new(item))
+    }
+}
+
+struct SpanOutput<'a, F> {
+    depth: usize,
+    visit: &'a mut F,
+}
+
+impl<F: FnMut(ItemSpan)> SpanOutput<'_, F> {
+    fn record(&mut self, span: ItemSpan, depth: usize) {
+        if depth == self.depth {
+            (self.visit)(span);
+        }
+    }
+}
+
+impl<F: FnMut(ItemSpan)> DecodeOutput for SpanOutput<'_, F> {
+    type Item = ();
+    type Array = ();
+    type Map = ();
+
+    fn scalar(&mut self, _: Value, span: ItemSpan, depth: usize) {
+        self.record(span, depth);
+    }
+    fn push_array(&mut self, (): &mut (), (): ()) {}
+    fn push_map(&mut self, (): &mut (), (): (), (): ()) {}
+    fn array(&mut self, (): (), span: ItemSpan, depth: usize) {
+        self.record(span, depth);
+    }
+    fn map(&mut self, (): (), span: ItemSpan, depth: usize) {
+        self.record(span, depth);
+    }
+    fn tag(&mut self, _: u64, (): (), span: ItemSpan, depth: usize) {
+        self.record(span, depth);
+    }
+}
+
+enum Open<B: DecodeOutput> {
     Array {
         start: usize,
         remaining: Option<u64>,
-        items: Vec<Value>,
+        items: B::Array,
     },
     Map {
         start: usize,
         remaining: Option<u64>,
-        entries: Vec<(Value, Value)>,
-        key: Option<Value>,
-        /// The span of the previous key's encoding (deterministic mode).
+        entries: B::Map,
+        key: Option<B::Item>,
         last_key: Option<(usize, usize)>,
     },
     Tag {
         start: usize,
         tag: u64,
     },
+}
+
+// This adapter keeps every existing owned decoder on the same implementation.
+fn decode_item<S: Source>(
+    source: &mut S,
+    limits: Limits,
+    deterministic: bool,
+) -> Result<Value, DecodeError> {
+    decode_item_to(source, limits, deterministic, &mut OwnedOutput)
+}
+
+/// Visit complete item spans at `depth`, where the root has depth zero.
+/// The callback records source locations; it must not publish graph events.
+/// Its records are provisional until this function returns Ok, because a later
+/// child can make the enclosing item malformed. The original input owns bytes.
+///
+/// Retains only open-container state and the current primitive. The existing
+/// string decoder can still own one complete string; this does not yet provide
+/// a borrowed-string decoder or a complete GTS memory bound.
+fn visit_prefix(
+    bytes: &[u8],
+    limits: Limits,
+    depth: usize,
+    mut visit: impl FnMut(ItemSpan),
+) -> Result<usize, DecodeError> {
+    let mut source = Slice { bytes, pos: 0 };
+    decode_item_to(
+        &mut source,
+        limits,
+        false,
+        &mut SpanOutput {
+            depth,
+            visit: &mut visit,
+        },
+    )?;
+    Ok(source.pos)
+}
+
+fn attach_to<S: Source, B: DecodeOutput>(
+    open: &mut Vec<Open<B>>,
+    item: B::Item,
+    mut start: usize,
+    source: &S,
+    deterministic: bool,
+    output: &mut B,
+) -> Result<Option<B::Item>, DecodeError> {
+    let mut item = Some(item);
+    loop {
+        let completed = match open.last_mut() {
+            None => return Ok(item),
+            Some(Open::Tag { .. }) => true,
+            Some(Open::Array {
+                remaining, items, ..
+            }) => {
+                output.push_array(items, item.take().expect("one completed CBOR child"));
+                match remaining {
+                    Some(n) => {
+                        *n -= 1;
+                        *n == 0
+                    }
+                    None => false,
+                }
+            }
+            Some(Open::Map {
+                remaining,
+                entries,
+                key,
+                last_key,
+                ..
+            }) => {
+                if let Some(pending) = key.take() {
+                    output.push_map(entries, pending, item.take().expect("one CBOR map value"));
+                    match remaining {
+                        Some(n) => {
+                            *n -= 1;
+                            *n == 0
+                        }
+                        None => false,
+                    }
+                } else {
+                    if deterministic {
+                        let end = source.offset();
+                        let bytes = source
+                            .consumed()
+                            .expect("the deterministic decoder reads a slice");
+                        if let Some((from, to)) = *last_key
+                            && bytes[from..to] >= bytes[start..end]
+                        {
+                            return Err(DecodeError::new(
+                                DecodeErrorKind::NotDeterministic(
+                                    "map keys must be in strictly ascending bytewise order",
+                                ),
+                                start,
+                            ));
+                        }
+                        *last_key = Some((start, end));
+                    }
+                    *key = item.take();
+                    return Ok(None);
+                }
+            }
+        };
+        if !completed {
+            return Ok(None);
+        }
+        let depth = open.len() - 1;
+        let end = source.offset();
+        item = Some(match open.pop() {
+            Some(Open::Tag { start: at, tag }) => {
+                start = at;
+                output.tag(
+                    tag,
+                    item.take().expect("one CBOR tag child"),
+                    (start, end),
+                    depth,
+                )
+            }
+            Some(Open::Array {
+                start: at, items, ..
+            }) => {
+                start = at;
+                output.array(items, (start, end), depth)
+            }
+            Some(Open::Map {
+                start: at, entries, ..
+            }) => {
+                start = at;
+                output.map(entries, (start, end), depth)
+            }
+            None => unreachable!("an item was just completed"),
+        });
+    }
+}
+
+fn decode_item_to<S: Source, B: DecodeOutput>(
+    source: &mut S,
+    limits: Limits,
+    deterministic: bool,
+    output: &mut B,
+) -> Result<B::Item, DecodeError> {
+    let mut open: Vec<Open<B>> = Vec::new();
+    loop {
+        let at = source.offset();
+        let initial = source.byte()?;
+        let major = initial >> 5;
+        if initial == 0xff {
+            let (value, start) = match open.pop() {
+                Some(Open::Array {
+                    start,
+                    remaining: None,
+                    items,
+                }) => {
+                    let span = (start, source.offset());
+                    (output.array(items, span, open.len()), start)
+                }
+                Some(Open::Map {
+                    start,
+                    remaining: None,
+                    entries,
+                    key: None,
+                    ..
+                }) => {
+                    let span = (start, source.offset());
+                    (output.map(entries, span, open.len()), start)
+                }
+                _ => {
+                    return Err(DecodeError::new(
+                        DecodeErrorKind::Malformed("a break outside an indefinite array or map"),
+                        at,
+                    ));
+                }
+            };
+            if let Some(done) = attach_to(&mut open, value, start, source, deterministic, output)? {
+                return Ok(done);
+            }
+            continue;
+        }
+        let argument = argument(source, initial, at, deterministic)?;
+        let depth = open.len();
+        let scalar =
+            |output: &mut B, value: Value, end: usize| output.scalar(value, (at, end), depth);
+        let value = match (major, argument) {
+            (0, Some(n)) => scalar(output, Value::Integer(Integer::from(n)), source.offset()),
+            (1, Some(n)) => scalar(
+                output,
+                Value::Integer(
+                    Integer::try_from(-1 - i128::from(n)).expect("-1 - u64 is within range"),
+                ),
+                source.offset(),
+            ),
+            (2, length) => {
+                let value = Value::Bytes(string_bytes(source, 2, length, deterministic, at)?);
+                scalar(output, value, source.offset())
+            }
+            (3, length) => {
+                let bytes = string_bytes(source, 3, length, deterministic, at)?;
+                let value = Value::Text(
+                    String::from_utf8(bytes)
+                        .map_err(|_| DecodeError::new(DecodeErrorKind::InvalidUtf8, at))?,
+                );
+                scalar(output, value, source.offset())
+            }
+            (4..=6, _) if open.len() >= limits.max_depth => {
+                return Err(DecodeError::new(
+                    DecodeErrorKind::Depth {
+                        limit: limits.max_depth,
+                    },
+                    at,
+                ));
+            }
+            (4 | 5, None) if deterministic => {
+                return Err(DecodeError::new(
+                    DecodeErrorKind::NotDeterministic("a length must be definite"),
+                    at,
+                ));
+            }
+            (4, Some(0)) => output.array(B::Array::default(), (at, source.offset()), depth),
+            (5, Some(0)) => output.map(B::Map::default(), (at, source.offset()), depth),
+            (4, remaining) => {
+                if remaining.is_some_and(|n| usize::try_from(n).is_err()) {
+                    return Err(DecodeError::new(DecodeErrorKind::TooLong, at));
+                }
+                open.push(Open::Array {
+                    start: at,
+                    remaining,
+                    items: B::Array::default(),
+                });
+                continue;
+            }
+            (5, remaining) => {
+                if remaining.is_some_and(|n| usize::try_from(n).is_err()) {
+                    return Err(DecodeError::new(DecodeErrorKind::TooLong, at));
+                }
+                open.push(Open::Map {
+                    start: at,
+                    remaining,
+                    entries: B::Map::default(),
+                    key: None,
+                    last_key: None,
+                });
+                continue;
+            }
+            (6, Some(tag)) => {
+                open.push(Open::Tag { start: at, tag });
+                continue;
+            }
+            (7, Some(n)) => scalar(
+                output,
+                simple_or_float(initial, n, at, deterministic)?,
+                source.offset(),
+            ),
+            (0 | 1 | 6 | 7, None) => {
+                return Err(DecodeError::new(
+                    DecodeErrorKind::Malformed(
+                        "only strings, arrays and maps have an indefinite length",
+                    ),
+                    at,
+                ));
+            }
+            _ => unreachable!("the major type is three bits"),
+        };
+        if let Some(done) = attach_to(&mut open, value, at, source, deterministic, output)? {
+            return Ok(done);
+        }
+    }
 }
 
 /// A head's argument: its value, or `None` for an indefinite length.
@@ -405,121 +746,6 @@ fn string_bytes<S: Source>(
     Ok(bytes)
 }
 
-/// Decode one item from `source`.
-fn decode_item<S: Source>(
-    source: &mut S,
-    limits: Limits,
-    deterministic: bool,
-) -> Result<Value, DecodeError> {
-    let mut open: Vec<Open> = Vec::new();
-    loop {
-        let at = source.offset();
-        let initial = source.byte()?;
-        let major = initial >> 5;
-        if initial == 0xff {
-            // A break closes the innermost indefinite array or map.
-            let (value, start) = match open.pop() {
-                Some(Open::Array {
-                    start,
-                    remaining: None,
-                    items,
-                }) => (Value::Array(items), start),
-                Some(Open::Map {
-                    start,
-                    remaining: None,
-                    entries,
-                    key: None,
-                    ..
-                }) => (Value::Map(entries), start),
-                _ => {
-                    return Err(DecodeError::new(
-                        DecodeErrorKind::Malformed("a break outside an indefinite array or map"),
-                        at,
-                    ));
-                }
-            };
-            if let Some(done) = attach(&mut open, value, start, source, deterministic)? {
-                return Ok(done);
-            }
-            continue;
-        }
-        let argument = argument(source, initial, at, deterministic)?;
-        let value = match (major, argument) {
-            (0, Some(n)) => Value::Integer(Integer::from(n)),
-            (1, Some(n)) => Value::Integer(
-                Integer::try_from(-1 - i128::from(n)).expect("-1 - u64 is within range"),
-            ),
-            (2, length) => Value::Bytes(string_bytes(source, 2, length, deterministic, at)?),
-            (3, length) => {
-                let bytes = string_bytes(source, 3, length, deterministic, at)?;
-                Value::Text(
-                    String::from_utf8(bytes)
-                        .map_err(|_| DecodeError::new(DecodeErrorKind::InvalidUtf8, at))?,
-                )
-            }
-            // Every array, map and tag counts against the cap, an empty one
-            // included, as every JSON container does.
-            (4..=6, _) if open.len() >= limits.max_depth => {
-                return Err(DecodeError::new(
-                    DecodeErrorKind::Depth {
-                        limit: limits.max_depth,
-                    },
-                    at,
-                ));
-            }
-            (4 | 5, None) if deterministic => {
-                return Err(DecodeError::new(
-                    DecodeErrorKind::NotDeterministic("a length must be definite"),
-                    at,
-                ));
-            }
-            (4, Some(0)) => Value::Array(Vec::new()),
-            (5, Some(0)) => Value::Map(Vec::new()),
-            (4, remaining) => {
-                if remaining.is_some_and(|n| usize::try_from(n).is_err()) {
-                    return Err(DecodeError::new(DecodeErrorKind::TooLong, at));
-                }
-                open.push(Open::Array {
-                    start: at,
-                    remaining,
-                    items: Vec::new(),
-                });
-                continue;
-            }
-            (5, remaining) => {
-                if remaining.is_some_and(|n| usize::try_from(n).is_err()) {
-                    return Err(DecodeError::new(DecodeErrorKind::TooLong, at));
-                }
-                open.push(Open::Map {
-                    start: at,
-                    remaining,
-                    entries: Vec::new(),
-                    key: None,
-                    last_key: None,
-                });
-                continue;
-            }
-            (6, Some(tag)) => {
-                open.push(Open::Tag { start: at, tag });
-                continue;
-            }
-            (7, Some(n)) => simple_or_float(initial, n, at, deterministic)?,
-            (0 | 1 | 6 | 7, None) => {
-                return Err(DecodeError::new(
-                    DecodeErrorKind::Malformed(
-                        "only strings, arrays and maps have an indefinite length",
-                    ),
-                    at,
-                ));
-            }
-            _ => unreachable!("the major type is three bits"),
-        };
-        if let Some(done) = attach(&mut open, value, at, source, deterministic)? {
-            return Ok(done);
-        }
-    }
-}
-
 /// A major type 7 item: a simple value or a float.
 fn simple_or_float(
     initial: u8,
@@ -560,98 +786,6 @@ fn simple_or_float(
         }
     }
     Ok(value)
-}
-
-/// Hand a complete `value` (encoded from `start`) to the innermost open item,
-/// closing every item it completes; the whole decoded item once the stack is
-/// empty.
-fn attach<S: Source>(
-    open: &mut Vec<Open>,
-    mut value: Value,
-    mut start: usize,
-    source: &S,
-    deterministic: bool,
-) -> Result<Option<Value>, DecodeError> {
-    loop {
-        let completed = match open.last_mut() {
-            None => return Ok(Some(value)),
-            Some(Open::Tag { .. }) => true,
-            Some(Open::Array {
-                remaining, items, ..
-            }) => {
-                items.push(value);
-                value = Value::Null;
-                match remaining {
-                    Some(n) => {
-                        *n -= 1;
-                        *n == 0
-                    }
-                    None => false,
-                }
-            }
-            Some(Open::Map {
-                remaining,
-                entries,
-                key,
-                last_key,
-                ..
-            }) => {
-                if let Some(pending) = key.take() {
-                    entries.push((pending, value));
-                    value = Value::Null;
-                    match remaining {
-                        Some(n) => {
-                            *n -= 1;
-                            *n == 0
-                        }
-                        None => false,
-                    }
-                } else {
-                    if deterministic {
-                        let end = source.offset();
-                        let bytes = source
-                            .consumed()
-                            .expect("the deterministic decoder reads a slice");
-                        if let Some((from, to)) = *last_key
-                            && bytes[from..to] >= bytes[start..end]
-                        {
-                            return Err(DecodeError::new(
-                                DecodeErrorKind::NotDeterministic(
-                                    "map keys must be in strictly ascending bytewise order",
-                                ),
-                                start,
-                            ));
-                        }
-                        *last_key = Some((start, end));
-                    }
-                    *key = Some(value);
-                    return Ok(None);
-                }
-            }
-        };
-        if !completed {
-            return Ok(None);
-        }
-        value = match open.pop() {
-            Some(Open::Tag { start: at, tag }) => {
-                start = at;
-                Value::Tag(tag, Box::new(value))
-            }
-            Some(Open::Array {
-                start: at, items, ..
-            }) => {
-                start = at;
-                Value::Array(items)
-            }
-            Some(Open::Map {
-                start: at, entries, ..
-            }) => {
-                start = at;
-                Value::Map(entries)
-            }
-            None => unreachable!("an item was just completed"),
-        };
-    }
 }
 
 /// Decode the one item at the front of `bytes`: the item and how many bytes it
@@ -878,5 +1012,321 @@ mod tests {
             size_of::<Result<Value, FormerError>>()
         );
         assert!(size_of::<DecodedSequence>() <= size_of::<(Vec<(usize, Value)>, Option<usize>)>());
+    }
+}
+
+/// An immutable source-backed CBOR item validated by the shared decoder.
+#[derive(Clone, Copy, Debug)]
+pub struct BorrowedItem<'a> {
+    encoded: &'a [u8],
+    limits: Limits,
+}
+
+/// Validate the front item without retaining a Value tree and borrow its bytes.
+pub fn borrowed_prefix(
+    bytes: &[u8],
+    limits: Limits,
+) -> Result<(BorrowedItem<'_>, usize), DecodeError> {
+    let end = visit_prefix(bytes, limits, 0, |_| {})?;
+    Ok((
+        BorrowedItem {
+            encoded: &bytes[..end],
+            limits,
+        },
+        end,
+    ))
+}
+
+impl<'a> BorrowedItem<'a> {
+    /// The exact original encoding, including indefinite and non-shortest forms.
+    pub const fn encoded(self) -> &'a [u8] {
+        self.encoded
+    }
+
+    /// Materialize only this item through the existing owned decoder.
+    pub fn decode(self) -> Result<Value, DecodeError> {
+        decode(self.encoded, self.limits)
+    }
+
+    /// The already-validated major type; every item has an initial byte.
+    pub fn major(self) -> u8 {
+        self.encoded[0] >> 5
+    }
+
+    fn children(self, major: u8) -> Option<BorrowedChildren<'a>> {
+        if self.major() != major {
+            return None;
+        }
+        let mut body = self.encoded;
+        if super::head::read_argument(&mut body, major).is_none() {
+            // The shared decoder admitted an indefinite array/map. Its last
+            // byte is its own break, not a descendant's or a string's byte.
+            assert_eq!(
+                self.encoded[0] & 31,
+                31,
+                "validated container has a valid head"
+            );
+            body = &self.encoded[1..self.encoded.len() - 1];
+        }
+        Some(BorrowedChildren {
+            remaining: body,
+            limits: self.limits,
+        })
+    }
+
+    /// Array elements in original order, retaining only the unvisited suffix.
+    pub fn array(self) -> Option<BorrowedChildren<'a>> {
+        self.children(super::head::ARRAY)
+    }
+
+    /// Map entries in original order. Duplicate keys retain their positions.
+    pub fn map(self) -> Option<BorrowedEntries<'a>> {
+        self.children(super::head::MAP)
+            .map(|children| BorrowedEntries { children })
+    }
+
+    /// A tag and its sole checked child. No owned child box is introduced.
+    pub fn tag(self) -> Option<(u64, Self)> {
+        if self.major() != super::head::TAG {
+            return None;
+        }
+        let mut body = self.encoded;
+        let tag = super::head::read_argument(&mut body, super::head::TAG)
+            .expect("the shared decoder validated the tag argument");
+        Some((
+            tag,
+            Self {
+                encoded: body,
+                limits: self.limits,
+            },
+        ))
+    }
+
+    /// Borrow definite text; concatenate indefinite chunks through the same
+    /// string decoder the owned API uses. A non-text item returns None.
+    pub fn text(self) -> Result<Option<std::borrow::Cow<'a, str>>, DecodeError> {
+        if self.major() != super::head::TEXT {
+            return Ok(None);
+        }
+        let mut encoded = self.encoded;
+        if let Some(text) = super::head::read_text(&mut encoded) {
+            assert!(
+                encoded.is_empty(),
+                "a validated text item has no trailing bytes"
+            );
+            return Ok(Some(std::borrow::Cow::Borrowed(text)));
+        }
+        let text = self
+            .decode()?
+            .into_text()
+            .expect("the shared decoder admitted this text item");
+        Ok(Some(std::borrow::Cow::Owned(text)))
+    }
+
+    /// Borrow definite bytes, or own the existing decoder's concatenated chunks.
+    pub fn bytes(self) -> Result<Option<std::borrow::Cow<'a, [u8]>>, DecodeError> {
+        if self.major() != super::head::BYTES {
+            return Ok(None);
+        }
+        let mut encoded = self.encoded;
+        if let Some(bytes) = super::head::read_bytes(&mut encoded) {
+            assert!(
+                encoded.is_empty(),
+                "a validated byte string has no trailing bytes"
+            );
+            return Ok(Some(std::borrow::Cow::Borrowed(bytes)));
+        }
+        let bytes = self
+            .decode()?
+            .into_bytes()
+            .expect("the shared decoder admitted this byte string");
+        Ok(Some(std::borrow::Cow::Owned(bytes)))
+    }
+
+    /// The first text-keyed entry, matching the existing Value map_get rule.
+    pub fn get(self, name: &str) -> Result<Option<Self>, DecodeError> {
+        let Some(entries) = self.map() else {
+            return Ok(None);
+        };
+        for entry in entries {
+            let (key, value) = entry?;
+            if key.text()?.is_some_and(|key| key == name) {
+                return Ok(Some(value));
+            }
+        }
+        Ok(None)
+    }
+}
+
+#[derive(Clone, Debug)]
+/// Forward children of a validated array or map, borrowing their source bytes.
+pub struct BorrowedChildren<'a> {
+    remaining: &'a [u8],
+    limits: Limits,
+}
+
+impl<'a> Iterator for BorrowedChildren<'a> {
+    type Item = Result<BorrowedItem<'a>, DecodeError>;
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        if self.remaining.is_empty() {
+            (0, Some(0))
+        } else {
+            (1, None)
+        }
+    }
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.remaining.is_empty() {
+            return None;
+        }
+        match borrowed_prefix(self.remaining, self.limits) {
+            Ok((item, consumed)) => {
+                self.remaining = &self.remaining[consumed..];
+                Some(Ok(item))
+            }
+            Err(error) => {
+                self.remaining = &[];
+                Some(Err(error))
+            }
+        }
+    }
+}
+
+impl std::iter::FusedIterator for BorrowedChildren<'_> {}
+
+#[derive(Clone, Debug)]
+/// Forward map entries, preserving duplicate keys and original order.
+pub struct BorrowedEntries<'a> {
+    children: BorrowedChildren<'a>,
+}
+
+impl<'a> Iterator for BorrowedEntries<'a> {
+    type Item = Result<(BorrowedItem<'a>, BorrowedItem<'a>), DecodeError>;
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        if self.children.size_hint().1 == Some(0) {
+            (0, Some(0))
+        } else {
+            (1, None)
+        }
+    }
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let key = match self.children.next()? {
+            Ok(key) => key,
+            Err(error) => return Some(Err(error)),
+        };
+        let value = match self
+            .children
+            .next()
+            .expect("a checked map has a value for every key")
+        {
+            Ok(value) => value,
+            Err(error) => return Some(Err(error)),
+        };
+        Some(Ok((key, value)))
+    }
+}
+
+impl std::iter::FusedIterator for BorrowedEntries<'_> {}
+
+/// One validated encoded item, retaining its original accepted byte spelling.
+#[derive(Debug)]
+pub struct EncodedItem {
+    encoded: Vec<u8>,
+    limits: Limits,
+}
+
+impl EncodedItem {
+    /// Borrow the already validated item without parsing or copying it again.
+    pub fn view(&self) -> BorrowedItem<'_> {
+        BorrowedItem {
+            encoded: &self.encoded,
+            limits: self.limits,
+        }
+    }
+}
+
+/// Observe only successful Source operations. The native Source remains the
+/// owner of malformed reader counts, Interrupted handling and exact offsets.
+struct Capturing<S> {
+    source: S,
+    encoded: Vec<u8>,
+}
+
+impl<S: Source> Source for Capturing<S> {
+    fn offset(&self) -> usize {
+        self.source.offset()
+    }
+
+    fn byte(&mut self) -> Result<u8, DecodeError> {
+        let byte = self.source.byte()?;
+        self.encoded.push(byte);
+        Ok(byte)
+    }
+
+    fn take(&mut self, len: u64, out: &mut Vec<u8>) -> Result<(), DecodeError> {
+        let start = out.len();
+        // Keep the exact original result. A partial failed read can append
+        // bytes, but its owner is never published as a validated item.
+        let result = self.source.take(len, out);
+        self.encoded.extend_from_slice(&out[start..]);
+        result
+    }
+
+    fn consumed(&self) -> Option<&[u8]> {
+        Some(&self.encoded)
+    }
+}
+
+/// Read exactly the next item, validating through the shared decoder while
+/// retaining encoded bytes rather than an owned Value tree. Clean EOF and all
+/// native refusal positions follow read_from's exact decision.
+///
+/// The existing primitive decoder can still allocate one complete string.
+/// During that read its bytes coexist with the captured item. This is not yet
+/// a bound on primitive-string workspace, validation terms or source size.
+pub fn read_encoded_from<R: Read + ?Sized>(
+    reader: &mut R,
+    limits: Limits,
+) -> Result<Option<EncodedItem>, DecodeError> {
+    let mut source = Capturing {
+        source: Stream { reader, pos: 0 },
+        encoded: Vec::new(),
+    };
+    let mut ignore = |_| {};
+    let mut output = SpanOutput {
+        depth: 0,
+        visit: &mut ignore,
+    };
+    match decode_item_to(&mut source, limits, false, &mut output) {
+        Ok(()) => Ok(Some(EncodedItem {
+            encoded: source.encoded,
+            limits,
+        })),
+        Err(error) if error.kind == DecodeErrorKind::Truncated && error.offset == 0 => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+impl EncodedItem {
+    /// Validate one complete item and retain its existing byte owner.
+    ///
+    /// # Errors
+    /// Preserves the original CBOR refusal, including trailing bytes.
+    pub fn from_bytes(encoded: Vec<u8>, limits: Limits) -> Result<Self, DecodeError> {
+        let end = visit_prefix(&encoded, limits, 0, |_| {})?;
+        if end != encoded.len() {
+            return Err(DecodeError::new(DecodeErrorKind::Trailing, end));
+        }
+        Ok(Self { encoded, limits })
+    }
+    /// Materialize this validated item through the shared decoder.
+    ///
+    /// # Errors
+    /// Preserves the original CBOR inspection refusal.
+    pub fn decode(&self) -> Result<Value, DecodeError> {
+        decode(&self.encoded, self.limits)
     }
 }
