@@ -28,6 +28,12 @@ pub(crate) struct Presence {
 const WORD_BITS: usize = u64::BITS as usize;
 
 impl Presence {
+    /// Release all rows while retaining bitmap storage for the next group.
+    pub(crate) fn clear(&mut self) {
+        self.words.clear();
+        self.len = 0;
+    }
+
     /// An empty bitmap with room for `rows` rows before it reallocates.
     pub(crate) fn with_capacity(rows: usize) -> Self {
         Self {

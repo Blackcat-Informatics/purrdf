@@ -135,6 +135,15 @@ constant or the host's available memory. Files whose rows fit one group retain
 the same encoding. Offsets and table row counts fit signed 64-bit fields; the
 footer fits its unsigned 32-bit length. Schema version remains `1`.
 
+Pending groups hold encoded PLAIN column buffers, packed nullable-column
+presence, and one four-byte end offset per present byte-array value. Source
+rows are released after their cells are appended. Integer columns need no
+per-row offset array. Compression and subdivision borrow ranges of these
+buffers; each child rebuilds its definition levels for its own row range.
+Buffers are reused across groups, and their capacities are bounded by the
+largest admitted group. Compression output and final file buffers are separate
+resident owners.
+
 The reader accepts any self-consistent sequence of supported groups; it need
 not reproduce the writer's cuts or compressed bytes. It validates column and
 page sizes, offsets, row totals, null counts and PLAIN cardinality before large
@@ -157,5 +166,6 @@ metadata needed for backend-independent ids and ordering; reading retains term
 resolution state and the builder. Footer metadata grows with group count.
 Group streaming removes complete-table decoded columns and intermediate
 statement tables, not these necessary owners. `project()` remains an explicitly
-eager relational representation; direct `write()` borrows canonical cells and
-blob payloads without first constructing that representation.
+eager relational representation; direct `write()` consumes borrowed canonical
+cells and blob payloads into pending columns without first constructing that
+representation.

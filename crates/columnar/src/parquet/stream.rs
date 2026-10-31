@@ -11,11 +11,76 @@ use super::{
 };
 use crate::ProjectionCell;
 use purrdf_core::SmallVec;
+use std::ops::Range;
 
 pub(super) struct EncodedGroup {
     pub(super) columns: Vec<EncodedColumn>,
     pub(super) row_count: i64,
     pub(super) offset: i64,
+}
+
+/// Admitted PLAIN values, without retaining any materialized source rows.
+#[derive(Default)]
+struct PendingColumn {
+    plain: Vec<u8>,
+    presence: Presence,
+    byte_ends: SmallVec<[u32; 1]>,
+}
+
+impl PendingColumn {
+    fn clear(&mut self) {
+        self.plain.clear();
+        self.presence.clear();
+        self.byte_ends.clear();
+    }
+
+    fn append(&mut self, cell: ProjectionCell<'_>, schema: &ColumnSchema) {
+        if schema.repetition == Repetition::Optional {
+            self.presence.push(!matches!(cell, ProjectionCell::Null));
+        }
+        match cell {
+            ProjectionCell::Null => {}
+            ProjectionCell::Int64(value) => self.plain.extend_from_slice(&value.to_le_bytes()),
+            ProjectionCell::Bytes(bytes) => {
+                // Admission already proved both this value and the complete
+                // PLAIN column fit the physical signed 32-bit page field.
+                self.plain
+                    .extend_from_slice(&(bytes.len() as i32).to_le_bytes());
+                self.plain.extend_from_slice(bytes);
+                self.byte_ends.push(self.plain.len() as u32);
+            }
+        }
+    }
+
+    fn plain_range(&self, values: Range<usize>, schema: &ColumnSchema) -> &[u8] {
+        let endpoint = |value: usize| match schema.physical_type {
+            PhysicalType::Int64 => value * 8,
+            PhysicalType::ByteArray => {
+                if value == 0 {
+                    0
+                } else {
+                    self.byte_ends[value - 1] as usize
+                }
+            }
+        };
+        &self.plain[endpoint(values.start)..endpoint(values.end)]
+    }
+}
+
+/// Dense value offsets accompany row ranges through subdivision, so children
+/// never rescan all preceding rows to find their nullable PLAIN boundaries.
+struct GroupRange {
+    rows: Range<usize>,
+    starts: [usize; 11],
+}
+
+impl GroupRange {
+    fn full(rows: usize) -> Self {
+        Self {
+            rows: 0..rows,
+            starts: [0; 11],
+        }
+    }
 }
 
 /// Exact current PLAIN length and maximal definition-level RLE run sizes.
@@ -94,8 +159,11 @@ fn write_rows_bounded<'a>(
 ) -> Result<Vec<u8>, ColumnarError> {
     let mut output = PARQUET_MAGIC.to_vec();
     let mut groups = SmallVec::new();
-    let mut pending: SmallVec<[_; 1]> = SmallVec::new();
     let column_count = table.schema().columns.len();
+    let mut pending: SmallVec<[PendingColumn; 11]> = (0..column_count)
+        .map(|_| PendingColumn::default())
+        .collect();
+    let mut pending_rows = 0;
     let mut sizes = [Measure::default(); 11];
     let mut next = sizes;
     let mut row_count = 0i64;
@@ -113,7 +181,7 @@ fn write_rows_bounded<'a>(
             Ok(())
         };
         measure(&sizes[..column_count], &mut next[..column_count])?;
-        if pending.len() == i32::MAX as usize
+        if pending_rows == i32::MAX as usize
             || next[..column_count]
                 .iter()
                 .any(|size| !size.fits(page_limit))
@@ -121,12 +189,16 @@ fn write_rows_bounded<'a>(
             emit(
                 table,
                 &pending,
+                &GroupRange::full(pending_rows),
                 compression,
                 page_limit,
                 &mut output,
                 &mut groups,
             )?;
-            pending.clear();
+            for column in &mut pending {
+                column.clear();
+            }
+            pending_rows = 0;
             sizes.fill(Measure::default());
             measure(&sizes[..column_count], &mut next[..column_count])?;
         }
@@ -145,17 +217,22 @@ fn write_rows_bounded<'a>(
             });
         }
         std::mem::swap(&mut sizes, &mut next);
-        pending.push(row);
+        for ((column, &cell), schema) in pending.iter_mut().zip(&row).zip(table.schema().columns) {
+            column.append(cell, schema);
+        }
+        pending_rows += 1;
         row_count = row_count.checked_add(1).ok_or_else(table_budget_overflow)?;
     }
     emit(
         table,
         &pending,
+        &GroupRange::full(pending_rows),
         compression,
         page_limit,
         &mut output,
         &mut groups,
     )?;
+    drop(pending);
     finish_file(table, row_count, &groups, output)
 }
 
@@ -180,34 +257,35 @@ fn finish_file(
 /// subdivides a candidate; there is no row-count tuning threshold.
 fn emit(
     table: Table,
-    rows: &[SmallVec<[ProjectionCell<'_>; 11]>],
+    pending: &[PendingColumn],
+    range: &GroupRange,
     compression: Compression,
     page_limit: u64,
     output: &mut Vec<u8>,
     groups: &mut SmallVec<[EncodedGroup; 1]>,
 ) -> Result<(), ColumnarError> {
-    if rows.is_empty() {
+    if range.rows.is_empty() {
         return Ok(());
     }
     let start = output.len();
     let mut columns = Vec::with_capacity(table.schema().columns.len());
-    for (index, schema) in table.schema().columns.iter().enumerate() {
-        let mut plain = Vec::new();
-        let mut presence = Presence::default();
-        for row in rows {
-            if schema.repetition == Repetition::Optional {
-                presence.push(!matches!(row[index], ProjectionCell::Null));
-            }
-            match row[index] {
-                ProjectionCell::Null => {}
-                ProjectionCell::Int64(value) => plain.extend_from_slice(&value.to_le_bytes()),
-                ProjectionCell::Bytes(bytes) => {
-                    let length = checked_i32_len(bytes.len(), "PLAIN BYTE_ARRAY length")?;
-                    plain.extend_from_slice(&length.to_le_bytes());
-                    plain.extend_from_slice(bytes);
-                }
-            }
-        }
+    for (index, (column, schema)) in pending.iter().zip(table.schema().columns).enumerate() {
+        let presence = if schema.repetition == Repetition::Optional {
+            column
+                .presence
+                .iter()
+                .skip(range.rows.start)
+                .take(range.rows.len())
+                .collect()
+        } else {
+            Presence::default()
+        };
+        let count = if schema.repetition == Repetition::Optional {
+            presence.count()
+        } else {
+            range.rows.len()
+        };
+        let plain = column.plain_range(range.starts[index]..range.starts[index] + count, schema);
         let definitions = if schema.repetition == Repetition::Optional {
             encode_definition_levels(&presence)
         } else {
@@ -217,9 +295,9 @@ fn emit(
         let encoded = match encode_page(
             plain,
             &definitions,
-            rows.len(),
+            range.rows.len(),
             if schema.repetition == Repetition::Optional {
-                rows.len() - presence.count()
+                range.rows.len() - count
             } else {
                 0
             },
@@ -233,7 +311,15 @@ fn emit(
                 ..
             }) => {
                 output.truncate(start);
-                return subdivide(table, rows, compression, page_limit, value, output, groups);
+                return subdivide(
+                    table,
+                    pending,
+                    range,
+                    (compression, page_limit),
+                    value,
+                    output,
+                    groups,
+                );
             }
             Err(error) => return Err(error),
         };
@@ -242,9 +328,9 @@ fn emit(
             output.truncate(start);
             return subdivide(
                 table,
-                rows,
-                compression,
-                page_limit,
+                pending,
+                range,
+                (compression, page_limit),
                 header.compressed_page_size as u64,
                 output,
                 groups,
@@ -260,7 +346,7 @@ fn emit(
             },
             path: schema.name,
             codec: compression.parquet_id(),
-            num_values: rows.len() as i64,
+            num_values: range.rows.len() as i64,
             total_uncompressed_size: encoded.total_uncompressed_size,
             total_compressed_size: encoded.total_compressed_size,
             data_page_offset: i64::try_from(page_start).map_err(|_| table_budget_overflow())?,
@@ -268,7 +354,7 @@ fn emit(
     }
     groups.push(EncodedGroup {
         columns,
-        row_count: rows.len() as i64,
+        row_count: range.rows.len() as i64,
         offset: i64::try_from(start).map_err(|_| table_budget_overflow())?,
     });
     Ok(())
@@ -276,23 +362,45 @@ fn emit(
 
 fn subdivide(
     table: Table,
-    rows: &[SmallVec<[ProjectionCell<'_>; 11]>],
-    compression: Compression,
-    limit: u64,
+    pending: &[PendingColumn],
+    range: &GroupRange,
+    (compression, limit): (Compression, u64),
     observed: u64,
     output: &mut Vec<u8>,
     groups: &mut SmallVec<[EncodedGroup; 1]>,
 ) -> Result<(), ColumnarError> {
-    if rows.len() == 1 {
+    if range.rows.len() == 1 {
         return Err(ColumnarError::LimitExceeded {
             context: "single row compressed Parquet page size",
             value: observed,
             maximum: limit,
         });
     }
-    let (left, right) = rows.split_at(rows.len() / 2);
-    emit(table, left, compression, limit, output, groups)?;
-    emit(table, right, compression, limit, output, groups)
+    let middle = range.rows.start + range.rows.len() / 2;
+    let mut right_starts = range.starts;
+    for (index, (column, schema)) in pending.iter().zip(table.schema().columns).enumerate() {
+        right_starts[index] += if schema.repetition == Repetition::Optional {
+            column
+                .presence
+                .iter()
+                .skip(range.rows.start)
+                .take(middle - range.rows.start)
+                .filter(|&present| present)
+                .count()
+        } else {
+            middle - range.rows.start
+        };
+    }
+    let left = GroupRange {
+        rows: range.rows.start..middle,
+        starts: range.starts,
+    };
+    let right = GroupRange {
+        rows: middle..range.rows.end,
+        starts: right_starts,
+    };
+    emit(table, pending, &left, compression, limit, output, groups)?;
+    emit(table, pending, &right, compression, limit, output, groups)
 }
 
 #[cfg(test)]
@@ -300,6 +408,39 @@ mod tests {
     use super::super::{TableReader, read_table};
     use super::*;
     use purrdf_core::{ContentStore, RdfDatasetBuilder, RdfLiteral};
+
+    #[test]
+    fn small_rows_retain_column_sized_writer_scratch() {
+        // Three dense integer columns and one null bitmap must not retain an
+        // eleven-cell row allocation for every admitted quad.
+        let rows = 16_384;
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let bytes = write_rows(
+            Table::Quads,
+            (0..rows).map(|id| {
+                Ok(purrdf_core::smallvec![
+                    ProjectionCell::Int64(id),
+                    ProjectionCell::Int64(id),
+                    ProjectionCell::Int64(id),
+                    ProjectionCell::Null,
+                ])
+            }),
+            Compression::Uncompressed,
+        )
+        .unwrap();
+        let measured = window.close();
+        let plain_bytes = rows * 3 * 8;
+        // Includes pending PLAIN buffers, encoded output growth, bitmap and
+        // footer scratch; the former row representation alone exceeds this.
+        assert!(
+            measured.peak_working_bytes <= plain_bytes * 8,
+            "{measured:?}"
+        );
+        assert_eq!(
+            read_table(&bytes, Table::Quads).unwrap().row_count,
+            rows as usize
+        );
+    }
 
     #[test]
     fn physical_groups_have_no_chosen_table_or_metadata_count_ceiling() {
@@ -347,6 +488,49 @@ mod tests {
         assert!(reader.next_group().unwrap().is_none());
         assert!(
             matches!(write_rows_bounded(Table::Blobs, compressed_rows().take(1), Compression::Zstd, 68), Err(ColumnarError::LimitExceeded {context: "single row compressed Parquet page size", value, maximum: 68}) if value > 68)
+        );
+
+        // Expansion splits inside both a present-byte run and a nullable
+        // integer run. Empty present bytes retain their length prefix, and
+        // the right child starts at its own dense value ordinal.
+        let a: Vec<u8> = (0..64).collect();
+        let b: Vec<u8> = (64..128).collect();
+        let lex = [Some(&b""[..]), Some(a.as_slice()), Some(b.as_slice()), None];
+        let datatype = [None, Some(7), Some(9), None];
+        let rows: Vec<SmallVec<[_; 11]>> = (0..4)
+            .map(|index| {
+                purrdf_core::smallvec![
+                    ProjectionCell::Int64(index as i64),
+                    ProjectionCell::Int64(0),
+                    lex[index].map_or(ProjectionCell::Null, ProjectionCell::Bytes),
+                    datatype[index].map_or(ProjectionCell::Null, ProjectionCell::Int64),
+                    ProjectionCell::Null,
+                    ProjectionCell::Null,
+                    ProjectionCell::Null,
+                    ProjectionCell::Null,
+                    ProjectionCell::Null,
+                    ProjectionCell::Null,
+                    ProjectionCell::Int64(0),
+                ]
+            })
+            .collect();
+        let bytes = write_rows_bounded(
+            Table::Terms,
+            rows.iter().cloned().map(Ok),
+            Compression::Zstd,
+            144,
+        )
+        .unwrap();
+        let mut reader = TableReader::open(&bytes, Table::Terms).unwrap();
+        assert_eq!(reader.next_group().unwrap().unwrap().row_count, 2);
+        assert_eq!(reader.next_group().unwrap().unwrap().row_count, 2);
+        assert!(reader.next_group().unwrap().is_none());
+        assert_eq!(
+            read_table(&bytes, Table::Terms)
+                .unwrap()
+                .rows()
+                .collect::<Vec<_>>(),
+            rows
         );
 
         // Exercise the real planner with synthetic sizes, without allocating a
@@ -433,12 +617,22 @@ mod tests {
             // must fail semantic ordering across the released group boundary.
             let data = read_table(files.get(Table::Quads), Table::Quads).unwrap();
             let row = data.rows().next().unwrap();
+            let mut pending: Vec<PendingColumn> =
+                (0..row.len()).map(|_| PendingColumn::default()).collect();
+            for ((column, &cell), schema) in pending
+                .iter_mut()
+                .zip(&row)
+                .zip(Table::Quads.schema().columns)
+            {
+                column.append(cell, schema);
+            }
             let mut duplicate = PARQUET_MAGIC.to_vec();
             let mut groups = SmallVec::new();
             for _ in 0..2 {
                 emit(
                     Table::Quads,
-                    std::slice::from_ref(&row),
+                    &pending,
+                    &GroupRange::full(1),
                     compression,
                     i32::MAX as u64,
                     &mut duplicate,

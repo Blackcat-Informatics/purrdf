@@ -347,7 +347,7 @@ fn encode_column(
     };
     let plain = values.encode_plain()?;
     encode_page(
-        plain,
+        &plain,
         &definitions,
         row_count,
         values.null_count(),
@@ -357,7 +357,7 @@ fn encode_column(
 }
 
 fn encode_page(
-    plain: Vec<u8>,
+    plain: &[u8],
     definitions: &[u8],
     row_count: usize,
     null_count: usize,
@@ -366,8 +366,8 @@ fn encode_page(
 ) -> Result<EncodedPage, ColumnarError> {
     let plain_len = plain.len();
     let compressed_values = match compression {
-        Compression::Uncompressed => plain,
-        Compression::Zstd => compress_slice_to_vec(&plain, CompressionLevel::Level(3)),
+        Compression::Uncompressed => Cow::Borrowed(plain),
+        Compression::Zstd => Cow::Owned(compress_slice_to_vec(plain, CompressionLevel::Level(3))),
     };
     let uncompressed_page_size = checked_i32_len(
         definitions.len().checked_add(plain_len).ok_or_else(|| {
@@ -2325,7 +2325,11 @@ mod tests {
                 assert!(measured.allocations <= allocations);
                 assert!(measured.requested_bytes <= requested);
                 assert!(measured.retained_bytes <= retained);
-                assert!(measured.peak_working_bytes <= peak);
+                // The column-streaming writer retains the digest's four-byte
+                // length prefix and 32-byte value until the complete group
+                // commits, so a later column can trigger rollback. Allocation
+                // counts, requested bytes and retained output stay unchanged.
+                assert!(measured.peak_working_bytes <= peak + 4 + 32);
                 assert_eq!(read_table(&bytes, Table::Blobs).unwrap(), data);
             }
         }
