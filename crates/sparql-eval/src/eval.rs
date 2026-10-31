@@ -6166,9 +6166,7 @@ fn run_ordinary<'a, 'd, D: DatasetView + Sync>(
                     }
                 }
                 let after = match current_pattern {
-                    GraphPattern::Join { left, right }
-                        if !runner.ctx.positive_region(current_pattern).unwrap_or(false) =>
-                    {
+                    GraphPattern::Join { left, right } => {
                         let lift = crate::governor::lift::Lift::at_admitted(
                             current_pattern,
                             &runner.ctx.growth,
@@ -6195,10 +6193,7 @@ fn run_ordinary<'a, 'd, D: DatasetView + Sync>(
                             lift: lift.detach(),
                         })
                     }),
-                    GraphPattern::Union { arms }
-                        if !arms.is_empty()
-                            && !runner.ctx.positive_region(current_pattern).unwrap_or(false) =>
-                    {
+                    GraphPattern::Union { arms } if !arms.is_empty() => {
                         crate::governor::lift::Lift::at_admitted(
                             current_pattern,
                             &runner.ctx.growth,
@@ -8490,6 +8485,10 @@ fn dispatch_node<D: DatasetView + Sync>(
         } => Ok(Evaluated::Complete(crate::modifier::eval_values(
             variables, bindings, ctx,
         )?)),
+        GraphPattern::Union { arms } if arms.is_empty() => {
+            let lift = crate::governor::lift::Lift::at_admitted(pattern, &ctx.growth)?;
+            Ok(lift.finish(crate::binop::concat_union(std::iter::empty(), ctx)?))
+        }
         GraphPattern::Service {
             name,
             inner,

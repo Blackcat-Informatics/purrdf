@@ -5,7 +5,7 @@
 //! statistics. Row hashes preserve blank scopes and every literal coordinate.
 
 use purrdf_hash::multiset::Multiset256;
-use purrdf_hash::{Domain, blake3::Hasher, frame::frame_le_with};
+use purrdf_hash::{Domain, blake3::RecordHasher, frame::frame_le_with};
 use purrdf_lex::allocation::{Admission, Memory, StorageError};
 
 use crate::ir::term::CanonicalNode;
@@ -23,7 +23,7 @@ pub(crate) fn resident_snapshot(
 ) -> purrdf_hash::hex::Digest32 {
     const ROWS: Domain = Domain::new(b"purrdf-core/snapshot/rows/v1");
     const GRAPHS: Domain = Domain::new(b"purrdf-core/snapshot/graphs/v1");
-    let mut hash = purrdf_hash::blake3::RecordHasher::new();
+    let mut hash = RecordHasher::new();
     hash.update(&records.fingerprint(ROWS));
     hash.update(&graphs.fingerprint(GRAPHS));
     hash.update(&dictionary);
@@ -32,7 +32,7 @@ pub(crate) fn resident_snapshot(
 
 pub(crate) fn record_hash(relation: crate::ir::statistics::Relation, row: [u8; 32]) -> [u8; 32] {
     use crate::ir::statistics::Relation;
-    let mut record = Hasher::new();
+    let mut record = RecordHasher::new();
     frame_le_with(RECORD.as_bytes(), &mut |bytes| {
         record.update(bytes);
     });
@@ -242,9 +242,11 @@ impl LiteralSourceRow<'_> {
 
 /// Both projections consume one canonical traversal. Only graph bytes go to
 /// the graph-aware state. Owned and native ID-based callers use this same law.
+/// Compact states keep source statistics usable on bounded-stack callers; the
+/// shared streaming engine preserves the same digest for every row length.
 pub(crate) struct SourceRowHasher {
-    graph: Hasher,
-    triple: Hasher,
+    graph: RecordHasher,
+    triple: RecordHasher,
 }
 
 impl SourceRowHasher {
@@ -260,12 +262,12 @@ impl SourceRowHasher {
     }
 
     pub(crate) fn new(named_graph: bool) -> Self {
-        let mut graph = Hasher::new();
+        let mut graph = RecordHasher::new();
         frame_le_with(ROW.as_bytes(), &mut |bytes| {
             graph.update(bytes);
         });
         graph.update(&[u8::from(named_graph)]);
-        let mut triple = Hasher::new();
+        let mut triple = RecordHasher::new();
         frame_le_with(TRIPLE_ROW.as_bytes(), &mut |bytes| {
             triple.update(bytes);
         });

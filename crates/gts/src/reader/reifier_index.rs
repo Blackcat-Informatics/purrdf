@@ -14,8 +14,8 @@
 use crate::model::{Graph, ReifierRow, Term, TermKind, Triple3};
 use crate::{FastMap, FastSet};
 
-/// Indexes kept in step with one segment's `Graph::terms` and
-/// `Graph::reifiers` as the fold appends to them.
+/// Indexes kept in step with one segment's terms and accepted bindings.
+/// Full row membership is retained only when constructing a graph.
 #[derive(Default)]
 pub(super) struct ReifierIndex {
     /// Reifier id → the triple terms whose components that id supplies, in
@@ -24,8 +24,8 @@ pub(super) struct ReifierIndex {
     anchors: FastMap<usize, Vec<usize>>,
     /// Reifier id → its FIRST recorded binding, as [`Graph::reifier`] answers.
     first: FastMap<usize, Triple3>,
-    /// Every recorded row, so a repeated row is recorded once, as
-    /// [`Graph::set_reifier`] does.
+    /// Every materialized row, so a repeated row is recorded once, as
+    /// [`Graph::set_reifier`] does. Streaming reads leave this empty.
     rows: FastSet<ReifierRow>,
 }
 
@@ -53,11 +53,14 @@ impl ReifierIndex {
         self.first.get(&rid).copied()
     }
 
-    /// Record `row` in `graph` unless the identical row is already there.
-    pub(super) fn record(&mut self, graph: &mut Graph, row: ReifierRow) {
-        if self.rows.insert(row) {
+    /// Keep the first binding for validation. Only a materializing read keeps
+    /// every distinct statement row; sink callbacks already carry those rows.
+    pub(super) fn record(&mut self, graph: &mut Graph, row: ReifierRow, materialize: bool) {
+        if !materialize || self.rows.insert(row) {
             self.first.entry(row.0).or_insert(row.1);
-            graph.reifiers.push(row);
+            if materialize {
+                graph.reifiers.push(row);
+            }
         }
     }
 

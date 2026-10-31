@@ -23,7 +23,7 @@
 //! # Hash-consing
 //!
 //! [`TermDag`] follows exactly the pattern [`crate::proof::ProofArena`] establishes:
-//! every node is interned by content hash into a [`hashbrown::HashTable`], so two
+//! every node is interned by content hash into a [`purrdf_core::hash::table::HashTable`], so two
 //! structurally identical terms — including two ALPHA-EQUIVALENT binders, since the
 //! locally-nameless encoding makes alpha-equivalent terms literally identical
 //! structure — collapse to the same [`NodeId`]. That collapse is what makes
@@ -54,7 +54,7 @@
 
 use core::hash::BuildHasher;
 
-use hashbrown::HashTable;
+use purrdf_core::hash::table::HashTable;
 use purrdf_hash::fixed::FixedState;
 use purrdf_lex::allocation::{Memory, Resident, StorageError};
 

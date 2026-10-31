@@ -495,8 +495,8 @@ struct Folder<'g, 's, 'k> {
     // legacy `rf`-only quoted-triple term, which is checked once the segment is
     // fully folded (see `report_ambiguous_reifiers`).
     rebound_reifiers: Vec<(usize, u64)>,
-    // Anchors, first bindings and recorded rows by reifier id, kept in step
-    // with `g.terms` and `g.reifiers` so a `reifies` row never scans either.
+    // Anchors and first bindings by reifier id, plus distinct rows only when
+    // materializing `g.reifiers`, so a `reifies` row never scans either table.
     reifier_index: ReifierIndex,
 }
 
@@ -1059,7 +1059,8 @@ impl Folder<'_, '_, '_> {
                 );
                 continue;
             }
-            self.reifier_index.record(self.g, (rid, triple, gslot));
+            self.reifier_index
+                .record(self.g, (rid, triple, gslot), self.materialize);
             self.with_sink(|segment_index, sink| sink.reifier(segment_index, (rid, triple, gslot)));
         }
     }
@@ -1898,7 +1899,7 @@ struct ActiveStreamingSegment {
 
 impl ActiveStreamingSegment {
     fn new(
-        raw_header: &Value,
+        raw_header: Value,
         index_offset: u64,
         segment_index: u64,
         sink: &mut dyn StreamingSink,
@@ -1908,9 +1909,9 @@ impl ActiveStreamingSegment {
         let mut header = Vec::new();
         let mut expected_prev = Vec::new();
         let mut valid_header = false;
-        match unwrap_header(raw_header) {
+        match crate::wire::into_header(raw_header) {
             Ok(entries) => {
-                header.clone_from(entries);
+                header = entries;
                 valid_header = true;
                 let stored_hid: Option<Vec<u8>> = match map_get(&header, "id") {
                     Some(Value::Bytes(b)) => Some(b.clone()),
@@ -2301,7 +2302,7 @@ pub fn read_to_sink_from_reader<R: Read>(
                 return result;
             }
             current = Some(ActiveStreamingSegment::new(
-                &item,
+                item,
                 item_index,
                 result.segment_heads.len() as u64,
                 sink,

@@ -8,6 +8,13 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Native table allocation errors (breaking Rust API):**
+  `QueryIndexAllocationError::StatementHistogram` now carries
+  `purrdf_core::hash::table::TryReserveError` instead of
+  `hashbrown::TryReserveError`. Callers that name or construct the payload must
+  use the Core type. This change belongs to the 4.0 major release; upgrade the
+  PurRDF crates together.
+
 - **Query-only bottom properties:** native axiom refutations install the same
   empty-role law as ontology parsing. Querying an unmentioned bottom object
   property now preserves its empty extension and native proof origin.

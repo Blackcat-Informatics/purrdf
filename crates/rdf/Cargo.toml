@@ -49,6 +49,7 @@ harness = false
 # model, diagnostics, store traits, loss ledger, provenance, FnO/SSSOM codecs,
 # the content store, and the GTS reader path. Non-optional:
 # purrdf always re-exports its shipped modules.
+# Shared native tables retain explicit fixed hashes and store each value once.
 purrdf-core = { workspace = true }
 # The native, zero-dependency XSD value space: non-optional, so purrdf's
 # always-on native codec path can reach W3C-canonical literal canonicalization
@@ -58,10 +59,6 @@ purrdf-xsd = { workspace = true }
 # CSVW string/duration format validation. Already workspace-pinned and present in
 # the SPARQL tree; the direct edge keeps one standards parser on native and wasm.
 regex = { workspace = true }
-# Store-once interning on the native text-codec hot path (fixed-key hashing with
-# `purrdf-core`'s `FastHasher` + raw hash table indices into the owned term Vec),
-# matching the purrdf-core `ir::builder` pattern.
-hashbrown = { workspace = true }
 purrdf-gts = { workspace = true }
 purrdf-events = { workspace = true }
 # The snapshot signing path constructs a SigningKey from 32 raw Ed25519 bytes;
