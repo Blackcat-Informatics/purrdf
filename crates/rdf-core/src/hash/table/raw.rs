@@ -106,7 +106,7 @@ impl ProbeSeq {
 /// Returns `None` if an overflow occurs.
 ///
 /// This ensures that `buckets * table_layout.size >= table_layout.ctrl_align`.
-// Workaround for emscripten bug emscripten-core/emscripten-fastcomp#258
+// Keep the capacity calculation out of line on Emscripten.
 #[cfg_attr(target_os = "emscripten", inline(never))]
 #[cfg_attr(not(target_os = "emscripten"), inline)]
 fn capacity_to_buckets(cap: usize, table_layout: TableLayout) -> Option<usize> {
@@ -231,7 +231,7 @@ impl TableLayout {
         let len = ctrl_offset.checked_add(buckets + Group::WIDTH)?;
 
         // We need an additional check to ensure that the allocation doesn't
-        // exceed `isize::MAX` (https://github.com/rust-lang/rust/pull/95295).
+        // exceed `isize::MAX` after alignment padding.
         if len > isize::MAX as usize - (ctrl_align - 1) {
             return None;
         }
@@ -3241,7 +3241,7 @@ impl RawTableInner {
                 let new_i_p = unsafe { guard.bucket_ptr(new_i, size_of) };
 
                 // We are moving the current item to a new position. Write
-                // our H2 to the control byte of the new position.
+                // its seven-bit fingerprint to the control byte of the new position.
                 let prev_ctrl = unsafe { guard.replace_ctrl_hash(new_i, hash) };
                 if prev_ctrl == Tag::EMPTY {
                     unsafe { guard.set_ctrl(i, Tag::EMPTY) };

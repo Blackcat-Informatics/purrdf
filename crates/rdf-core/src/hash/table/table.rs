@@ -1413,7 +1413,7 @@ where
     }
 
     /// Attempts to get mutable references to `N` values in the map at once.
-    #[deprecated(note = "use `get_disjoint_mut` instead")]
+    #[deprecated(since = "3.0.1", note = "use `get_disjoint_mut` instead")]
     pub fn get_many_mut<const N: usize>(
         &mut self,
         hashes: [u64; N],
@@ -1490,7 +1490,7 @@ where
     /// # Safety
     /// Each successful query must select a distinct stored entry. Overlapping
     /// results are undefined behavior even if the returned references are unused.
-    #[deprecated(note = "use `get_disjoint_unchecked_mut` instead")]
+    #[deprecated(since = "3.0.1", note = "use `get_disjoint_unchecked_mut` instead")]
     pub unsafe fn get_many_unchecked_mut<const N: usize>(
         &mut self,
         hashes: [u64; N],
@@ -2476,7 +2476,7 @@ impl<T> ExactSizeIterator for Iter<'_, T> {
 
 impl<T> FusedIterator for Iter<'_, T> {}
 
-// FIXME(#26925) Remove in favor of `#[derive(Clone)]`
+// Cloning the cursor does not clone stored entries.
 impl<T> Clone for Iter<'_, T> {
     fn clone(&self) -> Self {
         Iter {
@@ -2783,7 +2783,7 @@ impl<'a, T> Iterator for IterHash<'a, T> {
 
 impl<T> FusedIterator for IterHash<'_, T> {}
 
-// FIXME(#26925) Remove in favor of `#[derive(Clone)]`
+// Cloning the cursor does not clone stored entries.
 impl<T> Clone for IterHash<'_, T> {
     fn clone(&self) -> Self {
         IterHash {

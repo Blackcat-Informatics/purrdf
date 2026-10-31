@@ -1394,7 +1394,7 @@ where
     }
 
     /// Attempts to get mutable references to `N` values in the map at once.
-    #[deprecated(note = "use `get_disjoint_mut` instead")]
+    #[deprecated(since = "3.0.1", note = "use `get_disjoint_mut` instead")]
     pub fn get_many_mut<Q, const N: usize>(&mut self, ks: [&Q; N]) -> [Option<&'_ mut V>; N]
     where
         Q: Hash + Equivalent<K> + ?Sized,
@@ -1474,7 +1474,7 @@ where
     /// # Safety
     /// Each successful query must select a distinct stored entry. Overlapping
     /// results are undefined behavior even if the returned references are unused.
-    #[deprecated(note = "use `get_disjoint_unchecked_mut` instead")]
+    #[deprecated(since = "3.0.1", note = "use `get_disjoint_unchecked_mut` instead")]
     pub unsafe fn get_many_unchecked_mut<Q, const N: usize>(
         &mut self,
         ks: [&Q; N],
@@ -1552,7 +1552,7 @@ where
 
     /// Attempts to get mutable references to `N` values in the map at once, with immutable
     /// references to the corresponding keys.
-    #[deprecated(note = "use `get_disjoint_key_value_mut` instead")]
+    #[deprecated(since = "3.0.1", note = "use `get_disjoint_key_value_mut` instead")]
     pub fn get_many_key_value_mut<Q, const N: usize>(
         &mut self,
         ks: [&Q; N],
@@ -1632,7 +1632,10 @@ where
     /// # Safety
     /// Each successful query must select a distinct stored entry. Overlapping
     /// results are undefined behavior even if the returned references are unused.
-    #[deprecated(note = "use `get_disjoint_key_value_unchecked_mut` instead")]
+    #[deprecated(
+        since = "3.0.1",
+        note = "use `get_disjoint_key_value_unchecked_mut` instead"
+    )]
     pub unsafe fn get_many_key_value_unchecked_mut<Q, const N: usize>(
         &mut self,
         ks: [&Q; N],
@@ -2044,7 +2047,7 @@ pub struct Iter<'a, K, V> {
     marker: PhantomData<(&'a K, &'a V)>,
 }
 
-// FIXME(#26925) Remove in favor of `#[derive(Clone)]`
+// Cloning the cursor does not clone stored entries.
 impl<K, V> Clone for Iter<'_, K, V> {
     fn clone(&self) -> Self {
         Iter {
@@ -2340,7 +2343,7 @@ pub struct Keys<'a, K, V> {
     inner: Iter<'a, K, V>,
 }
 
-// FIXME(#26925) Remove in favor of `#[derive(Clone)]`
+// Cloning the cursor does not clone stored entries.
 impl<K, V> Clone for Keys<'_, K, V> {
     fn clone(&self) -> Self {
         Keys {
@@ -2386,7 +2389,7 @@ pub struct Values<'a, K, V> {
     inner: Iter<'a, K, V>,
 }
 
-// FIXME(#26925) Remove in favor of `#[derive(Clone)]`
+// Cloning the cursor does not clone stored entries.
 impl<K, V> Clone for Values<'_, K, V> {
     fn clone(&self) -> Self {
         Values {
@@ -4435,7 +4438,7 @@ impl<'map, 'key, K, Q: ?Sized, V, S, A: Allocator> VacantEntryRef<'map, 'key, K,
     ///   // Insert cannot be used here because tuples do not implement ToOwned.
     ///   // However this works because we can manually clone instead.
     ///   EntryRef::Vacant(r) => r.insert_with_key(k.clone(), 'c'),
-    ///   // In this branch we avoid the clone.
+    ///   // Using the occupied entry avoids cloning the lookup key.
     ///   EntryRef::Occupied(r) => r.into_mut(),
     /// };
     /// assert_eq!(*v, 'c');
@@ -4478,7 +4481,7 @@ impl<'map, 'key, K, Q: ?Sized, V, S, A: Allocator> VacantEntryRef<'map, 'key, K,
     /// let v =  match map.entry_ref(&k) {
     ///   // SAFETY: We trust the `Clone` implementation to return an equivalent value
     ///   EntryRef::Vacant(r) => unsafe { r.insert_with_key_unchecked(k.clone(), 'c') },
-    ///   // In this branch we avoid the clone.
+    ///   // Using the occupied entry avoids cloning the lookup key.
     ///   EntryRef::Occupied(r) => r.into_mut(),
     /// };
     /// assert_eq!(*v, 'c');
@@ -4540,7 +4543,7 @@ impl<'map, 'key, K, Q: ?Sized, V, S, A: Allocator> VacantEntryRef<'map, 'key, K,
     ///   // Insert cannot be used here because tuples do not implement ToOwned.
     ///   // However this works because we can manually clone instead.
     ///   EntryRef::Vacant(r) => r.insert_entry_with_key(k.clone(), 'c'),
-    ///   // In this branch we avoid the clone.
+    ///   // Using the occupied entry avoids cloning the lookup key.
     ///   EntryRef::Occupied(r) => r,
     /// };
     /// assert_eq!(r.get(), &'c');
@@ -4588,7 +4591,7 @@ impl<'map, 'key, K, Q: ?Sized, V, S, A: Allocator> VacantEntryRef<'map, 'key, K,
     /// let r = match map.entry_ref(&k) {
     ///   // SAFETY: We trust the `Clone` implementation to return an equivalent key
     ///   EntryRef::Vacant(r) => unsafe { r.insert_entry_with_key_unchecked(k.clone(), 'c') },
-    ///   // In this branch we avoid the clone.
+    ///   // Using the occupied entry avoids cloning the lookup key.
     ///   EntryRef::Occupied(r) => r,
     /// };
     /// assert_eq!(r.get(), &'c');

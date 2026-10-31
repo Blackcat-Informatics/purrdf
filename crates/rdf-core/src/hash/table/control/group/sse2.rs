@@ -23,7 +23,7 @@ pub(crate) const BITMASK_ITER_MASK: BitMaskWord = !0;
 #[derive(Copy, Clone)]
 pub(crate) struct Group(x86::__m128i);
 
-// FIXME: https://github.com/rust-lang/rust-clippy/issues/3859
+// Explicit constructors name the SIMD group represented by the intrinsic value.
 #[expect(clippy::use_self)]
 impl Group {
     /// Number of bytes in the group.

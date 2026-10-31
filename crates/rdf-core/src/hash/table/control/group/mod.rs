@@ -30,7 +30,6 @@ cfg_if! {
         target_arch = "aarch64",
         target_feature = "neon",
         // NEON intrinsics are currently broken on big-endian targets.
-        // See https://github.com/rust-lang/stdarch/issues/1484.
         target_endian = "little",
         not(miri),
     ))] {
