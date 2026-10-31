@@ -360,7 +360,7 @@ fn a_conclusion_directed_refusal_names_the_services_knob_and_the_neighbour_answe
         &purrdf_validate::ImportList<'_>,
         &[&str],
         &MaterializeLimits,
-    ) -> Result<purrdf_validate::regime::ReasoningAnswer, String>;
+    ) -> Result<purrdf_validate::regime::ReasoningAnswer<String>, String>;
     let conclusion = "<http://example.org/s0> <http://example.org/p> <http://example.org/o0> .\n";
     let pattern = "?s <http://example.org/p> ?o .\n";
     let services: [(Service, RegimeService, &str); 3] = [

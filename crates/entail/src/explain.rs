@@ -1302,7 +1302,7 @@ mod tests {
             ),
         )
         .unwrap()
-        .nquads
+        .nquads()
         .lines()
         .map(ToOwned::to_owned)
         .collect();

@@ -1377,10 +1377,17 @@ fn a_string_rule_deactivation_is_refused_and_boolean_true_deactivates_the_rule()
             ),
         )
         .unwrap()
-        .nquads
     };
-    assert!(!entail("true").contains("<http://example.org/ns#q>"));
-    assert!(entail("false").contains("<http://example.org/ns#q>"));
+    assert!(
+        !entail("true")
+            .nquads()
+            .contains("<http://example.org/ns#q>")
+    );
+    assert!(
+        entail("false")
+            .nquads()
+            .contains("<http://example.org/ns#q>")
+    );
 }
 
 // ── sh:targetNode as a node expression ───────────────────────────────────────
@@ -1929,12 +1936,12 @@ fn an_af_graph_with_functions_rules_and_node_expressions_loads_and_runs() {
         "the SPARQL function ran: only ex:bad's tripled amount exceeds 100"
     );
     let entailed = purrdf_shapes::entail_dataset(input.as_ref(), &shapes).expect("the rules run");
-    let nquads = purrdf_rdf::try_canonicalize(
+    let nquads_owner = purrdf_rdf::try_canonicalize(
         entailed.as_ref(),
         &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
-    .unwrap()
-    .nquads;
+    .unwrap();
+    let nquads = nquads_owner.nquads();
     assert!(
         nquads.contains(
             "<http://example.org/ns#childCount> \"2\"^^<http://www.w3.org/2001/XMLSchema#integer>"

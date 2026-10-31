@@ -171,7 +171,7 @@ pub unsafe extern "C" fn purrdf_serialize_jsonld_configured(
             .map_err(|diagnostic| {
                 PurrdfError::from_diagnostic(PurrdfStatus::SerializeError, &diagnostic)
             })?;
-            *out_buffer = into_handle(PurrdfBuffer(outcome.bytes));
+            *out_buffer = into_handle(PurrdfBuffer::from(outcome.bytes));
             Ok(PurrdfStatus::Ok)
         })
     }
@@ -302,7 +302,7 @@ pub unsafe extern "C" fn purrdf_serialize(
             if !out_named_graph_rows_dropped.is_null() {
                 *out_named_graph_rows_dropped = outcome.named_graph_rows_dropped;
             }
-            *out_buffer = into_handle(PurrdfBuffer(outcome.bytes));
+            *out_buffer = into_handle(PurrdfBuffer::from(outcome.bytes));
             Ok(PurrdfStatus::Ok)
         })
     }

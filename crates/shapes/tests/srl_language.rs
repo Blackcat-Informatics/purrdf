@@ -59,7 +59,7 @@ fn infer(rule_text: &str, ttl: &str) -> Result<Vec<[Term; 3]>, SrlError> {
             )
         )
         .unwrap()
-        .nquads,
+        .nquads(),
         try_canonicalize_flat_view(
             expected.as_ref(),
             CanonHash::Sha256,
@@ -69,7 +69,7 @@ fn infer(rule_text: &str, ttl: &str) -> Result<Vec<[Term; 3]>, SrlError> {
             )
         )
         .unwrap()
-        .nquads,
+        .nquads(),
         "{rule_text}"
     );
     Ok(original.inferred().to_vec())

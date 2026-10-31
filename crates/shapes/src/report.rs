@@ -3065,7 +3065,7 @@ mod tests {
                 )
             )
             .unwrap()
-            .nquads,
+            .nquads(),
             ::purrdf_rdf::try_canonicalize(
                 &round_tripped,
                 &mut purrdf_core::CanonicalizationControl::new(
@@ -3074,7 +3074,7 @@ mod tests {
                 )
             )
             .unwrap()
-            .nquads,
+            .nquads(),
             "to_dataset() and parse(to_ntriples()) must be the same graph"
         );
     }
@@ -3143,7 +3143,7 @@ mod tests {
                 )
             )
             .unwrap()
-            .nquads,
+            .nquads(),
             ::purrdf_rdf::try_canonicalize(
                 &round_tripped,
                 &mut purrdf_core::CanonicalizationControl::new(
@@ -3152,7 +3152,7 @@ mod tests {
                 )
             )
             .unwrap()
-            .nquads
+            .nquads()
         );
         assert_eq!(conforms_from_dataset(&direct), Some(true));
         assert!(tuples_from_dataset(&direct).is_empty());
@@ -3182,7 +3182,7 @@ mod tests {
                 )
             )
             .unwrap()
-            .nquads,
+            .nquads(),
             ::purrdf_rdf::try_canonicalize(
                 &round_tripped,
                 &mut purrdf_core::CanonicalizationControl::new(
@@ -3191,7 +3191,7 @@ mod tests {
                 )
             )
             .unwrap()
-            .nquads,
+            .nquads(),
             "escaping a blank label must not change the graph"
         );
         // …and the direct path still holds the caller's label unescaped.
@@ -3212,7 +3212,7 @@ mod tests {
                 )
             )
             .unwrap()
-            .nquads,
+            .nquads(),
             ::purrdf_rdf::try_canonicalize(
                 &report.to_dataset().expect("authored report emits"),
                 &mut purrdf_core::CanonicalizationControl::new(
@@ -3221,7 +3221,7 @@ mod tests {
                 )
             )
             .unwrap()
-            .nquads,
+            .nquads(),
             "relabelling must not change the graph"
         );
     }
@@ -3358,7 +3358,7 @@ mod tests {
                 )
             )
             .unwrap()
-            .nquads,
+            .nquads(),
             ::purrdf_rdf::try_canonicalize(
                 &dataset_from_ntriples(&carried_ntriples(&report)).expect("must parse"),
                 &mut purrdf_core::CanonicalizationControl::new(
@@ -3367,7 +3367,7 @@ mod tests {
                 )
             )
             .unwrap()
-            .nquads
+            .nquads()
         );
         assert_eq!(
             ::purrdf_rdf::try_canonicalize(
@@ -3378,7 +3378,7 @@ mod tests {
                 )
             )
             .unwrap()
-            .nquads,
+            .nquads(),
             ::purrdf_rdf::try_canonicalize(
                 &report.to_dataset().expect("authored report emits"),
                 &mut purrdf_core::CanonicalizationControl::new(
@@ -3387,7 +3387,7 @@ mod tests {
                 )
             )
             .unwrap()
-            .nquads,
+            .nquads(),
             "relabelling must not change the graph"
         );
     }

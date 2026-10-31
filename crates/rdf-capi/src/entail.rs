@@ -78,7 +78,7 @@ use crate::{cstr_array, cstr_to_str};
 
 /// Close `document` (N-Quads, which accepts N-Triples) under the regime spelled
 /// `regime`, returning the canonical N-Quads closure and the rendered reasoning
-/// report as two byte vectors. Native-testable, pointer-free core.
+/// report as two owning buffers. Native-testable, pointer-free core.
 ///
 /// The parse → close → canonicalize → render sequence lives in
 /// [`materialize_to_nquads_string_with`]; this only adds the C-ABI byte framing.
@@ -90,7 +90,7 @@ fn materialize_to_nquads_bytes(
     premise_iris: &[&str],
     limits: &MaterializeLimits,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
-) -> Result<(Vec<u8>, Vec<u8>), purrdf_validate::canonical::CanonicalServiceError> {
+) -> Result<(PurrdfBuffer, PurrdfBuffer), purrdf_validate::canonical::CanonicalServiceError> {
     let (nquads, report) = materialize_to_nquads_string_with(
         regime,
         document,
@@ -101,7 +101,7 @@ fn materialize_to_nquads_bytes(
         control,
     )?
     .into_parts();
-    Ok((nquads.into_bytes(), report.into_bytes()))
+    Ok((PurrdfBuffer::from(nquads), PurrdfBuffer::from(report)))
 }
 
 /// Materialize an RDF document under a SPARQL entailment regime.
@@ -229,8 +229,8 @@ pub unsafe extern "C" fn purrdf_entail_materialize_to_nquads(
                     control,
                 )
                 .map_err(PurrdfError::service)?;
-                *out_nquads = into_handle(PurrdfBuffer(nquads));
-                *out_report = into_handle(PurrdfBuffer(report));
+                *out_nquads = into_handle(nquads);
+                *out_report = into_handle(report);
                 Ok(PurrdfStatus::Ok)
             }
         )
@@ -277,7 +277,7 @@ pub unsafe extern "C" fn purrdf_entail_rules(
             let regime = cstr_to_str(regime)?;
             let bytes = rules_bytes(regime)
                 .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?;
-            *out_buffer = into_handle(PurrdfBuffer(bytes));
+            *out_buffer = into_handle(PurrdfBuffer::from(bytes));
             Ok(PurrdfStatus::Ok)
         })
     }
@@ -317,7 +317,7 @@ pub unsafe extern "C" fn purrdf_entail_implemented_rules(
             let regime = cstr_to_str(regime)?;
             let bytes = implemented_rules_bytes(regime)
                 .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?;
-            *out_buffer = into_handle(PurrdfBuffer(bytes));
+            *out_buffer = into_handle(PurrdfBuffer::from(bytes));
             Ok(PurrdfStatus::Ok)
         })
     }
@@ -360,7 +360,7 @@ pub unsafe extern "C" fn purrdf_entail_extensions(
             let regime = cstr_to_str(regime)?;
             let bytes = extensions_bytes(regime)
                 .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?;
-            *out_buffer = into_handle(PurrdfBuffer(bytes));
+            *out_buffer = into_handle(PurrdfBuffer::from(bytes));
             Ok(PurrdfStatus::Ok)
         })
     }
@@ -388,8 +388,11 @@ pub unsafe extern "C" fn purrdf_entail_extensions(
 /// # Safety
 /// `out_answer` and `out_certificate` must be non-null, writable pointers. Both
 /// writes happen only after every fallible step has succeeded.
-unsafe fn store_answer<E: Into<purrdf_validate::canonical::CanonicalServiceError>>(
-    produced: Result<ReasoningAnswer, E>,
+unsafe fn store_answer<
+    A: AsRef<str> + Into<PurrdfBuffer>,
+    E: Into<purrdf_validate::canonical::CanonicalServiceError>,
+>(
+    produced: Result<ReasoningAnswer<A>, E>,
     out_answer: *mut *mut PurrdfBuffer,
     out_certificate: *mut *mut PurrdfBuffer,
 ) -> Result<PurrdfStatus, PurrdfError> {
@@ -399,8 +402,8 @@ unsafe fn store_answer<E: Into<purrdf_validate::canonical::CanonicalServiceError
     // SAFETY: the caller's contract above — both pointers are non-null and
     // writable, and nothing fallible remains between here and the two writes.
     unsafe {
-        *out_answer = into_handle(PurrdfBuffer(answer.into_bytes()));
-        *out_certificate = into_handle(PurrdfBuffer(certificate.into_bytes()));
+        *out_answer = into_handle(answer.into());
+        *out_certificate = into_handle(PurrdfBuffer::from(certificate.into_bytes()));
     }
     Ok(PurrdfStatus::Ok)
 }
@@ -1373,8 +1376,8 @@ pub unsafe extern "C" fn purrdf_entail_verify_entailment(
 /// # Safety
 /// `out_answer`, `out_certificate` and `out_proof` must be non-null, writable pointers.
 /// All three writes happen only after every fallible step has succeeded.
-unsafe fn store_proved_answer(
-    produced: Result<ReasoningAnswer, purrdf_validate::canonical::CanonicalServiceError>,
+unsafe fn store_proved_answer<A: AsRef<str> + Into<PurrdfBuffer>>(
+    produced: Result<ReasoningAnswer<A>, purrdf_validate::canonical::CanonicalServiceError>,
     out_answer: *mut *mut PurrdfBuffer,
     out_certificate: *mut *mut PurrdfBuffer,
     out_proof: *mut *mut PurrdfBuffer,
@@ -1383,9 +1386,9 @@ unsafe fn store_proved_answer(
     // SAFETY: the caller's contract above — all three pointers are non-null and writable,
     // and nothing fallible remains between here and the three writes.
     unsafe {
-        *out_answer = into_handle(PurrdfBuffer(answer.into_bytes()));
-        *out_certificate = into_handle(PurrdfBuffer(certificate.into_bytes()));
-        *out_proof = into_handle(PurrdfBuffer(proof.into_bytes()));
+        *out_answer = into_handle(answer.into());
+        *out_certificate = into_handle(PurrdfBuffer::from(certificate.into_bytes()));
+        *out_proof = into_handle(PurrdfBuffer::from(proof.into_bytes()));
     }
     Ok(PurrdfStatus::Ok)
 }
@@ -1542,7 +1545,7 @@ pub unsafe extern "C" fn purrdf_entail_check_proof(
                     control,
                 )
                 .map_err(PurrdfError::service)?;
-                *out_report = into_handle(PurrdfBuffer(report.into_bytes()));
+                *out_report = into_handle(PurrdfBuffer::from(report.into_bytes()));
                 Ok(PurrdfStatus::Ok)
             }
         )
@@ -2312,8 +2315,8 @@ mod tests {
             ),
         )
         .expect("rdfs closure");
-        let nquads = String::from_utf8(nquads).expect("utf8");
-        let report = String::from_utf8(report).expect("utf8");
+        let nquads = std::str::from_utf8(nquads.as_bytes()).expect("utf8");
+        let report = std::str::from_utf8(report.as_bytes()).expect("utf8");
         assert!(nquads.contains(
             "<http://example.org/x> \
              <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/B> ."
@@ -2388,7 +2391,7 @@ mod tests {
                 ),
             )
             .unwrap_or_else(|error| panic!("{regime}: {error}"));
-            let report = String::from_utf8(report).expect("utf8");
+            let report = std::str::from_utf8(report.as_bytes()).expect("utf8");
             assert!(report.contains(&format!("\nregime {regime}\n")), "{report}");
         }
         // A rule document belongs to exactly one regime; passing one anywhere else is

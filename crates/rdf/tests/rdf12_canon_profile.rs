@@ -129,7 +129,7 @@ fn load_manifest() -> Vec<Case> {
 
 /// The canonical bytes for a case, or its refusal rendered in the manifest's
 /// discriminant spelling.
-fn run_case(case: &Case) -> Result<String, String> {
+fn run_case(case: &Case) -> Result<purrdf_core::Canonicalized, String> {
     let bytes = std::fs::read(&case.file).unwrap_or_else(|e| panic!("read {:?}: {e}", case.file));
     let dataset = parse_dataset(&bytes, media_type_for_path(&case.file), None)
         .unwrap_or_else(|e| panic!("{} must parse: {e}", case.rel));
@@ -138,7 +138,7 @@ fn run_case(case: &Case) -> Result<String, String> {
         CanonHash::Sha256,
         &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     ) {
-        Ok(canonicalized) => Ok(canonicalized.nquads),
+        Ok(canonicalized) => Ok(canonicalized),
         Err(CanonError::ReservedVocabulary(err)) => {
             let position = match err.position() {
                 TermPosition::Subject => "subject",
@@ -164,7 +164,8 @@ fn the_corpus_matches_its_pinned_expectations() {
     for case in load_manifest() {
         let actual = run_case(&case);
         match (&case.expect, actual) {
-            (Expectation::Golden, Ok(nquads)) => {
+            (Expectation::Golden, Ok(canonicalized)) => {
+                let nquads = canonicalized.nquads();
                 let canonical = case.file.with_extension("canonical");
                 let digest = case.file.with_extension("digest");
                 let hex = format!(
@@ -231,8 +232,10 @@ fn the_corpus_pairs_hold_their_declared_relations() {
         }
         let fields: Vec<&str> = line.split('\t').collect();
         assert_eq!(fields.len(), 3, "pairs.tsv line {} malformed", n + 1);
-        let left = run_case(&manifest[fields[0]]).expect("a paired case must canonicalize");
-        let right = run_case(&manifest[fields[1]]).expect("a paired case must canonicalize");
+        let left_owner = run_case(&manifest[fields[0]]).expect("a paired case must canonicalize");
+        let left = left_owner.nquads();
+        let right_owner = run_case(&manifest[fields[1]]).expect("a paired case must canonicalize");
+        let right = right_owner.nquads();
         match fields[2] {
             "same" => assert_eq!(
                 left, right,
@@ -266,7 +269,7 @@ fn refusal_of(turtle: &str) -> CanonError {
         Err(err) => err,
         Ok(canonicalized) => panic!(
             "this shape MUST be refused — it canonicalized to:\n{}",
-            canonicalized.nquads
+            canonicalized.nquads()
         ),
     }
 }
@@ -291,13 +294,13 @@ fn a_spelled_reifier_co_canonicalizes_with_the_row_it_spells() {
     let root = corpus_root();
     let genuine = std::fs::read(root.join("cases/reifier-simple.ttl")).expect("genuine case");
     let dataset = parse_dataset(&genuine, "text/turtle", None).expect("parses");
-    let lowered = try_canonicalize_with(
+    let lowered_owner = try_canonicalize_with(
         &dataset,
         CanonHash::Sha256,
         &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
-    .expect("a genuine reifier canonicalizes")
-    .nquads;
+    .expect("a genuine reifier canonicalizes");
+    let lowered = lowered_owner.nquads();
     let row = lowered
         .lines()
         .find(|line| line.contains("<urn:purrdf:rdfc:reifies>"))
@@ -310,13 +313,13 @@ fn a_spelled_reifier_co_canonicalizes_with_the_row_it_spells() {
 
     let spelled = std::fs::read(root.join("cases/poison-forgery.ttl")).expect("fold case");
     let dataset = parse_dataset(&spelled, "text/turtle", None).expect("parses");
-    let folded = try_canonicalize_with(
+    let folded_owner = try_canonicalize_with(
         &dataset,
         CanonHash::Sha256,
         &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
-    .expect("a quad in the exact emitted shape folds rather than refusing")
-    .nquads;
+    .expect("a quad in the exact emitted shape folds rather than refusing");
+    let folded = folded_owner.nquads();
     assert_eq!(
         folded,
         format!("{row}\n"),
@@ -339,7 +342,7 @@ fn a_spelled_reifier_co_canonicalizes_with_the_row_it_spells() {
             )
         )
         .expect("the canonical document canonicalizes")
-        .nquads,
+        .nquads(),
         lowered,
         "canonicalizing the canonical document moved its bytes"
     );
@@ -389,13 +392,13 @@ fn a_spelled_reifier_co_canonicalizes_with_the_flat_row_it_spells() {
     let root = corpus_root();
     let genuine = std::fs::read(root.join("cases/reifier-simple.ttl")).expect("genuine case");
     let dataset = parse_dataset(&genuine, "text/turtle", None).expect("parses");
-    let lowered = try_canonicalize_flat_view(
+    let lowered_owner = try_canonicalize_flat_view(
         &*dataset,
         CanonHash::Sha256,
         &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
-    .expect("a genuine reifier canonicalizes under the flat presentation")
-    .nquads;
+    .expect("a genuine reifier canonicalizes under the flat presentation");
+    let lowered = lowered_owner.nquads();
     let row = lowered
         .lines()
         .find(|line| line.contains(RDF_REIFIES))
@@ -408,7 +411,7 @@ fn a_spelled_reifier_co_canonicalizes_with_the_flat_row_it_spells() {
 
     let spelled = std::fs::read(root.join("cases/poison-forgery.ttl")).expect("fold case");
     let dataset = parse_dataset(&spelled, "text/turtle", None).expect("parses");
-    let folded = try_canonicalize_flat_view(
+    let folded_owner = try_canonicalize_flat_view(
         &*dataset,
         CanonHash::Sha256,
         &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
@@ -416,8 +419,8 @@ fn a_spelled_reifier_co_canonicalizes_with_the_flat_row_it_spells() {
     .expect(
         "a quad in the exact emitted shape folds rather than refusing, under the \
              flat presentation too",
-    )
-    .nquads;
+    );
+    let folded = folded_owner.nquads();
     assert_eq!(
         folded,
         format!("{row}\n"),
@@ -444,7 +447,7 @@ fn a_spelled_reifier_co_canonicalizes_with_the_flat_row_it_spells() {
             )
         )
         .expect("the flat canonical document canonicalizes")
-        .nquads,
+        .nquads(),
         lowered,
         "canonicalizing the flat canonical document moved its bytes"
     );
@@ -487,8 +490,8 @@ fn a_spelled_reifier_co_canonicalizes_with_the_flat_row_it_spells() {
         &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
     .expect("the exact folded shape must be admitted, not refused");
-    assert!(admitted.nquads.contains(RDF_REIFIES));
-    assert!(!admitted.nquads.contains(RESERVED_NAMESPACE));
+    assert!(admitted.nquads().contains(RDF_REIFIES));
+    assert!(!admitted.nquads().contains(RESERVED_NAMESPACE));
 }
 
 /// The annotation-side twin of
@@ -507,13 +510,13 @@ fn a_spelled_annotation_co_canonicalizes_with_the_flat_row_it_spells() {
     let o = b.intern_iri("http://example.org/o").unwrap();
     b.push_annotation(s, p, o).unwrap();
     let native = b.freeze().expect("valid dataset");
-    let lowered = try_canonicalize_flat_view(
+    let lowered_owner = try_canonicalize_flat_view(
         &*native,
         CanonHash::Sha256,
         &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
-    .expect("a genuine annotation canonicalizes under the flat presentation")
-    .nquads;
+    .expect("a genuine annotation canonicalizes under the flat presentation");
+    let lowered = lowered_owner.nquads();
     assert_eq!(
         lowered, "<http://example.org/s> <http://example.org/p> <http://example.org/o> .\n",
         "the native annotation's flat form must be the ordinary quad, with no \
@@ -523,7 +526,7 @@ fn a_spelled_annotation_co_canonicalizes_with_the_flat_row_it_spells() {
     let root = corpus_root();
     let spelled = std::fs::read(root.join("cases/poison-sentinel-graph.trig")).expect("fold case");
     let dataset = parse_dataset(&spelled, "application/trig", None).expect("parses");
-    let folded = try_canonicalize_flat_view(
+    let folded_owner = try_canonicalize_flat_view(
         &*dataset,
         CanonHash::Sha256,
         &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
@@ -531,8 +534,8 @@ fn a_spelled_annotation_co_canonicalizes_with_the_flat_row_it_spells() {
     .expect(
         "a quad in the exact emitted shape folds rather than refusing, under the \
              flat presentation too",
-    )
-    .nquads;
+    );
+    let folded = folded_owner.nquads();
     assert_eq!(
         folded, lowered,
         "under the flat presentation, the spelled annotation row (the sentinel used \
@@ -599,7 +602,7 @@ fn the_profile_identity_is_readable_from_the_api() {
             )
         )
         .expect("empty dataset canonicalizes")
-        .presentation,
+        .presentation(),
         CanonPresentation::Overlay
     );
     assert_eq!(
@@ -612,7 +615,7 @@ fn the_profile_identity_is_readable_from_the_api() {
             )
         )
         .expect("empty dataset canonicalizes")
-        .presentation,
+        .presentation(),
         CanonPresentation::FlatAssertion
     );
 }
@@ -627,20 +630,20 @@ fn flat_view_leaves_an_ordinary_quad_unchanged() {
     let root = corpus_root();
     let bytes = std::fs::read(root.join("cases/plain-rdf11.ttl")).expect("plain RDF 1.1 case");
     let dataset = parse_dataset(&bytes, "text/turtle", None).expect("parses");
-    let overlay = try_canonicalize_with(
+    let overlay_owner = try_canonicalize_with(
         &dataset,
         CanonHash::Sha256,
         &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
-    .expect("plain RDF 1.1 canonicalizes under the overlay presentation")
-    .nquads;
-    let flat = try_canonicalize_flat_view(
+    .expect("plain RDF 1.1 canonicalizes under the overlay presentation");
+    let overlay = overlay_owner.nquads();
+    let flat_owner = try_canonicalize_flat_view(
         &*dataset,
         CanonHash::Sha256,
         &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
-    .expect("plain RDF 1.1 canonicalizes under the flat presentation")
-    .nquads;
+    .expect("plain RDF 1.1 canonicalizes under the flat presentation");
+    let flat = flat_owner.nquads();
     assert_eq!(
         flat, overlay,
         "a dataset carrying no reifiers or annotations must produce identical bytes \
@@ -670,13 +673,13 @@ fn a_named_graph_reifier_lowers_to_flat_rdf_reifies_in_its_declaring_graph() {
     b.push_reifier_in_graph(r, triple, Some(g_declared))
         .unwrap();
     let dataset = b.freeze().expect("valid dataset");
-    let flat = try_canonicalize_flat_view(
+    let flat_owner = try_canonicalize_flat_view(
         &*dataset,
         CanonHash::Sha256,
         &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
-    .expect("a named-graph reifier canonicalizes under the flat presentation")
-    .nquads;
+    .expect("a named-graph reifier canonicalizes under the flat presentation");
+    let flat = flat_owner.nquads();
 
     let expected_assertion_row = "<http://example.org/s> <http://example.org/p> <http://example.org/o> \
          <http://example.org/g-asserted> .";
@@ -713,13 +716,13 @@ fn a_named_graph_annotation_lowers_to_a_flat_row_in_its_own_graph() {
     let g = b.intern_iri("http://example.org/g").unwrap();
     b.push_annotation_in_graph(s, p, o, Some(g)).unwrap();
     let dataset = b.freeze().expect("valid dataset");
-    let flat = try_canonicalize_flat_view(
+    let flat_owner = try_canonicalize_flat_view(
         &*dataset,
         CanonHash::Sha256,
         &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
-    .expect("a named-graph annotation canonicalizes under the flat presentation")
-    .nquads;
+    .expect("a named-graph annotation canonicalizes under the flat presentation");
+    let flat = flat_owner.nquads();
     assert_eq!(
         flat,
         "<http://example.org/s> <http://example.org/p> <http://example.org/o> \
@@ -746,13 +749,13 @@ fn a_doubly_spelled_reifier_row_is_emitted_once_under_the_flat_presentation() {
     let triple = only_native.intern_triple(s, p, o).unwrap();
     only_native.push_reifier(r, triple).unwrap();
     let dataset = only_native.freeze().expect("valid dataset");
-    let single = try_canonicalize_flat_view(
+    let single_owner = try_canonicalize_flat_view(
         &*dataset,
         CanonHash::Sha256,
         &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
-    .expect("a genuine reifier canonicalizes under the flat presentation")
-    .nquads;
+    .expect("a genuine reifier canonicalizes under the flat presentation");
+    let single = single_owner.nquads();
 
     let mut doubly_spelled = RdfDatasetBuilder::new();
     let s2 = doubly_spelled.intern_iri("http://example.org/s").unwrap();
@@ -766,13 +769,13 @@ fn a_doubly_spelled_reifier_row_is_emitted_once_under_the_flat_presentation() {
         .push_quad(r2, rdf_reifies, triple2, None)
         .unwrap();
     let dataset2 = doubly_spelled.freeze().expect("valid dataset");
-    let doubled = try_canonicalize_flat_view(
+    let doubled_owner = try_canonicalize_flat_view(
         &*dataset2,
         CanonHash::Sha256,
         &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
-    .expect("a reifier binding spelled both ways still canonicalizes")
-    .nquads;
+    .expect("a reifier binding spelled both ways still canonicalizes");
+    let doubled = doubled_owner.nquads();
 
     assert_eq!(
         doubled, single,
@@ -818,10 +821,10 @@ fn no_corpus_golden_leaks_the_reserved_namespace_under_the_flat_presentation() {
             )
         });
         assert!(
-            !flat.nquads.contains(RESERVED_NAMESPACE),
+            !flat.nquads().contains(RESERVED_NAMESPACE),
             "{} leaked the reserved namespace under the flat presentation: {}",
             case.rel,
-            flat.nquads
+            flat.nquads()
         );
         checked += 1;
     }

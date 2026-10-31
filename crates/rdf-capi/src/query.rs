@@ -247,7 +247,7 @@ pub unsafe extern "C" fn purrdf_dataset_division_policy(
                 ));
             }
             let text = PurrdfDataset::division(dataset).to_string();
-            *out_buffer = into_handle(PurrdfBuffer(text.into_bytes()));
+            *out_buffer = into_handle(PurrdfBuffer::from(text.into_bytes()));
             Ok(PurrdfStatus::Ok)
         })
     }
@@ -309,7 +309,7 @@ pub(crate) unsafe fn store_execution_receipt(
     coordinates: &purrdf_sparql_eval::QueryCoordinates,
 ) {
     unsafe {
-        *out = into_handle(PurrdfBuffer(
+        *out = into_handle(PurrdfBuffer::from(
             purrdf_validate::query::execution_receipt_json(coordinates).into_bytes(),
         ));
     }
@@ -867,7 +867,7 @@ unsafe fn query_json_entry(
                 )
                 .with_execution_receipt(&purrdf_validate::query::execution_receipt_json(&receipt))
             })?;
-        *out_buffer = into_handle(PurrdfBuffer(outcome.bytes));
+        *out_buffer = into_handle(PurrdfBuffer::from(outcome.bytes));
         store_execution_receipt(out_receipt, &receipt);
         Ok(PurrdfStatus::Ok)
     }
@@ -1446,7 +1446,7 @@ unsafe fn query_entailment_governed_entry(
                     query: query_evidence,
                     closure_trip: PurrdfGovernorTrip::NONE,
                 };
-                *out_report = into_handle(PurrdfBuffer(
+                *out_report = into_handle(PurrdfBuffer::from(
                     purrdf_validate::render_reasoning_report(&report).into_bytes(),
                 ));
                 store_execution_receipt(out_receipt, &receipt);

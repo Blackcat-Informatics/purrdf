@@ -770,13 +770,13 @@ impl Dataset {
                     .freeze()
                     .map_err(purrdf_core::CanonError::Invalid)?;
                 match try_canonicalize_flat_view(&frozen, CanonHash::Sha256, control) {
-                    Ok(canonicalized) => Ok(canonicalized.nquads),
+                    Ok(canonicalized) => Ok(canonicalized),
                     Err(ViewCanonError::Refused(cause)) => Err(cause),
                     Err(ViewCanonError::NotReady { error, .. }) => match error {},
                 }
             })?;
         Ok(crate::CanonicalResult::new(
-            JsValue::from_str(&text),
+            JsValue::from_str(text.nquads()),
             receipts,
         ))
     }

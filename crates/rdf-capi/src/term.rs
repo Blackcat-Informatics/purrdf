@@ -462,7 +462,7 @@ pub unsafe extern "C" fn purrdf_term_to_ntriples(
                 }
                 None => emit_term(&view_to_rdf_term(view)?),
             };
-            *out_buffer = into_handle(PurrdfBuffer(token.into_bytes()));
+            *out_buffer = into_handle(PurrdfBuffer::from(token.into_bytes()));
             Ok(PurrdfStatus::Ok)
         })
     }

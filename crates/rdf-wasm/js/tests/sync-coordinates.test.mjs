@@ -76,8 +76,8 @@ test("synchronous positional query coordinates reject lossy host values", () => 
     queryRaw: [data, QUERY, undefined, undefined, undefined, undefined, undefined],
     queryRawConfigured: [data, GRAPH, undefined, "jsonld", optionsJson, undefined],
     queryRawWithContext: [data, GRAPH, undefined, "jsonld", context, undefined, undefined],
-    queryGoverned: [data, QUERY, ...Array(11).fill(undefined)],
-    queryEntailmentGoverned: [data, QUERY, undefined, "rdfs", undefined, [], [], [], ...Array(13).fill(undefined)],
+    queryGoverned: [data, QUERY, ...Array(13).fill(undefined)],
+    queryEntailmentGoverned: [data, QUERY, undefined, "rdfs", undefined, [], [], [], ...Array(15).fill(undefined)],
     explainQuery: [data, QUERY, undefined, undefined],
   };
   try {

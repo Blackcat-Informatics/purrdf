@@ -1975,7 +1975,8 @@ mod tests {
                     None
                 )
             )
-            .unwrap(),
+            .unwrap()
+            .nquads(),
             crate::canonical_flat_nquads(
                 &expected,
                 &mut purrdf_core::CanonicalizationControl::new(
@@ -1983,7 +1984,8 @@ mod tests {
                     None
                 )
             )
-            .unwrap(),
+            .unwrap()
+            .nquads(),
         );
     }
 

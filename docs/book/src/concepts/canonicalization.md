@@ -30,9 +30,15 @@ let ds = parse_dataset(b"_:source <https://example.org/name> \"Alice\" .", "appl
 let renamed = parse_dataset(b"_:renamed <https://example.org/name> \"Alice\" .", "application/n-triples", None)?;
 let canon = try_canonicalize(&ds, &mut control)?;
 // Canonical labels are stable across runs, hosts, and language bindings.
-assert_eq!(canon.nquads, try_canonicalize(&renamed, &mut control)?.nquads);
+assert_eq!(canon.nquads(), try_canonicalize(&renamed, &mut control)?.nquads());
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
+
+The immutable `Canonicalized` result retains its source's owned storage
+reservation. Borrow its text with `nquads()`, its presentation with
+`presentation()`, and its labels with `label()` or `labels()`. Cloning shares the
+payload and its original reservation; that reservation lives until the last
+result owner is dropped.
 
 Use canonicalization when you need a content identity for a graph: hashing,
 signing, deduplication, or comparing datasets produced by different writers.

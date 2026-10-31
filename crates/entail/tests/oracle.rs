@@ -5767,7 +5767,7 @@ fn closure_lines(name: &str, plan: Materialization<'_>) -> BTreeSet<String> {
         &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
     .unwrap()
-    .nquads
+    .nquads()
     .lines()
     .map(ToOwned::to_owned)
     .collect()
@@ -5997,7 +5997,7 @@ fn render_golden(fixture: &Fixture) -> String {
     write_nquads(
         &mut out,
         "input",
-        &try_canonicalize(
+        try_canonicalize(
             &ds,
             &mut purrdf_core::CanonicalizationControl::new(
                 purrdf_core::RDFC_V2_CORPUS_POLICY,
@@ -6005,7 +6005,7 @@ fn render_golden(fixture: &Fixture) -> String {
             ),
         )
         .unwrap()
-        .nquads,
+        .nquads(),
     );
 
     // Frozen reports name the original native capacity profile explicitly;
@@ -6021,7 +6021,7 @@ fn render_golden(fixture: &Fixture) -> String {
                 write_nquads(
                     &mut out,
                     "closure",
-                    &try_canonicalize(
+                    try_canonicalize(
                         &closed,
                         &mut purrdf_core::CanonicalizationControl::new(
                             purrdf_core::RDFC_V2_CORPUS_POLICY,
@@ -6029,7 +6029,7 @@ fn render_golden(fixture: &Fixture) -> String {
                         ),
                     )
                     .unwrap()
-                    .nquads,
+                    .nquads(),
                 );
                 out.push_str("--- report ---\n");
                 render_report(&mut out, &report);
@@ -7507,7 +7507,7 @@ fn every_rule_is_registered_or_declared_unimplemented() {
                             )
                         )
                         .unwrap()
-                        .nquads
+                        .nquads()
                         .lines()
                         .any(|l| l == line),
                         "{regime:?} / {id}: positive fixture {} did not reach {line}",
@@ -7749,15 +7749,15 @@ fn a_named_graph_is_closed_and_its_conclusions_land_in_it() {
                 .any(|b| b.construct().as_str() == "named-graph"),
             "{regime:?} did not report the named-graph boundary"
         );
-        let lines = try_canonicalize(
+        let lines_owner = try_canonicalize(
             &closed,
             &mut purrdf_core::CanonicalizationControl::new(
                 purrdf_core::RDFC_V2_CORPUS_POLICY,
                 None,
             ),
         )
-        .unwrap()
-        .nquads;
+        .unwrap();
+        let lines = lines_owner.nquads();
         assert!(
             lines.contains(&format!("<{EX_X}> <{EX_P}> <{EX_Y}> <{EX_G}> .")),
             "{regime:?} did not carry the named-graph quad through"
@@ -7802,7 +7802,7 @@ fn a_terminology_in_the_default_graph_types_instances_in_a_named_graph() {
     let derived = format!("<{EX_X}> <{RDF_TYPE}> <{EX_B}> <{EX_G}> .");
     for plan in [Materialization::Rdfs, Materialization::OwlRl] {
         let regime = plan.regime();
-        let positive = try_canonicalize(
+        let positive_owner = try_canonicalize(
             &materialize(&build(fixture("named_graph_closure")), plan)
                 .expect("runnable regime")
                 .0,
@@ -7811,8 +7811,8 @@ fn a_terminology_in_the_default_graph_types_instances_in_a_named_graph() {
                 None,
             ),
         )
-        .unwrap()
-        .nquads;
+        .unwrap();
+        let positive = positive_owner.nquads();
         assert!(
             positive.lines().any(|line| line == derived),
             "{regime:?}: the terminology did not reach the named graph's instances"
@@ -7827,7 +7827,7 @@ fn a_terminology_in_the_default_graph_types_instances_in_a_named_graph() {
         );
 
         // THE CROSS-GRAPH JOIN THAT MUST NOT HAPPEN.
-        let near_miss = try_canonicalize(
+        let near_miss_owner = try_canonicalize(
             &materialize(&build(fixture("named_graph_closure_near_miss")), plan)
                 .expect("runnable regime")
                 .0,
@@ -7836,8 +7836,8 @@ fn a_terminology_in_the_default_graph_types_instances_in_a_named_graph() {
                 None,
             ),
         )
-        .unwrap()
-        .nquads;
+        .unwrap();
+        let near_miss = near_miss_owner.nquads();
         for graph in ["", &format!(" <{EX_G}>"), &format!(" <{EX_H}>")] {
             let line = format!("<{EX_X}> <{RDF_TYPE}> <{EX_B}>{graph} .");
             assert!(
@@ -8101,7 +8101,7 @@ fn a_reifier_range_conclusion_over_a_triple_term_is_abandoned_and_reported() {
         &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
     .unwrap()
-    .nquads
+    .nquads()
     .lines()
     {
         assert!(
@@ -8150,7 +8150,7 @@ fn a_reifier_side_table_round_trips_through_materialize() {
             .collect()
     }
     let before = overlay(
-        &try_canonicalize(
+        try_canonicalize(
             &ds,
             &mut purrdf_core::CanonicalizationControl::new(
                 purrdf_core::RDFC_V2_CORPUS_POLICY,
@@ -8158,7 +8158,7 @@ fn a_reifier_side_table_round_trips_through_materialize() {
             ),
         )
         .unwrap()
-        .nquads,
+        .nquads(),
     );
     assert_eq!(
         before.len(),
@@ -8170,7 +8170,7 @@ fn a_reifier_side_table_round_trips_through_materialize() {
         let (closed, _) = materialize(&ds, plan).expect("the five oracle regimes run");
         assert_eq!(
             overlay(
-                &try_canonicalize(
+                try_canonicalize(
                     &closed,
                     &mut purrdf_core::CanonicalizationControl::new(
                         purrdf_core::RDFC_V2_CORPUS_POLICY,
@@ -8178,7 +8178,7 @@ fn a_reifier_side_table_round_trips_through_materialize() {
                     )
                 )
                 .unwrap()
-                .nquads
+                .nquads()
             ),
             before,
             "{name}: the reifier side table did not survive materialization"
@@ -8210,7 +8210,7 @@ fn a_reifier_side_table_round_trips_through_materialize() {
         assert_eq!(closed.annotation_refs().count(), 1, "{name}");
         assert_eq!(
             overlay(
-                &try_canonicalize(
+                try_canonicalize(
                     &closed,
                     &mut purrdf_core::CanonicalizationControl::new(
                         purrdf_core::RDFC_V2_CORPUS_POLICY,
@@ -8218,7 +8218,7 @@ fn a_reifier_side_table_round_trips_through_materialize() {
                     )
                 )
                 .unwrap()
-                .nquads
+                .nquads()
             )
             .len(),
             2,
@@ -8261,15 +8261,15 @@ fn a_derived_triple_term_object_is_carried_through_not_folded() {
                 .any(|b| b.construct().as_str() == "triple-term"),
             "{regime:?} did not report the triple-term boundary"
         );
-        let lines = try_canonicalize(
+        let lines_owner = try_canonicalize(
             &closed,
             &mut purrdf_core::CanonicalizationControl::new(
                 purrdf_core::RDFC_V2_CORPUS_POLICY,
                 None,
             ),
         )
-        .unwrap()
-        .nquads;
+        .unwrap();
+        let lines = lines_owner.nquads();
         assert!(
             lines.contains(&format!(
                 "<{EX_X}> <{EX_MENTIONS}> <<( <{EX_A}> <{RDFS_SUBCLASSOF}> <{EX_B}> )>> ."
@@ -8335,7 +8335,7 @@ fn a_shared_conclusion_is_credited_once() {
                 )
             )
             .unwrap()
-            .nquads
+            .nquads()
             .contains(&nquads_line(EX_X, RDF_TYPE, EX_C)),
             "{regime:?} did not conclude the shared triple"
         );
@@ -8369,15 +8369,15 @@ fn a_would_be_literal_subject_is_abandoned_and_reported() {
     for plan in [Materialization::Rdfs, Materialization::OwlRl] {
         let regime = plan.regime();
         let (closed, report) = materialize(&ds, plan).expect("runnable regime");
-        let nquads = try_canonicalize(
+        let nquads_owner = try_canonicalize(
             &closed,
             &mut purrdf_core::CanonicalizationControl::new(
                 purrdf_core::RDFC_V2_CORPUS_POLICY,
                 None,
             ),
         )
-        .unwrap()
-        .nquads;
+        .unwrap();
+        let nquads = nquads_owner.nquads();
         // The literal is still in the closure — it is an input OBJECT. What may never
         // appear is a line that STARTS with it.
         assert!(

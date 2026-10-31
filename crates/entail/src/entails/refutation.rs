@@ -1138,8 +1138,7 @@ mod tests {
                                 None,
                             ),
                         )
-                        .unwrap()
-                        .nquads,
+                        .unwrap(),
                         r.decisions(),
                     )
                 })

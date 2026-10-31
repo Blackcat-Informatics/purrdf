@@ -892,13 +892,13 @@ mod tests {
                 &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
             )
             .unwrap()
-            .nquads,
+            .nquads(),
             try_canonicalize(
                 &ds,
                 &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
             )
             .unwrap()
-            .nquads,
+            .nquads(),
             "round trip must preserve the dataset up to canonical bytes"
         );
         assert_eq!(
@@ -919,13 +919,13 @@ mod tests {
                 &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
             )
             .unwrap()
-            .nquads,
+            .nquads(),
             try_canonicalize(
                 &b,
                 &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
             )
             .unwrap()
-            .nquads
+            .nquads()
         );
     }
 
@@ -1268,13 +1268,13 @@ mod tests {
                 &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
             )
             .unwrap()
-            .nquads,
+            .nquads(),
             try_canonicalize(
                 &ds,
                 &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
             )
             .unwrap()
-            .nquads
+            .nquads()
         );
         assert_eq!(
             try_canonicalize(
@@ -1282,13 +1282,13 @@ mod tests {
                 &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
             )
             .unwrap()
-            .nquads,
+            .nquads(),
             try_canonicalize(
                 &ds,
                 &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
             )
             .unwrap()
-            .nquads
+            .nquads()
         );
     }
 

@@ -148,9 +148,8 @@ impl PyRdfDataset {
     ) -> PyResult<crate::py_canonical::PyCanonicalResult> {
         let (text, receipts) = crate::py_canonical::run(py, canonical_search, cancel, |control| {
             try_canonicalize_flat_view(self.inner.as_ref(), CanonHash::Sha256, control)
-                .map(|canonicalized| canonicalized.nquads)
         })?;
-        crate::py_canonical::finish(py, text, receipts)
+        crate::py_canonical::finish(py, text.nquads(), receipts)
     }
 
     /// Serialize this immutable dataset as configured JSON-LD or YAML-LD.

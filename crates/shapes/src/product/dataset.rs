@@ -434,7 +434,7 @@ mod tests {
 
     /// The canonical N-Quads of a dataset — the value-level witness of equality
     /// the RDF types themselves do not provide.
-    fn canonical(dataset: &RdfDataset) -> String {
+    fn canonical(dataset: &RdfDataset) -> purrdf_core::Canonicalized {
         try_canonicalize(
             dataset,
             &mut purrdf_core::CanonicalizationControl::new(
@@ -443,7 +443,6 @@ mod tests {
             ),
         )
         .expect("fixture datasets canonicalize")
-        .nquads
     }
 
     // ── Round trip ──────────────────────────────────────────────────────────────
@@ -467,8 +466,8 @@ mod tests {
             "the section must restore every quad it carried",
         );
         assert_eq!(
-            canonical(restored.as_ref()),
-            canonical(source.as_ref()),
+            canonical(restored.as_ref()).nquads(),
+            canonical(source.as_ref()).nquads(),
             "the restored dataset must be the same RDF value as the source",
         );
 
@@ -517,7 +516,10 @@ mod tests {
         let restored = open_dataset(&bytes).expect("open the empty dataset");
 
         assert_eq!(restored.quad_count(), 0);
-        assert_eq!(canonical(restored.as_ref()), canonical(source.as_ref()));
+        assert_eq!(
+            canonical(restored.as_ref()).nquads(),
+            canonical(source.as_ref()).nquads()
+        );
         certify_dataset(
             &bytes,
             &mut purrdf_core::CanonicalizationControl::new(
@@ -638,8 +640,8 @@ mod tests {
         // every section's SHA-256 coverage, so nothing the cheap tier checks moved.
         let restored = open_dataset(&tampered).expect("a tampered identity must still OPEN");
         assert_eq!(
-            canonical(restored.as_ref()),
-            canonical(source.as_ref()),
+            canonical(restored.as_ref()).nquads(),
+            canonical(source.as_ref()).nquads(),
             "the tamper touched an identity claim, not the RDF",
         );
 
@@ -790,7 +792,8 @@ mod tests {
         // case-normalized to lowercase when a term is interned (BCP 47 tags are
         // case-insensitive), so the SUBTAG SEQUENCE is what this checks, not the
         // authored casing.
-        let source_nquads = canonical(source.as_ref());
+        let source_nquads_owner = canonical(source.as_ref());
+        let source_nquads = source_nquads_owner.nquads();
         for needle in [
             "\"direction\"@ar--ltr",
             "\"direction\"@ar--rtl",
@@ -816,7 +819,7 @@ mod tests {
         let restored = open_dataset(&bytes).expect("open");
 
         assert_eq!(
-            canonical(restored.as_ref()),
+            canonical(restored.as_ref()).nquads(),
             source_nquads,
             "every RDF 1.2 term kind must survive the section unchanged",
         );
@@ -826,7 +829,8 @@ mod tests {
         // language would merge them into one and lose a direction silently, so the
         // two spellings are asserted independently rather than trusted to the
         // whole-dataset comparison above.
-        let restored_nquads = canonical(restored.as_ref());
+        let restored_nquads_owner = canonical(restored.as_ref());
+        let restored_nquads = restored_nquads_owner.nquads();
         assert!(restored_nquads.contains("\"direction\"@ar--ltr"));
         assert!(restored_nquads.contains("\"direction\"@ar--rtl"));
 

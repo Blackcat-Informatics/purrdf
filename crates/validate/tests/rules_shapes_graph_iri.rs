@@ -116,7 +116,7 @@ fn a_shapes_graph_iri_beside_a_sparql_rl_rule_set_is_refused() {
 /// unnamed one.
 #[test]
 fn entailment_sees_the_shapes_graph_iri_it_is_given() {
-    let with = entail_to_ntriples_string_with_shapes_graph(
+    let with_owner = entail_to_ntriples_string_with_shapes_graph(
         SHAPES,
         None,
         Some(GRAPH),
@@ -125,9 +125,10 @@ fn entailment_sees_the_shapes_graph_iri_it_is_given() {
         &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
     .expect("entails");
+    let with = with_owner.nquads();
     assert!(with.contains(&named(GRAPH)), "{with}");
     assert!(with.contains(MARKED), "{with}");
-    let without = entail_to_ntriples_string_with_shapes_graph(
+    let without_owner = entail_to_ntriples_string_with_shapes_graph(
         SHAPES,
         None,
         None,
@@ -136,6 +137,7 @@ fn entailment_sees_the_shapes_graph_iri_it_is_given() {
         &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
     .expect("entails");
+    let without = without_owner.nquads();
     assert!(without.contains(UNNAMED), "{without}");
     assert!(!without.contains(MARKED), "{without}");
     assert_eq!(
@@ -151,5 +153,6 @@ fn entailment_sees_the_shapes_graph_iri_it_is_given() {
             )
         )
         .expect("entails")
+        .nquads()
     );
 }

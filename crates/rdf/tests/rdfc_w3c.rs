@@ -169,9 +169,10 @@ fn run_w3c_fixtures(scope: &str, include: &dyn Fn(&str) -> bool) {
             );
             match outcome {
                 Ok(canonical) => {
-                    let actual = canonical.nquads;
+                    let actual_owner = canonical;
+                    let actual = actual_owner.nquads();
                     let expected = std::fs::read_to_string(&expected_path).expect("read expected");
-                    if norm_lines(&actual) != norm_lines(&expected) {
+                    if norm_lines(actual) != norm_lines(&expected) {
                         failures.push(format!(
                             "{stem}: canonical output mismatch\n--- expected ---\n{expected}\n--- actual ---\n{actual}"
                         ));

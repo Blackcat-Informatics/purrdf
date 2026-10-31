@@ -342,7 +342,7 @@ fn legacy_canonical_form_omits_an_empty_named_declaration() {
             )
         )
         .unwrap()
-        .nquads,
+        .nquads(),
         try_canonicalize(
             &b.materialize(),
             &mut purrdf_core::CanonicalizationControl::new(
@@ -351,7 +351,7 @@ fn legacy_canonical_form_omits_an_empty_named_declaration() {
             )
         )
         .unwrap()
-        .nquads
+        .nquads()
     );
 }
 
@@ -524,7 +524,7 @@ fn oracle_accepts_global_relabeling_and_insertion_permutations() {
             )
         )
         .unwrap()
-        .nquads,
+        .nquads(),
         try_canonicalize(
             &b.materialize(),
             &mut purrdf_core::CanonicalizationControl::new(
@@ -533,7 +533,7 @@ fn oracle_accepts_global_relabeling_and_insertion_permutations() {
             )
         )
         .unwrap()
-        .nquads
+        .nquads()
     );
 }
 

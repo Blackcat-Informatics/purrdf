@@ -214,25 +214,32 @@ pub fn parse_regime(name: &str) -> Result<Regime, String> {
     }
 }
 
-/// One closure of one document under one regime: the canonical N-Quads and the
-/// rendered report, both as strings.
+/// One closure of one document under one regime: an owned canonical N-Quads
+/// result and the rendered report.
 ///
-/// Two strings rather than a tuple because both cross an FFI boundary and a
-/// positional pair is the wrong thing to get backwards there.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Named accessors keep the document and its report distinct at host boundaries.
+/// The canonical result retains its original storage reservation.
+#[derive(Debug, Clone)]
 pub struct RegimeClosure {
     /// The materialized dataset as canonical (RDFC-1.0) N-Quads.
-    nquads: String,
+    nquads: purrdf_core::Canonicalized,
     /// The run's [`ReasoningReport`], rendered by [`render_reasoning_report`].
     report: String,
 }
+
+impl PartialEq for RegimeClosure {
+    fn eq(&self, other: &Self) -> bool {
+        self.nquads() == other.nquads() && self.report == other.report
+    }
+}
+impl Eq for RegimeClosure {}
 
 impl RegimeClosure {
     /// The materialized dataset — every input quad plus every inferred triple —
     /// as canonical (RDFC-1.0) N-Quads.
     #[must_use]
     pub fn nquads(&self) -> &str {
-        &self.nquads
+        self.nquads.nquads()
     }
 
     /// What the run did, rendered by [`render_reasoning_report`].
@@ -241,9 +248,9 @@ impl RegimeClosure {
         &self.report
     }
 
-    /// Consume the closure, yielding `(nquads, report)`.
+    /// Consume the closure, retaining the canonical document owner beside its report.
     #[must_use]
-    pub fn into_parts(self) -> (String, String) {
+    pub fn into_parts(self) -> (purrdf_core::Canonicalized, String) {
         (self.nquads, self.report)
     }
 }
@@ -622,10 +629,10 @@ fn caller_flat_nquads(
     dataset: &purrdf_core::RdfDataset,
     context: &str,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
-) -> Result<String, crate::canonical::CanonicalServiceError> {
+) -> Result<purrdf_core::Canonicalized, crate::canonical::CanonicalServiceError> {
     match purrdf_core::try_canonicalize_flat_view(dataset, purrdf_core::CanonHash::Sha256, control)
     {
-        Ok(canonicalized) => Ok(canonicalized.nquads),
+        Ok(canonicalized) => Ok(canonicalized),
         Err(purrdf_core::ViewCanonError::Refused(err)) => {
             Err(crate::canonical::CanonicalServiceError::Canonical {
                 context: context.to_owned(),
@@ -1531,18 +1538,43 @@ use purrdf_iri::vocab::rdfs::SUB_CLASS_OF as RDFS_SUBCLASS_OF;
 /// `rdfs:subPropertyOf` — the mapping's sub-property predicate.
 use purrdf_iri::vocab::rdfs::SUB_PROPERTY_OF as RDFS_SUBPROPERTY_OF;
 
+/// An answer selected by a runtime service name. Canonical documents retain
+/// their immutable result owner; rendered service answers own their text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReasoningText {
+    /// A noncanonical service's line-oriented answer.
+    Rendered(String),
+    /// A dataset-valued answer under its source's original admission.
+    Canonical(purrdf_core::Canonicalized),
+}
+
+impl AsRef<str> for ReasoningText {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::Rendered(text) => text,
+            Self::Canonical(canonical) => canonical.nquads(),
+        }
+    }
+}
+
+purrdf_lex::variant_from!(ReasoningText {
+    Rendered(String),
+    Canonical(purrdf_core::Canonicalized),
+});
+
 /// One reasoning service's answer and the certificate of the run that produced it.
 ///
-/// The DL twin of [`RegimeClosure`], and for the same reason: both strings cross an
-/// FFI boundary and a positional pair is the wrong thing to get backwards there.
+/// The DL twin of [`RegimeClosure`]: named accessors distinguish the answer from
+/// its certificate at host boundaries. Dataset answers retain their canonical
+/// result owner; other services retain their rendered text.
 /// There is no certificate-free constructor and no second entry point that drops
 /// the certificate — a caller that does not care must still bind it, because the
 /// alternative is how "the reasoner says no" comes to mean "the reasoner ran out
 /// of steps".
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReasoningAnswer {
+#[derive(Debug, Clone)]
+pub struct ReasoningAnswer<A> {
     /// The service's answer, in the service's own line-oriented rendering.
-    answer: String,
+    answer: A,
     /// The certificate of the run that produced it.
     certificate: String,
     /// The rendered [`ServiceProof`] of the run that produced it, ABSENT when nobody asked
@@ -1550,7 +1582,26 @@ pub struct ReasoningAnswer {
     proof: Option<String>,
 }
 
-impl ReasoningAnswer {
+impl<A: AsRef<str>> PartialEq for ReasoningAnswer<A> {
+    fn eq(&self, other: &Self) -> bool {
+        self.answer() == other.answer()
+            && self.certificate == other.certificate
+            && self.proof == other.proof
+    }
+}
+impl<A: AsRef<str>> Eq for ReasoningAnswer<A> {}
+
+impl<A: AsRef<str>> ReasoningAnswer<A> {
+    /// Transform only the answer owner, retaining its exact certificate and proof.
+    #[must_use]
+    pub fn map_answer<B>(self, map: impl FnOnce(A) -> B) -> ReasoningAnswer<B> {
+        ReasoningAnswer {
+            answer: map(self.answer),
+            certificate: self.certificate,
+            proof: self.proof,
+        }
+    }
+
     /// The service's answer.
     ///
     /// Line-oriented and byte-stable, in the grammar the service's entry point
@@ -1558,7 +1609,7 @@ impl ReasoningAnswer {
     /// [`justify_to_string`]) is canonical (RDFC-1.0) N-Quads instead.
     #[must_use]
     pub fn answer(&self) -> &str {
-        &self.answer
+        self.answer.as_ref()
     }
 
     /// The certificate of the run that produced [`Self::answer`].
@@ -1609,21 +1660,21 @@ impl ReasoningAnswer {
         self.proof.as_deref().unwrap_or(ABSENT_DL_PROOF)
     }
 
-    /// Consume the answer, yielding `(answer, certificate)`.
+    /// Consume the answer, retaining its owner beside the certificate.
     ///
     /// Drops the proof, which is why it is not the way a host reaches one: see
     /// [`Self::into_proved_parts`].
     #[must_use]
-    pub fn into_parts(self) -> (String, String) {
+    pub fn into_parts(self) -> (A, String) {
         (self.answer, self.certificate)
     }
 
-    /// Consume the answer, yielding `(answer, certificate, proof_document)`.
+    /// Consume the answer, retaining its owner beside the certificate and proof document.
     ///
     /// The three-string shape a host that asked for a proof carries. The third is never
     /// empty: see [`Self::proof_document`].
     #[must_use]
-    pub fn into_proved_parts(self) -> (String, String, String) {
+    pub fn into_proved_parts(self) -> (A, String, String) {
         let proof = self.proof.unwrap_or_else(|| ABSENT_DL_PROOF.to_owned());
         (self.answer, self.certificate, proof)
     }
@@ -2412,7 +2463,7 @@ impl ReasonerSession {
     pub fn premise_nquads(
         &self,
         control: &mut purrdf_core::CanonicalizationControl<'_>,
-    ) -> Result<String, crate::canonical::CanonicalServiceError> {
+    ) -> Result<purrdf_core::Canonicalized, crate::canonical::CanonicalServiceError> {
         caller_flat_nquads(&self.dataset, "the reasoned premise", control)
     }
 
@@ -2530,7 +2581,7 @@ impl ReasonerSession {
     pub fn consistency(
         &mut self,
         control: &mut purrdf_core::CanonicalizationControl<'_>,
-    ) -> Result<ReasoningAnswer, crate::canonical::CanonicalServiceError> {
+    ) -> Result<ReasoningAnswer<String>, crate::canonical::CanonicalServiceError> {
         let (verdict, certificate, proof) = self.kb(control)?.consistency().into_certified_parts();
         Ok(ReasoningAnswer {
             answer: format!("consistency {}\n", verdict_name(verdict)),
@@ -2548,7 +2599,7 @@ impl ReasonerSession {
     pub fn classify(
         &mut self,
         control: &mut purrdf_core::CanonicalizationControl<'_>,
-    ) -> Result<ReasoningAnswer, crate::canonical::CanonicalServiceError> {
+    ) -> Result<ReasoningAnswer<String>, crate::canonical::CanonicalServiceError> {
         let certified = self
             .kb(control)?
             .classify()
@@ -2587,7 +2638,7 @@ impl ReasonerSession {
     pub fn realize(
         &mut self,
         control: &mut purrdf_core::CanonicalizationControl<'_>,
-    ) -> Result<ReasoningAnswer, crate::canonical::CanonicalServiceError> {
+    ) -> Result<ReasoningAnswer<String>, crate::canonical::CanonicalServiceError> {
         let certified = self
             .kb(control)?
             .realize()
@@ -2621,7 +2672,7 @@ impl ReasonerSession {
         &mut self,
         class: &str,
         control: &mut purrdf_core::CanonicalizationControl<'_>,
-    ) -> Result<ReasoningAnswer, crate::canonical::CanonicalServiceError> {
+    ) -> Result<ReasoningAnswer<String>, crate::canonical::CanonicalServiceError> {
         let term = parse_one_term(class)?;
         let (individuals, certificate, proof) = self
             .kb(control)?
@@ -2649,7 +2700,7 @@ impl ReasonerSession {
         &mut self,
         axiom: &str,
         control: &mut purrdf_core::CanonicalizationControl<'_>,
-    ) -> Result<ReasoningAnswer, crate::canonical::CanonicalServiceError> {
+    ) -> Result<ReasoningAnswer<String>, crate::canonical::CanonicalServiceError> {
         let parsed = parse_axiom(axiom)?;
         let (verdict, certificate, proof) = self
             .kb(control)?
@@ -2667,7 +2718,7 @@ impl ReasonerSession {
 
     /// See [`profile_to_string`]. Purely syntactic — never builds a knowledge base.
     #[must_use]
-    pub fn profile(&self) -> ReasoningAnswer {
+    pub fn profile(&self) -> ReasoningAnswer<String> {
         let certificate = profile(&self.dataset);
         ReasoningAnswer {
             answer: render_profile_answer(&certificate),
@@ -2687,7 +2738,8 @@ impl ReasonerSession {
         signature: &str,
         method: &str,
         control: &mut purrdf_core::CanonicalizationControl<'_>,
-    ) -> Result<ReasoningAnswer, crate::canonical::CanonicalServiceError> {
+    ) -> Result<ReasoningAnswer<purrdf_core::Canonicalized>, crate::canonical::CanonicalServiceError>
+    {
         let notion = parse_module_method(method)?;
         let seed = parse_signature(signature)?;
         // Two producers, one for each recording mode: `extract_module_with_proofs` records a
@@ -2721,7 +2773,8 @@ impl ReasonerSession {
         &self,
         axiom: &str,
         control: &mut purrdf_core::CanonicalizationControl<'_>,
-    ) -> Result<ReasoningAnswer, crate::canonical::CanonicalServiceError> {
+    ) -> Result<ReasoningAnswer<purrdf_core::Canonicalized>, crate::canonical::CanonicalServiceError>
+    {
         let parsed = parse_axiom(axiom)?;
         let justification =
             justify(&self.dataset, &parsed).map_err(|error| format!("justify: {error}"))?;
@@ -2745,7 +2798,7 @@ impl ReasonerSession {
         &self,
         regime: &str,
         conclusion: &str,
-    ) -> Result<ReasoningAnswer, String> {
+    ) -> Result<ReasoningAnswer<String>, String> {
         let parsed = parse_regime(regime)?;
         let (graph, subject, predicate, object) = parse_one_statement(conclusion)?;
         let proof = {
@@ -2836,7 +2889,7 @@ pub fn consistency_to_string(
     step_cap: u32,
     work_cap: u32,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
-) -> Result<ReasoningAnswer, crate::canonical::CanonicalServiceError> {
+) -> Result<ReasoningAnswer<String>, crate::canonical::CanonicalServiceError> {
     ReasonerSession::open_premise(document, imports, premise_iris, step_cap, work_cap, false)?
         .consistency(control)
 }
@@ -2869,7 +2922,7 @@ pub fn classify_to_string(
     step_cap: u32,
     work_cap: u32,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
-) -> Result<ReasoningAnswer, crate::canonical::CanonicalServiceError> {
+) -> Result<ReasoningAnswer<String>, crate::canonical::CanonicalServiceError> {
     ReasonerSession::open(document, step_cap, work_cap)?.classify(control)
 }
 
@@ -2897,7 +2950,7 @@ pub fn realize_to_string(
     step_cap: u32,
     work_cap: u32,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
-) -> Result<ReasoningAnswer, crate::canonical::CanonicalServiceError> {
+) -> Result<ReasoningAnswer<String>, crate::canonical::CanonicalServiceError> {
     ReasonerSession::open(document, step_cap, work_cap)?.realize(control)
 }
 
@@ -2919,7 +2972,7 @@ pub fn instances_to_string(
     step_cap: u32,
     work_cap: u32,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
-) -> Result<ReasoningAnswer, crate::canonical::CanonicalServiceError> {
+) -> Result<ReasoningAnswer<String>, crate::canonical::CanonicalServiceError> {
     ReasonerSession::open(document, step_cap, work_cap)?.instances(class, control)
 }
 
@@ -2966,7 +3019,7 @@ pub fn entails_to_string(
     step_cap: u32,
     work_cap: u32,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
-) -> Result<ReasoningAnswer, crate::canonical::CanonicalServiceError> {
+) -> Result<ReasoningAnswer<String>, crate::canonical::CanonicalServiceError> {
     ReasonerSession::open(document, step_cap, work_cap)?.entails(axiom, control)
 }
 
@@ -3020,7 +3073,7 @@ pub fn entails_to_string(
 /// assert_eq!(certified.answer().lines().next(), Some("certified EL"));
 /// assert!(certified.certificate().ends_with("one-directional true\n"));
 /// ```
-pub fn profile_to_string(document: &str) -> Result<ReasoningAnswer, String> {
+pub fn profile_to_string(document: &str) -> Result<ReasoningAnswer<String>, String> {
     Ok(ReasonerSession::open(document, 0, 0)?.profile())
 }
 
@@ -3101,7 +3154,7 @@ pub fn extract_module_to_string(
     signature: &str,
     method: &str,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
-) -> Result<ReasoningAnswer, crate::canonical::CanonicalServiceError> {
+) -> Result<ReasoningAnswer<purrdf_core::Canonicalized>, crate::canonical::CanonicalServiceError> {
     ReasonerSession::open(document, 0, 0)?.extract_module(signature, method, control)
 }
 
@@ -3186,7 +3239,7 @@ pub fn justify_to_string(
     document: &str,
     axiom: &str,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
-) -> Result<ReasoningAnswer, crate::canonical::CanonicalServiceError> {
+) -> Result<ReasoningAnswer<purrdf_core::Canonicalized>, crate::canonical::CanonicalServiceError> {
     ReasonerSession::open(document, 0, 0)?.justify(axiom, control)
 }
 
@@ -3318,7 +3371,7 @@ pub fn explain_conclusion_to_string(
     document: &str,
     regime: &str,
     conclusion: &str,
-) -> Result<ReasoningAnswer, String> {
+) -> Result<ReasoningAnswer<String>, String> {
     ReasonerSession::open(document, 0, 0)?.explain_conclusion(regime, conclusion)
 }
 
@@ -4079,7 +4132,7 @@ pub fn certain_answers_to_string(
     imports: &ImportList<'_>,
     premise_iris: &[&str],
     limits: &MaterializeLimits,
-) -> Result<ReasoningAnswer, String> {
+) -> Result<ReasoningAnswer<String>, String> {
     let (parsed, map) = configuration(regime, imports, premise_iris)?;
     let bgp = parse_bgp(pattern)?;
     let premise = parse_premise(document)?;
@@ -4181,7 +4234,7 @@ pub fn graph_entails_to_string(
     imports: &ImportList<'_>,
     premise_iris: &[&str],
     limits: &MaterializeLimits,
-) -> Result<ReasoningAnswer, String> {
+) -> Result<ReasoningAnswer<String>, String> {
     let (parsed, map) = configuration(regime, imports, premise_iris)?;
     let target = purrdf_rdf::parse_dataset(conclusion.as_bytes(), INPUT_MEDIA_TYPE, None)
         .map_err(|diagnostic| format!("the conclusion is not N-Quads: {diagnostic}"))?;
@@ -4296,7 +4349,7 @@ pub fn verify_entailment_to_string(
     imports: &ImportList<'_>,
     premise_iris: &[&str],
     limits: &MaterializeLimits,
-) -> Result<ReasoningAnswer, String> {
+) -> Result<ReasoningAnswer<String>, String> {
     let (parsed, map) = configuration(regime, imports, premise_iris)?;
     let target = purrdf_rdf::parse_dataset(conclusion.as_bytes(), INPUT_MEDIA_TYPE, None)
         .map_err(|diagnostic| format!("the conclusion is not N-Quads: {diagnostic}"))?;
@@ -4393,7 +4446,7 @@ impl ReasonerSession {
         &mut self,
         class: &str,
         control: &mut purrdf_core::CanonicalizationControl<'_>,
-    ) -> Result<ReasoningAnswer, crate::canonical::CanonicalServiceError> {
+    ) -> Result<ReasoningAnswer<String>, crate::canonical::CanonicalServiceError> {
         let term = parse_one_term(class)?;
         let (verdict, certificate, proof) = self
             .kb(control)?
@@ -4435,7 +4488,7 @@ impl ReasonerSession {
         service: &str,
         argument: &str,
         control: &mut purrdf_core::CanonicalizationControl<'_>,
-    ) -> Result<ReasoningAnswer, crate::canonical::CanonicalServiceError> {
+    ) -> Result<ReasoningAnswer<ReasoningText>, crate::canonical::CanonicalServiceError> {
         let asked = parse_proof_service(service)?;
         if !self.proofs {
             return Err(format!(
@@ -4449,21 +4502,31 @@ impl ReasonerSession {
             Service::Consistency => {
                 refuse_argument(service, argument)?;
                 self.consistency(control)
+                    .map(|answer| answer.map_answer(ReasoningText::from))
             }
-            Service::ClassSatisfiability => self.class_satisfiability(argument, control),
+            Service::ClassSatisfiability => self
+                .class_satisfiability(argument, control)
+                .map(|answer| answer.map_answer(ReasoningText::from)),
             Service::Classification => {
                 refuse_argument(service, argument)?;
                 self.classify(control)
+                    .map(|answer| answer.map_answer(ReasoningText::from))
             }
             Service::Realization => {
                 refuse_argument(service, argument)?;
                 self.realize(control)
+                    .map(|answer| answer.map_answer(ReasoningText::from))
             }
-            Service::InstanceRetrieval => self.instances(argument, control),
-            Service::AxiomEntailment => self.entails(argument, control),
+            Service::InstanceRetrieval => self
+                .instances(argument, control)
+                .map(|answer| answer.map_answer(ReasoningText::from)),
+            Service::AxiomEntailment => self
+                .entails(argument, control)
+                .map(|answer| answer.map_answer(ReasoningText::from)),
             Service::ModuleExtraction => {
                 let (signature, method) = parse_module_argument(argument)?;
                 self.extract_module(&signature, &method, control)
+                    .map(|answer| answer.map_answer(ReasoningText::from))
             }
             // `Service` is `#[non_exhaustive]`: a member added upstream is a member this
             // boundary cannot ask about, and saying so beats answering a different question.
@@ -4525,7 +4588,7 @@ pub fn prove_to_string(
     step_cap: u32,
     work_cap: u32,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
-) -> Result<ReasoningAnswer, crate::canonical::CanonicalServiceError> {
+) -> Result<ReasoningAnswer<ReasoningText>, crate::canonical::CanonicalServiceError> {
     ReasonerSession::open_with_proofs(document, step_cap, work_cap)?
         .prove(service, argument, control)
 }
@@ -5328,7 +5391,7 @@ pub fn check_dl_proof_golden_vectors(
 /// The consumer prepares the original source but never repeats the producer search.
 fn check_recursive_causal_vector(
     case: &DlProofVector,
-    produced: &ReasoningAnswer,
+    produced: &ReasoningAnswer<impl AsRef<str>>,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<(), crate::canonical::CanonicalServiceError> {
     use purrdf_entail::proof_source::{
@@ -6402,29 +6465,50 @@ mod tests {
         control: &mut purrdf_core::CanonicalizationControl<'_>,
     ) -> Vec<(
         &'static str,
-        Result<ReasoningAnswer, crate::canonical::CanonicalServiceError>,
+        Result<ReasoningAnswer<ReasoningText>, crate::canonical::CanonicalServiceError>,
     )> {
         vec![
             (
                 "consistency",
-                consistency_to_string(document, &[], &[], 0, 0, control),
+                consistency_to_string(document, &[], &[], 0, 0, control)
+                    .map(|answer| answer.map_answer(ReasoningText::from)),
             ),
-            ("classify", classify_to_string(document, 0, 0, control)),
-            ("realize", realize_to_string(document, 0, 0, control)),
+            (
+                "classify",
+                classify_to_string(document, 0, 0, control)
+                    .map(|answer| answer.map_answer(ReasoningText::from)),
+            ),
+            (
+                "realize",
+                realize_to_string(document, 0, 0, control)
+                    .map(|answer| answer.map_answer(ReasoningText::from)),
+            ),
             (
                 "instances",
-                instances_to_string(document, "<http://example.org/C>", 0, 0, control),
+                instances_to_string(document, "<http://example.org/C>", 0, 0, control)
+                    .map(|answer| answer.map_answer(ReasoningText::from)),
             ),
             (
                 "entails",
-                entails_to_string(document, CHAIN_AXIOM, 0, 0, control),
+                entails_to_string(document, CHAIN_AXIOM, 0, 0, control)
+                    .map(|answer| answer.map_answer(ReasoningText::from)),
             ),
-            ("profile", profile_to_string(document).map_err(Into::into)),
+            (
+                "profile",
+                profile_to_string(document)
+                    .map(|answer| answer.map_answer(ReasoningText::from))
+                    .map_err(Into::into),
+            ),
             (
                 "extract-module",
-                extract_module_to_string(document, "<http://example.org/A>\n", "star", control),
+                extract_module_to_string(document, "<http://example.org/A>\n", "star", control)
+                    .map(|answer| answer.map_answer(ReasoningText::from)),
             ),
-            ("justify", justify_to_string(document, CHAIN_AXIOM, control)),
+            (
+                "justify",
+                justify_to_string(document, CHAIN_AXIOM, control)
+                    .map(|answer| answer.map_answer(ReasoningText::from)),
+            ),
             (
                 "explain-conclusion",
                 explain_conclusion_to_string(
@@ -6434,6 +6518,7 @@ mod tests {
                      <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
                      <http://example.org/C> .\n",
                 )
+                .map(|answer| answer.map_answer(ReasoningText::from))
                 .map_err(Into::into),
             ),
         ]
@@ -8436,7 +8521,7 @@ _:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
         &ImportList<'_>,
         &[&str],
         &MaterializeLimits,
-    ) -> Result<ReasoningAnswer, String>;
+    ) -> Result<ReasoningAnswer<String>, String>;
 
     /// ALL THREE conclusion-directed services take the caller's import table, and answer
     /// from the imports closure over the premise AS WRITTEN.
@@ -9312,16 +9397,30 @@ mod proof_tests {
             let mut plain = ReasonerSession::open(TAXONOMY, 0, 0).expect("parses");
             assert!(!plain.records_proofs());
             let bare = match service {
-                "consistency" => plain.consistency(&mut control),
-                "class-satisfiability" => plain.class_satisfiability(argument, &mut control),
-                "classify" => plain.classify(&mut control),
-                "realize" => plain.realize(&mut control),
-                "instances" => plain.instances(argument, &mut control),
-                "entails" => plain.entails(argument, &mut control),
+                "consistency" => plain
+                    .consistency(&mut control)
+                    .map(|answer| answer.map_answer(ReasoningText::from)),
+                "class-satisfiability" => plain
+                    .class_satisfiability(argument, &mut control)
+                    .map(|answer| answer.map_answer(ReasoningText::from)),
+                "classify" => plain
+                    .classify(&mut control)
+                    .map(|answer| answer.map_answer(ReasoningText::from)),
+                "realize" => plain
+                    .realize(&mut control)
+                    .map(|answer| answer.map_answer(ReasoningText::from)),
+                "instances" => plain
+                    .instances(argument, &mut control)
+                    .map(|answer| answer.map_answer(ReasoningText::from)),
+                "entails" => plain
+                    .entails(argument, &mut control)
+                    .map(|answer| answer.map_answer(ReasoningText::from)),
                 _ => {
                     let (signature, method) =
                         parse_module_argument(argument).expect("a method line");
-                    plain.extract_module(&signature, &method, &mut control)
+                    plain
+                        .extract_module(&signature, &method, &mut control)
+                        .map(|answer| answer.map_answer(ReasoningText::from))
                 }
             }
             .unwrap_or_else(|error| panic!("{service}: {error}"));

@@ -334,7 +334,7 @@ fn entail(
     pattern: &str,
     value: &str,
     law: Option<Profile>,
-) -> Result<String, XPathValidationError> {
+) -> Result<purrdf_core::Canonicalized, XPathValidationError> {
     let shapes = rule_shapes(pattern);
     let data = data(value);
     let request = EntailRequest {
@@ -364,8 +364,8 @@ fn entail(
         )
         .unwrap();
         assert_eq!(
-            (&selected.ntriples, &selected.diagnostics),
-            (&compatibility.ntriples, &compatibility.diagnostics),
+            (selected.ntriples.nquads(), &selected.diagnostics),
+            (compatibility.ntriples.nquads(), &compatibility.diagnostics),
         );
     }
     Ok(selected.ntriples)
@@ -436,7 +436,10 @@ fn rules_entailment_and_node_expressions_follow_the_selected_law() {
         for (law, expected) in [(Profile::Xpath20, xpath20), (Profile::Xpath31, xpath31)] {
             let name = law.name();
             assert_eq!(
-                entail(pattern, value, Some(law)).unwrap().contains(hit),
+                entail(pattern, value, Some(law))
+                    .unwrap()
+                    .nquads()
+                    .contains(hit),
                 expected,
                 "entail {pattern} under {name}"
             );
@@ -459,7 +462,12 @@ fn rules_entailment_and_node_expressions_follow_the_selected_law() {
         }
     }
     // Unselected is the compatibility answer, which refuses the backreference.
-    assert!(!entail(BACKREFERENCE, "aa", None).unwrap().contains(hit));
+    assert!(
+        !entail(BACKREFERENCE, "aa", None)
+            .unwrap()
+            .nquads()
+            .contains(hit)
+    );
     assert_eq!(rules(BACKREFERENCE, "aa", false, None).unwrap(), "");
     assert_eq!(rules(BACKREFERENCE, "aa", true, None).unwrap(), "");
     assert_eq!(
@@ -493,7 +501,12 @@ fn a_rules_or_expression_resource_refusal_answers_nothing_and_the_neighbour_answ
             Err(XPathValidationError::Pattern(Error::Resource(refusal)))
                 if refusal.resource == Resource::PatternBytes
         ));
-        assert!(!entail(&at, "a", Some(law)).unwrap().contains("hit"));
+        assert!(
+            !entail(&at, "a", Some(law))
+                .unwrap()
+                .nquads()
+                .contains("hit")
+        );
         assert_eq!(rules(&at, "a", false, Some(law)).unwrap(), "");
         assert_eq!(rules(&at, "a", true, Some(law)).unwrap(), "");
         assert_eq!(
@@ -600,7 +613,7 @@ fn configured_rule_coordinates_preserve_dispatch_and_request_limits() {
             )
         })
         .unwrap();
-        assert!(outcome.ntriples.contains(NOW));
+        assert!(outcome.ntriples.nquads().contains(NOW));
         request.max_stored_facts = Some(0);
         let error = entail_to_ntriples_with_coordinates(
             &request,

@@ -514,10 +514,12 @@ the inputs the stated corpus configuration refuses.
 
 The presentation coordinate is also readable back off a produced result, not only
 off the entry point a caller happened to call: every `purrdf_core::Canonicalized`
-carries a `presentation` field naming exactly which of the two presentations
-produced its `nquads`. A consumer holding a `Canonicalized` value can therefore
-verify its pin's presentation coordinate against that field directly, rather than
-having to remember or re-derive it from the call site.
+exposes a `presentation()` accessor naming exactly which of the two presentations
+produced its `nquads()` document. A consumer holding a `Canonicalized` value can
+therefore verify its pin's presentation coordinate directly, rather than having
+to remember or re-derive it from the call site. Its text and ordered blank labels
+are immutable borrowed views; cloning shares the payload and its original owned
+storage reservation. This ownership does not change canonical identity or bytes.
 
 The execution pin additionally states the per-run search policy and charging-law
 version. Read the complete typed configuration and actual work from the caller's

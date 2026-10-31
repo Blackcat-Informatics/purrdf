@@ -470,7 +470,7 @@ fn result_image(result: &SparqlResult) -> String {
                     )
                 )
                 .unwrap()
-                .nquads
+                .nquads()
             )
         }
         SparqlResult::Solutions {
@@ -487,7 +487,7 @@ fn result_image(result: &SparqlResult) -> String {
                 )
             )
             .unwrap()
-            .nquads
+            .nquads()
         ),
     }
 }

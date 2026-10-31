@@ -350,7 +350,7 @@ fn materialize_nt(
             control,
         )
     })?;
-    crate::py_canonical::finish(py, closure.into_parts(), receipts)
+    crate::py_canonical::finish(py, (closure.nquads(), closure.report()), receipts)
 }
 
 // ── The rule inventories ────────────────────────────────────────────────────────
@@ -477,7 +477,7 @@ fn consistency(
     let (answer, receipts) = crate::py_canonical::run(py, canonical_search, cancel, |control| {
         consistency_to_string(data, &table, &premise_iris, step_cap, work_cap, control)
     })?;
-    crate::py_canonical::finish(py, answer.into_parts(), receipts)
+    crate::py_canonical::finish(py, (answer.answer(), answer.certificate()), receipts)
 }
 
 /// The entailed subsumption hierarchy over the ontology's named classes.
@@ -508,7 +508,7 @@ fn classify(
     let (answer, receipts) = crate::py_canonical::run(py, canonical_search, cancel, |control| {
         classify_to_string(data, step_cap, work_cap, control)
     })?;
-    crate::py_canonical::finish(py, answer.into_parts(), receipts)
+    crate::py_canonical::finish(py, (answer.answer(), answer.certificate()), receipts)
 }
 
 /// The entailed types of the ontology's named individuals, and the most specific of
@@ -532,7 +532,7 @@ fn realize(
     let (answer, receipts) = crate::py_canonical::run(py, canonical_search, cancel, |control| {
         realize_to_string(data, step_cap, work_cap, control)
     })?;
-    crate::py_canonical::finish(py, answer.into_parts(), receipts)
+    crate::py_canonical::finish(py, (answer.answer(), answer.certificate()), receipts)
 }
 
 /// The named individuals entailed to be instances of `class_`.
@@ -559,7 +559,7 @@ fn instances(
     let (answer, receipts) = crate::py_canonical::run(py, canonical_search, cancel, |control| {
         instances_to_string(data, class_, step_cap, work_cap, control)
     })?;
-    crate::py_canonical::finish(py, answer.into_parts(), receipts)
+    crate::py_canonical::finish(py, (answer.answer(), answer.certificate()), receipts)
 }
 
 /// Does the ontology entail `axiom`?
@@ -591,7 +591,7 @@ fn entails(
     let (answer, receipts) = crate::py_canonical::run(py, canonical_search, cancel, |control| {
         entails_to_string(data, axiom, step_cap, work_cap, control)
     })?;
-    crate::py_canonical::finish(py, answer.into_parts(), receipts)
+    crate::py_canonical::finish(py, (answer.answer(), answer.certificate()), receipts)
 }
 
 /// Which OWL 2 profiles the ontology is provably in, and what blocked the others.
@@ -644,7 +644,7 @@ fn extract_module(
     let (answer, receipts) = crate::py_canonical::run(py, canonical_search, cancel, |control| {
         extract_module_to_string(data, signature, method, control)
     })?;
-    crate::py_canonical::finish(py, answer.into_parts(), receipts)
+    crate::py_canonical::finish(py, (answer.answer(), answer.certificate()), receipts)
 }
 
 /// WHY a Description-Logic axiom is entailed: a minimal subset of the ontology that
@@ -679,7 +679,7 @@ fn justify(
     let (answer, receipts) = crate::py_canonical::run(py, canonical_search, cancel, |control| {
         justify_to_string(data, axiom, control)
     })?;
-    crate::py_canonical::finish(py, answer.into_parts(), receipts)
+    crate::py_canonical::finish(py, (answer.answer(), answer.certificate()), receipts)
 }
 
 /// WHY one triple of a chase closure holds: which rules, from which premises.
@@ -1063,7 +1063,15 @@ fn prove(
     let (answer, receipts) = crate::py_canonical::run(py, canonical_search, cancel, |control| {
         prove_to_string(data, service, argument, step_cap, work_cap, control)
     })?;
-    crate::py_canonical::finish(py, answer.into_proved_parts(), receipts)
+    crate::py_canonical::finish(
+        py,
+        (
+            answer.answer(),
+            answer.certificate(),
+            answer.proof_document(),
+        ),
+        receipts,
+    )
 }
 
 /// CHECK a proof against the CALLER's own ontology, question and answer.
@@ -1213,7 +1221,15 @@ impl PyReasoner {
             crate::py_canonical::run(py, canonical_search, cancel, |control| {
                 self.session.prove(service, argument, control)
             })?;
-        crate::py_canonical::finish(py, answer.into_proved_parts(), receipts)
+        crate::py_canonical::finish(
+            py,
+            (
+                answer.answer(),
+                answer.certificate(),
+                answer.proof_document(),
+            ),
+            receipts,
+        )
     }
 
     /// Is the knowledge base consistent? See `purrdf.entail.consistency`.
@@ -1228,7 +1244,7 @@ impl PyReasoner {
             crate::py_canonical::run(py, canonical_search, cancel, |control| {
                 self.session.consistency(control)
             })?;
-        crate::py_canonical::finish(py, answer.into_parts(), receipts)
+        crate::py_canonical::finish(py, (answer.answer(), answer.certificate()), receipts)
     }
 
     /// The entailed subsumption hierarchy. See `purrdf.entail.classify`.
@@ -1243,7 +1259,7 @@ impl PyReasoner {
             crate::py_canonical::run(py, canonical_search, cancel, |control| {
                 self.session.classify(control)
             })?;
-        crate::py_canonical::finish(py, answer.into_parts(), receipts)
+        crate::py_canonical::finish(py, (answer.answer(), answer.certificate()), receipts)
     }
 
     /// The entailed types of the named individuals. See `purrdf.entail.realize`.
@@ -1258,7 +1274,7 @@ impl PyReasoner {
             crate::py_canonical::run(py, canonical_search, cancel, |control| {
                 self.session.realize(control)
             })?;
-        crate::py_canonical::finish(py, answer.into_parts(), receipts)
+        crate::py_canonical::finish(py, (answer.answer(), answer.certificate()), receipts)
     }
 
     /// The individuals entailed to be instances of `class_`. See `purrdf.entail.instances`.
@@ -1274,7 +1290,7 @@ impl PyReasoner {
             crate::py_canonical::run(py, canonical_search, cancel, |control| {
                 self.session.instances(class_, control)
             })?;
-        crate::py_canonical::finish(py, answer.into_parts(), receipts)
+        crate::py_canonical::finish(py, (answer.answer(), answer.certificate()), receipts)
     }
 
     /// Does the ontology entail `axiom`? See `purrdf.entail.entails`.
@@ -1290,7 +1306,7 @@ impl PyReasoner {
             crate::py_canonical::run(py, canonical_search, cancel, |control| {
                 self.session.entails(axiom, control)
             })?;
-        crate::py_canonical::finish(py, answer.into_parts(), receipts)
+        crate::py_canonical::finish(py, (answer.answer(), answer.certificate()), receipts)
     }
 
     /// Which OWL 2 profiles the ontology is provably in. See `purrdf.entail.profile`.
@@ -1315,7 +1331,7 @@ impl PyReasoner {
             crate::py_canonical::run(py, canonical_search, cancel, |control| {
                 self.session.extract_module(signature, method, control)
             })?;
-        crate::py_canonical::finish(py, answer.into_parts(), receipts)
+        crate::py_canonical::finish(py, (answer.answer(), answer.certificate()), receipts)
     }
 
     /// A justification for `axiom`. See `purrdf.entail.justify`.
@@ -1331,7 +1347,7 @@ impl PyReasoner {
             crate::py_canonical::run(py, canonical_search, cancel, |control| {
                 self.session.justify(axiom, control)
             })?;
-        crate::py_canonical::finish(py, answer.into_parts(), receipts)
+        crate::py_canonical::finish(py, (answer.answer(), answer.certificate()), receipts)
     }
 
     /// Why `conclusion` holds under `regime`. See `purrdf.entail.explain_conclusion`.

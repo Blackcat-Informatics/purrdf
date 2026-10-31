@@ -761,8 +761,8 @@ msgstr "// 在驻留的 TermId 空间中构建数据集。\n"
 #: src/getting-started/rust.md:33 src/getting-started/python.md:40
 #: src/reference/python-api.md:49 src/reference/python-api.md:51
 #: src/reference/python-api.md:89 src/reference/python-api.md:110
-#: src/reference/python-api.md:601 src/concepts/canonicalization.md:61
-#: src/concepts/canonicalization.md:65 src/sparql/results.md:21
+#: src/reference/python-api.md:601 src/concepts/canonicalization.md:67
+#: src/concepts/canonicalization.md:71 src/sparql/results.md:21
 #: src/sparql/results.md:30 src/validation/shex.md:64 src/validation/shex.md:84
 #: src/gts.md:51
 msgid "\"https://example.org/alice\""
@@ -8485,7 +8485,7 @@ msgstr ""
 "b\"<https://example.org/alice> <https://schema.org/name> \\\"Alice\\\" .\""
 
 #: src/concepts/jsonld.md:46 src/concepts/canonicalization.md:29
-#: src/concepts/canonicalization.md:30 src/concepts/canonicalization.md:60
+#: src/concepts/canonicalization.md:30 src/concepts/canonicalization.md:66
 #: src/entailment.md:32
 msgid "\"application/n-triples\""
 msgstr "\"application/n-triples\""
@@ -8629,13 +8629,25 @@ msgstr "// 规范标签在不同运行、不同宿主与不同语言绑定之间
 
 #: src/concepts/canonicalization.md:37
 msgid ""
+"The immutable `Canonicalized` result retains its source's owned storage "
+"reservation. Borrow its text with `nquads()`, its presentation with "
+"`presentation()`, and its labels with `label()` or `labels()`. Cloning "
+"shares the payload and its original reservation; that reservation lives "
+"until the last result owner is dropped."
+msgstr ""
+"不可变的 `Canonicalized` 结果保留其来源的自有存储预留。通过 `nquads()` 借用"
+"文本，通过 `presentation()` 读取表示，并通过 `label()` 或 `labels()` 借用"
+"标签。克隆共享载荷及其原始预留；该预留会一直保留到最后一个结果所有者被释放。"
+
+#: src/concepts/canonicalization.md:43
+msgid ""
 "Use canonicalization when you need a content identity for a graph: hashing, "
 "signing, deduplication, or comparing datasets produced by different writers."
 msgstr ""
 "当需要为图确定内容身份时，使用规范化：哈希、签名、去重，或比较由不同写出器产"
 "生的数据集。"
 
-#: src/concepts/canonicalization.md:40
+#: src/concepts/canonicalization.md:46
 msgid ""
 "Every operation requires an explicit finite or unlimited search policy and "
 "accepts an optional caller stop signal through its control. Each constituent "
@@ -8647,11 +8659,11 @@ msgstr ""
 "停止信号。每次组成运行都记录自身的有效策略、配置和计费工作量；回执数组不是总"
 "量上限。profile 第三版保留成功规范化的字节，同时要求显式指定搜索策略。"
 
-#: src/concepts/canonicalization.md:46
+#: src/concepts/canonicalization.md:52
 msgid "Native relabeling with source attribution"
 msgstr "带源归属的原生重新标记"
 
-#: src/concepts/canonicalization.md:48
+#: src/concepts/canonicalization.md:54
 msgid ""
 "Use `canonical_relabel` when the next stage consumes a native dataset. It "
 "keeps RDF 1.2 terms, reifiers, annotations, graph declarations and source "
@@ -8660,7 +8672,7 @@ msgstr ""
 "当下一阶段消费的是原生数据集时，使用 `canonical_relabel`。它保留 RDF 1.2 项、"
 "具体化节点、注解、图声明与源位置，而无须呈现并重新解析一份规范文档。"
 
-#: src/concepts/canonicalization.md:52
+#: src/concepts/canonicalization.md:58
 msgid ""
 "When a compiler or analyzer must associate source nodes with that result, "
 "use `canonical_relabel_with_mapping`. It records the actual term mapping "
@@ -8670,25 +8682,25 @@ msgstr ""
 "`canonical_relabel_with_mapping`。它在同一次重建中、经过一次规范标签搜索之"
 "后，记录实际的项映射："
 
-#: src/concepts/canonicalization.md:60
+#: src/concepts/canonicalization.md:66
 msgid "b\"<https://example.org/alice> <https://example.org/knows> _:friend .\""
 msgstr ""
 "b\"<https://example.org/alice> <https://example.org/knows> _:friend .\""
 
-#: src/concepts/canonicalization.md:61
+#: src/concepts/canonicalization.md:67
 msgid "\"source IRI not interned\""
 msgstr "\"source IRI not interned\""
 
-#: src/concepts/canonicalization.md:63
+#: src/concepts/canonicalization.md:69
 msgid "\"source node not retained\""
 msgstr "\"source node not retained\""
 
-#: src/concepts/canonicalization.md:65
+#: src/concepts/canonicalization.md:71
 msgid ""
 "// Associate source receipts and owner metadata with canonical_value here.\n"
 msgstr "// 在此把源回执与所有者元数据关联到 canonical_value。\n"
 
-#: src/concepts/canonicalization.md:72
+#: src/concepts/canonicalization.md:78
 msgid ""
 "`source_node` must belong to the exact input dataset; `output_node` belongs "
 "to this result. A same-index ID from another dataset cannot be detected. The "
@@ -8701,7 +8713,7 @@ msgstr ""
 "量数据类型、复合嵌入的空节点与已驻留的 IRI、具体化节点与注解项，以及空的命名"
 "图。被重写省略的未使用字典条目返回 `None`。"
 
-#: src/concepts/canonicalization.md:78
+#: src/concepts/canonicalization.md:84
 msgid ""
 "The map uses four bytes per source term, with constant-time lookup. The "
 "existing `canonical_relabel` API does not allocate it. The map is not a "
@@ -8715,11 +8727,11 @@ msgstr ""
 "输入和输出回执一起持久化，绝不要持久化原始的 `TermId` 值。源角色与立场"
 "（standpoint）归属仍然是调用方的元数据，而不是规范标签的推论。"
 
-#: src/concepts/canonicalization.md:84
+#: src/concepts/canonicalization.md:90
 msgid "Over RDF 1.2 constructs: two forms, named apart"
 msgstr "在 RDF 1.2 构造之上：两种形式，以不同的名字区分"
 
-#: src/concepts/canonicalization.md:86
+#: src/concepts/canonicalization.md:92
 msgid ""
 "RDFC-1.0 has no notion of reifiers, annotations or triple terms. A dataset "
 "that is plain RDF 1.1 canonicalizes identically everywhere in PurRDF; one "
@@ -8730,7 +8742,7 @@ msgstr ""
 "中处处以相同方式规范化；携带这些构造的数据集则以两种形式之一规范化，而所持有"
 "的是哪一种，本身就是身份的一部分："
 
-#: src/concepts/canonicalization.md:91
+#: src/concepts/canonicalization.md:97
 msgid ""
 "**The flat form** — `canonical_flat_nquads` in `purrdf-rdf` rewrites the "
 "statement layer to plain `rdf:reifies` / annotation triples first and "
@@ -8743,7 +8755,7 @@ msgstr ""
 "规范化。CLI 的 `convert --canonical`、wasm 的 "
 "`Dataset.canonicalize(\"unlimited\")` 以及 W3C 一致性关卡运行的都是这一形式。"
 
-#: src/concepts/canonicalization.md:96
+#: src/concepts/canonicalization.md:102
 msgid ""
 "**The `purrdf-rdfc12` v3 profile** — `try_canonicalize` in `purrdf-core` "
 "keeps the statement layer and lowers it into a reserved `urn:purrdf:rdfc:` "
@@ -8766,11 +8778,11 @@ msgstr ""
 "本是 [`docs/RDF12-CANON-PROFILE.md`](https://github.com/Blackcat-Informatics/"
 "purrdf/blob/main/docs/RDF12-CANON-PROFILE.md)。"
 
-#: src/concepts/canonicalization.md:108
+#: src/concepts/canonicalization.md:114
 msgid "Isomorphism"
 msgstr "同构"
 
-#: src/concepts/canonicalization.md:110
+#: src/concepts/canonicalization.md:116
 msgid ""
 "`datasets_isomorphic(a, b, control)` decides whether two frozen datasets are "
 "RDF-structurally isomorphic: the same quads, reifier bindings, and "
@@ -8787,11 +8799,11 @@ msgstr ""
 "测试框架中更方便的形式。例如，PurRDF 自己的一致性测试框架使用 RDFC-1.0 同构来"
 "比较 SHACL Rules 的输出图与预期的推理图。"
 
-#: src/concepts/canonicalization.md:119
+#: src/concepts/canonicalization.md:125
 msgid "Diff"
 msgstr "Diff"
 
-#: src/concepts/canonicalization.md:121
+#: src/concepts/canonicalization.md:127
 msgid ""
 "`dataset_diff(a, b, control)` produces a structural diff between two frozen "
 "datasets, including an `isomorphic` verdict. For a human-facing review flow, "
@@ -8804,41 +8816,41 @@ msgstr ""
 "称 CBD（Symmetric-CBD）提取（\"describe\"）以及一个便于审阅的 Turtle 归一化"
 "器，从而使图的变更读起来就像代码变更。"
 
-#: src/concepts/canonicalization.md:127
+#: src/concepts/canonicalization.md:133
 msgid "Choosing the right tool"
 msgstr "选择合适的工具"
 
-#: src/concepts/canonicalization.md:129
+#: src/concepts/canonicalization.md:135
 msgid "Need"
 msgstr "需求"
 
-#: src/concepts/canonicalization.md:129
+#: src/concepts/canonicalization.md:135
 msgid "Use"
 msgstr "使用"
 
-#: src/concepts/canonicalization.md:131
+#: src/concepts/canonicalization.md:137
 msgid "Same dataset → same bytes"
 msgstr "同一数据集 → 相同字节"
 
-#: src/concepts/canonicalization.md:131
+#: src/concepts/canonicalization.md:137
 msgid "any native serializer (always true)"
 msgstr "任何原生序列化器（始终成立）"
 
-#: src/concepts/canonicalization.md:132
+#: src/concepts/canonicalization.md:138
 msgid "Same _graph_ (up to blank nodes) → same bytes, RDF 1.1 subset"
 msgstr "同一*图*（在空节点意义下）→ 相同字节，RDF 1.1 子集"
 
-#: src/concepts/canonicalization.md:132
+#: src/concepts/canonicalization.md:138
 msgid ""
 "RDFC-1.0 (`try_canonicalize` or `canonical_flat_nquads`, identical here)"
 msgstr ""
 "RDFC-1.0（`try_canonicalize` 或 `canonical_flat_nquads`，此处二者相同）"
 
-#: src/concepts/canonicalization.md:133
+#: src/concepts/canonicalization.md:139
 msgid "Same _graph_ with reifiers/annotations → same bytes"
 msgstr "带具体化节点/注解的同一*图* → 相同字节"
 
-#: src/concepts/canonicalization.md:133
+#: src/concepts/canonicalization.md:139
 msgid ""
 "`canonical_flat_nquads` (RDFC-1.0 over the flattened layer) or "
 "`try_canonicalize` (`purrdf-rdfc12` profile) — not interchangeable"
@@ -8846,31 +8858,31 @@ msgstr ""
 "`canonical_flat_nquads`（在扁平化层上运行 RDFC-1.0）或 `try_canonicalize`"
 "（`purrdf-rdfc12` profile）——二者不可互换"
 
-#: src/concepts/canonicalization.md:134
+#: src/concepts/canonicalization.md:140
 msgid "\"Are these two datasets the same graph?\""
 msgstr "「这两个数据集是同一张图吗？」"
 
-#: src/concepts/canonicalization.md:134
+#: src/concepts/canonicalization.md:140
 msgid "`datasets_isomorphic`"
 msgstr "`datasets_isomorphic`"
 
-#: src/concepts/canonicalization.md:135
+#: src/concepts/canonicalization.md:141
 msgid "\"What changed between these datasets?\""
 msgstr "「这两个数据集之间有什么变化？」"
 
-#: src/concepts/canonicalization.md:135
+#: src/concepts/canonicalization.md:141
 msgid "`dataset_diff` + describe/normalize"
 msgstr "`dataset_diff` + describe/normalize"
 
-#: src/concepts/canonicalization.md:136
+#: src/concepts/canonicalization.md:142
 msgid "Content-addressed transport of a graph"
 msgstr "图的内容寻址传输"
 
-#: src/concepts/canonicalization.md:136
+#: src/concepts/canonicalization.md:142
 msgid "[GTS](../gts.md) (BLAKE3 content ids)"
 msgstr "[GTS](../gts.md)（BLAKE3 内容 id）"
 
-#: src/concepts/canonicalization.md:138
+#: src/concepts/canonicalization.md:144
 msgid ""
 "API details are on [docs.rs/purrdf-core](https://docs.rs/purrdf-core) (the "
 "`try_canonicalize`, `datasets_isomorphic`, and `dataset_diff` items) and "

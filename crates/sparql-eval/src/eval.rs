@@ -2466,7 +2466,9 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     }
 
     /// Whether a governed loop whose items charge from inside their own evaluation may
-    /// fork: unless the caller set a ceiling other than fuel and scratch bytes. The
+    /// fork: unless the caller set a loop-wide ceiling other than fuel and scratch
+    /// bytes. Logical UDF depth remains enforced at call entry; the fork sites'
+    /// separate registry checks exclude SPARQL and expression-bodied calls. The
     /// loop's ordered commit ([`crate::row_checkpoint::commit_items`]) charges what its
     /// items charged — their fuel, their scratch, the terms it re-interns for them — in
     /// item order, and a dimension only metered
@@ -2495,6 +2497,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
                     dimension,
                     purrdf_core::ResourceDimension::Fuel
                         | purrdf_core::ResourceDimension::ScratchBytes
+                        | purrdf_core::ResourceDimension::UdfDepth
                 )
             })
             .all(|dimension| state.caller_ceiling(dimension).is_none())

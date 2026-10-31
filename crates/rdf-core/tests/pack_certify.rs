@@ -140,7 +140,7 @@ fn verify_pack_certifies_a_round_tripped_pack_against_the_source_digest() {
         &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
     )
     .expect("source canonicalizes");
-    let source_digest: [u8; 32] = Sha256::digest(source_canon.nquads.as_bytes()).into();
+    let source_digest: [u8; 32] = Sha256::digest(source_canon.nquads().as_bytes()).into();
 
     assert_eq!(
         certified.as_bytes(),

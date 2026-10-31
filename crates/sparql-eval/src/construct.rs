@@ -1611,7 +1611,7 @@ mod tests {
                 )
             )
             .unwrap()
-            .nquads,
+            .nquads(),
             "<http://ex/a> <http://ex/related> <http://ex/b> .\n\
              <http://ex/a> <http://ex/related> <http://ex/c> .\n"
         );
@@ -1639,7 +1639,7 @@ mod tests {
                 )
             )
             .unwrap()
-            .nquads,
+            .nquads(),
             "<http://ex/a> <http://ex/related> <http://ex/b> <http://example.org/g> .\n\
              <http://ex/a> <http://ex/related> <http://ex/c> <http://example.org/g> .\n"
         );
@@ -1667,7 +1667,7 @@ mod tests {
                 )
             )
             .unwrap()
-            .nquads,
+            .nquads(),
             "<http://ex/a> <http://ex/related> <http://ex/b> <http://ex/b> .\n\
              <http://ex/a> <http://ex/related> <http://ex/c> <http://ex/c> .\n"
         );
@@ -1698,7 +1698,7 @@ mod tests {
                 )
             )
             .unwrap()
-            .nquads,
+            .nquads(),
             "<http://ex/a> <http://ex/related> <http://ex/b> <http://example.org/g> .\n\
              <http://ex/a> <http://ex/related> <http://ex/b> <http://example.org/h> .\n\
              <http://ex/a> <http://ex/related> <http://ex/c> <http://example.org/g> .\n\
@@ -1730,7 +1730,7 @@ mod tests {
                 )
             )
             .unwrap()
-            .nquads,
+            .nquads(),
             "<http://ex/a> <http://ex/related> <http://ex/b> .\n\
              <http://ex/a> <http://ex/related> <http://ex/b> <http://example.org/g> .\n\
              <http://ex/a> <http://ex/related> <http://ex/c> .\n\
@@ -1831,7 +1831,7 @@ mod tests {
                 )
             )
             .unwrap()
-            .nquads,
+            .nquads(),
             "<http://ex/a> <http://ex/related> <http://ex/b> .\n\
              <http://ex/a> <http://ex/related> <http://ex/c> .\n"
         );
@@ -1874,7 +1874,7 @@ mod tests {
                 )
             )
             .unwrap()
-            .nquads,
+            .nquads(),
             purrdf_core::try_canonicalize(
                 &beside,
                 &mut purrdf_core::CanonicalizationControl::new(
@@ -1883,7 +1883,7 @@ mod tests {
                 )
             )
             .unwrap()
-            .nquads,
+            .nquads(),
             "a skipped graph slot must consume no blank-node counter values"
         );
     }
@@ -2064,7 +2064,7 @@ mod tests {
                 )
             )
             .unwrap()
-            .nquads,
+            .nquads(),
             purrdf_core::try_canonicalize(
                 &out2,
                 &mut purrdf_core::CanonicalizationControl::new(
@@ -2073,7 +2073,7 @@ mod tests {
                 )
             )
             .unwrap()
-            .nquads,
+            .nquads(),
             "the remint is a pure function of the result"
         );
     }
@@ -2773,7 +2773,7 @@ mod tests {
                 )
             )
             .unwrap()
-            .nquads,
+            .nquads(),
             try_canonicalize(
                 &direct_out,
                 &mut purrdf_core::CanonicalizationControl::new(
@@ -2782,7 +2782,7 @@ mod tests {
                 )
             )
             .unwrap()
-            .nquads,
+            .nquads(),
             "CONSTRUCT output must be isomorphic to direct push_reifier ingest"
         );
     }
@@ -2826,7 +2826,7 @@ mod tests {
                 )
             )
             .unwrap()
-            .nquads,
+            .nquads(),
             try_canonicalize(
                 &out2,
                 &mut purrdf_core::CanonicalizationControl::new(
@@ -2835,7 +2835,7 @@ mod tests {
                 )
             )
             .unwrap()
-            .nquads,
+            .nquads(),
             "loss declaration is deterministic across runs"
         );
 

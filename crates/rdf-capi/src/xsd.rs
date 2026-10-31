@@ -66,7 +66,7 @@ pub unsafe extern "C" fn purrdf_xsd_canonical_lexical(
                 ));
             }
             let value = typed_value(cstr_to_str(lexical)?, cstr_to_str(datatype)?)?;
-            *out_buffer = into_handle(PurrdfBuffer(value.canonical_lexical().into_bytes()));
+            *out_buffer = into_handle(PurrdfBuffer::from(value.canonical_lexical().into_bytes()));
             Ok(PurrdfStatus::Ok)
         })
     }

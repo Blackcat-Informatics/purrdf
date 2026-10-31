@@ -265,7 +265,7 @@ pub(crate) fn run(
     refuse_unreached_pairs(&premise, &imports, &premise_iris)?;
     let regime = purrdf_validate::regime::regime_name(options.regime.to_native());
 
-    let answer: ReasoningAnswer = match question {
+    let answer: ReasoningAnswer<String> = match question {
         Question::Conclusion { path, verify } => {
             let conclusion = read_as_nquads(path, "--conclusion", options, canonical)?;
             let decide = if verify {

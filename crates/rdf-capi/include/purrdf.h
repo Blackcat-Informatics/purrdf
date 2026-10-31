@@ -1008,7 +1008,7 @@ typedef int32_t PurrdfSrlCheckLevel;
 
 /**
  * An owned byte buffer. Opaque to C; read via `purrdf_buffer_data`, release
- * with `purrdf_buffer_free`.
+ * with `purrdf_buffer_free`. Canonical payloads retain their source's grant.
  */
 typedef struct PurrdfBuffer PurrdfBuffer;
 

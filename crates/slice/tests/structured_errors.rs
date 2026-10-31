@@ -159,7 +159,8 @@ fn flat_canonicalization_returns_the_native_reserved_vocabulary_refusal() {
                 purrdf_core::RDFC_V2_CORPUS_POLICY,
                 None
             ))
-            .unwrap(),
+            .unwrap()
+            .nquads(),
         "<urn:s> <urn:p> <urn:o> .\n"
     );
 }

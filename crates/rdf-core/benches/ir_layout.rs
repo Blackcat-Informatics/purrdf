@@ -1207,7 +1207,7 @@ fn bench_canonicalize(c: &mut Bench) {
                     ),
                 )
                 .unwrap()
-                .nquads
+                .nquads()
                 .len(),
             )
         });
