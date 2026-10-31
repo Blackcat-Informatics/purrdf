@@ -152,6 +152,13 @@ by the actual enclosing footer bytes, rather than an arbitrary item ceiling.
 Row uniqueness and canonical order hold across group boundaries as well as
 within groups. A later group refusal aborts the complete conversion.
 
+For ZSTD pages, native frame inspection checks every concatenated and skippable
+frame extent before allocating the bitmap or PLAIN buffer. Known frame content
+sizes must fit the Parquet declaration; their total must match when every frame
+declares its size. Unknown sizes are checked by actual decompression. Frame
+checksums are verified during decompression. Header claims and actual decoder
+output remain distinct evidence in refusal diagnostics.
+
 There is no chosen table-byte ceiling. One decoded group is consumed and
 released before the next. The term dictionary retains flat records across
 groups to resolve forward datatype and triple-term references; semantic rows
@@ -164,6 +171,9 @@ The API owns the input or output file buffers, and the RDF dataset and content
 store remain resident. Writing also retains canonical dictionary and sorted row
 metadata needed for backend-independent ids and ordering; reading retains term
 resolution state and the builder. Footer metadata grows with group count.
+Native codec workspace and the page body can still be allocated from matching
+metadata before malformed compressed content is rejected. These structural
+checks do not establish a separate caller resource-admission policy.
 Group streaming removes complete-table decoded columns and intermediate
 statement tables, not these necessary owners. `project()` remains an explicitly
 eager relational representation; direct `write()` consumes borrowed canonical
