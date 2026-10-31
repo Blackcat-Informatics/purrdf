@@ -20,10 +20,9 @@ has a lockfile. A committed first-party manifest is not necessarily a member
 of the root workspace: ``crates/gts/fuzz`` is excluded.
 
 The manifest set is the union of the git-tracked set and the root workspace's
-declared member/excluded-root set. The repository vendors no third-party Rust
-source, so each tracked manifest is a first-party declaration. If vendored
-Rust source is ever committed, its provenance must be handled explicitly; the
-scan must not silently narrow to workspace members.
+declared member/excluded-root set. Subsumed native table source records its
+original grants and provenance in license-inventory.toml and adds no upstream
+manifest. Every tracked manifest remains in the declaration scan.
 
 **Substitution.** A ``[patch]``/``[replace]`` override that redirects a
 banned name to a different source is scanned for too: ``[[patch.unused]]``
@@ -117,6 +116,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # dev/test, transitive) because a first-party replacement exists for every
 # edge kind; reintroduction anywhere in the resolved Cargo.lock closure fails.
 BANNED_ANY_EDGE: dict[str, str] = {
+    "hashbrown": "purrdf_core::hash::table (shared native probes and transactional growth)",
     "petgraph": "purrdf_core::graph::tarjan_scc (the first-party iterative Tarjan SCC)",
     "thiserror": "plain error types and std::error::Error implementations",
     "thiserror-impl": "plain error types and std::error::Error implementations (thiserror macro backend)",
@@ -226,10 +226,10 @@ BANNED_ANY_EDGE: dict[str, str] = {
     # sha3's permutation crate; nothing else in the graph pulled it in.
     "keccak": "purrdf_hash::sha3::keccak_f1600 (FIPS 202 Keccak-f[1600])",
     "ahash": "purrdf_hash::fixed::FixedHasher",
-    # The old hashbrown 0.15 resolution pulled these in; the current
-    # hashbrown resolution does not. Banning every removed lockfile name also
-    # keeps the old hashbrown closure from silently returning.
-    "allocator-api2": "current hashbrown resolution (no allocator-api2 edge)",
+    # Removed hashbrown allocator and hasher integrations stay banned on every
+    # edge; the shared native table engine needs neither external package.
+    # This also keeps the older hashbrown closure from silently returning.
+    "allocator-api2": "purrdf_core::hash::table (native global allocator)",
     "foldhash": "purrdf_hash::fixed::FixedHasher (old hashbrown 0.15 closure)",
     "version_check": "const and build-time declarations (old ahash/generic-array version probe)",
     # RustCrypto 0.11 removed the older 0.10/0.7 crypto trait closure, and

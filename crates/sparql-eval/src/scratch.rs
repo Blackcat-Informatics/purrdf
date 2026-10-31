@@ -47,7 +47,7 @@ use purrdf_core::{DatasetView, TermId, TermValue, ViewTermId};
 
 use std::hash::Hash;
 
-use hashbrown::HashTable;
+use purrdf_core::hash::table::HashTable;
 
 /// The deterministic per-term charge for an id/index slot or reserved identity.
 const TERM_OVERHEAD: u64 = 32;

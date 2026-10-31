@@ -6,7 +6,7 @@
 use std::hash::Hasher as _;
 use std::sync::{Arc, Mutex};
 
-use hashbrown::HashTable;
+use crate::hash::table::HashTable;
 use purrdf_lex::allocation::{Admission, Memory, StorageError};
 
 use crate::dataset_view::lock_read_state;

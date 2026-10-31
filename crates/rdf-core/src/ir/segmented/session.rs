@@ -4,10 +4,10 @@
 //! Sparse, authenticated block admission with exact bounded evidence and live pins.
 
 use crate::dataset_view::lock_read_state;
+use crate::hash::table::HashTable;
 use crate::hash::{
     hash_of, hash_table_allocation_bound, hash_table_retained_bound, reserve_table_with_memory,
 };
-use hashbrown::HashTable;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::dataset_view::{

@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::Arc;
 
-use hashbrown::HashTable;
+use crate::hash::table::HashTable;
 use purrdf_iri::IriError;
 use purrdf_lex::allocation::{Admission, CapacitySpace, Memory, Resident, StorageError};
 

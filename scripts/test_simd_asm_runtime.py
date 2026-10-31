@@ -322,7 +322,7 @@ class EvidenceTests(unittest.TestCase):
                 pass
 
         options = argparse.Namespace(jobs=7, fresh=False, probe=None)
-        with patch.object(runtime, "Runner", Stub), patch.object(gate, "require_targets"):
+        with patch.dict(os.environ, RUSTFLAGS="", CARGO_ENCODED_RUSTFLAGS=""), patch.object(runtime, "Runner", Stub), patch.object(gate, "require_targets"):
             with self.assertRaises(gate.GateError) as caught:
                 runtime.measure_all(gate, self.manifest, gate.CONFIGS, lambda _c: None, options)
             self.assertEqual(

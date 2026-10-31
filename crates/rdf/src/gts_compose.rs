@@ -21,7 +21,7 @@
 use std::collections::BTreeMap;
 use std::hash::BuildHasher;
 
-use hashbrown::HashTable;
+use purrdf_core::hash::table::HashTable;
 use purrdf_gts::model::{AnnotationRow, ReifierRow, Term, TermKind, is_literal_direction};
 use purrdf_gts::wire::{canonical, digest_str};
 use purrdf_gts::writer::Writer;

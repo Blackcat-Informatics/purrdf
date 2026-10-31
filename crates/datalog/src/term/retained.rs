@@ -4,7 +4,7 @@
 //! Owned reachable term data for a diagnostic that outlives its source arena.
 
 use core::hash::BuildHasher;
-use hashbrown::HashTable;
+use purrdf_core::hash::table::HashTable;
 use purrdf_hash::error::{ErrorValue, ErrorVisitor, StructuredError};
 use purrdf_hash::fixed::FixedState;
 use purrdf_lex::allocation::{Memory, Resident, StorageError};

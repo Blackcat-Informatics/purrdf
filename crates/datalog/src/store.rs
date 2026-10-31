@@ -72,7 +72,7 @@
 //!   through a `BTreeSet`, [`RelationStore::partitions`] through the maintained lexical
 //!   partition order, [`RelationStore::facts_sorted`] through an explicit sort — never by
 //!   mint order and never by hash-table order.
-//! - The interner holds a `hashbrown::HashTable` for O(1) borrowed-key probes. That
+//! - The interner holds a `purrdf_core::hash::table::HashTable` for O(1) borrowed-key probes. That
 //!   table is **never iterated**: it is keyed by the fixed-key `FixedHasher` and is only ever
 //!   asked "which id, if any, carries this surface". Insertion order lives in the
 //!   parallel `Vec` side arena, which is what every sweep reads.
@@ -112,7 +112,7 @@ pub use terms::{ReclaimingInterner, TermExpired};
 mod directory;
 use directory::{Directory, Position};
 
-use hashbrown::HashTable;
+use purrdf_core::hash::table::HashTable;
 
 use crate::cursor::{LendingIterator, RowCursor, VALUE_OBJECT, VALUE_SUBJECT, ValueCursor};
 use crate::dictionary::{

@@ -1,6 +1,24 @@
 {
   "components": [
     {
+      "id": "hashbrown-native-table",
+      "license": "MIT OR Apache-2.0",
+      "notices": [
+        "third-party/hashbrown-native-table/0-MIT.txt",
+        "third-party/hashbrown-native-table/1-Apache-2.0.txt",
+        "third-party/hashbrown-native-table/2-NOTICE"
+      ],
+      "paths": [
+        "crates/rdf-core/src/hash/table/**"
+      ],
+      "provenance": [
+        "crates/rdf-core/src/hash/table/PROVENANCE.md",
+        "crates/rdf-core/src/hash/table/UPSTREAM-SHA256.json"
+      ],
+      "scope": "modified inherited native table engine; original copyright and dual grant retained, local modifications attributed under the same grant",
+      "source": "https://crates.io/crates/hashbrown/0.17.1"
+    },
+    {
       "id": "unicode",
       "license": "Unicode-3.0",
       "notices": [
@@ -32,11 +50,14 @@
     "LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
     "LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
     "LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c",
-    "NOTICE.txt": "ec2747c083a69048c6a9aa64d498cc0285bb18f9c04790a2e10cf46a18555203",
+    "NOTICE.txt": "134f6cf6e9408eca6587c3786c1e4225fff9435728112ade47a3d81f181020b3",
+    "third-party/hashbrown-native-table/0-MIT.txt": "ff8f68cb076caf8cefe7a6430d4ac086ce6af2ca8ce2c4e5a2004d4552ef52a2",
+    "third-party/hashbrown-native-table/1-Apache-2.0.txt": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+    "third-party/hashbrown-native-table/2-NOTICE": "1523147a6efc4f8c0a660994a10465c2918c3b2c2dd243b3403f6b860b136a4d",
     "third-party/unicode/0-Unicode-3.0.txt": "8fa201617d2c10c64205a88903dfac046417e6b95748e36b492026fbc38c5b94"
   },
   "first_party_license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
-  "package_license": "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0",
+  "package_license": "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0 AND (MIT OR Apache-2.0)",
   "profile": "purrdf-core",
   "schema": 1
 }

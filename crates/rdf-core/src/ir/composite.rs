@@ -690,7 +690,7 @@ impl CompositeSource {
 #[derive(Debug, Default)]
 struct ReboundLiterals {
     values: FastMap<LocalId, String>,
-    index: hashbrown::HashTable<LocalId>,
+    index: crate::hash::table::HashTable<LocalId>,
 }
 
 /// A probe translated into the retained composite's handles: the three term
