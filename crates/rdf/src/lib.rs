@@ -111,8 +111,9 @@ pub use dataset_io::dataset_from_bytes;
 pub use gts_compose::{GtsIngestError, IngestCheckpoint, IngestReport};
 pub use gts_import_blobs::{
     DEFAULT_MAX_FRAME_DECODED_BYTES, DEFAULT_MAX_METADATA_BYTES, GtsBlobLimits,
-    GtsBlobMetadataSource, GtsBlobRetentionRefusal, GtsBlobSelector, GtsBlobUsage,
-    GtsImportWithBlobs, GtsImportedBlob, GtsRefusedBlob, import_gts_events_with_blobs,
+    GtsBlobMetadataSource, GtsBlobOmission, GtsBlobOmissionKind, GtsBlobRetentionRefusal,
+    GtsBlobSelector, GtsBlobUsage, GtsImportWithBlobs, GtsImportedBlob, GtsInlineExport,
+    GtsRefusedBlob, import_gts_events_with_blobs, import_gts_inline_for_export,
 };
 pub use gts_import_graph::import_gts_graph;
 pub use gts_import_sink::import_gts_events;

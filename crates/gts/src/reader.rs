@@ -71,7 +71,8 @@ fn diag_code_for(reason: &str) -> &'static str {
 
 /// Resolve public blob metadata's digest using the reader's identity convention.
 ///
-/// Accepts text with or without the `blake3:` prefix, or a 32-byte digest value.
+/// Accepts 64 lowercase hexadecimal digits with or without the `blake3:` prefix,
+/// or a 32-byte digest value.
 /// The original metadata is borrowed and unchanged. This only resolves the
 /// declaration; callers authenticating payloads must compare the result with the
 /// decoded content digest and reject ambiguous metadata keys separately.
@@ -81,8 +82,10 @@ pub fn public_blob_digest(value: &Value) -> Option<String> {
         return None;
     };
     match map_get(entries, "digest") {
-        Some(Value::Text(text)) if text.starts_with("blake3:") => Some(text.clone()),
-        Some(Value::Text(text)) => Some(["blake3:", text].concat()),
+        Some(Value::Text(text)) => {
+            let hex = text.strip_prefix("blake3:").unwrap_or(text);
+            purrdf_hash::hex::decode_32_canonical(hex).map(|digest| digest_label(&digest))
+        }
         Some(Value::Bytes(bytes)) if bytes.len() == 32 => Some(digest_label(bytes)),
         _ => None,
     }
@@ -251,7 +254,27 @@ pub struct BlobPayload<'a> {
     pub codecs: &'a [Codec],
 }
 
-/// One inline blob occurrence a sink's byte ceiling refused before decoding.
+/// Typed reason a reader could not provide one inline blob occurrence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BlobRefusalKind {
+    /// A caller-supplied payload byte ceiling.
+    ByteBudget,
+    /// A recognized codec/key capability is unavailable.
+    UnavailableCapability,
+}
+
+/// Recover the original typed refusal from a native payload diagnostic.
+/// Storage failures and diagnostics without their original cause return `None`.
+#[must_use]
+pub fn blob_refusal_kind(diagnostic: &Diagnostic) -> Option<BlobRefusalKind> {
+    let crate::model::DiagnosticCause::Native(cause) = diagnostic.cause.as_ref()? else {
+        return None;
+    };
+    let error: &(dyn std::error::Error + 'static) = &***cause;
+    error.downcast_ref::<PayloadError>()?.blob_refusal_kind()
+}
+
+/// One inline blob occurrence refused by a byte ceiling or missing capability.
 ///
 /// Reported so a selecting consumer still learns a candidate was present. It
 /// carries everything decidable without spending the bytes: the container's
@@ -260,6 +283,8 @@ pub struct BlobPayload<'a> {
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug)]
 pub struct BlobRefusal<'a> {
+    /// Original typed admission reason.
+    pub kind: BlobRefusalKind,
     /// Zero-based segment containing this occurrence.
     pub segment_index: u64,
     /// Declared content digest, when the container published one.
@@ -521,6 +546,7 @@ impl Folder<'_, '_, '_> {
     /// Report a payload the sink's own ceiling refused, before any decode.
     fn emit_blob_refusal(
         &mut self,
+        kind: BlobRefusalKind,
         digest: Option<&str>,
         digest_computed: bool,
         declared_metadata: Option<&Value>,
@@ -532,6 +558,7 @@ impl Folder<'_, '_, '_> {
             return;
         };
         sink.blob_refused(BlobRefusal {
+            kind,
             segment_index,
             digest,
             digest_computed,
@@ -1026,6 +1053,30 @@ impl Folder<'_, '_, '_> {
     fn h_blob_frame(&mut self, frame: &[(Value, Value)], index: u64) {
         let d = map_get(frame, "d");
         let declared_metadata = map_get(frame, "pub");
+        let declared_digest = declared_metadata.and_then(public_blob_digest);
+        let malformed = if d.is_some_and(|value| !matches!(value, Value::Bytes(_))) {
+            Some(PayloadCause::BlobNotBytes)
+        } else if matches!(map_get(frame, "x"), Some(Value::Array(ids)) if !ids.is_empty())
+            && d.is_none()
+        {
+            Some(PayloadCause::TransformedNotBytes)
+        } else if d.is_none() && declared_digest.is_none() {
+            Some(PayloadCause::BlobMissingIdentity)
+        } else {
+            None
+        };
+        if let Some(cause) = malformed {
+            let error = PayloadError::Damaged(cause);
+            let detail = error.diagnostic_detail();
+            self.opaque(frame, "blob", error.opaque_reason());
+            self.diag_native(
+                error.diagnostic_code(BLOB_BUDGET_DIAGNOSTIC),
+                error,
+                detail,
+                index,
+            );
+            return;
+        }
         let pub_meta = declared_metadata
             .filter(|value| matches!(value, Value::Map(_)))
             .cloned();
@@ -1080,10 +1131,11 @@ impl Folder<'_, '_, '_> {
                 Ok(_) => {}
                 Err(error) => {
                     let detail = error.diagnostic_detail();
-                    if matches!(&error, PayloadError::Budget(_)) {
+                    if let Some(kind) = error.blob_refusal_kind() {
                         let (refused_digest, digest_computed) =
                             refused_identity(&chain, d, pub_meta.as_ref());
                         self.emit_blob_refusal(
+                            kind,
                             refused_digest.as_deref(),
                             digest_computed,
                             declared_metadata,
@@ -1103,7 +1155,7 @@ impl Folder<'_, '_, '_> {
             return;
         }
 
-        if let Some(digest) = pub_meta.as_ref().and_then(public_blob_digest) {
+        if let Some(digest) = declared_digest {
             if let Some(meta) = pub_meta {
                 self.blob_meta_index
                     .set(&mut self.g.blob_meta, digest.clone(), meta);
@@ -1166,10 +1218,11 @@ impl Folder<'_, '_, '_> {
             Ok(_) => {}
             Err(error) => {
                 let detail = error.diagnostic_detail();
-                if matches!(&error, PayloadError::Budget(_)) {
+                if let Some(kind) = error.blob_refusal_kind() {
                     let (refused_digest, digest_computed) =
                         refused_identity(&chain, d, pub_meta.as_ref());
                     self.emit_blob_refusal(
+                        kind,
                         refused_digest.as_deref(),
                         digest_computed,
                         declared_metadata,
@@ -1296,7 +1349,14 @@ impl Folder<'_, '_, '_> {
                             limit,
                         });
                         let detail = error.diagnostic_detail();
-                        self.emit_blob_refusal(Some(&digest), true, None, bytes.len(), &detail);
+                        self.emit_blob_refusal(
+                            BlobRefusalKind::ByteBudget,
+                            Some(&digest),
+                            true,
+                            None,
+                            bytes.len(),
+                            &detail,
+                        );
                         self.diag_native(
                             error.diagnostic_code(BLOB_BUDGET_DIAGNOSTIC),
                             error,

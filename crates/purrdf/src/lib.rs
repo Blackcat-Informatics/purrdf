@@ -147,6 +147,11 @@ pub use embedding::{
 /// Borrowed typed error inspection, available without a sub-crate dependency.
 pub use purrdf_lex::error;
 
+pub mod gts_columnar;
+pub use gts_columnar::{
+    GtsBlobExportReport, GtsColumnarError, GtsColumnarSource, prepare_gts_columnar,
+};
+
 pub mod profile;
 pub use profile::{OntologyProfile, ReifierVocab};
 pub mod reasoning;

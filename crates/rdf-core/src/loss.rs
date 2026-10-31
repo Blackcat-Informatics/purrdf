@@ -186,6 +186,18 @@ impl LossLedger {
         memory.push(&mut self.entries, entry)
     }
 
+    /// Move actual runtime losses into this ledger without relabeling fields.
+    /// Admission completes before either ledger's entries are appended.
+    pub fn append_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        &mut self,
+        other: Self,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<(), purrdf_lex::allocation::StorageError> {
+        memory.reserve(&mut self.entries, other.entries.len())?;
+        self.entries.extend(other.entries);
+        Ok(())
+    }
+
     /// The ledger entries.
     ///
     /// For a [`Self::contract`] ledger this is sorted by `code` (the
@@ -273,6 +285,33 @@ const RDF_TO_GTS_PROFILE: &[(&str, &str)] = &[(
      destination GTS carries the reference; the payload bytes are streamed \
      origin->destination on demand (deferred materialization).",
 )];
+
+/// Closed loss profile for explicit GTS inline-payload admission to columnar v1.
+/// This describes blob admission only, not the GTS envelope as a whole.
+pub fn gts_to_columnar_loss_ledger() -> LossLedger {
+    contract_profile(
+        "gts",
+        "columnar-v1",
+        &[
+            (
+                "blob-byte-budget",
+                "An inline blob occurrence was not admitted under the caller's explicit byte ceilings; an unverified digest remains a container claim.",
+            ),
+            (
+                "blob-metadata-budget",
+                "An inline blob occurrence was not admitted under the caller's explicit public-metadata ceiling.",
+            ),
+            (
+                "blob-capability-unavailable",
+                "An inline blob occurrence could not be decoded because a recognized codec, key or decryptor capability is unavailable.",
+            ),
+            (
+                "blob-inline-payload-unavailable",
+                "A declared blob reference had no admitted inline payload at the end of the source.",
+            ),
+        ],
+    )
+}
 
 const GTS_TO_RDF_PROFILE: &[(&str, &str)] = &[(
     "bnode-scope-flatten",
@@ -2170,6 +2209,7 @@ fn registry_entries() -> Vec<LossEntry> {
     let mut entries: Vec<LossEntry> = Vec::new();
     entries.extend_from_slice(rdf_to_gts_loss_ledger().entries());
     entries.extend_from_slice(gts_to_rdf_loss_ledger().entries());
+    entries.extend_from_slice(gts_to_columnar_loss_ledger().entries());
     entries.extend_from_slice(rdf_to_okf_loss_ledger().entries());
     entries.extend_from_slice(okf_to_rdf_loss_ledger().entries());
     entries.extend_from_slice(rdf_to_lpg_loss_ledger().entries());
