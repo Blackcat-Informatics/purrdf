@@ -2414,6 +2414,98 @@ fn inline_export_keeps_malformed_and_integrity_failures_hard() {
 }
 
 #[test]
+fn inline_export_keeps_zstd_checksum_damage_hard_when_decode_is_admitted() {
+    // Produced and pinned by the GTS codec test's real checksum-enabled encoder.
+    let wire = include_bytes!("../../gts/tests/golden/zstd-checksummed-concat.bin");
+    let expected = [
+        b"first checksummed frame payload ".repeat(512),
+        b"second checksummed frame payload ".repeat(512),
+    ]
+    .concat();
+    let layout = purrdf_gts::codec::zstd_block_layout(wire).unwrap();
+    assert_eq!(layout.len(), 2);
+    let trailers = [layout[0].compressed_len - 1, wire.len() - 1];
+    for name in ["zstd", "zstd-rsyncable"] {
+        for declared_digest in [false, true] {
+            let container = |payload: &[u8]| {
+                let mut writer = Writer::new("generic");
+                writer.add_frame(
+                    "blob",
+                    None,
+                    Some(expected.clone()),
+                    Some(&[name.into()]),
+                    declared_digest.then(|| meta(&digest_str(&expected), "checked")),
+                );
+                let (mut items, torn) = purrdf_gts::wire::iter_items(&writer.into_bytes());
+                assert!(torn.is_none());
+                let Value::Map(frame) = &mut items[1].1 else {
+                    panic!("one blob frame follows the header")
+                };
+                frame
+                    .iter_mut()
+                    .find(|(key, _)| key.as_text() == Some("d"))
+                    .unwrap()
+                    .1 = Value::Bytes(payload.to_vec());
+                // Rehash the actual wire payload: the outer GTS frame is intact.
+                let id = purrdf_gts::wire::content_id(frame);
+                frame
+                    .iter_mut()
+                    .find(|(key, _)| key.as_text() == Some("id"))
+                    .unwrap()
+                    .1 = Value::Bytes(id);
+                items
+                    .into_iter()
+                    .flat_map(|(_, item)| purrdf_gts::wire::canonical(&item))
+                    .collect::<Vec<_>>()
+            };
+            let (_, blobs, omissions, _) = purrdf_rdf::import_gts_inline_for_export(
+                &container(wire),
+                GtsBlobLimits::UNBOUNDED,
+            )
+            .unwrap()
+            .into_parts();
+            assert_eq!(&*blobs[0].bytes, expected);
+            assert!(omissions.is_empty());
+            for trailer in trailers {
+                let mut damaged = wire.to_vec();
+                damaged[trailer] ^= 1;
+                let error = purrdf_rdf::import_gts_inline_for_export(
+                    &container(&damaged),
+                    GtsBlobLimits::UNBOUNDED,
+                )
+                .unwrap_err();
+                let cause = Capture::read(error.native_cause().unwrap());
+                let codec = if declared_digest {
+                    assert_eq!(error.code, "rdf-ir-gts-blob-decode");
+                    cause.child("cause")
+                } else {
+                    assert_eq!(error.code, "rdf-ir-gts-fold-diagnostic");
+                    assert_eq!(cause.code, "gts-payload-damaged");
+                    cause.child("detail").child("cause")
+                };
+                assert_eq!(codec.code, "gts-codec-failed");
+            }
+            // No integrity claim is made after refusing before output is decoded.
+            let mut damaged = wire.to_vec();
+            damaged[trailers[1]] ^= 1;
+            let mut policy = GtsBlobLimits::UNBOUNDED;
+            policy.max_decoded_bytes = 0;
+            let (_, blobs, omissions, _) =
+                purrdf_rdf::import_gts_inline_for_export(&container(&damaged), policy)
+                    .unwrap()
+                    .into_parts();
+            assert!(blobs.is_empty());
+            assert_eq!(omissions.len(), 1);
+            assert_eq!(
+                omissions[0].kind(),
+                purrdf_rdf::GtsBlobOmissionKind::ByteBudget
+            );
+            assert!(!omissions[0].digest_computed());
+        }
+    }
+}
+
+#[test]
 fn inline_export_reports_final_missing_references_and_recovers_proved_payloads() {
     let digest = digest_str(b"payload");
     let mut writer = Writer::new("generic");
