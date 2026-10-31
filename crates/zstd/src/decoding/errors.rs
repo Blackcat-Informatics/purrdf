@@ -555,6 +555,12 @@ impl From<HuffmanTableError> for DictionaryDecodeError {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum FrameDecoderError {
+    /// Growing the decoded output failed; the original allocator refusal is retained.
+    OutputAllocationFailed {
+        requested: usize,
+        capacity: usize,
+        cause: alloc::collections::TryReserveError,
+    },
     ReadFrameHeaderError(ReadFrameHeaderError),
     FrameHeaderError(FrameHeaderError),
     WindowSizeTooBig {
@@ -605,6 +611,7 @@ pub enum FrameDecoderError {
 impl StdError for FrameDecoderError {
     fn source(&self) -> Option<&(dyn StdError + 'static)> {
         match self {
+            FrameDecoderError::OutputAllocationFailed { cause, .. } => Some(cause),
             FrameDecoderError::ReadFrameHeaderError(source) => Some(source),
             FrameDecoderError::FrameHeaderError(source) => Some(source),
             FrameDecoderError::DictionaryDecodeError(source) => Some(source),
@@ -622,6 +629,16 @@ impl StdError for FrameDecoderError {
 impl fmt::Display for FrameDecoderError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> ::core::fmt::Result {
         match self {
+            FrameDecoderError::OutputAllocationFailed {
+                requested,
+                capacity,
+                cause,
+            } => {
+                write!(
+                    f,
+                    "Failed to reserve decoded output of {requested} bytes (capacity {capacity}): {cause}"
+                )
+            }
             FrameDecoderError::ReadFrameHeaderError(e) => {
                 write!(f, "{e:?}")
             }
@@ -640,10 +657,10 @@ impl fmt::Display for FrameDecoderError {
                 write!(f, "{e:?}")
             }
             FrameDecoderError::FailedToReadBlockHeader(e) => {
-                write!(f, "Failed to parse/decode block body: {e}")
+                write!(f, "Failed to parse block header: {e}")
             }
             FrameDecoderError::FailedToReadBlockBody(e) => {
-                write!(f, "Failed to parse block header: {e}")
+                write!(f, "Failed to parse/decode block body: {e}")
             }
 
             FrameDecoderError::FailedToReadChecksum(e) => {

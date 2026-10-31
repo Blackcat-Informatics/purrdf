@@ -137,6 +137,12 @@ impl<W: Write> StreamingEncoder<W, MatchGeneratorDriver> {
             self.state.strategy_tag,
             self.pledged_content_size.or(self.source_size_hint),
         );
+        self.state.literal_compression_disabled = self.state.strategy_tag
+            == crate::encoding::strategy::StrategyTag::Fast
+            && overrides.target_length.map_or_else(
+                || matches!(self.compression_level, CompressionLevel::Level(n) if n < 0),
+                |length| length > 0,
+            );
         self.state.matcher.set_param_overrides(Some(overrides));
         Ok(())
     }

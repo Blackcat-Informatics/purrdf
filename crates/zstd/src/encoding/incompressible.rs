@@ -114,7 +114,7 @@ pub(crate) fn compression_level_allows_raw_fast_path(
 #[inline]
 fn scan_sample_region(
     sample: &[u8],
-    counts: &mut [u16; 256],
+    counts: &mut [u32; 256],
     repeat_table: &mut [u32; INCOMPRESSIBLE_REPEAT_TABLE_LEN],
     repeat_occupied: &mut [u64; INCOMPRESSIBLE_REPEAT_OCCUPANCY_WORDS],
     repeats: &mut usize,
@@ -272,7 +272,7 @@ fn sample_looks_incompressible_capped(block: &[u8], max_sample_len: usize) -> bo
     let total_quads: usize = regions[..region_count].iter().map(|r| r.len() / 4).sum();
     let repeat_guard = total_quads / INCOMPRESSIBLE_REPEAT_DIVISOR + 1;
 
-    let mut counts = [0u16; 256];
+    let mut counts = [0u32; 256];
     let mut repeat_table = [u32::MAX; INCOMPRESSIBLE_REPEAT_TABLE_LEN];
     // Bitset occupancy keeps this path no_std-friendly while avoiding the
     // larger per-slot bool map (and extra matcher-level scratch state).

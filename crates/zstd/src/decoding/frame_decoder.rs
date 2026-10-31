@@ -1589,6 +1589,13 @@ impl FrameDecoder {
             // (single copy, no ring). The direct path writes precisely
             // `content_size` bytes (erroring otherwise), so the grown region is
             // fully written.
+            output.try_reserve_exact(cs).map_err(|cause| {
+                FrameDecoderError::OutputAllocationFailed {
+                    requested: frame_end,
+                    capacity: output.capacity(),
+                    cause,
+                }
+            })?;
             output.resize(frame_end, 0);
             // On error, drop the just-grown (zeroed) tail before propagating so
             // callers never observe bytes that were never decoded.

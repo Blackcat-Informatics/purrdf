@@ -40,6 +40,12 @@ use std::{
 
 const MAX_HUFFMAN_STATS_BYTES: usize = 64 * 1024;
 
+/// Exact floor(index * length / sample count), without overflowing usize.
+fn stats_sample_index(index: usize, length: usize) -> usize {
+    index * (length / MAX_HUFFMAN_STATS_BYTES)
+        + index * (length % MAX_HUFFMAN_STATS_BYTES) / MAX_HUFFMAN_STATS_BYTES
+}
+
 /// Tuning knobs for pure-Rust FastCOVER training.
 #[derive(Debug, Clone)]
 pub struct FastCoverOptions {
@@ -83,7 +89,7 @@ fn serialize_huffman_table(sample_data: &[u8], raw_content: &[u8]) -> io::Result
 
         let mut stats = Vec::with_capacity(MAX_HUFFMAN_STATS_BYTES);
         for i in 0..MAX_HUFFMAN_STATS_BYTES {
-            let idx = i * data.len() / MAX_HUFFMAN_STATS_BYTES;
+            let idx = stats_sample_index(i, data.len());
             stats.push(data[idx]);
         }
         stats
@@ -132,7 +138,7 @@ fn bounded_fse_symbols(data: &[u8], max_symbol: u8) -> Vec<u8> {
 
     let mut out = Vec::with_capacity(MAX_HUFFMAN_STATS_BYTES);
     for i in 0..MAX_HUFFMAN_STATS_BYTES {
-        let idx = i * data.len() / MAX_HUFFMAN_STATS_BYTES;
+        let idx = stats_sample_index(i, data.len());
         out.push((u16::from(data[idx]) % modulo) as u8);
     }
     out

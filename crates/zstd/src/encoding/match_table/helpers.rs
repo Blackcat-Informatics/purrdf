@@ -139,6 +139,10 @@ pub(crate) fn extend_backwards_shared(
 /// invoked once per encoded byte on lazy / Dfast / Row matchers
 /// (~10% exclusive on the default-level profile).
 #[inline(always)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "The advertised offset window and resident history base are distinct bounds"
+)]
 pub(crate) fn repcode_candidate_shared(
     kernel: FastpathKernel,
     concat: &[u8],
@@ -147,6 +151,7 @@ pub(crate) fn repcode_candidate_shared(
     abs_pos: usize,
     lit_len: usize,
     min_match_len: usize,
+    max_window_size: usize,
 ) -> Option<MatchCandidate> {
     let current_idx = abs_pos - history_abs_start;
     if current_idx + min_match_len > concat.len() {
@@ -182,7 +187,7 @@ pub(crate) fn repcode_candidate_shared(
     macro_rules! probe {
         ($rep:expr) => {{
             let rep = $rep;
-            if rep != 0 && rep <= abs_pos {
+            if rep != 0 && rep <= abs_pos && rep <= max_window_size {
                 let candidate_pos = abs_pos - rep;
                 // Upstream zstd `MEM_read32` rep gate (`zstd_lazy.c` lazy loop): a
                 // first-4-byte mismatch can never reach the

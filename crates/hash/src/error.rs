@@ -73,6 +73,14 @@ impl StructuredError for core::fmt::Error {
     }
 }
 
+impl StructuredError for std::collections::TryReserveError {
+    fn visit<'error>(&'error self, visitor: &mut dyn ErrorVisitor<'error>) {
+        // The stable API exposes no kind or allocator layout fields. Producers
+        // retain this original source and report their requested size alongside it.
+        visitor.variant("std-try-reserve");
+    }
+}
+
 impl StructuredError for core::num::TryFromIntError {
     fn visit<'error>(&'error self, visitor: &mut dyn ErrorVisitor<'error>) {
         // The standard error has no payload; the native producer retains the

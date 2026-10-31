@@ -297,6 +297,7 @@ macro_rules! greedy_parse_body {
                         rep_probe_pos,
                         rep_probe_lit_len,
                         REP_MIN_MATCH_LEN,
+                        $m.max_window_size,
                     )
                 } else {
                     None
@@ -1854,6 +1855,7 @@ impl RowMatchGenerator {
             abs_pos,
             lit_len,
             self.mls,
+            self.max_window_size,
         )
     }
 

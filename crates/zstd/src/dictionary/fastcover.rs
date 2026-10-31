@@ -76,13 +76,13 @@ pub(crate) fn normalize_fastcover_params(mut params: FastCoverParams) -> FastCov
     params
 }
 
-fn build_frequency_table(sample: &[u8], d: usize, f: u32, accel: usize) -> Vec<u32> {
+fn build_frequency_table(sample: &[u8], d: usize, f: u32, accel: usize) -> Vec<u64> {
     let bits = clamp_table_bits(f);
     let size = 1usize << bits;
     // Upstream zstd accel table: `skip = accel - 1` dmers between counted dmers
     // (`FASTCOVER_defaultAccelParameters`), i.e. a stride of `accel`.
     let step = accel.max(1);
-    let mut table = vec![0u32; size];
+    let mut table = vec![0u64; size];
 
     let read_len = dmer_read_len(d);
     if sample.len() < read_len {
@@ -91,8 +91,8 @@ fn build_frequency_table(sample: &[u8], d: usize, f: u32, accel: usize) -> Vec<u
 
     let mut i = 0usize;
     while i + read_len <= sample.len() {
-        // A count is bounded by the dmer count (`sample.len()`), far below
-        // `u32::MAX` for any trainable corpus — plain increment.
+        // A count is bounded by the dmer count (`sample.len()`), including
+        // corpora larger than the range of a 32-bit counter.
         table[hash_dmer_index(sample, i, bits, d)] += 1;
         i += step;
     }
@@ -133,7 +133,7 @@ fn build_raw_dict(sample: &[u8], dict_size: usize, params: FastCoverParams) -> V
     // Upstream zstd `COVER_computeEpochs` (passes = 1): target one selection per
     // epoch, with a floor so epochs stay large enough to contain useful
     // segments.
-    let min_epoch_size = k * 10;
+    let min_epoch_size = k.saturating_mul(10);
     let mut epoch_count = (dict_size / k).max(1);
     let mut epoch_size = nb_dmers / epoch_count;
     if epoch_size < min_epoch_size {
@@ -141,9 +141,9 @@ fn build_raw_dict(sample: &[u8], dict_size: usize, params: FastCoverParams) -> V
         epoch_count = (nb_dmers / epoch_size).max(1);
     }
 
-    // Per-window dmer occurrence counts (upstream zstd `segmentFreqs`, u16: a window
-    // holds at most `dmers_in_k` <= k occurrences of one index).
-    let mut segment_freqs = vec![0u16; 1usize << f];
+    // The public k has no small fixed bound. The temporary window can hold
+    // dmers_in_k + 1 occurrences before its oldest entry is removed.
+    let mut segment_freqs = vec![0usize; 1usize << f];
     // Fill from the back (upstream zstd layout) so the best segments sit at the end
     // of the dictionary and get referenced with the smallest offsets.
     let mut out = vec![0u8; dict_size];
@@ -168,7 +168,7 @@ fn build_raw_dict(sample: &[u8], dict_size: usize, params: FastCoverParams) -> V
         while active_end < epoch_end {
             let idx = hash_dmer_index(sample, active_end, f, d);
             if segment_freqs[idx] == 0 {
-                active_score += u64::from(freqs[idx]);
+                active_score += freqs[idx];
             }
             active_end += 1;
             segment_freqs[idx] += 1;
@@ -176,7 +176,7 @@ fn build_raw_dict(sample: &[u8], dict_size: usize, params: FastCoverParams) -> V
                 let del = hash_dmer_index(sample, active_begin, f, d);
                 segment_freqs[del] -= 1;
                 if segment_freqs[del] == 0 {
-                    active_score -= u64::from(freqs[del]);
+                    active_score -= freqs[del];
                 }
                 active_begin += 1;
             }

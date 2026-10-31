@@ -273,6 +273,16 @@ impl StructuredError for crate::decoding::errors::DictionaryDecodeError {
 impl StructuredError for crate::decoding::errors::FrameDecoderError {
     fn visit<'a>(&'a self, visitor: &mut dyn ErrorVisitor<'a>) {
         match self {
+            Self::OutputAllocationFailed {
+                requested,
+                capacity,
+                cause,
+            } => {
+                visitor.variant("zstd-frame-decoder-output-allocation-failed");
+                visitor.value(Some("requested"), ErrorValue::ByteCount(*requested as u128));
+                visitor.value(Some("capacity"), ErrorValue::ByteCount(*capacity as u128));
+                visitor.value(Some("cause"), ErrorValue::Cause(cause));
+            }
             Self::ReadFrameHeaderError(cause) => {
                 visitor.variant("zstd-frame-decoder-read-frame-header-error");
                 visitor.value(Some("cause"), ErrorValue::Cause(cause));

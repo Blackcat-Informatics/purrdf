@@ -302,14 +302,10 @@ pub enum CompressionLevel {
     /// evaluates up to two positions ahead before committing to a match,
     /// trading speed for a better compression ratio than [`CompressionLevel::Default`].
     Better,
-    /// This level is roughly equivalent to Zstd level 11.
+    /// The named high-ratio preset resolves to Zstd level 13.
     ///
-    /// Uses the hash-chain matcher with a deep lazy2 matching strategy and
-    /// a 16 MiB window. Compared to [`CompressionLevel::Better`], this level
-    /// uses larger hash and chain tables (2 M / 1 M entries vs 1 M / 512 K),
-    /// a deeper search (32 candidates vs 16), and a higher target match
-    /// length (128 vs 48), trading speed for the best compression ratio
-    /// available in this crate.
+    /// Uses the binary-tree matcher with a lazy2 matching strategy.
+    /// Numeric levels above 13 provide stronger, slower tuning.
     Best,
     /// Numeric compression level.
     ///
@@ -321,9 +317,9 @@ pub enum CompressionLevel {
     ///
     /// Named variants map to specific numeric levels:
     /// [`Fastest`](Self::Fastest) = 1, [`Default`](Self::Default) = 3,
-    /// [`Better`](Self::Better) = 7, [`Best`](Self::Best) = 11.
+    /// [`Better`](Self::Better) = 7, [`Best`](Self::Best) = 13.
     /// [`Best`](Self::Best) remains the highest-ratio named preset, but
-    /// [`Level`](Self::Level) values above 11 can target stronger (slower)
+    /// [`Level`](Self::Level) values above 13 can target stronger (slower)
     /// tuning than the named hierarchy.
     ///
     /// Levels above 11 use progressively larger windows and deeper search.
@@ -346,7 +342,7 @@ impl CompressionLevel {
 
     /// Create a compression level from a numeric value.
     ///
-    /// Returns named variants for canonical levels (`0`/`3`, `1`, `7`, `11`)
+    /// Returns named variants for canonical levels (`0`/`3`, `1`, `7`)
     /// and [`Level`](Self::Level) for all other values.
     ///
     /// With the default matcher backend (`MatchGeneratorDriver`), values
@@ -357,7 +353,6 @@ impl CompressionLevel {
             0 | Self::DEFAULT_LEVEL => Self::Default,
             1 => Self::Fastest,
             7 => Self::Better,
-            11 => Self::Best,
             _ => Self::Level(level),
         }
     }

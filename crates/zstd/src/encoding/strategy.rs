@@ -426,7 +426,7 @@ impl StrategyTag {
             CompressionLevel::Fastest => Self::Fast,
             CompressionLevel::Default => Self::Dfast,
             CompressionLevel::Better => Self::Lazy,
-            CompressionLevel::Best => Self::Lazy,
+            CompressionLevel::Best => Self::Btlazy2,
             CompressionLevel::Level(n) => {
                 if n <= 0 {
                     if n == 0 { Self::Dfast } else { Self::Fast }
