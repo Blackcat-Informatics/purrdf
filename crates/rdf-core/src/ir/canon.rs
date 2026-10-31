@@ -165,7 +165,7 @@ use sha2::{Digest, Sha256, Sha384};
 use super::dataset::{QuadIds, RdfDataset, TermRef};
 use super::skolem::{TermMapper, rebuild_dataset};
 use super::term::{BlankScope, TermId, TermValue};
-use super::term_walk::try_fold_term;
+use super::term_walk::try_fold_term_with_memory;
 use crate::content_store::ContentDigest;
 use crate::dataset_view::{
     DatasetView, DrainCheckpoint, DrainFailure, FallibleDatasetView, GraphMatch, TermGuard,
@@ -1266,8 +1266,10 @@ pub fn check_admissible_view<D: DatasetView<ReadError = Infallible>>(
 
 /// The count of distinct blank nodes in `ds` (incl. blanks nested inside triple
 /// terms). A cheap structural pre-reject used by [`super::compare`].
-#[must_use]
-pub fn blank_count(ds: &RdfDataset) -> usize {
+///
+/// # Errors
+/// Returns scratch admission or physical allocation failure without a count.
+pub fn blank_count(ds: &RdfDataset) -> Result<usize, CanonError> {
     blank_count_view(ds)
 }
 
@@ -1278,43 +1280,53 @@ pub fn blank_count(ds: &RdfDataset) -> usize {
 /// Label-independent by construction: it counts view ids, so two views whose blanks
 /// differ only in `(label, scope)` count the same, and two sources of a composite that
 /// happen to share a local label count as the two distinct nodes they are.
-#[must_use]
-pub fn blank_count_view<D: DatasetView<ReadError = Infallible>>(view: &D) -> usize {
-    match try_blank_count_view(view) {
-        Ok(count) => usize::try_from(count).expect("resident blank set fits local memory"),
-        Err(never) => match never {},
-    }
+///
+/// # Errors
+/// Returns scratch admission or physical allocation failure without a count.
+pub fn blank_count_view<D: DatasetView<ReadError = Infallible>>(
+    view: &D,
+) -> Result<usize, CanonError> {
+    view.checked_read(|view| blank_count_with_stop(view, None))
+        .map_err(CanonError::Read)?
 }
 
 /// Count blanks only after the complete source traversal succeeds.
 ///
 /// # Errors
-/// Returns backing-store failure and discards the partial count.
-pub fn try_blank_count_view<D: DatasetView>(view: &D) -> Result<u64, D::ReadError> {
+/// Returns original source, scratch admission or physical allocation failure and
+/// discards the partial count.
+pub fn try_blank_count_view<D: DatasetView>(view: &D) -> Result<u64, CanonError<D::ReadError>> {
     view.checked_read(|view| {
-        let count =
-            blank_count_with_stop(view, None).expect("an uncontrolled component walk cannot stop");
-        u64::try_from(count).expect("local blank set count fits u64")
+        let count = blank_count_with_stop(view, None)?;
+        u64::try_from(count).map_err(|_| CanonError::CounterCapacity)
     })
+    .map_err(CanonError::Read)?
 }
 
 pub(super) fn blank_count_with_stop<D: DatasetView>(
     view: &D,
     stop: Option<&dyn crate::StopSignal>,
-) -> Result<usize, CanonError> {
-    let mut set: BTreeSet<D::Id> = BTreeSet::new();
-    collect_components::<_, Infallible>(
-        view,
-        CanonScope::Dataset,
-        CanonPresentation::Overlay,
-        stop,
-        &mut |comp| {
-            comp.try_for_each_blank(view, stop, &mut |b| {
-                set.insert(b);
-            })
-        },
-    )?;
-    Ok(set.len())
+) -> Result<usize, CanonError<D::ReadError>> {
+    let reservation = view.reserve_workspace(0).map_err(CanonError::Read)?;
+    rendering::ScratchGrant::new(reservation).run(|memory| {
+        let mut set = crate::hash::table::HashTable::new();
+        collect_components::<_, D::ReadError>(
+            view,
+            CanonScope::Dataset,
+            CanonPresentation::Overlay,
+            stop,
+            &mut |comp| {
+                comp.try_for_each_blank(view, stop, &mut |id| {
+                    insert_blank(&mut set, id, memory)
+                        .map(|_| ())
+                        .map_err(|cause| memory.admission_mut().restore(CanonError::Storage(cause)))
+                })
+            },
+        )?;
+        let count = set.len();
+        release_blank_set(set, memory)?;
+        Ok(count)
+    })
 }
 
 /// Which statements of a view canonicalization admits.
@@ -1483,8 +1495,8 @@ impl<Id: ViewTermId> Component<Id> {
         self,
         ds: &D,
         stop: Option<&dyn crate::StopSignal>,
-        f: &mut impl FnMut(Id),
-    ) -> Result<(), CanonError> {
+        f: &mut impl FnMut(Id) -> Result<(), CanonError<D::ReadError>>,
+    ) -> Result<(), CanonError<D::ReadError>> {
         let (s, p, o, g) = self.slots();
         for slot in [Some(s), Some(p), Some(o), g].into_iter().flatten() {
             match slot {
@@ -1507,52 +1519,48 @@ impl<Id: ViewTermId> Component<Id> {
 /// consistent renaming of such a node canonicalize differently, and would let
 /// [`canonical_relabel`] emit a dangling label.
 ///
-/// The walk is [`try_fold_term`]'s work list: a triple term's subject, predicate and
-/// object are visited in that order, each fully before the next, and `f` fires
-/// for each blank as the walk reaches it.
+/// The walk uses [`try_fold_term_with_memory`]'s work list: a triple term's subject,
+/// predicate and object are visited in that order, each fully before the next,
+/// and `f` fires for each blank as the walk reaches it.
 fn blanks_in_term<D: DatasetView>(
     ds: &D,
     id: D::Id,
     stop: Option<&dyn crate::StopSignal>,
-    f: &mut impl FnMut(D::Id),
-) -> Result<(), CanonError> {
-    let result = try_fold_term(
-        ds,
-        id,
-        |id, term| {
-            check_stop(stop).map_err(Some)?;
-            match term {
-                TermRef::Blank { .. } => f(id),
-                TermRef::Literal {
-                    lexical, datatype, ..
-                } => {
-                    for id in composite_blanks(ds, lexical, datatype) {
-                        check_stop(stop).map_err(Some)?;
-                        f(id);
+    f: &mut impl FnMut(D::Id) -> Result<(), CanonError<D::ReadError>>,
+) -> Result<(), CanonError<D::ReadError>> {
+    let reservation = ds.reserve_workspace(0).map_err(CanonError::Read)?;
+    rendering::ScratchGrant::new(reservation).run(|memory| {
+        try_fold_term_with_memory(
+            ds,
+            id,
+            |id, term, memory| {
+                check_stop(stop).map_err(CanonError::with_read_error)?;
+                match term {
+                    TermRef::Blank { .. } => f(id)?,
+                    TermRef::Literal {
+                        lexical, datatype, ..
+                    } => {
+                        let ids = composite_blanks(ds, lexical, datatype, memory)?;
+                        let result = (|| {
+                            for &id in &ids {
+                                check_stop(stop).map_err(CanonError::with_read_error)?;
+                                f(id)?;
+                            }
+                            Ok(())
+                        })();
+                        let released = memory.release_vec(ids).map_err(CanonError::Storage);
+                        result.and(released)?;
                     }
+                    TermRef::Iri(_) | TermRef::Triple { .. } => {}
                 }
-                TermRef::Iri(_) | TermRef::Triple { .. } => {}
-            }
-            Ok(())
-        },
-        |_, (), (), ()| check_stop(stop).map_err(Some),
-        // This walk is provisional inside checked_read/checkpointed_drain,
-        // which retains the sticky source fault and discards the partial result.
-        // Stop the fold here without formatting or replacing that original cause.
-        // A provider that loses its fault violates the checked-drain contract;
-        // do not let provisional output escape as a successful canonical form.
-        |_| {
-            assert!(
-                ds.read_error().is_some(),
-                "DatasetView read_error must retain a failed resolution"
-            );
-            None
-        },
-    );
-    match result {
-        Ok(()) | Err(None) => Ok(()),
-        Err(Some(refusal)) => Err(refusal),
-    }
+                Ok(())
+            },
+            |_, (), (), (), _| check_stop(stop).map_err(CanonError::with_read_error),
+            CanonError::Read,
+            |cause, _| CanonError::Storage(cause),
+            memory,
+        )
+    })
 }
 
 /// The view ids of the blank nodes a composite literal's lexical form names,
@@ -1570,22 +1578,73 @@ fn blanks_in_term<D: DatasetView>(
 /// The lookup goes through [`DatasetView::term_id_by_value`], which resolves WITHOUT
 /// minting — the same non-minting resolve the flat path's `term_id_by_blank` performs,
 /// so an embedded pair naming no node stays absent rather than becoming one.
-fn composite_blanks<D: DatasetView>(ds: &D, lexical: &str, datatype: D::Id) -> Vec<D::Id> {
+fn composite_blanks<D: DatasetView, S: Admission + ?Sized>(
+    ds: &D,
+    lexical: &str,
+    datatype: D::Id,
+    memory: &mut Memory<'_, S>,
+) -> Result<Vec<D::Id>, purrdf_lex::allocation::StorageError> {
     let Some(guard) = ds.resolve_if_ready(datatype) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     let TermRef::Iri(iri) = guard.term() else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     if !crate::cdt_blank::is_cdt_datatype(iri) {
-        return Vec::new();
+        return Ok(Vec::new());
     }
-    let mut seen = BTreeSet::new();
-    crate::cdt_blank::cdt_embedded_blanks(lexical, iri)
-        .into_iter()
-        .filter_map(|(label, scope)| ds.term_id_if_ready(&TermValue::Blank { label, scope }))
-        .filter(|id| seen.insert(*id))
-        .collect()
+    let mut seen = crate::hash::table::HashTable::new();
+    let mut ids = Vec::new();
+    let mut blanks = crate::cdt_blank::cdt_embedded_blanks_with_memory(lexical, iri, memory)?;
+    for (label, scope) in &mut blanks {
+        let lookup = TermValue::Blank {
+            label: std::mem::take(label),
+            scope: *scope,
+        };
+        let id = ds.term_id_if_ready(&lookup);
+        let TermValue::Blank { label, .. } = lookup else {
+            unreachable!("the blank lookup was constructed above")
+        };
+        memory.release_string(label)?;
+        if let Some(id) = id
+            && insert_blank(&mut seen, id, memory)?
+        {
+            memory.push(&mut ids, id)?;
+        }
+    }
+    memory.release_vec(blanks)?;
+    release_blank_set(seen, memory)?;
+    Ok(ids)
+}
+
+/// Preserve first occurrence order while using the native admitted hash table.
+fn insert_blank<Id: ViewTermId, S: Admission + ?Sized>(
+    seen: &mut crate::hash::table::HashTable<Id>,
+    id: Id,
+    memory: &mut Memory<'_, S>,
+) -> Result<bool, purrdf_lex::allocation::StorageError> {
+    use purrdf_lex::allocation::StorageError;
+    let hash = crate::hash::hash_of(&id);
+    if seen.find(hash, |candidate| *candidate == id).is_some() {
+        return Ok(false);
+    }
+    let required = seen
+        .len()
+        .checked_add(1)
+        .ok_or(StorageError::SizeOverflow)?;
+    crate::hash::reserve_table_with_memory(seen, required, crate::hash::hash_of, memory)?;
+    seen.insert_unique(hash, id, crate::hash::hash_of);
+    Ok(true)
+}
+
+fn release_blank_set<Id, S: Admission + ?Sized>(
+    seen: crate::hash::table::HashTable<Id>,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), purrdf_lex::allocation::StorageError> {
+    let bytes = crate::hash::hash_table_retained_bound(&seen)
+        .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?;
+    drop(seen);
+    memory.release_bytes(bytes)
 }
 
 /// The ids, in ONE view's own id space, of the overlay's two sentinel IRIs.
@@ -2049,6 +2108,8 @@ struct IdIssuer<Id> {
     issued: BTreeMap<Id, Box<str>>,
     order: Vec<Id>,
 }
+
+type IssuedHash<Id> = (HashHex, IdIssuer<Id>);
 
 impl<Id: ViewTermId> IdIssuer<Id> {
     fn new(prefix: &'static str) -> Self {
@@ -2533,10 +2594,10 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         }
     }
 
-    fn collect_incidence(&mut self) -> Result<(), CanonError> {
+    fn collect_incidence(&mut self) -> Result<(), CanonError<D::ReadError>> {
         let mut blank_set: BTreeSet<D::Id> = BTreeSet::new();
         let mut incident: BTreeMap<D::Id, Vec<Component<D::Id>>> = BTreeMap::new();
-        collect_components::<_, Infallible>(
+        collect_components::<_, D::ReadError>(
             self.ds,
             self.scope,
             self.presentation,
@@ -2548,6 +2609,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                     if seen.insert(b) {
                         incident.entry(b).or_default().push(comp);
                     }
+                    Ok(())
                 })
             },
         )?;
@@ -2635,8 +2697,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         {
             return Err(CanonError::ReservedVocabulary(violation));
         }
-        self.collect_incidence()
-            .map_err(CanonError::with_read_error)?;
+        self.collect_incidence()?;
         self.run.phase(CanonPhase::Search);
         self.run_inner()?;
         Ok(self)
@@ -2680,9 +2741,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                 }
                 let mut temp = IdIssuer::new(TEMP_PREFIX);
                 temp.issue(b);
-                let (result_hash, result_issuer) = self
-                    .hash_n_degree(b, temp)
-                    .map_err(CanonError::with_read_error)?;
+                let (result_hash, result_issuer) = self.hash_n_degree(b, temp)?;
                 hash_paths.push((result_hash, result_issuer));
             }
             // 5.5: promote the temp issuers' bindings into the canonical issuer, the
@@ -2724,7 +2783,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         &self,
         identifier: D::Id,
         issuer: IdIssuer<D::Id>,
-    ) -> Result<(HashHex, IdIssuer<D::Id>), CanonError> {
+    ) -> Result<IssuedHash<D::Id>, CanonError<D::ReadError>> {
         let mut frame = self.n_degree_frame(identifier, issuer)?;
         let mut parents: WorkList<NDegreeFrame<D::Id>, 8> = WorkList::default();
         loop {
@@ -2732,7 +2791,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                 if let Some(mut candidate) = group.candidate.take() {
                     if let Some(related) = candidate.recursion.next() {
                         // §4.8 step 5.4.5: suspend this path while its child runs.
-                        self.check_stop()?;
+                        self.check_stop().map_err(CanonError::with_read_error)?;
                         let child_issuer = candidate.issuer.clone();
                         candidate.pending = Some(related);
                         group.candidate = Some(candidate);
@@ -2754,13 +2813,14 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
 
                 if let Some(perm) = group.permutations.next() {
                     // Charge after obtaining each permutation, including pruned ones.
-                    self.charge_search(SearchEvent::RdfcPermutation)?;
+                    self.charge_search(SearchEvent::RdfcPermutation)
+                        .map_err(CanonError::with_read_error)?;
                     let mut issuer = frame.issuer.clone();
                     let mut path = String::new();
                     let mut recursion = Vec::new();
                     let mut pruned = false;
                     for related in perm {
-                        self.check_stop()?;
+                        self.check_stop().map_err(CanonError::with_read_error)?;
                         if let Some(id) = self.canonical.issued_for(related) {
                             path.push_str("_:");
                             path.push_str(id);
@@ -2802,7 +2862,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
             }
 
             if let Some((hash, related)) = frame.related.next() {
-                self.check_stop()?;
+                self.check_stop().map_err(CanonError::with_read_error)?;
                 frame.data.push_str(hash.as_str());
                 frame.group = Some(NDegreeGroup {
                     permutations: permutations(&related),
@@ -2847,8 +2907,9 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         &self,
         identifier: D::Id,
         issuer: IdIssuer<D::Id>,
-    ) -> Result<NDegreeFrame<D::Id>, CanonError> {
-        self.charge_search(SearchEvent::RdfcFrame)?;
+    ) -> Result<NDegreeFrame<D::Id>, CanonError<D::ReadError>> {
+        self.charge_search(SearchEvent::RdfcFrame)
+            .map_err(CanonError::with_read_error)?;
 
         // §4.8 step 3: map related-blank hash → the related blanks bearing it.
         let mut hn: BTreeMap<HashHex, Vec<D::Id>> = BTreeMap::new();
@@ -2875,7 +2936,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         focus: D::Id,
         issuer: &IdIssuer<D::Id>,
         f: &mut impl FnMut(D::Id, HashHex),
-    ) -> Result<(), CanonError> {
+    ) -> Result<(), CanonError<D::ReadError>> {
         let (s, p, o, g) = comp.slots();
         // Standard quad positions whose blanks are "related": subject, object, graph.
         // (Predicates are always IRIs / sentinels — never blank.) Blanks nested
@@ -2903,7 +2964,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         focus: D::Id,
         issuer: &IdIssuer<D::Id>,
         f: &mut impl FnMut(D::Id, HashHex),
-    ) -> Result<(), CanonError> {
+    ) -> Result<(), CanonError<D::ReadError>> {
         // The annotation-overlay graph marker carries a real graph term whose blanks
         // are "related" exactly like any graph-slot term.
         let id = match slot {
@@ -2913,7 +2974,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         let mut held: Vec<(D::Id, Cow<'_, str>)> = Vec::new();
         let mut next = Some((id, Cow::Borrowed(position)));
         while let Some((id, position)) = next.take().or_else(|| held.pop()) {
-            self.check_stop()?;
+            self.check_stop().map_err(CanonError::with_read_error)?;
             let Some(guard) = self.ds.resolve_if_ready(id) else {
                 return Ok(());
             };
@@ -2942,18 +3003,35 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                     // segment so the role "inside a composite value" is distinguished
                     // from the slot's own term, and the segment is label-independent,
                     // which is what canonicality requires.
-                    for related in composite_blanks(self.ds, lexical, datatype) {
-                        self.check_stop()?;
-                        if related != focus {
-                            let h = self.hash_related_blank_node(
-                                related,
-                                &format!("{position}.cdt"),
-                                predicate,
-                                issuer,
-                            );
-                            f(related, h);
-                        }
-                    }
+                    let reservation = self.ds.reserve_workspace(0).map_err(CanonError::Read)?;
+                    rendering::ScratchGrant::new(reservation).run(|memory| {
+                        let related = composite_blanks(self.ds, lexical, datatype, memory)?;
+                        let mut cdt_position = String::new();
+                        let result = (|| {
+                            for &related in &related {
+                                self.check_stop().map_err(CanonError::with_read_error)?;
+                                if related != focus {
+                                    if cdt_position.is_empty() {
+                                        memory.push_str(&mut cdt_position, &position)?;
+                                        memory.push_str(&mut cdt_position, ".cdt")?;
+                                    }
+                                    let h = self.hash_related_blank_node(
+                                        related,
+                                        &cdt_position,
+                                        predicate,
+                                        issuer,
+                                    );
+                                    f(related, h);
+                                }
+                            }
+                            Ok(())
+                        })();
+                        let released = memory.release_vec(related).map_err(CanonError::Storage);
+                        let released_position = memory
+                            .release_string(cdt_position)
+                            .map_err(CanonError::Storage);
+                        result.and(released).and(released_position)
+                    })?;
                 }
                 TermRef::Iri(_) => {}
             }
@@ -4016,8 +4094,8 @@ mod tests {
             "the view-generic entry point folds too — one seam, not two"
         );
         assert_eq!(
-            blank_count(&native),
-            blank_count(&spelled),
+            blank_count(&native).unwrap(),
+            blank_count(&spelled).unwrap(),
             "the blank sweep reads the folded rows, so it agrees across spellings"
         );
         assert!(
@@ -4394,7 +4472,7 @@ mod tests {
         b.push_quad(x, p, y, None).unwrap();
         b.push_quad(y, p, x, None).unwrap();
         let ds = b.freeze().expect("valid");
-        assert_eq!(blank_count(&ds), 2);
+        assert_eq!(blank_count(&ds).unwrap(), 2);
     }
 
     #[test]
@@ -4720,7 +4798,7 @@ mod tests {
             .nquads()
         );
         // And so do the screening surfaces.
-        assert_eq!(blank_count(&ds), blank_count_view(&*ds));
+        assert_eq!(blank_count(&ds).unwrap(), blank_count_view(&*ds).unwrap());
         assert!(check_admissible(&ds).is_ok() && check_admissible_view(&*ds).is_ok());
     }
 

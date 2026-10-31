@@ -724,7 +724,7 @@ fn flat_graph_scope_commutes_with_statement_layer_rows_present_in_both_graphs() 
 #[test]
 fn blank_count_is_invariant_between_flat_and_overlay_presentations() {
     let ds = statement_layer_fixture_both_graphs();
-    let overlay_count = blank_count_view(&*ds);
+    let overlay_count = blank_count_view(&*ds).unwrap();
     let flat_bytes_owner = try_canonicalize_flat_view(
         &*ds,
         CanonHash::Sha256,
