@@ -118,6 +118,8 @@ fn write_scalar<W: Write + ?Sized>(value: &Value, out: &mut W) -> io::Result<boo
 enum Job<'v> {
     /// A value to encode.
     Value(&'v Value),
+    /// Advance one array without queuing every child at once.
+    Array(core::slice::Iter<'v, Value>),
     /// Bytes already encoded: a map key's deterministic encoding.
     Encoded(Vec<u8>),
 }
@@ -146,8 +148,9 @@ fn sorted_entries<'v>(
     keyed
 }
 
-/// Stream `jobs` to `out`: every container's parts go onto the work list in
-/// reverse, so they pop in order and nesting costs heap, never stack.
+/// Stream `jobs` to `out`: array cursors retain only their unvisited suffix,
+/// so array width does not grow the traversal work list. Maps retain their
+/// ordered entries, and nesting costs heap, never stack.
 fn run<W: Write + ?Sized>(mut jobs: Vec<Job<'_>>, out: &mut W, canonical: bool) -> io::Result<()> {
     while let Some(job) = jobs.pop() {
         let value = match job {
@@ -156,6 +159,15 @@ fn run<W: Write + ?Sized>(mut jobs: Vec<Job<'_>>, out: &mut W, canonical: bool) 
                 continue;
             }
             Job::Value(value) => value,
+            Job::Array(mut items) => {
+                let Some(value) = items.next() else {
+                    continue;
+                };
+                if !items.as_slice().is_empty() {
+                    jobs.push(Job::Array(items));
+                }
+                value
+            }
         };
         if write_scalar(value, out)? {
             continue;
@@ -167,7 +179,9 @@ fn run<W: Write + ?Sized>(mut jobs: Vec<Job<'_>>, out: &mut W, canonical: bool) 
             }
             Value::Array(items) => {
                 head::write_head(out, ARRAY, items.len() as u64)?;
-                jobs.extend(items.iter().rev().map(Job::Value));
+                if !items.is_empty() {
+                    jobs.push(Job::Array(items.iter()));
+                }
             }
             Value::Map(entries) => {
                 head::write_head(out, MAP, entries.len() as u64)?;
