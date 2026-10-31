@@ -49,25 +49,14 @@ impl ColumnarProjection {
 
     /// Visit rows in canonical order, with cells in native schema-column order.
     ///
-    /// One small cell vector is allocated per yielded row. String and blob data
-    /// stay borrowed; no per-cell string or payload copy occurs here.
+    /// Rows keep the fixed schema cells inline. String and blob data stay
+    /// borrowed; no per-row allocation or per-cell payload copy occurs here.
     #[must_use]
     pub fn rows(&self, table: Table) -> ProjectionRows<'_> {
-        let data = self.table(table);
-        ProjectionRows {
-            remaining: data.row_count,
-            columns: data
-                .columns
-                .iter()
-                .map(|column| match column {
-                    ColumnValues::Int64(values) => ColumnRows::Int64(values.rows()),
-                    ColumnValues::ByteArray(values) => ColumnRows::Bytes(values.iter()),
-                })
-                .collect(),
-        }
+        self.table(table).rows()
     }
 
-    /// Encode the projection using the unchanged native v1 Parquet writer.
+    /// Encode the projection using the native group-streaming Parquet writer.
     ///
     /// # Errors
     ///
@@ -108,12 +97,12 @@ impl<'a> ColumnRows<'a> {
 /// A borrowed traversal of a canonical table's rows.
 #[derive(Debug)]
 pub struct ProjectionRows<'a> {
-    columns: Vec<ColumnRows<'a>>,
+    columns: purrdf_core::SmallVec<[ColumnRows<'a>; 11]>,
     remaining: usize,
 }
 
 impl<'a> Iterator for ProjectionRows<'a> {
-    type Item = Vec<ProjectionCell<'a>>;
+    type Item = purrdf_core::SmallVec<[ProjectionCell<'a>; 11]>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.remaining == 0 {
@@ -130,3 +119,20 @@ impl<'a> Iterator for ProjectionRows<'a> {
 
 impl ExactSizeIterator for ProjectionRows<'_> {}
 impl std::iter::FusedIterator for ProjectionRows<'_> {}
+
+impl TableData {
+    pub(crate) fn rows(&self) -> ProjectionRows<'_> {
+        let data = self;
+        ProjectionRows {
+            remaining: data.row_count,
+            columns: data
+                .columns
+                .iter()
+                .map(|column| match column {
+                    ColumnValues::Int64(values) => ColumnRows::Int64(values.rows()),
+                    ColumnValues::ByteArray(values) => ColumnRows::Bytes(values.iter()),
+                })
+                .collect(),
+        }
+    }
+}

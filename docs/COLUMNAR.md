@@ -40,17 +40,17 @@ the structured-error protocol, inspection reports its original nested fields.
 
 | Column | Type | Cardinality | Meaning |
 | --- | --- | --- | --- |
-| `id` | INT64 | required | Dense, zero-based columnar term id. |
-| `kind` | INT64 | required | `0` IRI, `1` literal, `2` blank node, `3` triple term. |
+| `id` | `INT64` | required | Dense, zero-based columnar term id. |
+| `kind` | `INT64` | required | `0` IRI, `1` literal, `2` blank node, `3` triple term. |
 | `lex` | UTF8 | optional | IRI, literal lexical form, or blank label; null for triple terms. |
-| `datatype` | INT64 | optional | Term id of a literal's datatype IRI. |
+| `datatype` | `INT64` | optional | Term id of a literal's datatype IRI. |
 | `lang` | UTF8 | optional | Lower-cased language tag. |
-| `direction` | INT64 | optional | `0` left-to-right, `1` right-to-left. |
-| `scope` | INT64 | optional | Blank-node scope ordinal. |
-| `triple_s` | INT64 | optional | Triple-term subject id. |
-| `triple_p` | INT64 | optional | Triple-term predicate id. |
-| `triple_o` | INT64 | optional | Triple-term object id. |
-| `named_graph` | INT64 | required | `1` when the term names a declared graph, otherwise `0`. |
+| `direction` | `INT64` | optional | `0` left-to-right, `1` right-to-left. |
+| `scope` | `INT64` | optional | Blank-node scope ordinal. |
+| `triple_s` | `INT64` | optional | Triple-term subject id. |
+| `triple_p` | `INT64` | optional | Triple-term predicate id. |
+| `triple_o` | `INT64` | optional | Triple-term object id. |
+| `named_graph` | `INT64` | required | `1` when the term names a declared graph, otherwise `0`. |
 
 The term dictionary is the recursive closure of every term reachable from base
 quads, reifier bindings, annotations, and named-graph declarations. Rows are
@@ -62,10 +62,10 @@ explicitly declared empty named graphs and makes bytes independent of a
 
 | Column | Type | Cardinality | Meaning |
 | --- | --- | --- | --- |
-| `s` | INT64 | required | Subject term id. |
-| `p` | INT64 | required | Predicate term id. |
-| `o` | INT64 | required | Object term id. |
-| `g` | INT64 | optional | Named-graph term id; null is the default graph. |
+| `s` | `INT64` | required | Subject term id. |
+| `p` | `INT64` | required | Predicate term id. |
+| `o` | `INT64` | required | Object term id. |
+| `g` | `INT64` | optional | Named-graph term id; null is the default graph. |
 
 Rows are unique and sorted by `(s, p, o, g)` with the default graph before
 named graphs.
@@ -74,11 +74,11 @@ named graphs.
 
 | Column | Type | Cardinality | Meaning |
 | --- | --- | --- | --- |
-| `reifier` | INT64 | required | Reifier resource term id. |
-| `s` | INT64 | required | Reified statement subject id. |
-| `p` | INT64 | required | Reified statement predicate id. |
-| `o` | INT64 | required | Reified statement object id. |
-| `g` | INT64 | optional | Graph of the binding; null is the default graph. |
+| `reifier` | `INT64` | required | Reifier resource term id. |
+| `s` | `INT64` | required | Reified statement subject id. |
+| `p` | `INT64` | required | Reified statement predicate id. |
+| `o` | `INT64` | required | Reified statement object id. |
+| `g` | `INT64` | optional | Graph of the binding; null is the default graph. |
 
 Rows are unique and sorted by `(reifier, s, p, o, g)`.
 
@@ -86,10 +86,10 @@ Rows are unique and sorted by `(reifier, s, p, o, g)`.
 
 | Column | Type | Cardinality | Meaning |
 | --- | --- | --- | --- |
-| `reifier` | INT64 | required | Annotated reifier term id. |
-| `predicate` | INT64 | required | Annotation predicate term id. |
-| `value` | INT64 | required | Annotation object term id. |
-| `g` | INT64 | optional | Graph of the annotation; null is the default graph. |
+| `reifier` | `INT64` | required | Annotated reifier term id. |
+| `predicate` | `INT64` | required | Annotation predicate term id. |
+| `value` | `INT64` | required | Annotation object term id. |
+| `g` | `INT64` | optional | Graph of the annotation; null is the default graph. |
 
 Rows are unique and sorted by `(reifier, predicate, value, g)`.
 
@@ -105,8 +105,8 @@ rejects a mismatch; it never repairs or re-files corrupt content.
 
 ## Parquet profile
 
-Each non-empty table is one row group with one Data Page V2 per column. Values
-use PLAIN encoding. Optional-column definition levels use the Parquet RLE
+Each non-empty table contains one or more contiguous row groups, each with one
+Data Page V2 per column. Empty tables contain no row groups. Values use PLAIN encoding. Optional-column definition levels use the Parquet RLE
 hybrid's run-length form; there are no repetition levels because the schema is
 flat. A write chooses one codec for all value bodies: UNCOMPRESSED or ZSTD.
 Zstd is a runtime choice backed by the always-present pure-Rust
@@ -121,12 +121,61 @@ schema and encoding profile and fails closed on structural drift, unsupported
 features, malformed references, invalid RDF positions, decompression size
 mismatches, or trailing data.
 
-## Decode safety budget
+## Physical bounds and group streaming
 
-Before allocating a decoded column or entering Zstd, the reader cross-checks the
-row-group, column-chunk, and page sizes and estimates the table's resident column
-slots plus uncompressed value bytes. That fixed-profile working set may not
-exceed 256 MiB per table. Metadata-derived vectors initially reserve at most
-65,536 rows, and the public reader decodes and releases one physical table at a
-time. Inputs beyond the ceiling fail with `ColumnarError::LimitExceeded`; the
-writer applies the same budget so it cannot emit files its paired reader rejects.
+The writer consumes canonical rows and takes the longest next prefix whose
+per-column PLAIN bytes plus exact RLE definition bytes fit the signed 32-bit
+page-size fields, and whose row count fits the page's signed 32-bit count.
+A byte-array cell must itself fit the PLAIN signed 32-bit length. Compression
+is measured after encoding the candidate: if a compressed page exceeds its
+physical field, the candidate is split at its midpoint and each half is encoded
+by the same rule, in order. An indivisible oversized row fails explicitly.
+These cuts depend on the data and selected codec, never a row-count tuning
+constant or the host's available memory. Files whose rows fit one group retain
+the same encoding. Offsets and table row counts fit signed 64-bit fields; the
+footer fits its unsigned 32-bit length. Schema version remains `1`.
+
+Pending groups hold encoded PLAIN column buffers, packed nullable-column
+presence, and one four-byte end offset per present byte-array value. Source
+rows are released after their cells are appended. Integer columns need no
+per-row offset array. Compression and subdivision borrow ranges of these
+buffers; each child rebuilds its definition levels for its own row range.
+Buffers are reused across groups, and their capacities are bounded by the
+largest admitted group. Compression output and final file buffers are separate
+resident owners.
+
+The reader accepts any self-consistent sequence of supported groups; it need
+not reproduce the writer's cuts or compressed bytes. It validates column and
+page sizes, offsets, row totals, null counts and PLAIN cardinality before large
+decoding allocations or decompression. Metadata collection counts are bounded
+by the actual enclosing footer bytes, rather than an arbitrary item ceiling.
+Row uniqueness and canonical order hold across group boundaries as well as
+within groups. A later group refusal aborts the complete conversion.
+
+For ZSTD pages, native frame inspection checks every concatenated and skippable
+frame extent before allocating the bitmap or PLAIN buffer. Known frame content
+sizes must fit the Parquet declaration; their total must match when every frame
+declares its size. Unknown sizes are checked by actual decompression. Frame
+checksums are verified during decompression. Header claims and actual decoder
+output remain distinct evidence in refusal diagnostics.
+
+There is no chosen table-byte ceiling. One decoded group is consumed and
+released before the next. The term dictionary retains flat records across
+groups to resolve forward datatype and triple-term references; semantic rows
+then enter the dataset builder group by group. Blob payloads move into their
+final content store after digest verification. Physical addressability and
+checked size arithmetic still apply. A representable group can be large: page
+fields permit nearly 2 GiB per column.
+
+The API owns the input or output file buffers, and the RDF dataset and content
+store remain resident. Writing also retains canonical dictionary and sorted row
+metadata needed for backend-independent ids and ordering; reading retains term
+resolution state and the builder. Footer metadata grows with group count.
+Native codec workspace and the page body can still be allocated from matching
+metadata before malformed compressed content is rejected. These structural
+checks do not establish a separate caller resource-admission policy.
+Group streaming removes complete-table decoded columns and intermediate
+statement tables, not these necessary owners. `project()` remains an explicitly
+eager relational representation; direct `write()` consumes borrowed canonical
+cells and blob payloads into pending columns without first constructing that
+representation.

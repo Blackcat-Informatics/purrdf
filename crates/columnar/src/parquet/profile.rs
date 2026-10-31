@@ -19,7 +19,10 @@ pub struct SchemaProfile {
 
 /// An original parsed row group retained by a profile refusal.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RowGroupProfile(pub(super) Vec<ParsedRowGroup>);
+pub struct RowGroupProfile {
+    pub(super) groups: Vec<ParsedRowGroup>,
+    pub(super) selected: usize,
+}
 
 /// An original parsed column chunk retained by a profile refusal.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,9 +47,12 @@ impl StructuredError for SchemaProfile {
 }
 impl StructuredError for RowGroupProfile {
     fn visit<'error>(&'error self, visitor: &mut dyn ErrorVisitor<'error>) {
-        // This owner is created only after the one-group cardinality check.
+        // This owner retains the offending physical group, including later groups.
         visitor.variant("columnar-row-group-profile");
-        visitor.value(Some("original"), ErrorValue::Record(&self.0[0]));
+        visitor.value(
+            Some("original"),
+            ErrorValue::Record(&self.groups[self.selected]),
+        );
     }
 }
 impl StructuredError for ColumnProfile {
