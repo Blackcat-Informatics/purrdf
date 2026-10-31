@@ -249,7 +249,7 @@ fn validate_ip_literal_with(
                 .into(),
             );
         };
-        let (version, address) = (&inner[1..1 + dot], &inner[dot + 2..]);
+        let (version, address) = (&inner[1..=dot], &inner[dot + 2..]);
         if version.is_empty() || address.is_empty() {
             return Err(
                 IriError::BadAuthority(crate::AuthorityError::IpvFutureEmpty { offset: base_off })

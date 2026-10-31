@@ -117,6 +117,10 @@ impl FnoCatalog {
     /// # Errors
     /// Refuses malformed RDF values, conflicting descriptions and unresolved
     /// references. Indistinguishable duplicate facts are canonicalized once valid.
+    #[allow(
+        clippy::result_large_err,
+        reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+    )]
     pub fn try_new(data: FnoCatalogInput) -> Result<Self, FnoAdmissionError> {
         use purrdf_lex::{
             allocation::Resident,
@@ -162,6 +166,10 @@ impl FnoCatalog {
     /// assert!(matches!(refused.cause, ControlledError::Control("stopped")));
     /// assert_eq!(refused.input.document_iri, "urn:catalog");
     /// ```
+    #[allow(
+        clippy::result_large_err,
+        reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+    )]
     pub fn try_new_with_control<S, C>(
         data: FnoCatalogInput,
         storage: S,

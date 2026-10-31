@@ -301,10 +301,14 @@ pub fn encode_blank_label_with_memory<'a, S: Admission + ?Sized>(
         return Ok(Cow::Borrowed(label));
     }
     let encoded = memory.format_with_progress(&EnvelopeSpelling { label, scope })?;
-    debug_assert!(
-        is_valid_label_with_memory(&encoded, alphabet, memory)?,
-        "encode_blank_label must always produce a token legal under the target alphabet"
-    );
+    #[cfg(debug_assertions)]
+    {
+        let valid = is_valid_label_with_memory(&encoded, alphabet, memory)?;
+        debug_assert!(
+            valid,
+            "encode_blank_label must always produce a token legal under the target alphabet"
+        );
+    }
     Ok(Cow::Owned(encoded))
 }
 

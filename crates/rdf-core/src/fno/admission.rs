@@ -118,10 +118,10 @@ impl purrdf_hash::error::StructuredError for FnoAdmissionReason {
 impl purrdf_hash::error::StructuredError for FnoAdmissionError {
     purrdf_hash::error_visit! {
         @record self { input, reason } => "fno-admission" {
-            "input" => Record(&self.input), "reason" => Cause(match &self.reason {
-                super::FnoConstructionFailure::Semantic(reason) => &**reason as &dyn purrdf_hash::error::StructuredError,
-                super::FnoConstructionFailure::Storage(cause) => cause,
-                super::FnoConstructionFailure::Source(never)=>match *never {},
+            "input" => Record(&self.input), "reason" => Cause(match self.reason {
+                super::FnoConstructionFailure::Semantic(ref reason) => &**reason as &dyn purrdf_hash::error::StructuredError,
+                super::FnoConstructionFailure::Storage(ref cause) => cause,
+                super::FnoConstructionFailure::Source(never)=>match never {},
             }),
         }
     }
@@ -162,14 +162,14 @@ purrdf_lex::error_source!(FnoAdmissionReason => {
 });
 impl std::error::Error for FnoAdmissionError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match &self.reason {
-            super::FnoConstructionFailure::Semantic(reason) => Some(&**reason),
-            super::FnoConstructionFailure::Storage(cause) => Some(cause),
-            super::FnoConstructionFailure::Source(never) => match *never {},
-        }
+        std::error::Error::source(&self.reason)
     }
 }
 
+#[allow(
+    clippy::result_large_err,
+    reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+)]
 fn iri<S: Admission, C: Progress>(
     context: &mut Context<S, C>,
     subject: &Key<'_>,
@@ -188,6 +188,10 @@ fn iri<S: Admission, C: Progress>(
     Ok(())
 }
 
+#[allow(
+    clippy::result_large_err,
+    reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+)]
 fn text<S: Admission, C: Progress>(
     context: &mut Context<S, C>,
     subject: &Key<'_>,
@@ -213,6 +217,10 @@ fn text<S: Admission, C: Progress>(
     Ok(())
 }
 
+#[allow(
+    clippy::result_large_err,
+    reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+)]
 fn optional_text<S: Admission, C: Progress>(
     context: &mut Context<S, C>,
     subject: &Key<'_>,
@@ -225,6 +233,10 @@ fn optional_text<S: Admission, C: Progress>(
     Ok(())
 }
 
+#[allow(
+    clippy::result_large_err,
+    reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+)]
 fn same_text<S: Admission, C: Progress>(
     first: &TermValue,
     second: &TermValue,
@@ -370,6 +382,10 @@ enum Value<'a> {
 }
 
 impl Value<'_> {
+    #[allow(
+        clippy::result_large_err,
+        reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+    )]
     fn same<S: Admission, C: Progress>(
         self,
         other: Self,
@@ -498,6 +514,10 @@ impl<'a> Node<'a> {
     }
 }
 
+#[allow(
+    clippy::result_large_err,
+    reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+)]
 fn insert<'a, S: Admission, C: Progress>(
     context: &mut Context<S, C>,
     nodes: &mut Nodes<'a>,
@@ -526,6 +546,10 @@ fn insert<'a, S: Admission, C: Progress>(
     Ok(())
 }
 
+#[allow(
+    clippy::result_large_err,
+    reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+)]
 fn reference<S: Admission, C: Progress>(
     context: &mut Context<S, C>,
     subject: &Key<'_>,
@@ -545,6 +569,10 @@ fn reference<S: Admission, C: Progress>(
     Ok(())
 }
 
+#[allow(
+    clippy::result_large_err,
+    reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+)]
 pub(super) fn validate<'a, S: Admission, C: Progress>(
     context: &mut Context<S, C>,
     data: &'a FnoCatalogInput,
@@ -756,6 +784,10 @@ pub(super) struct Shared {
     classes: OrderedTable<&'static str, ()>,
 }
 
+#[allow(
+    clippy::result_large_err,
+    reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+)]
 fn shared_facts<'a, S: Admission, C: Progress>(
     context: &mut Context<S, C>,
     nodes: &Nodes<'a>,
@@ -779,16 +811,16 @@ fn shared_facts<'a, S: Admission, C: Progress>(
                 context.check(1)?;
                 match (property, value) {
                     (Property::Label, Value::Text(value)) if facts.label.is_none() => {
-                        facts.label = Some(context.term(value)?)
+                        facts.label = Some(context.term(value)?);
                     }
                     (Property::Description, Value::Text(value)) if facts.description.is_none() => {
-                        facts.description = Some(context.term(value)?)
+                        facts.description = Some(context.term(value)?);
                     }
                     (Property::Predicate, Value::Iri(value)) if facts.predicate.is_none() => {
-                        facts.predicate = Some(context.string(value)?)
+                        facts.predicate = Some(context.string(value)?);
                     }
                     (Property::SeeAlso, Value::Iri(value)) if facts.see_also.is_none() => {
-                        facts.see_also = Some(context.string(value)?)
+                        facts.see_also = Some(context.string(value)?);
                     }
                     _ => {}
                 }
@@ -799,6 +831,10 @@ fn shared_facts<'a, S: Admission, C: Progress>(
     Ok(shared)
 }
 
+#[allow(
+    clippy::result_large_err,
+    reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+)]
 fn canonical_text<S: Admission, C: Progress>(
     context: &mut Context<S, C>,
     value: &mut TermValue,
@@ -820,6 +856,10 @@ fn canonical_text<S: Admission, C: Progress>(
     Ok(())
 }
 
+#[allow(
+    clippy::result_large_err,
+    reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+)]
 fn canonical_optional<S: Admission, C: Progress>(
     context: &mut Context<S, C>,
     value: Option<&mut TermValue>,
@@ -830,6 +870,14 @@ fn canonical_optional<S: Admission, C: Progress>(
     Ok(())
 }
 
+#[allow(
+    clippy::iter_with_drain,
+    reason = "Retain the original vector allocation until its explicit destruction and admitted-capacity refund."
+)]
+#[allow(
+    clippy::result_large_err,
+    reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+)]
 pub(super) fn canonicalize<S: Admission, C: Progress>(
     context: &mut Context<S, C>,
     data: &mut FnoCatalogInput,
@@ -943,21 +991,21 @@ pub(super) fn canonicalize<S: Admission, C: Progress>(
     let mut mappings: Vec<FnMapping> = Vec::new();
     let mut original_mappings = core::mem::take(&mut data.mappings);
     for mut mapping in original_mappings.drain(..) {
-        if let Some(previous) = mappings.last_mut() {
-            if context.compare(&previous.node, &mapping.node)?.is_eq() {
-                for item in mapping.parameter_mappings.drain(..) {
-                    context.push(&mut previous.parameter_mappings, item)?;
-                }
-                for item in mapping.return_mappings.drain(..) {
-                    context.push(&mut previous.return_mappings, item)?;
-                }
-                context.sort(&mut previous.parameter_mappings)?;
-                context.dedup(&mut previous.parameter_mappings)?;
-                context.sort(&mut previous.return_mappings)?;
-                context.dedup(&mut previous.return_mappings)?;
-                context.release(mapping)?;
-                continue;
+        if let Some(previous) = mappings.last_mut()
+            && context.compare(&previous.node, &mapping.node)?.is_eq()
+        {
+            for item in mapping.parameter_mappings.drain(..) {
+                context.push(&mut previous.parameter_mappings, item)?;
             }
+            for item in mapping.return_mappings.drain(..) {
+                context.push(&mut previous.return_mappings, item)?;
+            }
+            context.sort(&mut previous.parameter_mappings)?;
+            context.dedup(&mut previous.parameter_mappings)?;
+            context.sort(&mut previous.return_mappings)?;
+            context.dedup(&mut previous.return_mappings)?;
+            context.release(mapping)?;
+            continue;
         }
         context.push(&mut mappings, mapping)?;
     }
@@ -966,6 +1014,10 @@ pub(super) fn canonicalize<S: Admission, C: Progress>(
     Ok(())
 }
 
+#[allow(
+    clippy::result_large_err,
+    reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+)]
 pub(super) fn construct<S: Admission, C: Progress>(
     context: &mut Context<S, C>,
     original: &FnoCatalogInput,
@@ -977,30 +1029,22 @@ pub(super) fn construct<S: Admission, C: Progress>(
     Ok(staged)
 }
 
-impl RetainedFields for Key<'_> {
-    fn retained_fields<S: Admission, C: Progress>(
-        &self,
-        _: &mut purrdf_lex::allocation::Memory<'_, S>,
-        progress: &mut C,
-    ) -> PhysicalResult<usize, C::Error> {
-        progress
-            .charge(1)
-            .map_err(purrdf_lex::control::ControlledError::Control)?;
-        Ok(0)
-    }
+// Admission indexes borrow the original input. Their keys and node handles own
+// no heap payload; reuse the reference census and its single work checkpoint.
+macro_rules! borrowed_retained_fields {
+    ($($kind:ty),+ $(,)?) => {$(
+        impl RetainedFields for $kind {
+            fn retained_fields<S: Admission, C: Progress>(
+                &self,
+                memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+                progress: &mut C,
+            ) -> PhysicalResult<usize, C::Error> {
+                <&Self as RetainedFields>::retained_fields(&self, memory, progress)
+            }
+        }
+    )+};
 }
-impl RetainedFields for Node<'_> {
-    fn retained_fields<S: Admission, C: Progress>(
-        &self,
-        _: &mut purrdf_lex::allocation::Memory<'_, S>,
-        progress: &mut C,
-    ) -> PhysicalResult<usize, C::Error> {
-        progress
-            .charge(1)
-            .map_err(purrdf_lex::control::ControlledError::Control)?;
-        Ok(0)
-    }
-}
+borrowed_retained_fields!(Key<'_>, Node<'_>);
 impl RetainedFields for Shared {
     fn retained_fields<S: Admission, C: Progress>(
         &self,

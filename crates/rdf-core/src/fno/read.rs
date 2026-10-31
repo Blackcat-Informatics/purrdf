@@ -20,6 +20,10 @@ use purrdf_iri::vocab::rdf::{FIRST, NIL, REST};
 use purrdf_lex::allocation::{Admission, OrderedTable, Resident, StorageError};
 use purrdf_lex::control::{ControlledError, Progress, Unmetered};
 
+#[allow(
+    clippy::large_enum_variant,
+    reason = "Inline acquired semantic operands and original provider failures must survive refusal without allocating an error wrapper."
+)]
 enum ReadFailure<R, E> {
     Construction(super::construction::Failure<FnoReadError, E>),
     Source(FnoReadSourceError<R>),
@@ -30,6 +34,10 @@ impl<R, E> From<super::construction::Failure<FnoReadError, E>> for ReadFailure<R
         Self::Construction(cause)
     }
 }
+#[allow(
+    clippy::result_large_err,
+    reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+)]
 fn domain<T, R, E>(result: ConstructionResult<T, FnoReadError, E>) -> ReadResult<T, R, E> {
     result.map_err(Into::into)
 }
@@ -83,6 +91,10 @@ impl FnoCatalog {
     ///     &source, "urn:ontology", Resident, |_| Err("stopped"));
     /// assert!(matches!(refused, Err(ControlledError::Control("stopped"))));
     /// ```
+    #[allow(
+        clippy::result_large_err,
+        reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+    )]
     pub fn from_dataset_with_control<D: DatasetView, S, C>(
         view: &D,
         ontology_iri: &str,
@@ -102,11 +114,11 @@ impl FnoCatalog {
             let result = read(&mut context, view, ontology_iri);
             if matches!(
                 &result,
-                Err(ReadFailure::Source(_))
-                    | Err(ReadFailure::Construction(ControlledError::Control(_)))
-                    | Err(ReadFailure::Construction(ControlledError::Native(
-                        FnoConstructionFailure::Storage(_)
-                    )))
+                Err(ReadFailure::Source(_)
+                    | ReadFailure::Construction(
+                        ControlledError::Control(_)
+                            | ControlledError::Native(FnoConstructionFailure::Storage(_))
+                    ))
             ) {
                 return result;
             }
@@ -160,6 +172,10 @@ impl FnoCatalog {
     }
 }
 
+#[allow(
+    clippy::result_large_err,
+    reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+)]
 fn collect<T, D: DatasetView, S: Admission, C: Progress>(
     context: &mut Context<S, C>,
     view: &D,
@@ -185,6 +201,10 @@ fn collect<T, D: DatasetView, S: Admission, C: Progress>(
     Ok(rows)
 }
 
+#[allow(
+    clippy::result_large_err,
+    reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+)]
 fn import<D: DatasetView, S: Admission, C: Progress>(
     context: &mut Context<S, C>,
     view: &D,
@@ -244,6 +264,14 @@ fn import<D: DatasetView, S: Admission, C: Progress>(
     Ok(at)
 }
 
+#[allow(
+    clippy::iter_with_drain,
+    reason = "Retain the original vector allocation until its explicit destruction and admitted-capacity refund."
+)]
+#[allow(
+    clippy::result_large_err,
+    reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+)]
 fn translate<I: ViewTermId, R, S: Admission, C: Progress>(
     context: &mut Context<S, C>,
     mut source: Vec<QuadIds<I>>,
@@ -268,6 +296,10 @@ fn translate<I: ViewTermId, R, S: Admission, C: Progress>(
     Ok(rows)
 }
 
+#[allow(
+    clippy::result_large_err,
+    reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+)]
 fn read<D: DatasetView, S: Admission, C: Progress>(
     context: &mut Context<S, C>,
     view: &D,
@@ -286,6 +318,14 @@ fn read<D: DatasetView, S: Admission, C: Progress>(
     result
 }
 
+#[allow(
+    clippy::iter_with_drain,
+    reason = "Retain the original vector allocation until its explicit destruction and admitted-capacity refund."
+)]
+#[allow(
+    clippy::result_large_err,
+    reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+)]
 fn read_snapshot<D: DatasetView, S: Admission, C: Progress>(
     context: &mut Context<S, C>,
     view: &D,
@@ -383,11 +423,11 @@ fn read_snapshot<D: DatasetView, S: Admission, C: Progress>(
     }
     for (at, value) in terms.iter().enumerate() {
         reader.context.check(1)?;
-        if let TermValue::Iri(iri) = value {
-            if reader.context.compare(iri.as_str(), NIL)?.is_eq() {
-                reader.nil = Some(at);
-                break;
-            }
+        if let TermValue::Iri(iri) = value
+            && reader.context.compare(iri.as_str(), NIL)?.is_eq()
+        {
+            reader.nil = Some(at);
+            break;
         }
     }
     reader
@@ -431,6 +471,10 @@ struct Reader<'a, 'm, R, S: Admission, C> {
 }
 
 impl<'a, R, S: Admission, C: Progress> Reader<'a, '_, R, S, C> {
+    #[allow(
+        clippy::result_large_err,
+        reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+    )]
     fn statement<T>(&mut self, row: QuadIds<usize>, reason: Shape) -> ReadResult<T, R, C::Error> {
         let row = QuadValues {
             s: self.context.term(&self.terms[row.s])?,
@@ -443,21 +487,33 @@ impl<'a, R, S: Admission, C: Progress> Reader<'a, '_, R, S, C> {
         };
         domain(self.context.refuse(FnoReadError::Statement { row, reason }))
     }
+    #[allow(
+        clippy::result_large_err,
+        reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+    )]
     fn objects(
         &mut self,
         subject: &TermValue,
         predicate: &str,
     ) -> ReadResult<Vec<&'a TermValue>, R, C::Error> {
         let mut values = Vec::new();
-        if let Some(props) = self.context.lookup(&self.index, &subject)? {
-            if let Some(objects) = self.context.lookup(props, &predicate)? {
-                for (&value, _) in objects.ordered() {
-                    self.context.push(&mut values, value)?;
-                }
+        if let Some(props) = self.context.lookup(&self.index, &subject)?
+            && let Some(objects) = self.context.lookup(props, &predicate)?
+        {
+            for (&value, _) in objects.ordered() {
+                self.context.push(&mut values, value)?;
             }
         }
         Ok(values)
     }
+    #[allow(
+        clippy::iter_with_drain,
+        reason = "Retain the original vector allocation until its explicit destruction and admitted-capacity refund."
+    )]
+    #[allow(
+        clippy::result_large_err,
+        reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+    )]
     fn field<T>(
         &mut self,
         subject: &TermValue,
@@ -480,24 +536,31 @@ impl<'a, R, S: Admission, C: Progress> Reader<'a, '_, R, S, C> {
             expected,
         }))
     }
+    #[allow(
+        clippy::result_large_err,
+        reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+    )]
     fn claim(
         &mut self,
         subject: &TermValue,
         predicate: &str,
         object: &TermValue,
     ) -> ReadResult<(), R, C::Error> {
-        if let Some(props) = self.context.lookup(&self.index, &subject)? {
-            if let Some(objects) = self.context.lookup(props, &predicate)? {
-                if let Some(rows) = self.context.lookup(objects, &object)? {
-                    for &row in rows {
-                        self.context.check(1)?;
-                        self.claimed[row] = true;
-                    }
-                }
+        if let Some(props) = self.context.lookup(&self.index, &subject)?
+            && let Some(objects) = self.context.lookup(props, &predicate)?
+            && let Some(rows) = self.context.lookup(objects, &object)?
+        {
+            for &row in rows {
+                self.context.check(1)?;
+                self.claimed[row] = true;
             }
         }
         Ok(())
     }
+    #[allow(
+        clippy::result_large_err,
+        reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+    )]
     fn scalar(
         &mut self,
         subject: &TermValue,
@@ -526,6 +589,10 @@ impl<'a, R, S: Admission, C: Progress> Reader<'a, '_, R, S, C> {
             Ok(None)
         }
     }
+    #[allow(
+        clippy::result_large_err,
+        reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+    )]
     fn iri(&mut self, subject: &TermValue, predicate: &str) -> ReadResult<String, R, C::Error> {
         match self.scalar(subject, predicate, true)? {
             Some(TermValue::Iri(value)) => Ok(value),
@@ -535,6 +602,10 @@ impl<'a, R, S: Admission, C: Progress> Reader<'a, '_, R, S, C> {
             }
         }
     }
+    #[allow(
+        clippy::result_large_err,
+        reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+    )]
     fn optional_iri(
         &mut self,
         subject: &TermValue,
@@ -549,6 +620,10 @@ impl<'a, R, S: Admission, C: Progress> Reader<'a, '_, R, S, C> {
             }
         }
     }
+    #[allow(
+        clippy::result_large_err,
+        reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+    )]
     fn literal(
         &mut self,
         subject: &TermValue,
@@ -565,11 +640,19 @@ impl<'a, R, S: Admission, C: Progress> Reader<'a, '_, R, S, C> {
         }
         Ok(value)
     }
+    #[allow(
+        clippy::result_large_err,
+        reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+    )]
     fn text(&mut self, subject: &TermValue, predicate: &str) -> ReadResult<TermValue, R, C::Error> {
         Ok(self
             .literal(subject, predicate, true)?
             .expect("required scalar was checked"))
     }
+    #[allow(
+        clippy::result_large_err,
+        reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+    )]
     fn plain(&mut self, subject: &TermValue, predicate: &str) -> ReadResult<String, R, C::Error> {
         let value = self.scalar(subject, predicate, true)?;
         if let Some(TermValue::Literal {
@@ -578,20 +661,22 @@ impl<'a, R, S: Admission, C: Progress> Reader<'a, '_, R, S, C> {
             language: None,
             direction: None,
         }) = &value
-        {
-            if self
+            && self
                 .context
                 .compare(datatype.as_str(), purrdf_xsd::datatype::XSD_STRING)?
                 .is_eq()
-            {
-                let result = self.context.string(lexical_form)?;
-                self.context.release(value)?;
-                return Ok(result);
-            }
+        {
+            let result = self.context.string(lexical_form)?;
+            self.context.release(value)?;
+            return Ok(result);
         }
         self.context.release(value)?;
         self.field(subject, predicate, Field::PlainString)
     }
+    #[allow(
+        clippy::result_large_err,
+        reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+    )]
     fn boolean(&mut self, subject: &TermValue, predicate: &str) -> ReadResult<bool, R, C::Error> {
         let value = self.scalar(subject, predicate, true)?;
         if let Some(TermValue::Literal {
@@ -600,54 +685,61 @@ impl<'a, R, S: Admission, C: Progress> Reader<'a, '_, R, S, C> {
             language: None,
             direction: None,
         }) = &value
-        {
-            if self
+            && self
                 .context
                 .compare(datatype.as_str(), purrdf_xsd::datatype::XSD_BOOLEAN)?
                 .is_eq()
+        {
+            let boolean = if self.context.compare(lexical_form.as_str(), "true")?.is_eq() {
+                Some(true)
+            } else if self
+                .context
+                .compare(lexical_form.as_str(), "false")?
+                .is_eq()
             {
-                let boolean = if self.context.compare(lexical_form.as_str(), "true")?.is_eq() {
-                    Some(true)
-                } else if self
-                    .context
-                    .compare(lexical_form.as_str(), "false")?
-                    .is_eq()
-                {
-                    Some(false)
-                } else {
-                    None
-                };
-                if let Some(boolean) = boolean {
-                    self.context.release(value)?;
-                    return Ok(boolean);
-                }
+                Some(false)
+            } else {
+                None
+            };
+            if let Some(boolean) = boolean {
+                self.context.release(value)?;
+                return Ok(boolean);
             }
         }
         self.context.release(value)?;
         self.field(subject, predicate, Field::Boolean)
     }
+    #[allow(
+        clippy::result_large_err,
+        reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+    )]
     fn subjects(&mut self, class: &str) -> ReadResult<Vec<&'a TermValue>, R, C::Error> {
         let selector = self.context.iri(class)?;
         let mut subjects = Vec::new();
         for (&subject, props) in self.index.ordered() {
             self.context.check(1)?;
-            if let Some(types) = self.context.lookup(props, &RDF_TYPE)? {
-                if self.context.lookup(types, &&selector)?.is_some() {
-                    self.context.push(&mut subjects, subject)?;
-                }
+            if let Some(types) = self.context.lookup(props, &RDF_TYPE)?
+                && self.context.lookup(types, &&selector)?.is_some()
+            {
+                self.context.push(&mut subjects, subject)?;
             }
         }
         self.context.release(selector)?;
         Ok(subjects)
     }
+    #[allow(
+        clippy::result_large_err,
+        reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+    )]
     fn typed(&mut self, subject: &TermValue, class: &str) -> ReadResult<(), R, C::Error> {
         let value = self.context.iri(class)?;
-        let mut found = false;
-        if let Some(props) = self.context.lookup(&self.index, &subject)? {
-            if let Some(types) = self.context.lookup(props, &RDF_TYPE)? {
-                found = self.context.lookup(types, &&value)?.is_some();
-            }
-        }
+        let found = if let Some(props) = self.context.lookup(&self.index, &subject)?
+            && let Some(types) = self.context.lookup(props, &RDF_TYPE)?
+        {
+            self.context.lookup(types, &&value)?.is_some()
+        } else {
+            false
+        };
         if found {
             self.claim(subject, RDF_TYPE, &value)?;
             domain(self.context.release(value))
@@ -657,6 +749,10 @@ impl<'a, R, S: Admission, C: Progress> Reader<'a, '_, R, S, C> {
             self.field(subject, RDF_TYPE, Field::Role { class })
         }
     }
+    #[allow(
+        clippy::result_large_err,
+        reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+    )]
     fn subject_iri(&mut self, subject: &TermValue) -> ReadResult<String, R, C::Error> {
         if let TermValue::Iri(value) = subject {
             domain(self.context.string(value))
@@ -664,6 +760,10 @@ impl<'a, R, S: Admission, C: Progress> Reader<'a, '_, R, S, C> {
             self.field(subject, RDF_TYPE, Field::Iri)
         }
     }
+    #[allow(
+        clippy::result_large_err,
+        reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+    )]
     fn blank(&mut self, subject: &TermValue) -> ReadResult<FnBlank, R, C::Error> {
         if let TermValue::Blank { label, scope } = subject {
             Ok(FnBlank {
@@ -674,6 +774,14 @@ impl<'a, R, S: Admission, C: Progress> Reader<'a, '_, R, S, C> {
             self.field(subject, RDF_TYPE, Field::Blank)
         }
     }
+    #[allow(
+        clippy::iter_with_drain,
+        reason = "Retain the original vector allocation until its explicit destruction and admitted-capacity refund."
+    )]
+    #[allow(
+        clippy::result_large_err,
+        reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+    )]
     fn list(
         &mut self,
         subject: &TermValue,
@@ -787,15 +895,23 @@ impl<'a, R, S: Admission, C: Progress> Reader<'a, '_, R, S, C> {
         self.context.release(members)?;
         Ok(values)
     }
+    #[allow(
+        clippy::iter_with_drain,
+        reason = "Retain the original vector allocation until its explicit destruction and admitted-capacity refund."
+    )]
+    #[allow(
+        clippy::result_large_err,
+        reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
+    )]
     fn catalog(&mut self, ontology: &str) -> ReadResult<FnoCatalogInput, R, C::Error> {
         let selector = self.context.iri(ontology)?;
         let mut documents = Vec::new();
         for (&subject, props) in self.index.ordered() {
             self.context.check(1)?;
-            if let Some(values) = self.context.lookup(props, &DCTERMS_IS_PART_OF)? {
-                if self.context.lookup(values, &&selector)?.is_some() {
-                    self.context.push(&mut documents, subject)?;
-                }
+            if let Some(values) = self.context.lookup(props, &DCTERMS_IS_PART_OF)?
+                && self.context.lookup(values, &&selector)?.is_some()
+            {
+                self.context.push(&mut documents, subject)?;
             }
         }
         self.context.release(selector)?;

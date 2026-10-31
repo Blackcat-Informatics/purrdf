@@ -331,31 +331,31 @@ fn run<S: Sink>(
         memory.admission_mut().checkpoint(1)?;
         match job {
             Job::Punct(text) => {
-                purrdf_lex::text_out::with_memory_progress(out, memory, |out| out.push_str(text))?
+                purrdf_lex::text_out::with_memory_progress(out, memory, |out| out.push_str(text))?;
             }
             Job::Key(key) => {
-                purrdf_lex::text_out::with_memory_progress(out, memory, |out| write_key(out, key))?
+                purrdf_lex::text_out::with_memory_progress(out, memory, |out| write_key(out, key))?;
             }
             Job::Term(term) => match term {
                 CdtTerm::Composite(inner) => out.composite(&mut jobs, inner.as_ref(), memory)?,
                 CdtTerm::TripleTerm(triple) => push_triple(&mut jobs, triple.as_ref(), memory)?,
                 CdtTerm::Iri(iri) => {
                     purrdf_lex::text_out::with_memory_progress(out, memory, |out| {
-                        write_iri(iri, out)
-                    })?
+                        write_iri(iri, out);
+                    })?;
                 }
                 CdtTerm::Blank(label) => {
                     purrdf_lex::text_out::with_memory_progress(out, memory, |out| {
-                        write_blank(label, out)
-                    })?
+                        write_blank(label, out);
+                    })?;
                 }
                 CdtTerm::Literal(literal) => {
                     purrdf_lex::text_out::with_memory_progress(out, memory, |out| {
-                        write_literal(out, literal)
-                    })?
+                        write_literal(out, literal);
+                    })?;
                 }
                 CdtTerm::Null => purrdf_lex::text_out::with_memory_progress(out, memory, |out| {
-                    out.push_str("null")
+                    out.push_str("null");
                 })?,
             },
         }

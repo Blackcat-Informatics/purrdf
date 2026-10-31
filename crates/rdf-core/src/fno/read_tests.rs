@@ -268,11 +268,7 @@ fn strict_reader_refuses_unreproducible_rows_and_retains_original_operands() {
             16 => "fno-read-returns",
             _ => unreachable!(),
         };
-        assert_eq!(
-            captured.code, expected,
-            "selection {selection}: {}",
-            &*error
-        );
+        assert_eq!(captured.code, expected, "selection {selection}: {}", *error);
         match error.as_ref() {
             FnoReadError::Field {
                 subject,
@@ -471,7 +467,7 @@ fn source_failures_and_rdf_statement_layers_never_publish_a_partial_catalog() {
             FnoCatalog::from_dataset(&source, &catalog.as_input().ontology_iri).unwrap_err(),
         );
         let FnoReadError::Statement { row, reason } = error.as_ref() else {
-            panic!("{}", &*error);
+            panic!("{}", *error);
         };
         assert_eq!(
             *reason,

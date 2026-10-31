@@ -891,10 +891,8 @@ pub(crate) fn try_fold_term_with_memory_inner<
         id,
         &mut (),
         |(), id, memory| {
-            if check_ready {
-                if let Some(cause) = view.read_error() {
-                    return Err(read_error(cause));
-                }
+            if check_ready && let Some(cause) = view.read_error() {
+                return Err(read_error(cause));
             }
             memory
                 .admission_mut()
@@ -902,20 +900,19 @@ pub(crate) fn try_fold_term_with_memory_inner<
                 .map_err(|cause| (storage_error.borrow_mut())(cause, memory))?;
             let guard = view.resolve(id).map_err(&mut read_error)?;
             let term = guard.term();
-            if check_ready {
-                if let Some(cause) = view.read_error() {
-                    return Err(read_error(cause));
-                }
+            if check_ready && let Some(cause) = view.read_error() {
+                return Err(read_error(cause));
             }
             let result = match term {
                 TermRef::Triple { s, p, o } => Ok(Nested::Triple(s, p, o)),
                 resolved => leaf(id, resolved, memory).map(Nested::Leaf),
             };
             drop(guard);
-            if check_ready && result.is_ok() {
-                if let Some(cause) = view.read_error() {
-                    return Err(read_error(cause));
-                }
+            if check_ready
+                && result.is_ok()
+                && let Some(cause) = view.read_error()
+            {
+                return Err(read_error(cause));
             }
             result
         },

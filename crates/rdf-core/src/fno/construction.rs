@@ -22,11 +22,9 @@ pub enum FnoConstructionFailure<N, R = core::convert::Infallible> {
     Semantic(N),
 }
 
-impl<N, R> From<StorageError> for FnoConstructionFailure<N, R> {
-    fn from(cause: StorageError) -> Self {
-        Self::Storage(cause)
-    }
-}
+purrdf_lex::variant_from!(impl<N, R> FnoConstructionFailure<N, R> {
+    Storage(StorageError)
+});
 
 impl<N: core::fmt::Display, R: core::fmt::Display> core::fmt::Display
     for FnoConstructionFailure<SharedOwned<N>, R>
@@ -273,7 +271,7 @@ impl<S: Admission, C: Progress> Context<S, C> {
         value.copy_fields(self)
     }
 
-    pub(super) fn refuse<T, N>(&mut self, reason: N) -> Result<T, N, C::Error> {
+    pub(super) fn refuse<T, N>(&self, reason: N) -> Result<T, N, C::Error> {
         Err(ControlledError::Native(FnoConstructionFailure::Semantic(
             reason,
         )))
@@ -407,35 +405,36 @@ impl<S: Admission, C: Progress> Context<S, C> {
         S: Send + Sync + 'static,
     {
         let refusal = |cause| ControlledError::Native(FnoConstructionFailure::Storage(cause));
-        let mut memory = if self.live == 0 {
-            Memory::new(&mut self.storage)
-        } else {
-            Memory::resume(&mut self.storage, self.live)
-        };
-        let retained = value
-            .retained_fields(&mut memory, &mut Unmetered)
-            .map_err(|cause| match cause {
-                ControlledError::Native(cause) => refusal(cause),
-                ControlledError::Control(never) => match never {},
-            })?;
-        let released = memory
-            .admitted_bytes()
-            .checked_sub(retained)
-            .ok_or_else(|| refusal(StorageError::SizeOverflow))?;
-        // A refused refund keeps its original grant. Preserve the first native
-        // cause and use that still-admitted credit before asking for growth.
-        if released != 0 {
-            let _ = memory.release_bytes(released);
+        {
+            let mut memory = if self.live == 0 {
+                Memory::new(&mut self.storage)
+            } else {
+                Memory::resume(&mut self.storage, self.live)
+            };
+            let retained = value
+                .retained_fields(&mut memory, &mut Unmetered)
+                .map_err(|cause| match cause {
+                    ControlledError::Native(cause) => refusal(cause),
+                    ControlledError::Control(never) => match never {},
+                })?;
+            let released = memory
+                .admitted_bytes()
+                .checked_sub(retained)
+                .ok_or_else(|| refusal(StorageError::SizeOverflow))?;
+            // A refused refund keeps its original grant. Preserve the first native
+            // cause and use that still-admitted credit before asking for growth.
+            if released != 0 {
+                let _ = memory.release_bytes(released);
+            }
+            let target = retained
+                .checked_add(SharedOwned::<T>::allocation_layout::<OwnedAdmission<S>>().size())
+                .ok_or_else(|| refusal(StorageError::SizeOverflow))?;
+            if target > memory.admitted_bytes() {
+                let growth = target - memory.admitted_bytes();
+                memory.add_bytes(growth).map_err(refusal)?;
+            }
+            self.live = memory.admitted_bytes();
         }
-        let target = retained
-            .checked_add(SharedOwned::<T>::allocation_layout::<OwnedAdmission<S>>().size())
-            .ok_or_else(|| refusal(StorageError::SizeOverflow))?;
-        if target > memory.admitted_bytes() {
-            let growth = target - memory.admitted_bytes();
-            memory.add_bytes(growth).map_err(refusal)?;
-        }
-        self.live = memory.admitted_bytes();
-        drop(memory);
         SharedOwned::try_from_admitted(value, self.storage)
             .map_err(|_| refusal(StorageError::AllocationFailed))
     }
@@ -497,7 +496,7 @@ impl<T: CopyFields> CopyFields for Vec<T> {
         &self,
         context: &mut Context<S, C>,
     ) -> Result<Self, N, C::Error> {
-        let mut result = Vec::new();
+        let mut result = Self::new();
         for value in self {
             context.check(1)?;
             let value = context.copy(value)?;
@@ -870,10 +869,9 @@ impl RetainedFields for FnoAdmissionReason {
         memory: &mut Memory<'_, S>,
         progress: &mut C,
     ) -> PhysicalResult<usize, C::Error> {
-        use FnoAdmissionReason as Reason;
         let sum = |a, b| add_layout(a, b);
         match self {
-            Reason::Iri {
+            Self::Iri {
                 subject,
                 predicate,
                 value,
@@ -884,7 +882,7 @@ impl RetainedFields for FnoAdmissionReason {
                 let c = value.retained_fields(memory, progress)?;
                 sum(sum(a, b)?, sum(c, cause.owned_text_bytes())?)
             }
-            Reason::ExpectedLiteral {
+            Self::ExpectedLiteral {
                 subject,
                 predicate,
                 value,
@@ -893,7 +891,7 @@ impl RetainedFields for FnoAdmissionReason {
                 let b = predicate.retained_fields(memory, progress)?;
                 sum(sum(a, b)?, value.retained_fields(memory, progress)?)
             }
-            Reason::Literal {
+            Self::Literal {
                 subject,
                 predicate,
                 cause,
@@ -902,8 +900,8 @@ impl RetainedFields for FnoAdmissionReason {
                 let b = predicate.retained_fields(memory, progress)?;
                 sum(sum(a, b)?, cause.retained_fields(memory, progress)?)
             }
-            Reason::ConflictingNode { subject } => subject.retained_fields(memory, progress),
-            Reason::Reference {
+            Self::ConflictingNode { subject } => subject.retained_fields(memory, progress),
+            Self::Reference {
                 subject,
                 predicate,
                 target,
@@ -970,17 +968,16 @@ impl RetainedFields for super::FnoReadError {
         memory: &mut Memory<'_, S>,
         progress: &mut C,
     ) -> PhysicalResult<usize, C::Error> {
-        use super::FnoReadError as Error;
         progress.charge(1).map_err(ControlledError::Control)?;
         match self {
-            Error::Document {
+            Self::Document {
                 ontology_iri,
                 candidates,
             } => {
                 let selector = ontology_iri.retained_fields(memory, progress)?;
                 add_layout(selector, candidates.retained_fields(memory, progress)?)
             }
-            Error::Field {
+            Self::Field {
                 subject,
                 predicate,
                 objects,
@@ -1000,7 +997,7 @@ impl RetainedFields for super::FnoReadError {
                     add_layout(objects, expected)?,
                 )
             }
-            Error::List {
+            Self::List {
                 subject,
                 predicate,
                 cause,
@@ -1011,7 +1008,7 @@ impl RetainedFields for super::FnoReadError {
                 let members = cause.members.retained_fields(memory, progress)?;
                 add_layout(add_layout(subject, predicate)?, add_layout(node, members)?)
             }
-            Error::Returns {
+            Self::Returns {
                 subject,
                 predicate,
                 head,
@@ -1023,15 +1020,15 @@ impl RetainedFields for super::FnoReadError {
                 let members = members.retained_fields(memory, progress)?;
                 add_layout(add_layout(subject, predicate)?, add_layout(head, members)?)
             }
-            Error::Statement { row, .. } => {
+            Self::Statement { row, .. } => {
                 let s = row.s.retained_fields(memory, progress)?;
                 let p = row.p.retained_fields(memory, progress)?;
                 let o = row.o.retained_fields(memory, progress)?;
                 let g = row.g.retained_fields(memory, progress)?;
                 add_layout(add_layout(s, p)?, add_layout(o, g)?)
             }
-            Error::Graph { graph } => graph.retained_fields(memory, progress),
-            Error::Admission(cause) => cause.retained_fields(memory, progress),
+            Self::Graph { graph } => graph.retained_fields(memory, progress),
+            Self::Admission(cause) => cause.retained_fields(memory, progress),
         }
     }
 }

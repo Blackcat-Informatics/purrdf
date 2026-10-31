@@ -147,10 +147,11 @@ pub fn with_memory_control<
             progress,
             failure: None,
         };
-        let mut child = Memory::resume(&mut admission, live);
-        let result = body(&mut child);
-        let live = child.admitted_bytes();
-        drop(child);
+        let (result, live) = {
+            let mut child = Memory::resume(&mut admission, live);
+            let result = body(&mut child);
+            (result, child.admitted_bytes())
+        };
         let result = if result.is_ok() {
             match admission.checkpoint(0) {
                 Ok(()) => result,

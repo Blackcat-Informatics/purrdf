@@ -44,6 +44,7 @@ impl Admission for Account {
         }
         ledger.live = live;
         ledger.peak = ledger.peak.max(live);
+        drop(ledger);
         Ok(())
     }
 }

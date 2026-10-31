@@ -73,19 +73,15 @@ fn owned_term_leaf<D: DatasetView + ?Sized, C: ?Sized, E>(
             language,
             direction,
         } => {
-            if check_ready {
-                if let Some(cause) = view.read_error() {
-                    return Err(lookup_error(TermLookupError::Read(cause)));
-                }
+            if check_ready && let Some(cause) = view.read_error() {
+                return Err(lookup_error(TermLookupError::Read(cause)));
             }
             let guard = view
                 .resolve(datatype)
                 .map_err(|cause| lookup_error(TermLookupError::Read(cause)))?;
             let term = guard.term();
-            if check_ready {
-                if let Some(cause) = view.read_error() {
-                    return Err(lookup_error(TermLookupError::Read(cause)));
-                }
+            if check_ready && let Some(cause) = view.read_error() {
+                return Err(lookup_error(TermLookupError::Read(cause)));
             }
             let TermRef::Iri(datatype) = term else {
                 return Err(lookup_error(TermLookupError::ForeignId));
@@ -97,10 +93,8 @@ fn owned_term_leaf<D: DatasetView + ?Sized, C: ?Sized, E>(
                 direction,
             };
             drop(guard);
-            if check_ready {
-                if let Some(cause) = view.read_error() {
-                    return Err(lookup_error(TermLookupError::Read(cause)));
-                }
+            if check_ready && let Some(cause) = view.read_error() {
+                return Err(lookup_error(TermLookupError::Read(cause)));
             }
             value
         }
