@@ -303,7 +303,15 @@ pub fn encode_blank_label_with_memory<'a, S: Admission + ?Sized>(
     let encoded = memory.format_with_progress(&EnvelopeSpelling { label, scope })?;
     #[cfg(debug_assertions)]
     {
-        let valid = is_valid_label_with_memory(&encoded, alphabet, memory)?;
+        let valid = match is_valid_label_with_memory(&encoded, alphabet, memory) {
+            Ok(valid) => valid,
+            Err(cause) => {
+                // Destroy the unpublished string before refunding its original
+                // grant. A cleanup refusal cannot replace the validation cause.
+                let _ = memory.release_string(encoded);
+                return Err(cause);
+            }
+        };
         debug_assert!(
             valid,
             "encode_blank_label must always produce a token legal under the target alphabet"
@@ -1133,6 +1141,67 @@ mod tests {
                     );
                 }
             }
+        }
+        #[cfg(debug_assertions)]
+        {
+            use purrdf_lex::allocation::{Memory, Resident};
+            use purrdf_lex::control::{ControlledError, with_memory_control};
+
+            let mut storage = Resident;
+            let mut memory = Memory::new(&mut storage);
+            let mut callbacks = 0;
+            let encoded = with_memory_control(
+                &mut memory,
+                &mut |_| {
+                    callbacks += 1;
+                    Ok::<(), &'static str>(())
+                },
+                |memory| {
+                    super::encode_blank_label_with_memory(
+                        "a b",
+                        BlankScope(1),
+                        LabelAlphabet::BlankNodeLabel,
+                        memory,
+                    )
+                },
+            )
+            .unwrap();
+            let Cow::Owned(encoded) = encoded else {
+                panic!("a scoped label must retain its owned envelope");
+            };
+            assert!(memory.admitted_bytes() > 0);
+            memory.release_string(encoded).unwrap();
+            assert_eq!(memory.admitted_bytes(), 0);
+
+            // The healthy boundary's final callback publishes success. Refuse
+            // the preceding callback, inside validation of the formatted token.
+            let stop_at = callbacks - 1;
+            let mut seen = 0;
+            let refused = with_memory_control(
+                &mut memory,
+                &mut |_| {
+                    seen += 1;
+                    if seen == stop_at {
+                        Err("encoded validation stopped")
+                    } else {
+                        Ok(())
+                    }
+                },
+                |memory| {
+                    super::encode_blank_label_with_memory(
+                        "a b",
+                        BlankScope(1),
+                        LabelAlphabet::BlankNodeLabel,
+                        memory,
+                    )
+                },
+            );
+            assert_eq!(
+                refused,
+                Err(ControlledError::Control("encoded validation stopped"))
+            );
+            assert_eq!(seen, stop_at, "cleanup must not poll after refusal");
+            assert_eq!(memory.admitted_bytes(), 0);
         }
     }
 

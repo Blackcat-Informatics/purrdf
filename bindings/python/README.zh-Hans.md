@@ -814,19 +814,41 @@ rows = purrdf.gts_relational_rows_from_bytes(gts_bytes)
 rows["terms"], rows["quads"], rows["reifiers"], rows["annotations"], rows["blobs"]
 ```
 
-`gts_relational_rows_from_bytes` 返回一个 `GtsRelationalRows` 字典，含五个行列表。
-`gts_to_sqlite(data, path)`、`gts_to_duckdb(data, path)` 与
-`gts_to_parquet(data, out_dir)` 把这五张表——`terms`、`quads`、`reifiers`、
-`annotations`、`blobs`——按投影自身的行顺序写出，因此把同一个容器导出两次会得到相同的
-内容。`gts_to_parquet` 每张表写一个文件，并按表的顺序返回它们的路径。
+`gts_relational_rows_from_bytes` 是折叠检查接口。规范导出使用
+`gts_columnar_rows_from_bytes(data, blob_limits=...)` 和
+`gts_columnar_parquet_from_bytes(data, blob_limits=...)`，返回 `(output, report)`。
+每次导出必须明确提供 `GtsBlobLimits` 的全部五个关键字字段，或字符串 `"unbounded"`。
+每个字段都允许用 `None` 表示无限制。
 
-SQLite 只需要标准库。另外两个在对应的 extra 缺失时会抛出点名该 extra 的
-`ModuleNotFoundError`：
-
-```bash
-pip install 'purrdf[duckdb]'    # gts_to_duckdb
-pip install 'purrdf[parquet]'   # gts_to_parquet
+```python
+policy = purrdf.GtsBlobLimits(
+    max_encoded_bytes=16_000_000,
+    max_decoded_bytes=64_000_000,
+    max_total_decoded_bytes=256_000_000,
+    max_metadata_bytes=65_536,
+    max_frame_decoded_bytes=64_000_000,
+)
+result = purrdf.gts_to_parquet(gts_bytes, "tables", blob_limits=policy)
+print(result.paths, result.report.losses, result.report.omissions)
 ```
+
+`gts_to_sqlite`、`gts_to_duckdb` 和 `gts_to_parquet` 返回冻结的 `GtsExportResult`。
+`paths` 是按规范表顺序排列的路径元组，`report` 始终存在。明确的 blob 限额、缺少
+编解码器、密钥或解密器，以及最终没有获准内联数据的引用，会产生类型化遗漏和带位置的
+`gts` 到 `columnar-v1` 损失。遗漏对象保留原始原生原因的 `kind`/`value` 结构快照，
+以及源帧、摘要证明、限额和用量。不透明的 `pub` 值遵循 GTS 的 `pub:any` 信封语法；
+已识别的映射字段按其声明类型进行检查。存在的 blob 载荷必须为字节串；外部 blob 必须声明
+有效摘要。损坏、认证失败、无效的已识别元数据字段、存储失败、RDF 错误和
+非 blob 帧拒绝仍然是硬错误。
+
+此导出仍会保留完整数据：获准 blob、编解码中间缓冲区、关系行和 Parquet 文件都会占用
+内存。逻辑用量计数只描述准入计费，不包含数据集、帧、索引和分配器的内存。
+`max_frame_decoded_bytes` 约束变换帧的解码缓冲区；原始或直接 RDF 行，以及读取器的
+CBOR/帧工作内存均不计入该项。
+有界的端到端流式处理尚未完成；该策略不代表进程内存上限。
+
+SQLite 使用标准库。DuckDB 需要 `pip install 'purrdf[duckdb]'`。
+Parquet 写入使用原生编解码器；`purrdf[parquet]` 提供读取文件的 PyArrow。
 
 同样的入口点也归组在 `purrdf.gts` 之下以便发现。
 

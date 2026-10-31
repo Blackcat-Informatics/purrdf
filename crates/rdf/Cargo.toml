@@ -172,6 +172,12 @@ name = "native_codecs"
 harness = false
 
 [[bench]]
+# Current-thread allocation demand over the whole public GTS import. Shares its
+# fixture and measurement with the residency regression; report-only, no timing.
+name = "gts_import_alloc"
+harness = false
+
+[[bench]]
 # One-shot allocation/count/retained/peak-byte baseline for expanded JSON-LD parse and
 # serialization. Separate from the timed benches so allocator atomics do not perturb timing.
 name = "jsonld_alloc"

@@ -1140,7 +1140,26 @@ mod tests {
                 ][selection]
             );
             if selection == 0 || selection == 2 {
-                assert!(std::error::Error::source(&error.reason).is_some());
+                let FnoConstructionFailure::Semantic(reason) = &error.reason else {
+                    panic!("expected the original semantic admission reason");
+                };
+                let source = std::error::Error::source(&**reason)
+                    .expect("the semantic reason retains its native cause");
+                match &**reason {
+                    FnoAdmissionReason::Iri { cause, .. } => {
+                        let original = source
+                            .downcast_ref::<purrdf_iri::IriError>()
+                            .expect("the original IRI cause remains downcastable");
+                        assert!(core::ptr::eq(original, cause));
+                    }
+                    FnoAdmissionReason::Literal { cause, .. } => {
+                        let original = source
+                            .downcast_ref::<crate::RdfDiagnostic>()
+                            .expect("the original literal cause remains downcastable");
+                        assert!(core::ptr::eq(original, cause));
+                    }
+                    _ => panic!("expected an IRI or literal admission reason"),
+                }
             }
             assert_eq!(
                 FnoCatalog::try_new(healthy.as_input().clone()).unwrap(),

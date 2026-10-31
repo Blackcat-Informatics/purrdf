@@ -4,10 +4,11 @@
 //! Exact-source, certified-RDF, and source-ordinal mismatch separation.
 
 use purrdf::{
-    CanonicalMetadataInput, CertifiedPurrpckSource, ContentDigest, CorpusTarget, EmbeddingBuilder,
-    EmbeddingError, EmbeddingTarget, EmbeddingView, MatrixInput, MatrixRow, PackView,
-    PrefixPostprocessing, ProjectionSpec, RdfDatasetBuilder, RdfDatasetTarget, RdfTermTarget,
-    TargetSet, TermValue, verify_embedding, verify_embedding_source,
+    CanonicalMetadataInput, CertifiedEmbeddingSource, ContentDigest, CorpusTarget,
+    EmbeddingBuilder, EmbeddingError, EmbeddingSource, EmbeddingTarget, EmbeddingView, MatrixInput,
+    MatrixRow, PackView, PrefixPostprocessing, ProjectionSpec, RdfDatasetBuilder, RdfDatasetTarget,
+    RdfTermTarget, SourceAttachmentError, TargetSet, TermValue, verify_embedding,
+    verify_embedding_source,
 };
 use purrdf_core::purremb_fixture::{Identities, read_u64, reseal, section_span};
 const SECTION_SOURCE: u32 = 1;
@@ -15,6 +16,7 @@ const SECTION_TARGETS: u32 = 3;
 
 struct Fixture {
     source_bytes: Vec<u8>,
+    columnar_files: Option<purrdf::columnar::ParquetFiles>,
     artifact_bytes: Vec<u8>,
     dataset_target: EmbeddingTarget,
     corpus_target: EmbeddingTarget,
@@ -23,6 +25,13 @@ struct Fixture {
 const FX: Identities = Identities::at("https://example.org/source/");
 
 fn fixture(extra_targets: Vec<EmbeddingTarget>) -> Fixture {
+    source_fixture(extra_targets, None)
+}
+
+fn source_fixture(
+    extra_targets: Vec<EmbeddingTarget>,
+    compression: Option<purrdf::columnar::Compression>,
+) -> Fixture {
     let mut dataset = RdfDatasetBuilder::new();
     let subject = dataset.intern_iri("https://example.org/source/s").unwrap();
     let predicate = dataset.intern_iri("https://example.org/source/p").unwrap();
@@ -30,7 +39,17 @@ fn fixture(extra_targets: Vec<EmbeddingTarget>) -> Fixture {
     dataset.push_quad(subject, predicate, object, None).unwrap();
     let dataset = dataset.freeze().expect("dataset");
     let (source, source_bytes) =
-        CertifiedPurrpckSource::from_dataset(&dataset).expect("source pack");
+        CertifiedEmbeddingSource::from_dataset(&dataset).expect("source pack");
+    let columnar_files = compression.map(|compression| {
+        let mut blobs = purrdf::ContentStore::new();
+        blobs.insert(b"source-only payload".to_vec());
+        purrdf::columnar::write(&*dataset, &blobs, compression)
+            .unwrap()
+            .files
+    });
+    let source = columnar_files.as_ref().map_or(source, |files| {
+        CertifiedEmbeddingSource::certify(EmbeddingSource::Columnar(files)).unwrap()
+    });
     let dataset_target = source.dataset_target(true).expect("dataset target");
     let corpus_target = CorpusTarget {
         manifest_digest: ContentDigest::of(b"manifest"),
@@ -70,6 +89,7 @@ fn fixture(extra_targets: Vec<EmbeddingTarget>) -> Fixture {
     builder.add_f32_matrix(matrix);
     Fixture {
         source_bytes,
+        columnar_files,
         artifact_bytes: builder.build().expect("artifact").bytes,
         dataset_target,
         corpus_target,
@@ -81,24 +101,34 @@ fn source_length_and_exact_digest_mismatches_are_distinct() {
     let fixture = fixture(Vec::new());
     let mut view = EmbeddingView::from_bytes(&fixture.artifact_bytes).expect("view");
     verify_embedding(&mut view).expect("artifact integrity");
-    verify_embedding_source(&view, &fixture.source_bytes).expect("exact source");
+    verify_embedding_source(&view, EmbeddingSource::Purrpck(&fixture.source_bytes))
+        .expect("exact source");
 
     let short = &fixture.source_bytes[..fixture.source_bytes.len() - 1];
     assert!(matches!(
-        verify_embedding_source(&view, short),
-        Err(EmbeddingError::SourceLengthMismatch { .. })
+        verify_embedding_source(&view, EmbeddingSource::Purrpck(short)),
+        Err(SourceAttachmentError::Embedding(
+            EmbeddingError::SourceLengthMismatch { .. }
+        ))
     ));
     let mut changed = fixture.source_bytes.clone();
     changed[0] ^= 1;
     assert!(matches!(
-        verify_embedding_source(&view, &changed),
-        Err(EmbeddingError::DigestMismatch { .. })
+        verify_embedding_source(&view, EmbeddingSource::Purrpck(&changed)),
+        Err(SourceAttachmentError::Embedding(
+            EmbeddingError::DigestMismatch { .. }
+        ))
     ));
 }
 
 #[test]
 fn attachment_verification_detects_a_wrong_rdf_claim() {
-    let fixture = fixture(Vec::new());
+    for compression in [None, Some(purrdf::columnar::Compression::Uncompressed)] {
+        assert_wrong_rdf_claim(&source_fixture(Vec::new(), compression));
+    }
+}
+
+fn assert_wrong_rdf_claim(fixture: &Fixture) {
     let old_order = fixture.dataset_target.id < fixture.corpus_target.id;
     let (wrong_digest, replacement) = (1u32..=1024)
         .map(|counter| {
@@ -141,8 +171,16 @@ fn attachment_verification_detects_a_wrong_rdf_claim() {
     verify_embedding(&mut view).expect("artifact is internally self-consistent");
 
     assert!(matches!(
-        verify_embedding_source(&view, &fixture.source_bytes),
-        Err(EmbeddingError::DigestMismatch { .. })
+        verify_embedding_source(
+            &view,
+            fixture.columnar_files.as_ref().map_or(
+                EmbeddingSource::Purrpck(&fixture.source_bytes),
+                EmbeddingSource::Columnar,
+            )
+        ),
+        Err(SourceAttachmentError::Embedding(
+            EmbeddingError::DigestMismatch { .. }
+        ))
     ));
 }
 
@@ -159,14 +197,160 @@ fn attachment_verification_rejects_a_stale_source_ordinal() {
         .id_by_value(&TermValue::Iri("https://example.org/source/o".into()))
         .expect("object ordinal");
     assert_ne!(subject, object);
-    let stale = RdfTermTarget::Iri("https://example.org/source/s".into())
-        .into_target(true, Some(object))
-        .expect("stale ordinal target");
-    let fixture = fixture(vec![stale]);
-    let mut view = EmbeddingView::from_bytes(&fixture.artifact_bytes).expect("view");
-    verify_embedding(&mut view).expect("artifact integrity");
+    for ordinal in [object, 0] {
+        let stale = RdfTermTarget::Iri("https://example.org/source/s".into())
+            .into_target(true, Some(ordinal))
+            .expect("stale ordinal target");
+        let fixture = fixture(vec![stale]);
+        let mut view = EmbeddingView::from_bytes(&fixture.artifact_bytes).expect("view");
+        verify_embedding(&mut view).expect("artifact integrity");
+        assert!(matches!(
+            verify_embedding_source(&view, EmbeddingSource::Purrpck(&fixture.source_bytes)),
+            Err(SourceAttachmentError::Embedding(
+                EmbeddingError::OrdinalMismatch { .. }
+            ))
+        ));
+    }
+}
+
+#[test]
+fn columnar_manifest_binds_every_actual_file_in_normative_order() {
+    use purrdf::columnar::{Compression, Table, source_manifest};
+    for compression in [Compression::Uncompressed, Compression::Zstd] {
+        let fixture = source_fixture(Vec::new(), Some(compression));
+        let files = fixture.columnar_files.as_ref().unwrap();
+        let manifest = source_manifest(files).unwrap();
+        assert_eq!(&manifest[..8], b"PURRCOLM");
+        assert_eq!(&manifest[8..12], &1_u32.to_le_bytes());
+        assert_eq!(&manifest[12..16], &5_u32.to_le_bytes());
+        let mut offset = 16;
+        for table in Table::ALL {
+            let name_length = read_u64(&manifest, offset) as usize;
+            offset += 8;
+            assert_eq!(
+                &manifest[offset..offset + name_length],
+                table.file_name().as_bytes()
+            );
+            offset += name_length;
+            assert_eq!(read_u64(&manifest, offset), files.get(table).len() as u64);
+            offset += 8;
+            assert_eq!(
+                &manifest[offset..offset + 32],
+                ContentDigest::of(files.get(table)).as_bytes()
+            );
+            offset += 32;
+        }
+        assert_eq!(offset, manifest.len());
+        let mut view = EmbeddingView::from_bytes(&fixture.artifact_bytes).unwrap();
+        verify_embedding(&mut view).unwrap();
+        assert_eq!(view.source().source_length(), manifest.len() as u64);
+        assert_eq!(
+            view.source().source_exact_digest(),
+            ContentDigest::of(&manifest)
+        );
+        let report = verify_embedding_source(&view, EmbeddingSource::Columnar(files)).unwrap();
+        assert_eq!(
+            report.source_format(),
+            purrdf::EmbeddingSourceFormat::ColumnarV1
+        );
+        assert_eq!(report.ordinals_checked(), 0);
+        assert!(matches!(
+            verify_embedding_source(&view, EmbeddingSource::Purrpck(&fixture.source_bytes)),
+            Err(SourceAttachmentError::FormatMismatch { .. })
+        ));
+
+        for index in 0..Table::ALL.len() {
+            let mut changed = files.clone().into_array();
+            changed[index][0] ^= 1;
+            let changed = purrdf::columnar::ParquetFiles::from_array(changed);
+            assert!(matches!(
+                verify_embedding_source(&view, EmbeddingSource::Columnar(&changed)),
+                Err(SourceAttachmentError::Embedding(
+                    EmbeddingError::DigestMismatch { .. }
+                ))
+            ));
+        }
+
+        // A valid blob-only replacement preserves RDF but changes exact identity.
+        let read = purrdf::columnar::read(files).unwrap();
+        let mut blobs = read.blobs;
+        blobs.insert(b"another payload".to_vec());
+        let changed = purrdf::columnar::write(&*read.dataset, &blobs, compression).unwrap();
+        let certificate =
+            CertifiedEmbeddingSource::certify(EmbeddingSource::Columnar(&changed.files)).unwrap();
+        assert_eq!(
+            certificate.certified_rdf_digest(),
+            report.certified_rdf_digest()
+        );
+        assert_ne!(certificate.source_exact_digest(), report.exact_digest());
+        assert!(matches!(
+            verify_embedding_source(&view, EmbeddingSource::Columnar(&changed.files)),
+            Err(SourceAttachmentError::Embedding(
+                EmbeddingError::DigestMismatch { .. }
+            ))
+        ));
+    }
+}
+
+#[test]
+fn columnar_empty_tables_require_five_valid_files_and_preserve_native_causes() {
+    use purrdf::columnar::{Compression, ParquetFiles, Table};
+    let dataset = RdfDatasetBuilder::new().freeze().unwrap();
+    let files = purrdf::columnar::write(
+        &*dataset,
+        &purrdf::ContentStore::new(),
+        Compression::Uncompressed,
+    )
+    .unwrap()
+    .files;
+    let certificate = CertifiedEmbeddingSource::certify(EmbeddingSource::Columnar(&files)).unwrap();
+    let (pack, _) = CertifiedEmbeddingSource::from_dataset(&dataset).unwrap();
+    assert_eq!(
+        certificate.certified_rdf_digest(),
+        pack.certified_rdf_digest()
+    );
+    for index in 0..Table::ALL.len() {
+        let mut missing = files.clone().into_array();
+        missing[index].clear();
+        let missing = ParquetFiles::from_array(missing);
+        let error =
+            CertifiedEmbeddingSource::certify(EmbeddingSource::Columnar(&missing)).unwrap_err();
+        drop(missing);
+        let SourceAttachmentError::Columnar(cause) = &error else {
+            panic!("native Columnar refusal")
+        };
+        let source = std::error::Error::source(&error).unwrap();
+        assert!(std::ptr::eq(
+            source
+                .downcast_ref::<purrdf::columnar::ColumnarError>()
+                .unwrap(),
+            cause.as_ref()
+        ));
+        let capture = purrdf_testkit::error_capture::Capture::read(&error);
+        assert_eq!(capture.code, "purremb-attachment-columnar");
+    }
+}
+
+#[test]
+fn exact_columnar_files_still_require_complete_strict_validation() {
+    use purrdf::columnar::{ColumnarOrdinal, Compression, ParquetFiles};
+    let fixture = source_fixture(Vec::new(), Some(Compression::Uncompressed));
+    let mut files = fixture.columnar_files.unwrap().into_array();
+    // A valid requested term cannot excuse a later invalid blob table.
+    files[4].clear();
+    let files = ParquetFiles::from_array(files);
+    assert!(purrdf::columnar::read_with_ordinals(&files, &[ColumnarOrdinal::Term(0)]).is_err());
+    let mut artifact = fixture.artifact_bytes;
+    let manifest = purrdf::columnar::source_manifest(&files).unwrap();
+    let digest = ContentDigest::of(&manifest);
+    let (offset, _) = section_span(&artifact, SECTION_SOURCE, 0);
+    artifact[offset + 24..offset + 56].copy_from_slice(digest.as_bytes());
+    artifact[96..128].copy_from_slice(digest.as_bytes());
+    reseal(&mut artifact, &[(SECTION_SOURCE, 0)]);
+    let mut view = EmbeddingView::from_bytes(&artifact).unwrap();
+    verify_embedding(&mut view).unwrap();
     assert!(matches!(
-        verify_embedding_source(&view, &fixture.source_bytes),
-        Err(EmbeddingError::OrdinalMismatch { .. })
+        verify_embedding_source(&view, EmbeddingSource::Columnar(&files)),
+        Err(SourceAttachmentError::Columnar(_))
     ));
 }

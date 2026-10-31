@@ -120,12 +120,22 @@ from purrdf import gts_relational_rows_from_bytes
 rows = gts_relational_rows_from_bytes(gts_bytes)  # terms, quads, reifiers, annotations, blobs
 ```
 
-`gts_to_sqlite(data, path)`, `gts_to_duckdb(data, path)` and
-`gts_to_parquet(data, out_dir)` write those same five tables out, in the
-projection's own row order — so exporting a container twice produces the same
-content. SQLite needs nothing beyond the standard library; the other two raise
-`ModuleNotFoundError` naming the extra to install (`purrdf[duckdb]`,
-`purrdf[parquet]`).
+Canonical exports use `gts_columnar_rows_from_bytes(data, blob_limits=...)` or
+`gts_columnar_parquet_from_bytes(data, blob_limits=...)`, returning `(output, report)`.
+`gts_to_sqlite`, `gts_to_duckdb` and `gts_to_parquet` require the same policy and
+return a frozen result with `paths` and an always-present `report`:
+
+```python
+result = purrdf.gts_to_parquet(gts_bytes, "tables", blob_limits="unbounded")
+print(result.paths, result.report.losses, result.report.omissions)
+```
+
+Use `GtsBlobLimits` with all five explicit fields for caller-chosen byte ceilings;
+`None` makes an individual ceiling unbounded. Typed omissions retain native
+causes and source locations. Corruption, authentication, storage, RDF and non-blob
+frame failures remain hard errors. The export remains eager; bounded end-to-end
+streaming is unfinished. SQLite uses the standard library, DuckDB requires
+`purrdf[duckdb]`, and native Parquet writing needs no extra encoder.
 
 ## Graph, tabular, and research-object archives
 

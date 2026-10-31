@@ -407,7 +407,7 @@ fn subdivide(
 mod tests {
     use super::super::{TableReader, read_table};
     use super::*;
-    use purrdf_core::{ContentStore, RdfDatasetBuilder, RdfLiteral};
+    use purrdf_core::{ContentStore, DatasetView, RdfDatasetBuilder, RdfLiteral};
 
     #[test]
     fn small_rows_retain_column_sized_writer_scratch() {
@@ -612,6 +612,29 @@ mod tests {
                     .files,
                 original.files
             );
+            // The last statement spans physical groups and must keep its
+            // original table-global ordinal through dictionary reconstruction.
+            let evidence = crate::read_with_ordinals(
+                &files,
+                &[
+                    crate::ColumnarOrdinal::Quad(23),
+                    crate::ColumnarOrdinal::Term(0),
+                ],
+            )
+            .unwrap();
+            let Some(crate::ColumnarOrdinalValue::Quad(quad)) =
+                evidence.get(crate::ColumnarOrdinal::Quad(23))
+            else {
+                panic!("requested statement")
+            };
+            let term_value = evidence.read().dataset.as_ref().term_value(quad.o);
+            let expected = dataset
+                .quads()
+                .map(|quad| dataset.as_ref().term_value(quad.o))
+                .max()
+                .unwrap();
+            assert_eq!(term_value, expected);
+            assert!(evidence.get(crate::ColumnarOrdinal::Quad(0)).is_none());
 
             // Both physical groups are valid, but duplicating their boundary row
             // must fail semantic ordering across the released group boundary.
@@ -643,7 +666,11 @@ mod tests {
             let duplicate = finish_file(Table::Quads, 2, &groups, duplicate).unwrap();
             let mut damaged = files.into_array();
             damaged[1] = duplicate;
-            assert!(crate::read(&crate::ParquetFiles::from_array(damaged)).is_err());
+            let damaged = crate::ParquetFiles::from_array(damaged);
+            assert!(crate::read(&damaged).is_err());
+            assert!(
+                crate::read_with_ordinals(&damaged, &[crate::ColumnarOrdinal::Quad(0)]).is_err()
+            );
         }
     }
 }

@@ -80,7 +80,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use purrdf::{
-    AppliedStage, CanonicalMetadataInput, CertifiedPurrpckSource, DimensionalityPolicy,
+    AppliedStage, CanonicalMetadataInput, CertifiedEmbeddingSource, DimensionalityPolicy,
     DistanceMetric, EmbeddingBuilder, EmbeddingFamilyContract, MatrixInput, MatrixRow,
     PrefixPostprocessing, ProjectionSpec, RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfTermTarget,
     TargetId, TargetSet, TargetSetId, TermValue, VectorDtype, VectorSpaceId,
@@ -203,7 +203,8 @@ fn artifact() -> (
 ) {
     let dimension = 2u32;
     let empty = RdfDatasetBuilder::new().freeze().expect("an empty dataset");
-    let (source, _) = CertifiedPurrpckSource::from_dataset(&empty).expect("the source pack seals");
+    let (source, _) =
+        CertifiedEmbeddingSource::from_dataset(&empty).expect("the source pack seals");
 
     let mut targets = Vec::with_capacity(CORPUS.len());
     let mut bindings = Vec::with_capacity(CORPUS.len());

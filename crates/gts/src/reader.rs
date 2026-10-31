@@ -11,6 +11,7 @@
 //! `"unverified"` and `encrypt`-class frames degrade to `missing-key` opaque
 //! nodes. Callers that hold content keys can use [`read_with_options`].
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use crate::{FastMap, FastSet};
@@ -40,7 +41,8 @@ use crate::model::{
 use crate::reader_index::DigestIndex;
 use crate::reader_layout::{IndexRecord, check_index_mmr, layout_check};
 use crate::reader_rows::{
-    RowDecode, RowError, check_quad_positions, decode_annotation_row, decode_reifier_row,
+    RowDecode, RowError, TermIdBase, check_quad_positions, decode_annotation_row,
+    decode_reifier_row,
 };
 use crate::reader_union::union_segments;
 use crate::stream::DIGEST as STREAM_DIGEST;
@@ -62,6 +64,14 @@ pub(crate) fn text_or<'a>(v: Option<&'a Value>, default: &'a str) -> &'a str {
     v.and_then(Value::as_text).unwrap_or(default)
 }
 
+/// Borrow raw blob bytes and move decoded transform output without copying.
+fn payload_bytes(value: Cow<'_, Value>) -> Option<Cow<'_, [u8]>> {
+    match value {
+        Cow::Borrowed(value) => value.as_bytes().map(Cow::Borrowed),
+        Cow::Owned(value) => value.into_bytes().ok().map(Cow::Owned),
+    }
+}
+
 fn diag_code_for(reason: &str) -> &'static str {
     match reason {
         "missing-key" => "MissingKey",
@@ -71,7 +81,8 @@ fn diag_code_for(reason: &str) -> &'static str {
 
 /// Resolve public blob metadata's digest using the reader's identity convention.
 ///
-/// Accepts text with or without the `blake3:` prefix, or a 32-byte digest value.
+/// Accepts 64 lowercase hexadecimal digits with or without the `blake3:` prefix,
+/// or a 32-byte digest value.
 /// The original metadata is borrowed and unchanged. This only resolves the
 /// declaration; callers authenticating payloads must compare the result with the
 /// decoded content digest and reject ambiguous metadata keys separately.
@@ -81,8 +92,10 @@ pub fn public_blob_digest(value: &Value) -> Option<String> {
         return None;
     };
     match map_get(entries, "digest") {
-        Some(Value::Text(text)) if text.starts_with("blake3:") => Some(text.clone()),
-        Some(Value::Text(text)) => Some(["blake3:", text].concat()),
+        Some(Value::Text(text)) => {
+            let hex = text.strip_prefix("blake3:").unwrap_or(text);
+            purrdf_hash::hex::decode_32_canonical(hex).map(|digest| digest_label(&digest))
+        }
         Some(Value::Bytes(bytes)) if bytes.len() == 32 => Some(digest_label(bytes)),
         _ => None,
     }
@@ -251,7 +264,27 @@ pub struct BlobPayload<'a> {
     pub codecs: &'a [Codec],
 }
 
-/// One inline blob occurrence a sink's byte ceiling refused before decoding.
+/// Typed reason a reader could not provide one inline blob occurrence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BlobRefusalKind {
+    /// A caller-supplied payload byte ceiling.
+    ByteBudget,
+    /// A recognized codec/key capability is unavailable.
+    UnavailableCapability,
+}
+
+/// Recover the original typed refusal from a native payload diagnostic.
+/// Storage failures and diagnostics without their original cause return `None`.
+#[must_use]
+pub fn blob_refusal_kind(diagnostic: &Diagnostic) -> Option<BlobRefusalKind> {
+    let crate::model::DiagnosticCause::Native(cause) = diagnostic.cause.as_ref()? else {
+        return None;
+    };
+    let error: &(dyn std::error::Error + 'static) = &***cause;
+    error.downcast_ref::<PayloadError>()?.blob_refusal_kind()
+}
+
+/// One inline blob occurrence refused by a byte ceiling or missing capability.
 ///
 /// Reported so a selecting consumer still learns a candidate was present. It
 /// carries everything decidable without spending the bytes: the container's
@@ -260,6 +293,8 @@ pub struct BlobPayload<'a> {
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug)]
 pub struct BlobRefusal<'a> {
+    /// Original typed admission reason.
+    pub kind: BlobRefusalKind,
     /// Zero-based segment containing this occurrence.
     pub segment_index: u64,
     /// Declared content digest, when the container published one.
@@ -521,6 +556,7 @@ impl Folder<'_, '_, '_> {
     /// Report a payload the sink's own ceiling refused, before any decode.
     fn emit_blob_refusal(
         &mut self,
+        kind: BlobRefusalKind,
         digest: Option<&str>,
         digest_computed: bool,
         declared_metadata: Option<&Value>,
@@ -532,6 +568,7 @@ impl Folder<'_, '_, '_> {
             return;
         };
         sink.blob_refused(BlobRefusal {
+            kind,
             segment_index,
             digest,
             digest_computed,
@@ -602,7 +639,11 @@ impl Folder<'_, '_, '_> {
     }
 
     /// Resolve a frame's logical payload (§6.1); error on missing capability.
-    fn payload(&self, frame: &[(Value, Value)], blob: bool) -> Result<Value, PayloadError> {
+    fn payload<'frame>(
+        &self,
+        frame: &'frame [(Value, Value)],
+        blob: bool,
+    ) -> Result<Cow<'frame, Value>, PayloadError> {
         let d = map_get(frame, "d");
         if blob
             && let Some(Value::Bytes(bytes)) = d
@@ -645,9 +686,10 @@ impl Folder<'_, '_, '_> {
                 decode_chain(&chain, db)?
             };
             if blob {
-                return Ok(Value::Bytes(decoded));
+                return Ok(Cow::Owned(Value::Bytes(decoded)));
             }
             return cbor::decode(&decoded, cbor::Limits::DEFAULT)
+                .map(Cow::Owned)
                 .map_err(|e| PayloadError::Damaged(PayloadCause::Cbor(e)));
         }
         if blob
@@ -663,7 +705,7 @@ impl Folder<'_, '_, '_> {
                 limit,
             }));
         }
-        Ok(d.cloned().unwrap_or(Value::Null))
+        Ok(d.map_or(Cow::Owned(Value::Null), Cow::Borrowed))
     }
 
     /// Fold one already-verified frame into the graph.
@@ -693,10 +735,10 @@ impl Folder<'_, '_, '_> {
             Ok(p) => p,
         };
         match ftype {
-            "terms" => self.h_terms(&payload, index),
-            "quads" => self.h_quads(&payload, index),
-            "reifies" => self.h_reifies(&payload, index),
-            "annot" => self.h_annot(&payload, index),
+            "terms" => self.h_terms(&payload, index, TermIdBase(0)),
+            "quads" => self.h_quads(&payload, index, TermIdBase(0)),
+            "reifies" => self.h_reifies(&payload, index, TermIdBase(0)),
+            "annot" => self.h_annot(&payload, index, TermIdBase(0)),
             "meta" => self.h_meta(&payload),
             "suppress" => self.h_suppress(&payload),
             "snapshot" => self.h_snapshot(&payload, index),
@@ -716,7 +758,29 @@ impl Folder<'_, '_, '_> {
 
     // -- per-type handlers ---------------------------------------------------
 
-    fn h_terms(&mut self, payload: &Value, index: u64) {
+    fn damaged_row(&mut self, error: RowError, index: u64) {
+        let message = error.to_string();
+        self.diag_native("DamagedFrame", error, message, index);
+    }
+
+    fn term_reference(
+        &mut self,
+        value: Option<&Value>,
+        base: TermIdBase,
+        index: u64,
+    ) -> Option<i128> {
+        let value = value?;
+        match base.integer(value) {
+            Ok(value) => value,
+            Err(error) => {
+                // A bad reference must not renumber later positional terms.
+                self.damaged_row(error, index);
+                None
+            }
+        }
+    }
+
+    fn h_terms(&mut self, payload: &Value, index: u64, base: TermIdBase) {
         let Value::Array(rows) = payload else { return };
         for raw in rows {
             let Value::Map(entries) = raw else { continue };
@@ -833,8 +897,8 @@ impl Folder<'_, '_, '_> {
                 }
                 (_, direction) => direction,
             };
-            let dt_raw = map_get(entries, "dt").and_then(as_i128);
-            let rf_raw = map_get(entries, "rf").and_then(as_i128);
+            let dt_raw = self.term_reference(map_get(entries, "dt"), base, index);
+            let rf_raw = self.term_reference(map_get(entries, "rf"), base, index);
             // Sanitise refs: dt MUST name an already-introduced term, and rf
             // normally does too (§7.5). A quoted-triple term may self-bind
             // its reifier (`rf == term_id`) so the term can be used directly
@@ -858,9 +922,10 @@ impl Folder<'_, '_, '_> {
             // therefore cannot contain itself, which is what makes `tt` the
             // acyclic-by-construction spelling of a quoted triple.
             let tt_raw = match map_get(entries, "tt") {
-                Some(Value::Array(ids)) if ids.len() == 3 => {
-                    Some([&ids[0], &ids[1], &ids[2]].map(as_i128))
-                }
+                Some(Value::Array(ids)) if ids.len() == 3 => Some(
+                    [&ids[0], &ids[1], &ids[2]]
+                        .map(|value| self.term_reference(Some(value), base, index)),
+                ),
                 _ => None,
             };
             let tt = match tt_raw {
@@ -902,27 +967,28 @@ impl Folder<'_, '_, '_> {
         }
     }
 
-    fn h_quads(&mut self, payload: &Value, index: u64) {
+    fn h_quads(&mut self, payload: &Value, index: u64, base: TermIdBase) {
         let Value::Array(rows) = payload else { return };
         for row in rows {
             let Value::Array(items) = row else { continue };
             if items.len() < 3 {
                 continue;
             }
-            let (s, p, o) = (as_idx(&items[0]), as_idx(&items[1]), as_idx(&items[2]));
+            let raw = match base.row::<4>(items) {
+                Ok(raw) => raw,
+                Err(error) => {
+                    self.damaged_row(error, index);
+                    continue;
+                }
+            };
+            let [s, p, o, gslot] = raw.map(|value| value.and_then(|id| usize::try_from(id).ok()));
             let has_graph = items.len() >= 4;
-            let gslot = if has_graph { as_idx(&items[3]) } else { None };
             if s.is_none() || p.is_none() || o.is_none() || (has_graph && gslot.is_none()) {
                 let error = RowError::QuadIds {
-                    values: items.iter().take(4).map(as_i128).collect(),
+                    values: raw[..items.len().min(4)].to_vec(),
                     width: items.len(),
                 };
-                self.diag_native(
-                    "DamagedFrame",
-                    error,
-                    "quad has non-integer term ids".to_string(),
-                    index,
-                );
+                self.damaged_row(error, index);
                 continue;
             }
             let (Some(s), Some(p), Some(o)) = (s, p, o) else {
@@ -951,18 +1017,17 @@ impl Folder<'_, '_, '_> {
         }
     }
 
-    fn h_reifies(&mut self, payload: &Value, index: u64) {
+    fn h_reifies(&mut self, payload: &Value, index: u64, base: TermIdBase) {
         let Value::Array(rows) = payload else {
             self.diag(FoldError::ReifiesArray { snapshot: false }, index);
             return;
         };
         for row in rows {
-            let (rid, triple, gslot) = match decode_reifier_row(row, self.g) {
+            let (rid, triple, gslot) = match decode_reifier_row(row, self.g, base) {
                 RowDecode::Skip => continue,
                 RowDecode::Row(row) => row,
                 RowDecode::Damaged(detail) => {
-                    let message = detail.to_string();
-                    self.diag_native("DamagedFrame", *detail, message, index);
+                    self.damaged_row(*detail, index);
                     continue;
                 }
                 RowDecode::Position(detail) => {
@@ -999,15 +1064,14 @@ impl Folder<'_, '_, '_> {
         }
     }
 
-    fn h_annot(&mut self, payload: &Value, index: u64) {
+    fn h_annot(&mut self, payload: &Value, index: u64, base: TermIdBase) {
         let Value::Array(rows) = payload else { return };
         for row in rows {
-            let annotation = match decode_annotation_row(row, self.g) {
+            let annotation = match decode_annotation_row(row, self.g, base) {
                 RowDecode::Skip => continue,
                 RowDecode::Row(row) => row,
                 RowDecode::Damaged(detail) => {
-                    let message = detail.to_string();
-                    self.diag_native("DamagedFrame", *detail, message, index);
+                    self.damaged_row(*detail, index);
                     continue;
                 }
                 RowDecode::Position(detail) => {
@@ -1026,6 +1090,30 @@ impl Folder<'_, '_, '_> {
     fn h_blob_frame(&mut self, frame: &[(Value, Value)], index: u64) {
         let d = map_get(frame, "d");
         let declared_metadata = map_get(frame, "pub");
+        let declared_digest = declared_metadata.and_then(public_blob_digest);
+        let malformed = if d.is_some_and(|value| !matches!(value, Value::Bytes(_))) {
+            Some(PayloadCause::BlobNotBytes)
+        } else if matches!(map_get(frame, "x"), Some(Value::Array(ids)) if !ids.is_empty())
+            && d.is_none()
+        {
+            Some(PayloadCause::TransformedNotBytes)
+        } else if d.is_none() && declared_digest.is_none() {
+            Some(PayloadCause::BlobMissingIdentity)
+        } else {
+            None
+        };
+        if let Some(cause) = malformed {
+            let error = PayloadError::Damaged(cause);
+            let detail = error.diagnostic_detail();
+            self.opaque(frame, "blob", error.opaque_reason());
+            self.diag_native(
+                error.diagnostic_code(BLOB_BUDGET_DIAGNOSTIC),
+                error,
+                detail,
+                index,
+            );
+            return;
+        }
         let pub_meta = declared_metadata
             .filter(|value| matches!(value, Value::Map(_)))
             .cloned();
@@ -1049,8 +1137,8 @@ impl Folder<'_, '_, '_> {
         };
 
         if chain.iter().any(|codec| codec.cls == "encrypt") {
-            match self.payload(frame, true).map(Value::into_bytes) {
-                Ok(Ok(bytes)) => {
+            match self.payload(frame, true).map(payload_bytes) {
+                Ok(Some(bytes)) => {
                     let digest = digest_str(&bytes);
                     if let Some(meta) = pub_meta {
                         self.blob_meta_index
@@ -1073,17 +1161,18 @@ impl Folder<'_, '_, '_> {
                         self.blob_index.set(
                             &mut self.g.blobs,
                             digest.clone(),
-                            BlobEntry::bytes(bytes),
+                            BlobEntry::bytes(bytes.into_owned()),
                         );
                     }
                 }
                 Ok(_) => {}
                 Err(error) => {
                     let detail = error.diagnostic_detail();
-                    if matches!(&error, PayloadError::Budget(_)) {
+                    if let Some(kind) = error.blob_refusal_kind() {
                         let (refused_digest, digest_computed) =
                             refused_identity(&chain, d, pub_meta.as_ref());
                         self.emit_blob_refusal(
+                            kind,
                             refused_digest.as_deref(),
                             digest_computed,
                             declared_metadata,
@@ -1103,7 +1192,7 @@ impl Folder<'_, '_, '_> {
             return;
         }
 
-        if let Some(digest) = pub_meta.as_ref().and_then(public_blob_digest) {
+        if let Some(digest) = declared_digest {
             if let Some(meta) = pub_meta {
                 self.blob_meta_index
                     .set(&mut self.g.blob_meta, digest.clone(), meta);
@@ -1141,8 +1230,8 @@ impl Folder<'_, '_, '_> {
         let Some(Value::Bytes(_)) = d else {
             return;
         };
-        match self.payload(frame, true).map(Value::into_bytes) {
-            Ok(Ok(bytes)) => {
+        match self.payload(frame, true).map(payload_bytes) {
+            Ok(Some(bytes)) => {
                 let digest = digest_str(&bytes);
                 if let Some(meta) = pub_meta {
                     self.blob_meta_index
@@ -1159,17 +1248,21 @@ impl Folder<'_, '_, '_> {
                     encoded_len,
                 );
                 if self.materialize {
-                    self.blob_index
-                        .set(&mut self.g.blobs, digest.clone(), BlobEntry::bytes(bytes));
+                    self.blob_index.set(
+                        &mut self.g.blobs,
+                        digest.clone(),
+                        BlobEntry::bytes(bytes.into_owned()),
+                    );
                 }
             }
             Ok(_) => {}
             Err(error) => {
                 let detail = error.diagnostic_detail();
-                if matches!(&error, PayloadError::Budget(_)) {
+                if let Some(kind) = error.blob_refusal_kind() {
                     let (refused_digest, digest_computed) =
                         refused_identity(&chain, d, pub_meta.as_ref());
                     self.emit_blob_refusal(
+                        kind,
                         refused_digest.as_deref(),
                         digest_computed,
                         declared_metadata,
@@ -1221,61 +1314,29 @@ impl Folder<'_, '_, '_> {
 
     /// Fold a self-contained snapshot (§10).
     ///
-    /// Shifts the snapshot's local term ids into the outer id space and
-    /// re-dispatches through the normal handlers, so a snapshot gets the SAME
-    /// semantic checks as the equivalent streamed frames.
+    /// Decode local term ids against the captured outer base through the same
+    /// handlers and semantic checks as equivalent streamed frames. The source
+    /// payload remains borrowed; rebasing never builds another CBOR tree.
     fn h_snapshot(&mut self, payload: &Value, index: u64) {
         let Value::Map(entries) = payload else { return };
-        let base = self.g.terms.len();
-        // Shift a valid local id into the outer space; pass non-ints through
-        // so the downstream handler's own checks reject them with diagnostics.
-        let sh = |v: &Value| -> Value {
-            match as_idx(v) {
-                Some(iv) => Value::from((iv + base) as u64),
-                None => v.clone(),
-            }
-        };
-        let sh_row = |row: &Value| -> Value {
-            match row {
-                Value::Array(items) => Value::Array(items.iter().map(sh).collect()),
-                other => other.clone(),
-            }
-        };
-
-        if let Some(Value::Array(snap_terms)) = map_get(entries, "terms") {
-            let shifted: Vec<Value> = snap_terms
-                .iter()
-                .map(|raw| match raw {
-                    Value::Map(term_entries) => Value::Map(
-                        term_entries
-                            .iter()
-                            .map(|(k, v)| match k.as_text() {
-                                Some("dt" | "rf") => (k.clone(), sh(v)),
-                                // `tt` is a 3-id row, so it shifts row-wise.
-                                Some("tt") => (k.clone(), sh_row(v)),
-                                _ => (k.clone(), v.clone()),
-                            })
-                            .collect(),
-                    ),
-                    other => other.clone(),
-                })
-                .collect();
-            self.h_terms(&Value::Array(shifted), index);
+        let base = TermIdBase(self.g.terms.len());
+        if let Some(terms @ Value::Array(_)) = map_get(entries, "terms") {
+            self.h_terms(terms, index, base);
         }
-        if let Some(Value::Array(quads)) = map_get(entries, "quads") {
-            self.h_quads(&Value::Array(quads.iter().map(sh_row).collect()), index);
+        if let Some(quads @ Value::Array(_)) = map_get(entries, "quads") {
+            self.h_quads(quads, index, base);
         }
         match map_get(entries, "reifies") {
             Some(Value::Map(_)) => {
                 self.diag(FoldError::ReifiesArray { snapshot: true }, index);
             }
-            Some(Value::Array(reifies)) => {
-                self.h_reifies(&Value::Array(reifies.iter().map(sh_row).collect()), index);
+            Some(reifies @ Value::Array(_)) => {
+                self.h_reifies(reifies, index, base);
             }
             _ => {}
         }
-        if let Some(Value::Array(annot)) = map_get(entries, "annot") {
-            self.h_annot(&Value::Array(annot.iter().map(sh_row).collect()), index);
+        if let Some(annot @ Value::Array(_)) = map_get(entries, "annot") {
+            self.h_annot(annot, index, base);
         }
         if let Some(Value::Map(blobs)) = map_get(entries, "blobs") {
             let ceiling = self
@@ -1296,7 +1357,14 @@ impl Folder<'_, '_, '_> {
                             limit,
                         });
                         let detail = error.diagnostic_detail();
-                        self.emit_blob_refusal(Some(&digest), true, None, bytes.len(), &detail);
+                        self.emit_blob_refusal(
+                            BlobRefusalKind::ByteBudget,
+                            Some(&digest),
+                            true,
+                            None,
+                            bytes.len(),
+                            &detail,
+                        );
                         self.diag_native(
                             error.diagnostic_code(BLOB_BUDGET_DIAGNOSTIC),
                             error,

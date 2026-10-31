@@ -1177,6 +1177,117 @@ fn reader_file_and_chain_diagnostics_retain_native_inputs() {
     }
 }
 
+fn snapshot_id_overflow_reports_the_wire_operand_and_base() {
+    use purrdf_gts::{
+        model::Term,
+        reader::{read, read_to_sink},
+        writer::Writer,
+    };
+    use purrdf_lex::cbor::Value;
+
+    for field in ["dt", "rf", "tt", "quads", "reifies", "annot"] {
+        for overflow in [false, true] {
+            let operand = if overflow { usize::MAX } else { 0 };
+            let mut terms: Vec<_> = ["s", "p", "o"]
+                .map(|name| {
+                    Value::Map(vec![
+                        ("k".into(), 0.into()),
+                        ("v".into(), format!("https://example.org/{name}").into()),
+                    ])
+                })
+                .into();
+            let object = match field {
+                "dt" => {
+                    terms.push(Value::Map(vec![
+                        ("k".into(), 1.into()),
+                        ("v".into(), "literal".into()),
+                        ("dt".into(), operand.into()),
+                    ]));
+                    3
+                }
+                "rf" | "tt" => {
+                    let mut term = vec![
+                        ("k".into(), 3.into()),
+                        (
+                            "tt".into(),
+                            Value::Array(vec![0.into(), 1.into(), 2.into()]),
+                        ),
+                    ];
+                    if field == "rf" {
+                        term.push(("rf".into(), operand.into()));
+                    } else {
+                        term[1].1 = Value::Array(vec![0.into(), 1.into(), operand.into()]);
+                    }
+                    terms.push(Value::Map(term));
+                    3
+                }
+                "quads" => operand,
+                _ => 2,
+            };
+            let mut payload = vec![
+                ("terms".into(), Value::Array(terms)),
+                (
+                    "quads".into(),
+                    Value::Array(vec![Value::Array(vec![0.into(), 1.into(), object.into()])]),
+                ),
+            ];
+            if field == "reifies" {
+                payload.push((
+                    field.into(),
+                    Value::Array(vec![Value::Array(vec![
+                        0.into(),
+                        0.into(),
+                        1.into(),
+                        operand.into(),
+                    ])]),
+                ));
+            } else if field == "annot" {
+                payload.push((
+                    field.into(),
+                    Value::Array(vec![Value::Array(vec![0.into(), 1.into(), operand.into()])]),
+                ));
+            }
+            let mut writer = Writer::new("generic");
+            writer.add_terms(&[Term::iri("https://example.org/prefix")]);
+            writer.add_frame("snapshot", Some(Value::Map(payload)), None, None, None);
+            let bytes = writer.into_bytes();
+            let graph = read(&bytes, true, None);
+            let mut sink = DiagnosticSink::default();
+            let streamed = read_to_sink(&bytes, true, None, &mut sink);
+            assert_eq!(graph.diagnostics, streamed.diagnostics);
+            assert_eq!(graph.diagnostics, sink.diagnostics);
+            if !overflow {
+                assert!(
+                    graph.diagnostics.is_empty(),
+                    "valid {field}: {:?}",
+                    graph.diagnostics
+                );
+                assert_eq!(graph.quads.len(), 1);
+                continue;
+            }
+            let diagnostic = sink
+                .diagnostics
+                .into_iter()
+                .find(|diagnostic| {
+                    diagnostic.native_cause().is_some_and(|cause| {
+                        Capture::read(cause).code == "gts-term-id-base-overflow"
+                    })
+                })
+                .unwrap_or_else(|| panic!("missing overflow for {field}: {:?}", graph.diagnostics));
+            assert_eq!(diagnostic.code, "DamagedFrame");
+            assert_eq!(diagnostic.frame_index, Some(2));
+            drop(bytes);
+            drop(graph);
+            drop(streamed);
+            let fields = Capture::read(&diagnostic).child("cause");
+            assert!(
+                matches!(fields.field("value"), ErrorValue::Unsigned(value) if value == usize::MAX as u128)
+            );
+            assert!(matches!(fields.field("base"), ErrorValue::Unsigned(1)));
+        }
+    }
+}
+
 fn reader_row_diagnostics_keep_native_widths_ids_and_term_kinds() {
     use purrdf_gts::{
         model::Term,
@@ -2539,6 +2650,7 @@ fn policy_findings_keep_native_counts_identifiers_and_vocabulary() {
 }
 
 purrdf_testkit::harness_main!(
+    snapshot_id_overflow_reports_the_wire_operand_and_base,
     nested_discovery_keeps_original_limits_and_child_failures,
     policy_findings_keep_native_counts_identifiers_and_vocabulary,
     reader_preserves_terminal_io_and_sequence_causes,

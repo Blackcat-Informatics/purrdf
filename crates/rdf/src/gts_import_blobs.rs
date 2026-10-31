@@ -13,7 +13,11 @@ use purrdf_lex::cbor::Value;
 use crate::{GtsBundle, RdfDiagnostic};
 
 mod error;
+mod export;
 pub use error::GtsBlobRetentionRefusal;
+pub use export::{
+    GtsBlobOmission, GtsBlobOmissionKind, GtsInlineExport, import_gts_inline_for_export,
+};
 
 /// A required inline blob, selected independently of RDF statement order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -325,6 +329,7 @@ struct BlobFrame {
 }
 
 pub(crate) struct BlobCollector<'a> {
+    export: Option<Vec<GtsBlobOmission>>,
     selectors: Vec<GtsBlobSelector<'a>>,
     selector_index: Vec<(u8, &'a str)>,
     limits: GtsBlobLimits,
@@ -433,6 +438,8 @@ struct RefusedOccurrence {
     usage: GtsBlobUsage,
     available_decoded_bytes: usize,
     cause: Option<purrdf_gts::model::DiagnosticCause>,
+    kind: purrdf_gts::reader::BlobRefusalKind,
+    source: Option<GtsBlobMetadataSource>,
 }
 
 /// Borrow the selector's kind and exact spelling for ordered lookup.
@@ -451,7 +458,8 @@ struct SelectionOutcome {
 
 impl<'a> BlobCollector<'a> {
     fn selects(&self, digest: &str, key: Option<&SelectionKey>) -> bool {
-        self.selector_index.binary_search(&(0, digest)).is_ok()
+        self.export.is_some()
+            || self.selector_index.binary_search(&(0, digest)).is_ok()
             || key
                 .and_then(|key| key.rep.as_deref())
                 .is_some_and(|rep| self.selector_index.binary_search(&(1, rep)).is_ok())
@@ -560,6 +568,7 @@ impl<'a> BlobCollector<'a> {
         }
         let selectors = memory.collect(selectors.iter().copied())?;
         Ok(Self {
+            export: None,
             selectors,
             selector_index: ordered,
             limits,
@@ -687,8 +696,22 @@ impl<'a> BlobCollector<'a> {
                 "selected blob payload field is not a byte string",
             ));
         }
-        let metadata = bounded_metadata(metadata, self.limits.max_metadata_bytes)?;
-        validate_metadata(metadata.as_ref(), payload.digest)?;
+        validate_metadata(metadata, payload.digest)?;
+        if self.export.is_some()
+            && payload.codecs.is_empty()
+            && let Some(bytes) = payload.bytes
+            && purrdf_gts::wire::digest_str(bytes) != payload.digest
+        {
+            return Err(RdfDiagnostic::error(
+                "rdf-ir-gts-blob-digest",
+                "inline blob bytes differ from their declared digest",
+            ));
+        }
+        if let Err(failure) = check_metadata_bound(metadata, self.limits.max_metadata_bytes) {
+            let error = failure.into_diagnostic()?;
+            return self.omit_or_error(payload, GtsBlobOmissionKind::MetadataBudget, error);
+        }
+        let metadata = metadata.cloned();
         // The reader fires its frame event for every frame before any of that
         // frame's rows, with the same segment index, so a payload always has a
         // matching frame and no container reaches the error arm below. It is
@@ -731,6 +754,13 @@ impl<'a> BlobCollector<'a> {
                 // container may still carry it, and the authoritative importer
                 // accepts exactly that file. Defer to finish(), which sees the
                 // whole container.
+                if self.export.is_some() {
+                    self.record_export_omission(
+                        payload,
+                        GtsBlobOmissionKind::MissingInlinePayload,
+                        None,
+                    )?;
+                }
                 self.unresolved
                     .insert(memory.string(payload.digest)?, (), &mut memory)?;
                 return Ok(());
@@ -783,13 +813,28 @@ impl<'a> BlobCollector<'a> {
                     .with_native_cause(cause, &mut Memory::new(&mut Resident))?)
             };
         if payload.encoded_len > self.limits.max_encoded_bytes {
-            return Err(refusal(None)?);
+            let error = refusal(None)?;
+            return self.omit_or_error(payload, GtsBlobOmissionKind::ByteBudget, error);
         }
         let limit = self.limits.max_decoded_bytes.min(remaining);
-        let bytes = purrdf_gts::codec::decode_chain_bounded(payload.codecs, wire_bytes, limit)
-            .map_err(|error| match refusal(Some(error)) {
-                Ok(error) | Err(error) => error,
-            })?;
+        let bytes = match purrdf_gts::codec::decode_chain_bounded(payload.codecs, wire_bytes, limit)
+        {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                let kind = if matches!(error, purrdf_gts::codec::CodecError::Limit { .. }) {
+                    Some(GtsBlobOmissionKind::ByteBudget)
+                } else if error.is_capability_unavailable() {
+                    Some(GtsBlobOmissionKind::UnavailableCapability)
+                } else {
+                    None
+                };
+                let error = refusal(Some(error))?;
+                return match kind {
+                    Some(kind) => self.omit_or_error(payload, kind, error),
+                    None => Err(error),
+                };
+            }
+        };
         let digest = purrdf_gts::wire::digest_str(&bytes);
         if digest != payload.digest {
             return Err(RdfDiagnostic::error(
@@ -871,6 +916,15 @@ impl<'a> BlobCollector<'a> {
     pub(crate) fn refused(&mut self, refusal: BlobRefusal<'_>) -> Result<(), RdfDiagnostic> {
         let mut resident = Resident;
         let mut memory = Memory::resume(&mut resident, self.storage_bytes()?);
+        if self.export.is_some()
+            && let Some(digest) = refusal.digest
+        {
+            self.inlined
+                .insert(memory.string(digest)?, (), &mut memory)?;
+        }
+        if self.export.is_some() {
+            validate_metadata(refusal.metadata, refusal.digest.unwrap_or(""))?;
+        }
         let usage = self.usage;
         let previous_bytes = refusal
             .digest
@@ -920,7 +974,10 @@ impl<'a> BlobCollector<'a> {
                     self.usage
                         .replace_payload(old.bytes.len(), 0, self.selected.len())?;
                 }
-            } else if self.selected.get_by(|key| digest.cmp(key)).is_some() {
+            } else if self.selected.get_by(|key| digest.cmp(key)).is_some()
+                && (self.export.is_none()
+                    || check_metadata_bound(Some(meta), self.limits.max_metadata_bytes).is_ok())
+            {
                 let metadata = bounded_metadata(Some(meta), self.limits.max_metadata_bytes)?;
                 validate_metadata(metadata.as_ref(), digest)?;
                 let source = self
@@ -962,7 +1019,14 @@ impl<'a> BlobCollector<'a> {
             memory.string(refusal.detail)?
         };
         let key = selection_key(refusal.metadata)?;
+        let source = self
+            .export
+            .as_ref()
+            .map(|_| self.export_source())
+            .transpose()?;
         let occurrence = RefusedOccurrence {
+            kind: refusal.kind,
+            source,
             key,
             frame_index,
             usage,
@@ -1006,6 +1070,20 @@ impl<'a> BlobCollector<'a> {
         // that inherits it hands the caller that source verbatim.
         for (_, source) in self.last_declared.values_mut() {
             if source.segment_index == segment_index {
+                source.segment_head = memory.collect(head.iter().copied())?;
+            }
+        }
+        if let Some(omissions) = &mut self.export {
+            for omission in omissions {
+                if omission.source.segment_index == segment_index {
+                    omission.source.segment_head = memory.collect(head.iter().copied())?;
+                }
+            }
+        }
+        for refusal in &mut self.refused {
+            if let Some(source) = &mut refusal.source
+                && source.segment_index == segment_index
+            {
                 source.segment_head = memory.collect(head.iter().copied())?;
             }
         }
@@ -1178,11 +1256,7 @@ impl<'a> BlobCollector<'a> {
         );
         let mut resident = Resident;
         let mut memory = Memory::new(&mut resident);
-        let mut blobs = Vec::new();
-        memory.reserve(&mut blobs, self.selected.len())?;
-        while let Some((_, blob)) = self.selected.pop_first() {
-            memory.push(&mut blobs, blob)?;
-        }
+        let blobs = self.take_export_blobs()?;
         let refused = memory.collect(self.refused.into_iter().map(|refused| refused.blob))?;
         Ok((blobs, refused, self.usage))
     }
@@ -1220,21 +1294,14 @@ impl<'a> BlobCollector<'a> {
 }
 
 fn validate_metadata(meta: Option<&Value>, digest: &str) -> Result<(), RdfDiagnostic> {
-    if let Some(meta) = meta {
-        if !matches!(meta, Value::Map(_)) {
-            return Err(RdfDiagnostic::error(
-                "rdf-ir-gts-blob-metadata",
-                "selected blob public metadata must be a map",
-            ));
-        }
-        if metadata_field(Some(meta), "digest")?.is_some()
-            && purrdf_gts::reader::public_blob_digest(meta).as_deref() != Some(digest)
-        {
-            return Err(RdfDiagnostic::error(
-                "rdf-ir-gts-blob-digest",
-                "selected blob metadata digest differs from its identity",
-            ));
-        }
+    if let Some(meta) = meta
+        && metadata_field(Some(meta), "digest")?.is_some()
+        && purrdf_gts::reader::public_blob_digest(meta).as_deref() != Some(digest)
+    {
+        return Err(RdfDiagnostic::error(
+            "rdf-ir-gts-blob-digest",
+            "selected blob metadata digest differs from its identity",
+        ));
     }
     for key in ["rep", "mt"] {
         if let Some(value) = metadata_field(meta, key)? {

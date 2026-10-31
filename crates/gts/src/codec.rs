@@ -12,7 +12,7 @@ use std::borrow::Cow;
 mod error;
 pub use error::{CodecError, CodecFailure, CodecUnavailable};
 
-use structured_zstd::decoding::{FrameDecoder, errors::FrameDecoderError};
+use structured_zstd::decoding::{ContentChecksum, FrameDecoder, errors::FrameDecoderError};
 use structured_zstd::encoding::{
     CompressionLevel, FrameCompressor, MatchGeneratorDriver, compress_to_vec,
 };
@@ -106,6 +106,7 @@ fn decode_one<'a>(
         }
         "zstd" | "zstd-rsyncable" => {
             let mut decoder = FrameDecoder::new();
+            decoder.set_content_checksum(ContentChecksum::Verify);
             if let Some(dict) = codec.dct.as_deref() {
                 decoder
                     .add_dict_from_bytes(dict)
@@ -490,6 +491,62 @@ mod tests {
         let mut expected = block1.to_vec();
         expected.extend_from_slice(block2);
         assert_eq!(decoded, expected);
+    }
+
+    #[test]
+    fn zstd_checksums_are_verified_in_each_concatenated_frame() {
+        let first = b"first checksummed frame payload ".repeat(512);
+        let second = b"second checksummed frame payload ".repeat(512);
+        let expected = [first.as_slice(), second.as_slice()].concat();
+        let corpus = dict_corpus();
+        let samples: Vec<&[u8]> = corpus.iter().map(Vec::as_slice).collect();
+        let dictionary = crate::dict::raw_content_dict(&samples, 4096).unwrap();
+        for dictionary in [None, Some(dictionary)] {
+            let mut encoder: DictCompressor = FrameCompressor::new(CompressionLevel::Fastest);
+            encoder.set_content_checksum(true);
+            if let Some(dictionary) = &dictionary {
+                encoder.set_dictionary_from_bytes(dictionary).unwrap();
+            }
+            let frames = [
+                encoder.compress_independent_frame(&first),
+                encoder.compress_independent_frame(&second),
+            ];
+            // RFC 8878: bit 2 of each frame descriptor announces its real trailer.
+            for frame in &frames {
+                assert_ne!(frame[4] & 4, 0, "the encoder must emit a content checksum");
+            }
+            let encoded = [frames[0].as_slice(), frames[1].as_slice()].concat();
+            if dictionary.is_none() {
+                purrdf_testkit::golden::check_bytes(
+                    &purrdf_testkit::paths::workspace_root()
+                        .join("crates/gts/tests/golden/zstd-checksummed-concat.bin"),
+                    &encoded,
+                    purrdf_testkit::golden::REGENERATE_ENV,
+                )
+                .unwrap();
+            }
+            for name in ["zstd", "zstd-rsyncable"] {
+                let mut codec = Codec::new(name, "compress");
+                codec.dct.clone_from(&dictionary);
+                assert_eq!(
+                    decode_chain_bounded(std::slice::from_ref(&codec), &encoded, expected.len())
+                        .unwrap(),
+                    expected
+                );
+                for trailer in [frames[0].len() - 1, encoded.len() - 1] {
+                    let mut damaged = encoded.clone();
+                    damaged[trailer] ^= 1;
+                    assert!(matches!(
+                        decode_chain_bounded(
+                            std::slice::from_ref(&codec),
+                            &damaged,
+                            expected.len()
+                        ),
+                        Err(CodecError::Failed(CodecFailure::ZstdDecode(_)))
+                    ));
+                }
+            }
+        }
     }
 
     #[test]
