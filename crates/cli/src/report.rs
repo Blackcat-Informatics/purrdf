@@ -423,7 +423,7 @@ mod tests {
     fn an_inconsistent_run_still_writes_its_report() {
         let dir = purrdf_testkit::TempDir::for_unit_test().expect("tempdir");
         let path = dir.path().join("report.txt");
-        let mut canonical =
+        let canonical =
             crate::canonical::Request::new(None, None).expect("native-only report request");
         let result = materialize_reported(
             &inconsistent(),

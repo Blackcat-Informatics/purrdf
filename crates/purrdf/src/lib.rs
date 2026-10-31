@@ -755,6 +755,7 @@ mod tests {
 
     #[test]
     fn facade_exposes_ontology_schema_compilation_contract() {
+        type CompilationWithExpressions = (SchemaCompilation, SchemaClassExpressionReport);
         let _: fn(
             &SchemaCompileRequest<'_>,
             &mut CanonicalizationControl<'_>,
@@ -766,8 +767,7 @@ mod tests {
         let _: fn(
             &SchemaCompileRequest<'_>,
             &mut CanonicalizationControl<'_>,
-        )
-            -> Result<(SchemaCompilation, SchemaClassExpressionReport), SchemaCompileError> =
+        ) -> Result<CompilationWithExpressions, SchemaCompileError> =
             compile_schema_with_class_expressions;
         let _: Option<SchemaExpressionOutcome> = None;
     }
