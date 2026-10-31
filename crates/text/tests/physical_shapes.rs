@@ -173,10 +173,10 @@ impl purrdf_sparql_eval::shapes::ShapeProvider for DictionaryMismatchProbe {
             .scan(self.index.clone(), None, workspace)
             .unwrap_err();
         if held.is_some() {
-            assert!(matches!(
-                error,
-                purrdf_sparql_eval::EvalError::WorkspaceStopped
-            ));
+            assert!(
+                matches!(error, purrdf_sparql_eval::EvalError::WorkspaceStopped),
+                "original workspace refusal: {error:?}"
+            );
             return Err(error);
         }
         *self.failure.lock().unwrap() = Some(error);
@@ -241,8 +241,11 @@ fn dictionary_mismatch_retains_original_query_admission() {
         };
         let baseline = live();
         let account = source.clone();
-        let remaining: Arc<dyn Fn() -> u64 + Send + Sync> =
-            Arc::new(move || limit - account.evidence().live_bytes());
+        let remaining: Arc<dyn Fn() -> u64 + Send + Sync> = Arc::new(move || {
+            let evidence = account.evidence();
+            // Usable capacity includes cache bytes the source can evict.
+            limit - evidence.live_bytes() + evidence.unpinned_cache_bytes()
+        });
         let failure = Arc::new(Mutex::new(None));
         let mut shapes = ShapeRegistry::new();
         shapes.register(
