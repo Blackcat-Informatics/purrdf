@@ -62,6 +62,8 @@ import init, {
   AsyncJobOptions,
   AsyncOperationKind,
   CancellationToken,
+  CanonicalCause,
+  CanonicalResult,
   CompiledJsonLdContext,
   DataFactory,
   Dataset,
@@ -895,6 +897,17 @@ function abortRejection(signal, message) {
  * for a deadline, a `NotAcceptableError` for a result no acceptable format carries.
  * Every error this builds carries the job's evidence as `error.evidence.async`.
  */
+/** Copy request evidence and its native owner before the existing runner frees the job. */
+function attachCanonicalization(error, job) {
+  const receipts = job.errorCanonicalizationJson;
+  if (receipts !== undefined) error.canonicalizationJson = receipts;
+  const fields = job.errorNativeCauseJson;
+  if (fields !== undefined) error.nativeCauseJson = fields;
+  const cause = job.errorNativeCause;
+  if (cause !== undefined) error.nativeCause = cause;
+  return error;
+}
+
 function jobFailure(job, signal) {
   const kind = job.errorKind;
   const code = job.errorCode;
@@ -924,7 +937,7 @@ function jobFailure(job, signal) {
   const receipt = job.errorExecutionReceiptJson;
   if (receipt !== undefined) error.executionReceipt = JSON.parse(receipt);
   error.evidence = evidence;
-  return error;
+  return attachCanonicalization(error, job);
 }
 
 /**
@@ -1004,7 +1017,7 @@ function shaclRefusalFailure(job, signal) {
       const receipt = job.errorExecutionReceiptJson;
       if (receipt !== undefined) refusal.executionReceipt = JSON.parse(receipt);
       refusal.evidence = { async: asyncEvidenceToObject(job.takeEvidence()) };
-      return refusal;
+      return attachCanonicalization(refusal, job);
     }
   }
   return jobFailure(job, signal);
@@ -1047,7 +1060,11 @@ export const shaclValidateChangesToSarifAsync = shaclTwin("validateChangesToSari
   job.takeShaclChangeValidation(),
 );
 
-/** The twin of `shaclEntail`: resolves to the same `ShaclEntailment` (call `.free()` on it). */
+/**
+ * The twin of `shaclEntail`: required canonicalSearch follows the rule limits,
+ * before host options. Its existing job signal polls canonical search as well.
+ * Resolves to the same `ShaclEntailment` (call `.free()` on it).
+ */
 export const shaclEntailAsync = shaclTwin("entail", (job) => job.takeShaclEntailment());
 
 /**
@@ -1673,6 +1690,8 @@ export async function streamToDataset(quadStream) {
 export {
   asyncStackRegionBytes,
   CancellationToken,
+  CanonicalCause,
+  CanonicalResult,
   CompiledJsonLdContext,
   DataFactory,
   Dataset,

@@ -59,8 +59,20 @@ fn write_bytes(dir: &Path, name: &str, bytes: &[u8]) -> String {
 /// The RDFC-1.0 canonical N-Quads document of a source list, produced BY THE BINARY.
 /// Byte-equality of two such documents is an isomorphism test.
 fn canonical_of(dir: &Path, args: &[&str]) -> Vec<u8> {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let out = path(dir, "canonical.scratch.nq");
-    let mut full: Vec<&str> = vec!["convert", "--canonical"];
+    let mut full: Vec<&str> = vec![
+        "convert",
+        "--canonical",
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ];
     full.extend_from_slice(args);
     full.push(&out);
     let o = run(&full);
@@ -402,6 +414,10 @@ fn the_union_is_deterministic_and_order_independent() {
 /// classified from their own extensions, all merged.
 #[test]
 fn a_mixed_format_source_list_is_admitted() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let left = write_file(dir, "left.nt", SEED_LEFT);
@@ -411,7 +427,19 @@ fn a_mixed_format_source_list_is_admitted() {
     // Seed a pack from `left`, then merge a DIFFERENT text source with it.
     let pack = path(dir, "right.purrpck");
     let o = run(&[
-        "convert", "--from", "ntriples", "--to", "pack", &left, &pack,
+        "convert",
+        "--from",
+        "ntriples",
+        "--to",
+        "pack",
+        &left,
+        &pack,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert!(
         o.status.success(),
@@ -420,7 +448,21 @@ fn a_mixed_format_source_list_is_admitted() {
     );
 
     let out = path(dir, "merged.nq");
-    let o = run(&["convert", "--input", &pack, "--input", &gts, &third, &out]);
+    let o = run(&[
+        "convert",
+        "--input",
+        &pack,
+        "--input",
+        &gts,
+        &third,
+        &out,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(
         o.status.success(),
         "mixed-format union failed: {}",
@@ -759,12 +801,28 @@ fn a_transport_suffixed_output_is_refused_by_name() {
 /// it into a fresh buffer would discard exactly that guarantee.
 #[test]
 fn a_compressed_pack_source_is_refused_by_name() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(dir, "left.nt", SEED_LEFT);
     let pack = path(dir, "in.purrpck");
     let o = run(&[
-        "convert", "--from", "ntriples", "--to", "pack", &seed, &pack,
+        "convert",
+        "--from",
+        "ntriples",
+        "--to",
+        "pack",
+        &seed,
+        &pack,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert!(
         o.status.success(),
@@ -776,7 +834,19 @@ fn a_compressed_pack_source_is_refused_by_name() {
     let wrapped = write_bytes(dir, "in.purrpck.gz", &gzip(&packed));
     let out = path(dir, "out.nq");
 
-    let o = run(&["convert", "--to", "nquads", &wrapped, &out]);
+    let o = run(&[
+        "convert",
+        "--to",
+        "nquads",
+        &wrapped,
+        &out,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(!o.status.success(), "a gzip-wrapped pack must be refused");
     assert!(
         stderr(&o).contains("gzip"),
@@ -790,12 +860,29 @@ fn a_compressed_pack_source_is_refused_by_name() {
 /// reaches the transport decoder, so the flag would be accepted and never read.
 #[test]
 fn transport_against_a_pack_source_is_refused_by_name() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+    let canonical_receipt_3 = canonical_receipt_dir.path().join("request-3.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(dir, "left.nt", SEED_LEFT);
     let pack = path(dir, "in.purrpck");
     let o = run(&[
-        "convert", "--from", "ntriples", "--to", "pack", &seed, &pack,
+        "convert",
+        "--from",
+        "ntriples",
+        "--to",
+        "pack",
+        &seed,
+        &pack,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert!(
         o.status.success(),
@@ -812,13 +899,31 @@ fn transport_against_a_pack_source_is_refused_by_name() {
         "nquads",
         &pack,
         &out,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert!(!o.status.success(), "--transport on a pack must be refused");
     assert_eq!(o.status.code(), Some(2), "usage errors exit 2");
     assert!(stderr(&o).contains("--transport"), "{}", stderr(&o));
 
     // `auto` (the default) is still fine: it decodes nothing and refuses nothing.
-    let o = run(&["convert", "--to", "nquads", &pack, &out]);
+    let o = run(&[
+        "convert",
+        "--to",
+        "nquads",
+        &pack,
+        &out,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_3
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(
         o.status.success(),
         "the default must still work: {}",

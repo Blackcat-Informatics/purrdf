@@ -139,6 +139,14 @@ fn a_query_selector_expands_against_the_data() {
 /// EVERY native data syntax, plus the pack container, reaches the identical verdict.
 #[test]
 fn every_native_data_format_reaches_the_same_verdict() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_conditional_1 = canonical_receipt_dir
+        .path()
+        .join("conditional-request-1.json");
+    let canonical_conditional_2 = canonical_receipt_dir
+        .path()
+        .join("conditional-request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let schema = write_file(dir.path(), "schema.shex", SCHEMA);
     let seed = write_file(dir.path(), "seed.ttl", DATA);
@@ -161,14 +169,40 @@ fn every_native_data_format_reaches_the_same_verdict() {
             .to_str()
             .expect("temp path is valid UTF-8")
             .to_owned();
-        let converted = run(&["convert", "--from", "turtle", "--to", token, &seed, &target]);
+        let converted = {
+            let mut arguments = vec!["convert", "--from", "turtle", "--to", token, &seed, &target];
+            if token == "pack" {
+                arguments.extend([
+                    "--canonical-search",
+                    "unlimited",
+                    "--canonicalization-receipts",
+                    canonical_conditional_1
+                        .to_str()
+                        .expect("UTF-8 canonical receipt path"),
+                ]);
+            }
+            run(&arguments)
+        };
         assert!(
             converted.status.success(),
             "seeding the `{token}` source failed: {}",
             stderr(&converted)
         );
 
-        let out = run(&["shex", "--schema", &schema, "--data", &target, ALICE]);
+        let out = {
+            let mut arguments = vec!["shex", "--schema", &schema, "--data", &target, ALICE];
+            if token == "pack" {
+                arguments.extend([
+                    "--canonical-search",
+                    "unlimited",
+                    "--canonicalization-receipts",
+                    canonical_conditional_2
+                        .to_str()
+                        .expect("UTF-8 canonical receipt path"),
+                ]);
+            }
+            run(&arguments)
+        };
         assert_eq!(code(&out), 0, "`{token}`: {}", stderr(&out));
         assert!(
             stderr(&out).contains("shex nonconformant 1\n"),
@@ -1455,6 +1489,12 @@ fn a_schema_on_stdin_with_a_relative_iri_is_refused_not_vacuously_decided() {
 /// working from a relative-admitting source.
 #[test]
 fn base_with_a_pack_data_source_is_consumed_by_the_shape_map() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+    let canonical_receipt_3 = canonical_receipt_dir.path().join("request-3.json");
+    let canonical_receipt_4 = canonical_receipt_dir.path().join("request-4.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let schema = write_file(dir.path(), "schema.shex", SCHEMA);
     let data = write_file(dir.path(), "data.ttl", DATA);
@@ -1464,7 +1504,21 @@ fn base_with_a_pack_data_source_is_consumed_by_the_shape_map() {
         .to_str()
         .expect("temp path")
         .to_owned();
-    let packed = run(&["convert", "--from", "turtle", "--to", "pack", &data, &pack]);
+    let packed = run(&[
+        "convert",
+        "--from",
+        "turtle",
+        "--to",
+        "pack",
+        &data,
+        &pack,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(packed.status.success(), "{}", stderr(&packed));
 
     // A RELATIVE shape map over the pack: only `--base` can resolve `<alice>` and
@@ -1478,6 +1532,12 @@ fn base_with_a_pack_data_source_is_consumed_by_the_shape_map() {
         "--base",
         "http://example.org/",
         "<alice>@<UserShape>",
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     assert!(
@@ -1502,6 +1562,12 @@ fn base_with_a_pack_data_source_is_consumed_by_the_shape_map() {
         "--data",
         &pack,
         "<alice>@<UserShape>",
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_3
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert_eq!(
         code(&unbased),
@@ -1526,6 +1592,12 @@ fn base_with_a_pack_data_source_is_consumed_by_the_shape_map() {
         "--base",
         "http://example.org/",
         ALICE,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_4
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert_eq!(code(&absolute), 0, "{}", stderr(&absolute));
     assert!(stderr(&absolute).contains("shex nonconformant 1\n"));

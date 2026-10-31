@@ -1165,7 +1165,15 @@ mod tests {
 
         let reparsed = lift(&first.bundle, &config);
         assert!(
-            datasets_isomorphic(&source, &reparsed).unwrap(),
+            datasets_isomorphic(
+                &source,
+                &reparsed,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap(),
             "the complete OKF profile must round-trip isomorphically"
         );
         let second = write_okf_bundle(&reparsed, &config).expect("second write");
@@ -1208,7 +1216,15 @@ mod tests {
 
         let reparsed = lift(&outcome.bundle, &config);
         assert!(
-            datasets_isomorphic(&base, &reparsed).unwrap(),
+            datasets_isomorphic(
+                &base,
+                &reparsed,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap(),
             "only the explicitly ledgered extra annotation may disappear"
         );
     }
@@ -1359,7 +1375,18 @@ mod tests {
             if accepted {
                 let outcome = result.expect("exact YAML representation");
                 let read = lift(&outcome.bundle, &config);
-                assert!(datasets_isomorphic(&frozen, &read).unwrap(), "{lexical}");
+                assert!(
+                    datasets_isomorphic(
+                        &frozen,
+                        &read,
+                        &mut purrdf_core::CanonicalizationControl::new(
+                            purrdf_core::RDFC_V2_CORPUS_POLICY,
+                            None
+                        )
+                    )
+                    .unwrap(),
+                    "{lexical}"
+                );
             } else {
                 assert!(result.is_err(), "{lexical}");
             }

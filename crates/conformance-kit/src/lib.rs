@@ -33,7 +33,9 @@ pub enum GradeError {
     /// Well-formed inputs disagree under the declared comparison.
     Mismatch(String),
     /// The kernel could not establish canonical equality within its limits.
-    Canonicalization(String),
+    Canonicalization(purrdf_core::CanonError),
+    /// The local optional-report matcher exhausted its candidate projection allowance.
+    ProjectionLimit(String),
     /// A report subject has two records for one test: EARL asserts one outcome
     /// per subject and test, so a second would contradict or shadow the first.
     DuplicateAssertion {
@@ -48,6 +50,9 @@ impl fmt::Display for GradeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let (kind, message) = match self {
             Self::Storage(error) => return write!(f, "storage refused: {error}"),
+            Self::Canonicalization(error) => {
+                return write!(f, "canonicalization refused: {error}");
+            }
             Self::DuplicateAssertion { subject, case } => {
                 return write!(
                     f,
@@ -56,13 +61,13 @@ impl fmt::Display for GradeError {
             }
             Self::Malformed(message) => ("malformed input", message),
             Self::Mismatch(message) => ("mismatch", message),
-            Self::Canonicalization(message) => ("canonicalization refused", message),
+            Self::ProjectionLimit(message) => ("canonicalization refused", message),
         };
         write!(f, "{kind}: {message}")
     }
 }
 
-purrdf_lex::error_source!(GradeError { Storage });
+purrdf_hash::error_sources!(GradeError, Storage, Canonicalization);
 
 purrdf_lex::variant_from!(GradeError { Storage(purrdf_lex::allocation::StorageError) });
 
@@ -81,11 +86,11 @@ impl From<purrdf_core::CanonError> for GradeError {
             purrdf_core::CanonError::Invalid(error) => error.storage_error().map_or_else(
                 || {
                     let cause: purrdf_core::CanonError = purrdf_core::CanonError::Invalid(error);
-                    Self::Canonicalization(cause.to_string())
+                    Self::Canonicalization(cause)
                 },
                 Self::Storage,
             ),
-            other => Self::Canonicalization(other.to_string()),
+            other => Self::Canonicalization(other),
         }
     }
 }
@@ -116,7 +121,7 @@ mod tests {
     use super::GradeError;
 
     #[test]
-    fn native_capacity_refusal_survives_report_and_canonicalization_boundaries() {
+    fn native_refusals_survive_report_and_canonicalization_boundaries() {
         let cause: purrdf_lex::allocation::StorageError = purrdf_core::TermId::from_index(u32::MAX)
             .unwrap_err()
             .into();
@@ -133,6 +138,28 @@ mod tests {
                 std::error::Error::source(&error)
                     .unwrap()
                     .downcast_ref::<purrdf_lex::allocation::StorageError>(),
+                Some(&cause)
+            );
+        }
+        let mut builder = purrdf_core::RdfDatasetBuilder::new();
+        let subject = builder.intern_iri("urn:purrdf:rdfc:refused").unwrap();
+        let predicate = builder.intern_iri("urn:predicate").unwrap();
+        builder
+            .push_quad(subject, predicate, predicate, None)
+            .unwrap();
+        let dataset = builder.freeze().unwrap();
+        let reserved = purrdf_core::check_admissible(&dataset).expect_err("reserved subject");
+        assert!(
+            matches!(&reserved, purrdf_core::CanonError::ReservedVocabulary(_)),
+            "{reserved:?}"
+        );
+        for cause in [purrdf_core::CanonError::Stopped, reserved] {
+            let error = GradeError::from(cause.clone());
+            assert_eq!(error, GradeError::Canonicalization(cause.clone()));
+            assert_eq!(
+                std::error::Error::source(&error)
+                    .unwrap()
+                    .downcast_ref::<purrdf_core::CanonError>(),
                 Some(&cause)
             );
         }

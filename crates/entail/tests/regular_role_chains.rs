@@ -842,15 +842,32 @@ fn recorded_chain_consequence_replays_against_the_original_rbox() {
     let question = Question::AxiomEntailment {
         axiom: Box::new(axiom.clone()),
     };
-    let mut reasoner = Reasoner::with_proofs(&dataset).expect("regular source");
+    let mut reasoner = Reasoner::with_proofs(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("regular source");
     let answer = reasoner.entails(&axiom).expect("recorded answer");
     assert_eq!(*answer.answer(), Verdict::True);
-    let mut consumer = Reasoner::with_proofs(&dataset).expect("independent reverse mapping");
+    let mut consumer = Reasoner::with_proofs(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("independent reverse mapping");
     consumer.prepare(&question).expect("query preparation");
     let context = consumer.proof_context().expect("proof context");
     let proof = answer.proof().expect("actual recorded chain refutation");
     proof
-        .verify(&dataset, &question, Some(answer.certificate()), &context)
+        .verify(
+            &dataset,
+            &question,
+            Some(answer.certificate()),
+            &context,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
         .expect("independent original-inclusion replay");
 
     let mut altered = Ontology::default();
@@ -861,7 +878,11 @@ fn recorded_chain_consequence_replays_against_the_original_rbox() {
     altered.edge("a", p, "b");
     altered.edge("b", q, "c");
     let altered = altered.finish();
-    let mut checker = Reasoner::with_proofs(&altered).expect("regular changed RBox");
+    let mut checker = Reasoner::with_proofs(
+        &altered,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("regular changed RBox");
     checker.prepare(&question).expect("same question");
     let changed_context = checker.proof_context().expect("changed source context");
     assert!(
@@ -870,7 +891,11 @@ fn recorded_chain_consequence_replays_against_the_original_rbox() {
                 &altered,
                 &question,
                 Some(answer.certificate()),
-                &changed_context
+                &changed_context,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                ),
             )
             .is_err(),
         "a proof of p·q must not authenticate a q·p source"
@@ -1020,14 +1045,28 @@ fn fixed_top_aliases_without_a_chain_reach_query_only_individuals() {
             alias,
         );
         let dataset = o.finish();
-        let mut reasoner = Reasoner::with_proofs(&dataset).expect("fixed top alias");
+        let mut reasoner = Reasoner::with_proofs(
+            &dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("fixed top alias");
         let axiom = assertion("newSubject", "universalAlias", "newObject");
         let answer = reasoner.entails(&axiom).expect("universal relation");
         assert_eq!(*answer.answer(), Verdict::True);
         let question = Question::AxiomEntailment {
             axiom: Box::new(axiom),
         };
-        let mut consumer = Reasoner::with_proofs(&dataset).expect("source context");
+        let mut consumer = Reasoner::with_proofs(
+            &dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("source context");
         consumer.prepare(&question).expect("query roots");
         answer
             .proof()
@@ -1037,6 +1076,10 @@ fn fixed_top_aliases_without_a_chain_reach_query_only_individuals() {
                 &question,
                 Some(answer.certificate()),
                 &consumer.proof_context().expect("checking context"),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
             )
             .expect("independent fixed-role alias replay");
 
@@ -1106,9 +1149,12 @@ fn role_language_work_exhaustion_is_unknown_never_a_consistency_proof() {
     o.edge("a", r, "b");
     o.edge("b", p, "c");
     let dataset = o.finish();
-    let reasoner = Reasoner::with_proofs(&dataset)
-        .expect("regular source")
-        .with_work_cap(1);
+    let reasoner = Reasoner::with_proofs(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("regular source")
+    .with_work_cap(1);
     let answer = reasoner.consistency();
     assert_eq!(*answer.answer(), Verdict::Unknown);
     assert_eq!(
@@ -1262,7 +1308,13 @@ fn class_expression_role_refusals_retain_original_source_terms() {
                 o.relation(class, rdfs::SUB_CLASS_OF, restriction);
                 let dataset = o.finish();
                 match if recording {
-                    Reasoner::with_proofs(&dataset)
+                    Reasoner::with_proofs(
+                        &dataset,
+                        &mut purrdf_core::CanonicalizationControl::new(
+                            purrdf_core::RDFC_V2_CORPUS_POLICY,
+                            None,
+                        ),
+                    )
                 } else {
                     Reasoner::new(&dataset)
                 } {

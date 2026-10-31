@@ -86,25 +86,27 @@ fn keys() -> Keyring {
     ring
 }
 
-fn ed_pack(input: &[u8]) -> Vec<u8> {
+fn ed_pack(input: &[u8], control: &mut purrdf_core::CanonicalizationControl<'_>) -> Vec<u8> {
     compact_and_certify(
         input,
         DictPlan::undicted(),
         TIME,
         false,
         (fixed_key(73), "ed-pack".into()),
+        control,
     )
     .unwrap()
     .0
 }
 
-fn composite_pack(input: &[u8]) -> Vec<u8> {
+fn composite_pack(input: &[u8], control: &mut purrdf_core::CanonicalizationControl<'_>) -> Vec<u8> {
     compact_and_certify(
         input,
         DictPlan::undicted(),
         TIME,
         false,
         CompositePackaging::new(fixed_composite_key(74), "composite-pack".into(), draw),
+        control,
     )
     .unwrap()
     .0
@@ -151,17 +153,61 @@ fn authentic_composite_and_ed_packaging_preserve_exact_mixed_authorship() {
         assert_eq!(pairs.len(), 2);
         assert_eq!(verify_file_with_keyring(&input, &keys()).valid, 2);
         for (pack, algorithm) in [
-            (ed_pack(&input), Algorithm::Ed25519),
-            (composite_pack(&input), Algorithm::CompositeMlDsa65Ed25519),
+            (
+                ed_pack(
+                    &input,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
+                ),
+                Algorithm::Ed25519,
+            ),
+            (
+                composite_pack(
+                    &input,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
+                ),
+                Algorithm::CompositeMlDsa65Ed25519,
+            ),
         ] {
             let folded = read(&pack, true, None);
             assert_eq!(folded.diagnostics, []);
             assert_eq!(compact::detached_signature_pairs(&folded).unwrap(), pairs);
             assert_eq!(
-                refold_digest(&original).unwrap(),
-                refold_digest(&folded).unwrap()
+                refold_digest(
+                    &original,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
+                )
+                .unwrap(),
+                refold_digest(
+                    &folded,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
+                )
+                .unwrap()
             );
-            assert!(verify_compaction(&input, &pack, &keys()).unwrap().all_ok());
+            assert!(
+                verify_compaction(
+                    &input,
+                    &pack,
+                    &keys(),
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
+                )
+                .unwrap()
+                .all_ok()
+            );
             let signature = folded.signatures.last().unwrap().cose.as_ref().unwrap();
             assert_eq!(cose::parse_sign1(signature).unwrap().algorithm(), algorithm);
             let leaves = compact::detached_signature_leaves(&folded).unwrap();
@@ -180,12 +226,30 @@ fn authentic_composite_and_ed_packaging_preserve_exact_mixed_authorship() {
                 assert_eq!(proof.root, root);
                 purrdf_gts::mmr::verify_proof(&proof).unwrap();
             }
-            let repack = composite_pack(&pack);
+            let repack = composite_pack(
+                &pack,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            );
             assert_eq!(
                 compact::detached_signature_pairs(&read(&repack, true, None)).unwrap(),
                 pairs
             );
-            assert!(verify_compaction(&pack, &repack, &keys()).unwrap().all_ok());
+            assert!(
+                verify_compaction(
+                    &pack,
+                    &repack,
+                    &keys(),
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
+                )
+                .unwrap()
+                .all_ok()
+            );
         }
         let direct = compact::compact_streamable(
             &input,
@@ -203,43 +267,94 @@ fn authentic_composite_and_ed_packaging_preserve_exact_mixed_authorship() {
         )
         .unwrap();
         assert!(
-            verify_compaction(&input, &direct, &keys())
-                .unwrap()
-                .all_ok()
+            verify_compaction(
+                &input,
+                &direct,
+                &keys(),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .all_ok()
         );
     });
 }
 
 fn both_components_and_resolved_typed_keys_are_required() {
     let input = source();
-    let pack = composite_pack(&input);
+    let pack = composite_pack(
+        &input,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    );
     for byte in [0, 3309] {
         let bad_source = mutate_signature(&input, 1, byte);
-        let carried = composite_pack(&bad_source);
-        let report = verify_compaction(&bad_source, &carried, &keys()).unwrap();
+        let carried = composite_pack(
+            &bad_source,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        );
+        let report = verify_compaction(
+            &bad_source,
+            &carried,
+            &keys(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         assert!(report.packaging_sig_ok);
         assert!(!report.signatures_verify && !report.all_ok());
         let index = wire::iter_items(&pack).0.len() - 1;
         let bad_package = mutate_signature(&pack, index, byte);
-        let report = verify_compaction(&input, &bad_package, &keys()).unwrap();
+        let report = verify_compaction(
+            &input,
+            &bad_package,
+            &keys(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         assert!(report.signatures_verify);
         assert!(!report.packaging_sig_ok && !report.all_ok());
     }
     let mut wrong = keys();
     wrong.insert(AUTHOR, fixed_key(70).verifying_key());
     assert!(
-        !verify_compaction(&input, &pack, &wrong)
-            .unwrap()
-            .signatures_verify
+        !verify_compaction(
+            &input,
+            &pack,
+            &wrong,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+        .signatures_verify
     );
     wrong.insert(
         AUTHOR,
         Box::new(fixed_composite_key(76).verifying_key().clone()),
     );
     assert!(
-        !verify_compaction(&input, &pack, &wrong)
-            .unwrap()
-            .signatures_verify
+        !verify_compaction(
+            &input,
+            &pack,
+            &wrong,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+        .signatures_verify
     );
     let mut unresolved = Keyring::default();
     unresolved.insert(
@@ -247,36 +362,71 @@ fn both_components_and_resolved_typed_keys_are_required() {
         Box::new(fixed_composite_key(74).verifying_key().clone()),
     );
     assert!(
-        !verify_compaction(&input, &pack, &unresolved)
-            .unwrap()
-            .signatures_verify
+        !verify_compaction(
+            &input,
+            &pack,
+            &unresolved,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+        .signatures_verify
     );
     let mut wrong_pack = keys();
     wrong_pack.insert(b"composite-pack", fixed_key(74).verifying_key());
     assert!(
-        !verify_compaction(&input, &pack, &wrong_pack)
-            .unwrap()
-            .packaging_sig_ok
+        !verify_compaction(
+            &input,
+            &pack,
+            &wrong_pack,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+        .packaging_sig_ok
     );
     wrong_pack.insert(
         b"composite-pack",
         Box::new(fixed_composite_key(78).verifying_key().clone()),
     );
     assert!(
-        !verify_compaction(&input, &pack, &wrong_pack)
-            .unwrap()
-            .packaging_sig_ok
+        !verify_compaction(
+            &input,
+            &pack,
+            &wrong_pack,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+        .packaging_sig_ok
     );
     assert!(
-        !verify_compaction(&input, &pack, &Keyring::default())
-            .unwrap()
-            .packaging_sig_ok
+        !verify_compaction(
+            &input,
+            &pack,
+            &Keyring::default(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+        .packaging_sig_ok
     );
 }
 
 fn a_pack_followed_by_new_authored_history_keeps_both_kinds_of_authorship() {
     let input = source();
-    let mut combined = ed_pack(&input);
+    let mut combined = ed_pack(
+        &input,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    );
     let mut tail = Writer::with_options(
         "purrdf.gts",
         purrdf_gts::writer::WriterOptions {
@@ -308,7 +458,10 @@ fn a_pack_followed_by_new_authored_history_keeps_both_kinds_of_authorship() {
     for signature in tail_signatures {
         assert!(pairs.contains(&(signature.frame_id, signature.cose.unwrap())));
     }
-    let packed = composite_pack(&combined);
+    let packed = composite_pack(
+        &combined,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    );
     let final_graph = read(&packed, true, None);
     let selected_roots =
         compact::compaction_signature_roots(&final_graph, &folded.segment_heads).unwrap();
@@ -323,15 +476,26 @@ fn a_pack_followed_by_new_authored_history_keeps_both_kinds_of_authorship() {
         pairs
     );
     assert!(
-        verify_compaction(&combined, &packed, &keys())
-            .unwrap()
-            .all_ok()
+        verify_compaction(
+            &combined,
+            &packed,
+            &keys(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+        .all_ok()
     );
 }
 
 fn unrelated_valid_signature_cannot_replace_the_ordering_commitment() {
     let input = source();
-    let pack = ed_pack(&input);
+    let pack = ed_pack(
+        &input,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    );
     let mut items = wire::iter_items(&pack).0;
     let first = items[1].1.as_map_mut().unwrap();
     let id = wire::content_id(first);
@@ -347,9 +511,17 @@ fn unrelated_valid_signature_cannot_replace_the_ordering_commitment() {
         .collect();
     assert_eq!(verify_file_with_keyring(&unsigned_index, &keys()).valid, 1);
     assert!(
-        !verify_compaction(&input, &unsigned_index, &keys())
-            .unwrap()
-            .packaging_sig_ok
+        !verify_compaction(
+            &input,
+            &unsigned_index,
+            &keys(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+        .packaging_sig_ok
     );
     let index = items.last_mut().unwrap().1.as_map_mut().unwrap();
     let id = wire::content_id(index);
@@ -362,9 +534,17 @@ fn unrelated_valid_signature_cannot_replace_the_ordering_commitment() {
         .flat_map(|(_, value)| cbor::encode(&value))
         .collect();
     assert!(
-        verify_compaction(&input, &signed, &keys())
-            .unwrap()
-            .packaging_sig_ok
+        verify_compaction(
+            &input,
+            &signed,
+            &keys(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+        .packaging_sig_ok
     );
     let mut wrong_order = wire::iter_items(&signed).0;
     let index = wrong_order.last_mut().unwrap().1.as_map_mut().unwrap();
@@ -403,23 +583,47 @@ fn unrelated_valid_signature_cannot_replace_the_ordering_commitment() {
             .any(|diagnostic| diagnostic.code == "StreamableLayoutError")
     );
     assert!(
-        !verify_compaction(&input, &wrong_order, &keys())
-            .unwrap()
-            .packaging_sig_ok
+        !verify_compaction(
+            &input,
+            &wrong_order,
+            &keys(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+        .packaging_sig_ok
     );
     let invalid = mutate_signature(&signed, 1, 0);
     assert_eq!(verify_file_with_keyring(&invalid, &keys()).valid, 1);
     assert!(
-        !verify_compaction(&input, &invalid, &keys())
-            .unwrap()
-            .packaging_sig_ok
+        !verify_compaction(
+            &input,
+            &invalid,
+            &keys(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+        .packaging_sig_ok
     );
     let mut torn = signed;
     torn.push(0x5f);
     assert!(
-        !verify_compaction(&input, &torn, &keys())
-            .unwrap()
-            .packaging_sig_ok
+        !verify_compaction(
+            &input,
+            &torn,
+            &keys(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+        .packaging_sig_ok
     );
 }
 
@@ -438,6 +642,10 @@ fn entropy_failure_returns_no_pack_and_explicit_fresh_retry_succeeds() {
             TIME,
             false,
             CompositePackaging::new(fixed_composite_key(74), "composite-pack".into(), provider),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
         );
         assert!(
             result
@@ -447,9 +655,23 @@ fn entropy_failure_returns_no_pack_and_explicit_fresh_retry_succeeds() {
         );
     }
     assert!(
-        verify_compaction(&input, &composite_pack(&input), &keys())
-            .unwrap()
-            .all_ok()
+        verify_compaction(
+            &input,
+            &composite_pack(
+                &input,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            ),
+            &keys(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+        .all_ok()
     );
 }
 
@@ -515,9 +737,23 @@ fn malformed_and_ambiguous_carried_nodes_are_never_silently_dropped() {
         if variant == 8 {
             assert_eq!(compact::detached_signature_pairs(&folded).unwrap().len(), 1);
             assert!(
-                verify_compaction(&input, &ed_pack(&input), &keys())
-                    .unwrap()
-                    .all_ok()
+                verify_compaction(
+                    &input,
+                    &ed_pack(
+                        &input,
+                        &mut purrdf_core::CanonicalizationControl::new(
+                            purrdf_core::RDFC_V2_CORPUS_POLICY,
+                            None
+                        )
+                    ),
+                    &keys(),
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
+                )
+                .unwrap()
+                .all_ok()
             );
             continue;
         }
@@ -579,9 +815,23 @@ fn literal_class_names_remain_content_and_do_not_fabricate_provenance() {
     );
     assert_eq!(compact::detached_signature_pairs(&folded).unwrap(), []);
     assert!(
-        verify_compaction(&input, &ed_pack(&input), &keys())
-            .unwrap()
-            .all_ok()
+        verify_compaction(
+            &input,
+            &ed_pack(
+                &input,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            ),
+            &keys(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+        .all_ok()
     );
 }
 
@@ -639,32 +889,63 @@ fn ordinary_compaction_type_keeps_verbatim_authored_index_in_both_readers() {
         let streamed = purrdf_gts::reader::read_to_sink(&input, true, None, &mut observations);
         assert_eq!(streamed.diagnostics, []);
         assert_eq!(observations.0, folded.signatures);
-        let packed = composite_pack(&input);
+        let packed = composite_pack(
+            &input,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        );
         assert_eq!(
             compact::detached_signature_pairs(&read(&packed, true, None)).unwrap(),
             pairs
         );
         assert!(
-            verify_compaction(&input, &packed, &keys())
-                .unwrap()
-                .all_ok()
+            verify_compaction(
+                &input,
+                &packed,
+                &keys(),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .all_ok()
         );
-        let repacked = ed_pack(&packed);
+        let repacked = ed_pack(
+            &packed,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        );
         assert_eq!(
             compact::detached_signature_pairs(&read(&repacked, true, None)).unwrap(),
             pairs
         );
         assert!(
-            verify_compaction(&packed, &repacked, &keys())
-                .unwrap()
-                .all_ok()
+            verify_compaction(
+                &packed,
+                &repacked,
+                &keys(),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .all_ok()
         );
     }
 }
 
 fn packaging_capability_resets_between_streamable_and_ordinary_segments() {
     let input = source();
-    let pack = ed_pack(&input);
+    let pack = ed_pack(
+        &input,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    );
     let packed_graph = read(&pack, true, None);
     let mut writer = Writer::with_layout("purrdf.gts", None);
     writer.add_terms(&compaction_terms(TIME, false));
@@ -700,25 +981,53 @@ fn packaging_capability_resets_between_streamable_and_ordinary_segments() {
         let streamed = purrdf_gts::reader::read_to_sink(&combined, true, None, &mut observations);
         assert_eq!(streamed.diagnostics, []);
         assert_eq!(observations.0, folded.signatures);
-        let packed = composite_pack(&combined);
+        let packed = composite_pack(
+            &combined,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        );
         assert_eq!(
             compact::detached_signature_pairs(&read(&packed, true, None)).unwrap(),
             pairs
         );
         assert!(
-            verify_compaction(&combined, &packed, &keys())
-                .unwrap()
-                .all_ok()
+            verify_compaction(
+                &combined,
+                &packed,
+                &keys(),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .all_ok()
         );
-        let repacked = ed_pack(&packed);
+        let repacked = ed_pack(
+            &packed,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        );
         assert_eq!(
             compact::detached_signature_pairs(&read(&repacked, true, None)).unwrap(),
             pairs
         );
         assert!(
-            verify_compaction(&packed, &repacked, &keys())
-                .unwrap()
-                .all_ok()
+            verify_compaction(
+                &packed,
+                &repacked,
+                &keys(),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .all_ok()
         );
     }
 }
@@ -760,33 +1069,89 @@ fn rewrite_timestamp_shape_preserves_authorship_and_classifies_only_utc() {
             assert_eq!(pairs[0].1, original.signatures[0].cose.clone().unwrap());
             assert_eq!(projection.quads, original.quads, "{timestamp}");
         }
-        let packed = composite_pack(&input);
+        let packed = composite_pack(
+            &input,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        );
         let folded = read(&packed, true, None);
         assert_eq!(folded.diagnostics, [], "{timestamp}");
         assert!(folded.signatures.last().unwrap().packaging);
         assert_eq!(compact::detached_signature_pairs(&folded).unwrap(), pairs);
         assert_eq!(
-            refold_digest(&folded).unwrap(),
-            refold_digest(&original).unwrap()
+            refold_digest(
+                &folded,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap(),
+            refold_digest(
+                &original,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
         );
         assert!(
-            verify_compaction(&input, &packed, &keys())
-                .unwrap()
-                .all_ok(),
+            verify_compaction(
+                &input,
+                &packed,
+                &keys(),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .all_ok(),
             "{timestamp}"
         );
-        let repacked = ed_pack(&packed);
+        let repacked = ed_pack(
+            &packed,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        );
         let refolded = read(&repacked, true, None);
         assert!(refolded.signatures.last().unwrap().packaging);
         assert_eq!(compact::detached_signature_pairs(&refolded).unwrap(), pairs);
         assert_eq!(
-            refold_digest(&refolded).unwrap(),
-            refold_digest(&original).unwrap()
+            refold_digest(
+                &refolded,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap(),
+            refold_digest(
+                &original,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
         );
         assert!(
-            verify_compaction(&packed, &repacked, &keys())
-                .unwrap()
-                .all_ok(),
+            verify_compaction(
+                &packed,
+                &repacked,
+                &keys(),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .all_ok(),
             "{timestamp}"
         );
     }
@@ -823,6 +1188,10 @@ fn rewrite_timestamp_parameters_refuse_before_randomness_and_preserve_utc_bytes(
             timestamp,
             false,
             (fixed_key(73), "ed-pack".into()),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
         )
         .unwrap_err();
         assert!(
@@ -850,9 +1219,17 @@ fn rewrite_timestamp_parameters_refuse_before_randomness_and_preserve_utc_bytes(
         );
         assert!(folded.signatures.last().unwrap().packaging);
         assert!(
-            verify_compaction(&input, &packed, &keys())
-                .unwrap()
-                .all_ok(),
+            verify_compaction(
+                &input,
+                &packed,
+                &keys(),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+            .all_ok(),
             "{timestamp}"
         );
     }
@@ -860,7 +1237,10 @@ fn rewrite_timestamp_parameters_refuse_before_randomness_and_preserve_utc_bytes(
 
 fn root_commitments_require_current_subject_literal_identity_and_cardinality() {
     let input = source();
-    let packed = ed_pack(&input);
+    let packed = ed_pack(
+        &input,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    );
     let original = read(&packed, true, None);
     let root_quad = original
         .quads
@@ -926,7 +1306,16 @@ fn root_commitments_require_current_subject_literal_identity_and_cardinality() {
             _ => unreachable!(),
         }
         let rebuilt = signed_graph(&graph.terms, &graph.quads);
-        let report = verify_compaction(&input, &rebuilt, &keys()).unwrap();
+        let report = verify_compaction(
+            &input,
+            &rebuilt,
+            &keys(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         if variant == 0 || variant == 7 {
             assert!(report.all_ok(), "variant {variant}: {report:?}");
         } else {
@@ -940,6 +1329,10 @@ fn root_commitments_require_current_subject_literal_identity_and_cardinality() {
                 TIME,
                 false,
                 (fixed_key(73), "ed-pack".into()),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
             )
             .unwrap_err()
             .to_string();

@@ -885,7 +885,14 @@ mod tests {
         let mut reversed_quads: Vec<_> = source.owned_quads().collect();
         reversed_quads.reverse();
         let reversed = dataset_from_quads(&reversed_quads).expect("reversed source");
-        let pack = PackBuilder::build_bytes(&source).expect("pack");
+        let pack = PackBuilder::build_bytes(
+            &source,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("pack");
         let packed = PackView::from_bytes(&pack).expect("pack view");
 
         for format in NativeRdfFormat::all() {
@@ -911,7 +918,17 @@ mod tests {
                 .get(&resident.artifact_path)
                 .expect("artifact");
             let reparsed = parse_dataset(bytes, format.media_type(), None).expect("reparse VoID");
-            assert!(datasets_isomorphic(resident.dataset.as_ref(), &reparsed).unwrap());
+            assert!(
+                datasets_isomorphic(
+                    resident.dataset.as_ref(),
+                    &reparsed,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
+                )
+                .unwrap()
+            );
         }
     }
 

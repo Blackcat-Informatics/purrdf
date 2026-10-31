@@ -28,8 +28,18 @@ fn path_independence() {
     let dst = tmp.path().join("test-slice");
     copy_dir_all(&src, &dst).expect("copy fixture");
 
-    let rec_src = SliceCatalog::from_slice_dir(&src, &test_vocab()).expect("load from src");
-    let rec_dst = SliceCatalog::from_slice_dir(&dst, &test_vocab()).expect("load from dst");
+    let rec_src = SliceCatalog::from_slice_dir(
+        &src,
+        &test_vocab(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("load from src");
+    let rec_dst = SliceCatalog::from_slice_dir(
+        &dst,
+        &test_vocab(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("load from dst");
 
     assert_eq!(
         rec_src.artifacts.len(),
@@ -79,7 +89,12 @@ fn copy_dir_all(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result
 #[test]
 fn lossless_round_trip() {
     let dir = fixture_dir();
-    let rec = SliceCatalog::from_slice_dir(&dir, &test_vocab()).expect("load slice");
+    let rec = SliceCatalog::from_slice_dir(
+        &dir,
+        &test_vocab(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("load slice");
 
     // Structural fields from manifest.ttl.
     assert_eq!(
@@ -116,7 +131,12 @@ fn lossless_round_trip() {
 #[test]
 fn recoverability() {
     let dir = fixture_dir();
-    let rec = SliceCatalog::from_slice_dir(&dir, &test_vocab()).expect("load slice");
+    let rec = SliceCatalog::from_slice_dir(
+        &dir,
+        &test_vocab(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("load slice");
 
     assert!(
         !rec.artifacts.is_empty(),
@@ -161,7 +181,12 @@ fn recoverability() {
 #[test]
 fn role_classification() {
     let dir = fixture_dir();
-    let rec = SliceCatalog::from_slice_dir(&dir, &test_vocab()).expect("load slice");
+    let rec = SliceCatalog::from_slice_dir(
+        &dir,
+        &test_vocab(),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("load slice");
 
     let has_manifest = rec
         .artifacts
@@ -226,7 +251,15 @@ fn semantic_digest_blank_nodes_are_deterministic() {
     }
 
     fn module_semantic_digest(dir: &std::path::Path) -> String {
-        let rec = SliceCatalog::from_slice_dir(dir, &test_vocab()).expect("load slice");
+        let rec = SliceCatalog::from_slice_dir(
+            dir,
+            &test_vocab(),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .expect("load slice");
         rec.artifacts
             .iter()
             .find(|a| matches!(a.role, ArtifactRole::Module))

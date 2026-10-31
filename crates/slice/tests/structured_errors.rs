@@ -134,7 +134,12 @@ fn flat_canonicalization_returns_the_native_reserved_vocabulary_refusal() {
     let text = format!("<{rejected}> <urn:p> <urn:o> .");
     let dataset =
         purrdf_slice::rdf_query::Dataset::parse_turtle(text.as_bytes(), None, "reserved").unwrap();
-    let error = dataset.canonical_nquads_flat().unwrap_err();
+    let error = dataset
+        .canonical_nquads_flat(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::RDFC_V2_CORPUS_POLICY,
+            None,
+        ))
+        .unwrap_err();
     drop(dataset);
     drop(text);
     let captured = Capture::read(&error);
@@ -149,7 +154,12 @@ fn flat_canonicalization_returns_the_native_reserved_vocabulary_refusal() {
     )
     .unwrap();
     assert_eq!(
-        accepted.canonical_nquads_flat().unwrap(),
+        accepted
+            .canonical_nquads_flat(&mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            ))
+            .unwrap(),
         "<urn:s> <urn:p> <urn:o> .\n"
     );
 }

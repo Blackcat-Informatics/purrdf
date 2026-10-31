@@ -28,7 +28,7 @@ use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::{Arc, OnceLock};
 
-use hashbrown::HashTable;
+use crate::hash::table::HashTable;
 
 use crate::backend::DatasetHandle;
 use crate::content_id::{Blake3ContentId, ContentIdScheme};
@@ -72,7 +72,7 @@ pub enum QueryIndexAllocationError {
     /// Ordinal array allocation failed.
     Permutation(purrdf_lex::allocation::StorageError),
     /// The statement graph histogram table allocation failed.
-    StatementHistogram(hashbrown::TryReserveError),
+    StatementHistogram(crate::hash::table::TryReserveError),
 }
 
 impl std::fmt::Display for QueryIndexAllocationError {
@@ -1177,7 +1177,7 @@ impl RdfDataset {
     /// cardinality once prevents any allocating insertion in the fill pass.
     fn try_statement_graph_rows(
         &self,
-    ) -> Result<&HashTable<(TermId, usize)>, hashbrown::TryReserveError> {
+    ) -> Result<&HashTable<(TermId, usize)>, crate::hash::table::TryReserveError> {
         if let Some(rows) = self.statement_graph_rows.get() {
             return Ok(rows);
         }
@@ -3819,8 +3819,18 @@ mod tests {
         let ba = RdfDataset::union(&[&c, &a]).unwrap();
         assert_eq!(ab.quad_count(), 2, "both quads survive the union");
         assert_eq!(
-            try_canonicalize(&ab).unwrap().nquads,
-            try_canonicalize(&ba).unwrap().nquads,
+            try_canonicalize(
+                &ab,
+                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+            )
+            .unwrap()
+            .nquads,
+            try_canonicalize(
+                &ba,
+                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+            )
+            .unwrap()
+            .nquads,
             "union is order-independent up to isomorphism"
         );
     }
@@ -3941,8 +3951,18 @@ mod tests {
         };
         let u = RdfDataset::union(&[&ds]).unwrap();
         assert_eq!(
-            try_canonicalize(&ds).unwrap().nquads,
-            try_canonicalize(&u).unwrap().nquads,
+            try_canonicalize(
+                &ds,
+                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+            )
+            .unwrap()
+            .nquads,
+            try_canonicalize(
+                &u,
+                &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+            )
+            .unwrap()
+            .nquads,
             "single-input union is isomorphic to the input"
         );
     }

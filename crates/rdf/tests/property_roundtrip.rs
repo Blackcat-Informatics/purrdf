@@ -56,7 +56,11 @@ const XSD_NON_NEGATIVE_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#nonNega
 /// The native flat RDFC-1.0 canonical N-Quads of a dataset — the comparator for every
 /// round-trip property (blank-node labels canonicalized, lines sorted/deduped).
 fn canonical(dataset: &RdfDataset) -> String {
-    canonical_flat_nquads(dataset).expect("native RDFC-1.0 canonicalization")
+    canonical_flat_nquads(
+        dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("native RDFC-1.0 canonicalization")
 }
 
 /// Serialize a dataset to RDF text of `format` (full RDF 1.2 statement layer).
@@ -570,9 +574,9 @@ prop_test! {
         let reference = {
             let flat = flat_dataset_from_quads(&flat_rdf_quads_from_dataset(&dataset))
                 .expect("an already-valid dataset's own flat quad stream must re-freeze");
-            try_canonicalize_with(&flat, hash).unwrap().nquads
+            try_canonicalize_with(&flat, hash, &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None)).unwrap().nquads
         };
-        match try_canonicalize_flat_view(&*dataset, hash) {
+        match try_canonicalize_flat_view(&*dataset, hash, &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None)) {
             Ok(canonicalized) => prop_assert_eq!(canonicalized.nquads, reference),
             Err(err) => prop_assert!(
                 false,
@@ -651,11 +655,11 @@ prop_test! {
         // The swap removes every reserved-namespace IRI, so the only way this can
         // still refuse is an unrelated poison-budget exhaustion — skip rather than
         // fail on that, since it is not what this property is about either.
-        let Ok(swapped_canonicalized) = try_canonicalize_flat_view(&*swapped_dataset, hash) else {
+        let Ok(swapped_canonicalized) = try_canonicalize_flat_view(&*swapped_dataset, hash, &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None)) else {
             return Ok(());
         };
 
-        match try_canonicalize_flat_view(&*dataset, hash) {
+        match try_canonicalize_flat_view(&*dataset, hash, &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None)) {
             Ok(canonicalized) => prop_assert_eq!(
                 canonicalized.nquads,
                 swapped_canonicalized.nquads,

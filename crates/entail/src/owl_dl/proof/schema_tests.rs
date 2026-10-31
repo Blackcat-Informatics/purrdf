@@ -26,7 +26,11 @@ fn derived() -> (DlProof, DlProofContext<'static>) {
         .push_quad(subject, edge, object, None)
         .unwrap();
     let dataset = fixture.freeze();
-    let reasoner = Reasoner::with_proofs(&dataset).unwrap();
+    let reasoner = Reasoner::with_proofs(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let answer = reasoner.consistency();
     assert_eq!(*answer.answer(), Verdict::False);
     let proof = answer
@@ -138,7 +142,11 @@ fn legacy_v4_prepared_prefixes_use_the_same_current_support_checker() {
 #[test]
 fn schema_layout_without_its_evidence_is_not_a_second_encoding_of_a_legacy_proof() {
     let dataset = shared_schema(1, 0, false);
-    let reasoner = Reasoner::with_proofs(&dataset).unwrap();
+    let reasoner = Reasoner::with_proofs(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     let answer = reasoner.consistency();
     let proof = answer
         .proof()
@@ -201,7 +209,11 @@ fn refusing_native_support_keeps_search_parity_and_a_typed_incomplete_proof() {
         .unwrap();
     let dataset = fixture.freeze();
     let plain = Reasoner::new(&dataset).unwrap().consistency();
-    let mut refused = Reasoner::with_proofs(&dataset).unwrap();
+    let mut refused = Reasoner::with_proofs(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     refused.set_schema_recording_budget(crate::reasoner::SchemaPreparationBudget {
         bytes: Some(0),
         work: None,
@@ -327,7 +339,14 @@ fn retained_schema_proof_clones_release_their_original_allocations_after_the_con
     let dataset = shared_schema(2, 1, true);
     let window = CurrentThreadWindow::open();
     {
-        let reasoner = Reasoner::with_proofs(&dataset).unwrap();
+        let reasoner = Reasoner::with_proofs(
+            &dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         let answer = reasoner.consistency();
         let proof = answer.proof().unwrap().clone();
         let clone = proof.clone();
@@ -338,6 +357,10 @@ fn retained_schema_proof_clones_release_their_original_allocations_after_the_con
                 proof.question(),
                 Some(answer.certificate()),
                 &context,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
             )
             .unwrap();
         drop(context);

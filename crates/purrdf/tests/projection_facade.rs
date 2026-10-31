@@ -36,5 +36,15 @@ fn umbrella_facade_projects_and_lifts_without_subcrate_imports() {
     assert!(!first.loss_ledger.is_empty());
 
     let lifted = lift_archive(&first.archive, LiftProfile::LpgCsv, &config).expect("lift");
-    assert!(datasets_isomorphic(&dataset, &lifted.dataset).unwrap());
+    assert!(
+        datasets_isomorphic(
+            &dataset,
+            &lifted.dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+    );
 }

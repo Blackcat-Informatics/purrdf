@@ -108,6 +108,7 @@ pub(crate) fn run(
     options: &ConsistencyOptions<'_>,
     ledger_target: &LedgerTarget,
     jsonld_options: Option<&JsonLdSerializeOptions>,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<CliOutcome, CliError> {
     // Refuse the two global document flags, which name outputs this command does not produce.
     //
@@ -136,7 +137,7 @@ pub(crate) fn run(
     readers.extend(import_readers(&import_pairs));
     refuse_shared_stdin(&readers)?;
     let format = format::resolve(options.from, options.input)?;
-    let document = read_as_nquads(options, format)?;
+    let document = read_as_nquads(options, format, canonical)?;
     // The IRI the input document was read FROM: an `owl:imports` of it names the ontology
     // itself, so it resolves in place rather than being refused as missing.
     let premise_base = premise_imports::premise_iri(options.input, format, options.base)?;
@@ -146,7 +147,7 @@ pub(crate) fn run(
         let what = format!("--import {}", pair.iri);
         imports.push((
             pair.iri.to_owned(),
-            read_path_as_nquads(pair.path, &what, options)?,
+            read_path_as_nquads(pair.path, &what, options, canonical)?,
         ));
     }
     crate::entails::refuse_unreached_pairs(&document, &imports, &premise_iris)?;
@@ -168,11 +169,11 @@ pub(crate) fn run(
     )
     .map_err(CliError::Runtime)?;
     let answer: ReasoningAnswer = if options.proof {
-        session.prove("consistency", "")
+        session.prove("consistency", "", canonical.control()?)
     } else {
-        session.consistency()
+        session.consistency(canonical.control()?)
     }
-    .map_err(CliError::Runtime)?;
+    .map_err(CliError::native)?;
 
     let mut rendered = String::with_capacity(answer.answer().len() + answer.certificate().len());
     rendered.push_str(answer.answer());
@@ -181,9 +182,9 @@ pub(crate) fn run(
         rendered.push_str(answer.proof_document());
     }
     if let Some(path) = options.check_proof {
-        rendered.push_str(&check_supplied_proof(path, &session, &answer)?);
+        rendered.push_str(&check_supplied_proof(path, &session, &answer, canonical)?);
     }
-    sink::write_out("-", rendered.as_bytes())?;
+    sink::write_out_with_request("-", rendered.as_bytes(), canonical)?;
 
     // `unknown` is the certificate's own word for "at least one hypertableau run reached
     // its round cap" — read from the rendered certificate rather than re-parsing the
@@ -215,9 +216,13 @@ fn check_supplied_proof(
     path: &Path,
     session: &ReasonerSession,
     answer: &ReasoningAnswer,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<String, CliError> {
-    let proof = std::fs::read_to_string(path)
-        .map_err(|error| CliError::Runtime(format!("--check-proof {}: {error}", path.display())))?;
+    let proof = std::fs::read_to_string(path).map_err(|error| {
+        crate::canonical::map_error(error, |error| {
+            CliError::Runtime(format!("--check-proof {}: {error}", path.display()))
+        })
+    })?;
     session
         .check_proof(
             "consistency",
@@ -225,8 +230,13 @@ fn check_supplied_proof(
             answer.answer(),
             answer.certificate(),
             &proof,
+            canonical.control()?,
         )
-        .map_err(|error| CliError::Runtime(format!("--check-proof {}: {error}", path.display())))
+        .map_err(|error| {
+            crate::canonical::map_error(error, |error| {
+                CliError::Runtime(format!("--check-proof {}: {error}", path.display()))
+            })
+        })
 }
 
 /// Read `options.input` through the CLI's own format resolution and re-serialize it as
@@ -240,6 +250,7 @@ fn check_supplied_proof(
 fn read_as_nquads(
     options: &ConsistencyOptions<'_>,
     format: SourceFormat,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<String, CliError> {
     // The parses are the only legs `--base` has: this command answers with a verdict and a
     // certificate, and every document crosses the boundary as N-Quads, which can express no
@@ -253,7 +264,13 @@ fn read_as_nquads(
             .map(|(format, role)| format::BaseUse::parse(*format, role)),
     );
     format::refuse_unconsumable_base(options.base, &legs)?;
-    transcode(options.input, format, options.base, options.input)
+    transcode(
+        options.input,
+        format,
+        options.base,
+        options.input,
+        canonical,
+    )
 }
 
 /// Read one `--import` document through the same resolution and lossless crossing as the
@@ -262,9 +279,16 @@ fn read_path_as_nquads(
     path: &str,
     what: &str,
     options: &ConsistencyOptions<'_>,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<String, CliError> {
     let format = format::resolve(options.from, path)?;
-    transcode(path, format, options.base, &format!("{what} {path}"))
+    transcode(
+        path,
+        format,
+        options.base,
+        &format!("{what} {path}"),
+        canonical,
+    )
 }
 
 /// Serialize the document at `path` as N-Quads, refusing a realized drop. `named` opens the
@@ -274,10 +298,11 @@ fn transcode(
     format: SourceFormat,
     base: Option<&str>,
     named: &str,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<String, CliError> {
     // A pack crosses the N-Quads boundary as a zero-copy `PackView`, not a rebuilt
     // owned dataset; a text source parses to an `RdfDataset`.
-    let outcome = source::serialize_input_to_nquads(path, format, base)?;
+    let outcome = source::serialize_input_to_nquads(path, format, base, canonical)?;
     if outcome.statement_rows_dropped > 0 || outcome.directional_literals_dropped > 0 {
         return Err(CliError::Runtime(format!(
             "{named}: reading this document into the consistency boundary's N-Quads dropped {} \

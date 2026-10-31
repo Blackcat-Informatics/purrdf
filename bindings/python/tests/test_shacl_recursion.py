@@ -43,8 +43,8 @@ def test_requests_survive_direct_prepared_xpath_and_incremental_execution(mode, 
 @pytest.mark.parametrize("mode,expected", [("lfp", False), ("gfp", True)])
 def test_products_require_current_request_on_every_restore(mode, expected):
     options = request(mode)
-    packed = purrdf.shapes.pack_product(SHAPES, **options)
-    assert packed == purrdf.shapes.Shapes(SHAPES, **options).prepare().to_product()
+    packed = purrdf.shapes.pack_product(SHAPES, **options, canonical_search="1000000").value
+    assert packed == purrdf.shapes.Shapes(SHAPES, **options).prepare().to_product(canonical_search="1000000").value
     product = purrdf.shapes.ShapesProduct.open(packed)
     for name in ("admit", "admit_expecting", "rebuild", "rebuild_expecting"):
         args = (product.identity_digest(),) if name.endswith("expecting") else ()
@@ -67,7 +67,7 @@ def test_partial_or_unknown_request_fails_before_semantic_shape_loading(options)
     for load in (
         lambda: purrdf.shapes.validate(SHAPES, DATA, **options),
         lambda: purrdf.shapes.Shapes(SHAPES, **options),
-        lambda: purrdf.shapes.pack_product(SHAPES, **options),
+        lambda: purrdf.shapes.pack_product(SHAPES, **options, canonical_search="1000000").value,
     ):
         with pytest.raises(ValueError, match="recursion"):
             load()

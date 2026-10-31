@@ -157,7 +157,18 @@ fn canonical_reuse(c: &mut Bench) {
         }
         let data = builder.freeze().expect("valid canonical benchmark dataset");
         group.bench_function(name, |b| {
-            b.iter(|| black_box(canonical_relabel(black_box(&data)).expect("canonical relabel")));
+            b.iter(|| {
+                black_box(
+                    canonical_relabel(
+                        black_box(&data),
+                        &mut purrdf_core::CanonicalizationControl::new(
+                            purrdf_core::RDFC_V2_CORPUS_POLICY,
+                            None,
+                        ),
+                    )
+                    .expect("canonical relabel"),
+                )
+            });
         });
     }
     group.finish();

@@ -400,12 +400,6 @@ distinct = "internal to aes-gcm's AES-256-GCM; PurRDF has no block cipher or AEA
 holder = "aes-gcm"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
-[packages.hashbrown]
-category = "runtime"
-reason = "raw HashTable for store-once interners and dedup maps"
-distinct = "the raw HashTable API behind hash-once, store-once interners, which std does not expose; PurRDF has hashers (purrdf_hash::fixed) but no hash table"
-metrics = { direct = true, exclusive_closure = 1, release = true, wasm = true, build_script = false, proc_macro = false }
-
 [packages.heck]
 category = "transitive:pyo3"
 reason = "identifier case conversion for pyo3 and clap derive macros"

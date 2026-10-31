@@ -87,9 +87,10 @@ fn frozen_canonical_payloads_match_independent_typed_preimages() {
         assert!(names.insert(*name), "duplicate frozen state vector");
         let dataset = fixture(name);
         let mut reservation = dataset.reserve_workspace(0).unwrap();
-        let mut captured = Captured::new(&*dataset, &mut reservation).unwrap();
+        let run = SearchRun::new(crate::RDFC_V2_CORPUS_POLICY, None);
+        let mut captured = Captured::new(&*dataset, &mut reservation, &run).unwrap();
         captured.collect().unwrap();
-        let actual = captured.canonical_bytes(RDFC_CALL_LIMIT).unwrap();
+        let actual = captured.canonical_bytes().unwrap();
         let expected = purrdf_hash::hex::decode_canonical(payload_hex).unwrap();
         assert_eq!(actual, expected, "{name}");
         let mut hasher = blake3::Hasher::new();
@@ -102,7 +103,12 @@ fn frozen_canonical_payloads_match_independent_typed_preimages() {
             "{name} pinned digest"
         );
         assert_eq!(
-            DatasetStateDigest::from_view(&dataset).unwrap().as_bytes(),
+            DatasetStateDigest::from_view(
+                &dataset,
+                &mut CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None)
+            )
+            .unwrap()
+            .as_bytes(),
             expected_digest.as_bytes(),
             "{name} public digest"
         );
@@ -113,35 +119,48 @@ fn frozen_canonical_payloads_match_independent_typed_preimages() {
 #[test]
 fn discrete_refinement_uses_one_search_node_and_a_zero_node_budget_refuses() {
     let dataset = fixtures::anchored_blanks(256, false);
-    let mut reservation = dataset.reserve_workspace(0).unwrap();
-    let mut captured = Captured::new(&*dataset, &mut reservation).unwrap();
-    captured.collect().unwrap();
-    assert_eq!(
-        captured.canonical_bytes(0),
-        Err(DatasetStateError::SearchBudgetExceeded),
-    );
-    let bytes = captured
-        .canonical_bytes(1)
+    let mut zero = CanonicalizationControl::new(SearchPolicy::Finite(0), None);
+    assert!(matches!(DatasetStateDigest::from_view(&dataset, &mut zero),
+        Err(DatasetStateError::SearchBudgetExceeded { limit: 0, work }) if work.total() == 0));
+    assert_eq!(zero.receipts()[0].work.total(), 0);
+    assert!(!zero.receipts()[0].completed);
+    let mut one = CanonicalizationControl::new(SearchPolicy::Finite(1), None);
+    let digest = DatasetStateDigest::from_view(&dataset, &mut one)
         .expect("one discrete terminal is one search node");
-    assert_eq!(bytes, captured.canonical_bytes(RDFC_CALL_LIMIT).unwrap());
+    assert_eq!(one.receipts()[0].work.count(SearchEvent::StateNode), 1);
+    assert!(one.receipts()[0].completed);
     let renamed = fixtures::anchored_blanks(256, true);
     assert_eq!(
-        DatasetStateDigest::from_view(&dataset).unwrap(),
-        DatasetStateDigest::from_view(&renamed).unwrap(),
+        digest,
+        DatasetStateDigest::from_view(
+            &renamed,
+            &mut CanonicalizationControl::new(SearchPolicy::Unlimited, None)
+        )
+        .unwrap()
     );
 }
 
 #[test]
 fn genuine_branching_refuses_its_search_budget_and_has_an_admitted_neighbor() {
     let dataset = fixtures::triangle_components(2);
-    let mut reservation = dataset.reserve_workspace(0).unwrap();
-    let mut captured = Captured::new(&*dataset, &mut reservation).unwrap();
-    captured.collect().unwrap();
-    assert_eq!(
-        captured.canonical_bytes(1),
-        Err(DatasetStateError::SearchBudgetExceeded),
-    );
-    assert!(captured.canonical_bytes(RDFC_CALL_LIMIT).is_ok());
+    let mut unlimited = CanonicalizationControl::new(SearchPolicy::Unlimited, None);
+    let expected = DatasetStateDigest::from_view(&dataset, &mut unlimited).unwrap();
+    let work = unlimited.receipts()[0].work;
+    assert!(work.count(SearchEvent::StateCandidate) > 0);
+    assert!(work.count(SearchEvent::StateAutomorphism) > 0);
+    for limit in [1, work.total() - 1, work.total()] {
+        let mut control = CanonicalizationControl::new(SearchPolicy::Finite(limit), None);
+        let result = DatasetStateDigest::from_view(&dataset, &mut control);
+        if limit == work.total() {
+            assert_eq!(result.unwrap(), expected);
+            assert_eq!(control.receipts()[0].work, work);
+        } else {
+            assert!(
+                matches!(result, Err(DatasetStateError::SearchBudgetExceeded { limit: actual, work }) if actual == limit && work.total() == limit)
+            );
+            assert!(!control.receipts()[0].completed);
+        }
+    }
 }
 
 fn incidence_fixture(asymmetric: bool) -> Arc<RdfDataset> {
@@ -225,9 +244,10 @@ fn incident_transpositions_match_every_record_and_restore_labels() {
     let mut pairs = 0;
     for (name, dataset) in cases {
         let mut reservation = dataset.reserve_workspace(0).unwrap();
-        let mut captured = Captured::new(&*dataset, &mut reservation).unwrap();
+        let run = SearchRun::new(SearchPolicy::Unlimited, None);
+        let mut captured = Captured::new(&*dataset, &mut reservation, &run).unwrap();
         captured.collect().unwrap();
-        let incidence = captured.incidence();
+        let incidence = captured.incidence().unwrap();
         for reverse in [false, true] {
             let mut identity: Vec<_> = (0..captured.blank_count).collect();
             if reverse {
@@ -239,9 +259,13 @@ fn incident_transpositions_match_every_record_and_restore_labels() {
             for (blank, incident) in incidence.iter().enumerate() {
                 let original = identity[blank];
                 for (index, &record) in captured.records.iter().enumerate() {
-                    let bytes = captured.render(record, Labels::Ordinals(&identity));
+                    let bytes = captured
+                        .render(record, Labels::Ordinals(&identity))
+                        .unwrap();
                     identity[blank] = captured.blank_count;
-                    let changed = captured.render(record, Labels::Ordinals(&identity));
+                    let changed = captured
+                        .render(record, Labels::Ordinals(&identity))
+                        .unwrap();
                     identity[blank] = original;
                     assert_eq!(
                         incident.binary_search(&index).is_ok(),
@@ -250,14 +274,20 @@ fn incident_transpositions_match_every_record_and_restore_labels() {
                     );
                 }
             }
-            let original = captured.rendered_records(Labels::Ordinals(&identity));
+            let original = captured
+                .rendered_records(Labels::Ordinals(&identity))
+                .unwrap();
             for a in 0..captured.blank_count {
                 for b in a + 1..captured.blank_count {
                     identity.swap(a, b);
-                    let expected =
-                        captured.rendered_records(Labels::Ordinals(&identity)) == original;
+                    let expected = captured
+                        .rendered_records(Labels::Ordinals(&identity))
+                        .unwrap()
+                        == original;
                     identity.swap(a, b);
-                    let actual = captured.automorphism(a, b, &incidence, &mut identity);
+                    let actual = captured
+                        .automorphism(a, b, &incidence, &mut identity)
+                        .unwrap();
                     assert_eq!(actual, expected, "{name}: {a}/{b}, reverse={reverse}");
                     assert_eq!(identity, before, "labels restored after {name}: {a}/{b}");
                     accepted |= actual;

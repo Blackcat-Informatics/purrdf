@@ -183,6 +183,14 @@ fn a_conforming_graph_reports_conforms_true() {
 /// lost the type assertion or the offending literal would change the result count.
 #[test]
 fn every_native_source_format_reaches_the_same_verdict() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_conditional_1 = canonical_receipt_dir
+        .path()
+        .join("conditional-request-1.json");
+    let canonical_conditional_2 = canonical_receipt_dir
+        .path()
+        .join("conditional-request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "shapes.ttl", SHAPES);
     let seed = write_file(dir.path(), "seed.ttl", DATA);
@@ -205,7 +213,20 @@ fn every_native_source_format_reaches_the_same_verdict() {
             .to_str()
             .expect("temp path is valid UTF-8")
             .to_owned();
-        let converted = run(&["convert", "--from", "turtle", "--to", token, &seed, &target]);
+        let converted = {
+            let mut arguments = vec!["convert", "--from", "turtle", "--to", token, &seed, &target];
+            if token == "pack" {
+                arguments.extend([
+                    "--canonical-search",
+                    "unlimited",
+                    "--canonicalization-receipts",
+                    canonical_conditional_1
+                        .to_str()
+                        .expect("UTF-8 canonical receipt path"),
+                ]);
+            }
+            run(&arguments)
+        };
         assert!(
             converted.status.success(),
             "seeding the `{token}` source failed: {}",
@@ -214,7 +235,20 @@ fn every_native_source_format_reaches_the_same_verdict() {
 
         // The extension alone resolves the format — no `--from` needed, exactly as for
         // `convert`/`reason`.
-        let out = run(&["validate", "--shapes", &shapes, &target]);
+        let out = {
+            let mut arguments = vec!["validate", "--shapes", &shapes, &target];
+            if token == "pack" {
+                arguments.extend([
+                    "--canonical-search",
+                    "unlimited",
+                    "--canonicalization-receipts",
+                    canonical_conditional_2
+                        .to_str()
+                        .expect("UTF-8 canonical receipt path"),
+                ]);
+            }
+            run(&arguments)
+        };
         assert_eq!(code(&out), 0, "`{token}`: {}", stderr(&out));
         assert!(
             stdout(&out).contains(&conforms_triple(false)),
@@ -315,6 +349,10 @@ fn rdf12_statement_metadata_is_validated() {
 /// is the one carrier that stores the star layer losslessly.
 #[test]
 fn rdf12_statement_metadata_survives_a_pack_source() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "star-shapes.ttl", STAR_SHAPES);
     let data = write_file(dir.path(), "star.ttl", STAR_DATA);
@@ -324,10 +362,35 @@ fn rdf12_statement_metadata_survives_a_pack_source() {
         .to_str()
         .expect("temp path")
         .to_owned();
-    let packed = run(&["convert", "--from", "turtle", "--to", "pack", &data, &pack]);
+    let packed = run(&[
+        "convert",
+        "--from",
+        "turtle",
+        "--to",
+        "pack",
+        &data,
+        &pack,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(packed.status.success(), "{}", stderr(&packed));
 
-    let out = run(&["validate", "--shapes", &shapes, &pack]);
+    let out = run(&[
+        "validate",
+        "--shapes",
+        &shapes,
+        &pack,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     assert!(
         stdout(&out).contains("\"0.9\"^^<http://www.w3.org/2001/XMLSchema#decimal>"),
@@ -706,6 +769,10 @@ fn base_resolves_relative_iris_in_the_data_graph() {
 /// has no relative-IRI syntax, so the base would be accepted and silently unread.
 #[test]
 fn base_with_a_pack_data_source_is_refused_by_name() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "shapes.ttl", SHAPES);
     let data = write_file(dir.path(), "data.ttl", DATA);
@@ -715,7 +782,21 @@ fn base_with_a_pack_data_source_is_refused_by_name() {
         .to_str()
         .expect("temp path")
         .to_owned();
-    let packed = run(&["convert", "--from", "turtle", "--to", "pack", &data, &pack]);
+    let packed = run(&[
+        "convert",
+        "--from",
+        "turtle",
+        "--to",
+        "pack",
+        &data,
+        &pack,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(packed.status.success(), "{}", stderr(&packed));
 
     let out = run(&[
@@ -725,6 +806,12 @@ fn base_with_a_pack_data_source_is_refused_by_name() {
         "--base",
         "http://example.org/",
         &pack,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert_eq!(code(&out), 2, "a usage error");
     assert!(
@@ -1555,6 +1642,9 @@ fn assert_prefixes_001_verdict(out: &Output) {
 /// import in place and reaches the W3C verdict again.
 #[test]
 fn the_w3c_prefix_idiom_needs_no_import_flag_and_a_header_import_is_refused() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     assert_prefixes_001_verdict(&run(&["validate", "--shapes", PREFIXES_001, PREFIXES_001]));
     assert_prefixes_001_verdict(&run(&[
         "validate",
@@ -1617,6 +1707,12 @@ fn the_w3c_prefix_idiom_needs_no_import_flag_and_a_header_import_is_refused() {
         PREFIXES_001,
         "--out",
         product_path,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert_eq!(code(&packed), 0, "{}", stderr(&packed));
     assert_prefixes_001_verdict(&run(&[
@@ -1634,6 +1730,9 @@ fn the_w3c_prefix_idiom_needs_no_import_flag_and_a_header_import_is_refused() {
 /// which recorded its base when it was packed.
 #[test]
 fn shapes_base_is_the_shapes_documents_parse_base() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     const RELATIVE_SHAPES: &str = concat!(
         "@prefix sh:  <http://www.w3.org/ns/shacl#> .\n",
         "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n",
@@ -1709,7 +1808,20 @@ fn shapes_base_is_the_shapes_documents_parse_base() {
 
     let product = dir.path().join("relative.purrshp");
     let product_path = product.to_str().expect("utf8 path");
-    let packed = run(&["shacl", "pack", "--shapes", &shapes, "--out", product_path]);
+    let packed = run(&[
+        "shacl",
+        "pack",
+        "--shapes",
+        &shapes,
+        "--out",
+        product_path,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert_eq!(code(&packed), 0, "{}", stderr(&packed));
     let refused = run(&[
         "validate",
@@ -2611,6 +2723,9 @@ fn cli_validate_evaluates_sparql_expr_beside_its_vocabulary_declaration() {
 /// set, and a value that is not an IRI is a usage error rather than a silently default run.
 #[test]
 fn cli_validate_conformance_disallows() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     const WARNING_SHAPES: &str = concat!(
         "@prefix sh: <http://www.w3.org/ns/shacl#> .\n",
         "@prefix ex: <http://example.org/> .\n",
@@ -2653,7 +2768,20 @@ fn cli_validate_conformance_disallows() {
 
     let product = dir.path().join("warning.purrshp");
     let product_path = product.to_str().expect("utf8 path");
-    let packed = run(&["shacl", "pack", "--shapes", &shapes, "--out", product_path]);
+    let packed = run(&[
+        "shacl",
+        "pack",
+        "--shapes",
+        &shapes,
+        "--out",
+        product_path,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert_eq!(code(&packed), 0, "{}", stderr(&packed));
     let restored = run(&[
         "validate",
@@ -2685,6 +2813,9 @@ fn cli_validate_conformance_disallows() {
 /// control — a direct instance of the target class — fires both ways.
 #[test]
 fn cli_validate_subclass_of_in_shapes_graph() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     const SHAPES: &str = concat!(
         "@prefix sh: <http://www.w3.org/ns/shacl#> .\n",
         "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n",
@@ -2726,7 +2857,20 @@ fn cli_validate_subclass_of_in_shapes_graph() {
 
     let product = dir.path().join("subclass.purrshp");
     let product_path = product.to_str().expect("utf8 path");
-    let packed = run(&["shacl", "pack", "--shapes", &shapes, "--out", product_path]);
+    let packed = run(&[
+        "shacl",
+        "pack",
+        "--shapes",
+        &shapes,
+        "--out",
+        product_path,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert_eq!(code(&packed), 0, "{}", stderr(&packed));
     let restored = run(&[
         "validate",
@@ -2846,6 +2990,9 @@ fn verdict_lines(out: &Output) -> String {
 /// Validate `data` against the same shapes graph written as Turtle, TriG and RDF/XML, on
 /// `validate --shapes` and through a `shacl pack` product, and return the Turtle run.
 fn validate_in_three_syntaxes(dir: &Path, stem: &str, data: &str, spellings: [&str; 3]) -> Output {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let data = write_file(dir, &format!("{stem}-data.ttl"), data);
     let mut runs: Vec<(String, Output)> = Vec::new();
     for (extension, shapes) in ["ttl", "trig", "rdf"].into_iter().zip(spellings) {
@@ -2870,6 +3017,12 @@ fn validate_in_three_syntaxes(dir: &Path, stem: &str, data: &str, spellings: [&s
             from,
             "--out",
             product,
+            "--canonical-search",
+            "unlimited",
+            "--canonicalization-receipts",
+            canonical_receipt_1
+                .to_str()
+                .expect("UTF-8 canonical receipt path"),
         ]);
         assert_eq!(code(&packed), 0, "pack {extension}: {}", stderr(&packed));
         runs.push((
@@ -3208,6 +3361,10 @@ fn a_change_that_adds_a_link_validates_in_full() {
 /// name, and a link to a shapes graph it declares validates.
 #[test]
 fn a_product_must_hold_every_link() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(
         dir.path(),
@@ -3216,7 +3373,20 @@ fn a_product_must_hold_every_link() {
     );
     let product = dir.path().join("shapes.purrshp");
     let product = product.to_str().expect("utf-8");
-    let packed = run(&["shacl", "pack", "--shapes", &shapes, "--out", product]);
+    let packed = run(&[
+        "shacl",
+        "pack",
+        "--shapes",
+        &shapes,
+        "--out",
+        product,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert_eq!(code(&packed), 0, "{}", stderr(&packed));
 
     let unheld = write_file(
@@ -3266,6 +3436,12 @@ fn a_product_must_hold_every_link() {
         &format!("http://example.org/graph-shapes1={linked}"),
         "--out",
         with_lib,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert_eq!(code(&packed), 0, "{}", stderr(&packed));
     let holds = run(&["validate", "--shapes-product", with_lib, &unheld]);

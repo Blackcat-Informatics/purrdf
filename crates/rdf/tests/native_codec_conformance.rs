@@ -248,7 +248,12 @@ fn round_trip(ds: &RdfDataset, media_type: &str, base: &str) -> Result<bool, Str
         .map_err(|e| format!("serialize: {e:?}"))?;
     let reparsed =
         parse_dataset(&text, media_type, Some(base)).map_err(|e| format!("re-parse: {e:?}"))?;
-    Ok(datasets_isomorphic(ds, &reparsed).unwrap())
+    Ok(datasets_isomorphic(
+        ds,
+        &reparsed,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap())
 }
 
 /// Outcome of running one case.
@@ -290,7 +295,16 @@ fn run_case(case: &Case) -> Outcome {
                     Ok(rds) => rds,
                     Err(e) => return Outcome::Fail(format!("parse result: {e:?}")),
                 };
-                if !datasets_isomorphic(&ds, &rds).unwrap() {
+                if !datasets_isomorphic(
+                    &ds,
+                    &rds,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
+                )
+                .unwrap()
+                {
                     return Outcome::Fail("action not isomorphic to mf:result".to_owned());
                 }
             }

@@ -133,7 +133,13 @@ ex:n3 ex:locatedIn ex:city .
 fn product_bytes() -> Vec<u8> {
     let shapes = parse_shapes(SHAPES, None).expect("the fixture shapes parse");
     PreparedShapes::new(Arc::new(shapes))
-        .to_product(&ShapesProfile::CORE)
+        .to_product(
+            &ShapesProfile::CORE,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
         .expect("the fixture is representable as a product")
 }
 

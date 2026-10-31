@@ -19,6 +19,9 @@
 //! order. Use these types for lookup and membership; sort explicitly when order
 //! matters.
 
+/// Shared native table engine and its original allocation refusals.
+pub mod table;
+
 /// The workspace's fixed-key hasher builder,
 /// [`FixedState`](purrdf_hash::fixed::FixedState). Non-cryptographic, no
 /// runtime RNG seeding — see the [module docs](self) for the determinism policy.
@@ -33,14 +36,14 @@ pub type FastSet<T> = std::collections::HashSet<T, FastHasher>;
 /// A [`FastSet`] of interned [`TermId`](crate::TermId)s — the common id-membership set.
 pub type IdSet = FastSet<crate::TermId>;
 
-/// Checked allocation bound for a fresh `hashbrown::HashTable<T>` holding
+/// Checked allocation bound for a fresh `table::HashTable<T>` holding
 /// `capacity` elements. This is a physical layout certificate, not a governor
 /// proxy. It includes bucket storage, control bytes and their alignment.
 ///
-/// The workspace pins hashbrown 0.17: its small-table minimum uses at most a
+/// The shared native table preserves its pinned small-table minimum: at most a
 /// 16-byte control group and its larger tables reserve one eighth of buckets.
 /// The 16-byte bound also covers the portable eight-byte implementation. A
-/// dependency upgrade changing those allocation rules must update this home.
+/// change to those allocation rules must update this physical certificate.
 #[must_use]
 pub fn hash_table_allocation_bound<T>(capacity: usize) -> Option<usize> {
     if capacity == 0 {
@@ -69,7 +72,7 @@ pub fn hash_table_allocation_bound<T>(capacity: usize) -> Option<usize> {
 /// rise on reinsertion without changing the allocation. Native buffer owners
 /// must use the actual bucket count when resuming or refunding their grant.
 #[must_use]
-pub fn hash_table_retained_bound<T>(table: &hashbrown::HashTable<T>) -> Option<usize> {
+pub fn hash_table_retained_bound<T>(table: &table::HashTable<T>) -> Option<usize> {
     if table.allocation_size() == 0 {
         return Some(0);
     }
@@ -250,7 +253,7 @@ pub(crate) fn hash_triple_for_interner(s: u64, p: u64, o: u64) -> u64 {
 /// # Errors
 /// Returns layout overflow, original admission refusal or allocator refusal.
 pub fn reserve_table_with_memory<T, S: purrdf_lex::allocation::Admission + ?Sized>(
-    table: &mut hashbrown::HashTable<T>,
+    table: &mut table::HashTable<T>,
     required: usize,
     hash: impl Fn(&T) -> u64,
     memory: &mut purrdf_lex::allocation::Memory<'_, S>,
@@ -259,20 +262,39 @@ pub fn reserve_table_with_memory<T, S: purrdf_lex::allocation::Admission + ?Size
     if required <= table.capacity() {
         return Ok(());
     }
+    // Refuse original work/stop authority before growth can mutate or refuse
+    // admission. The established no-allocation fast path remains unchanged.
+    memory.admission_mut().checkpoint(0)?;
     let old = hash_table_retained_bound(table).ok_or(StorageError::SizeOverflow)?;
-    let next = hash_table_allocation_bound::<T>(required).ok_or(StorageError::SizeOverflow)?;
-    let mut replacement = memory.scope(|memory| {
+    let additional = required
+        .checked_sub(table.len())
+        .ok_or(StorageError::SizeOverflow)?;
+    // required > items + growth_left, so additional > growth_left and the
+    // native reserve plan necessarily contains a replacement capacity.
+    let capacity = table
+        .capacity_for_reserve(additional)
+        .map_err(|_| StorageError::SizeOverflow)?
+        .expect("required insertion headroom exceeds current table capacity");
+    let next = hash_table_allocation_bound::<T>(capacity).ok_or(StorageError::SizeOverflow)?;
+    memory.scope(|memory| {
+        // Both layouts stay admitted while transactional native rehash borrows
+        // original entries. On refusal the replacement dies before scope refund.
         memory.add_bytes(next)?;
-        let mut replacement = hashbrown::HashTable::new();
-        replacement
-            .try_reserve(required, &hash)
-            .map_err(|_| StorageError::AllocationFailed)?;
-        Ok(replacement)
+        table
+            .try_reserve_with_control(additional, |value, _| Ok(hash(value)), &mut |units| {
+                memory.admission_mut().checkpoint(units)
+            })
+            .map_err(|cause| match cause {
+                purrdf_lex::control::ControlledError::Control(cause) => cause,
+                purrdf_lex::control::ControlledError::Native(
+                    table::TryReserveError::CapacityOverflow,
+                ) => StorageError::SizeOverflow,
+                purrdf_lex::control::ControlledError::Native(
+                    table::TryReserveError::AllocError { .. },
+                ) => StorageError::AllocationFailed,
+            })
     })?;
-    for value in table.drain() {
-        replacement.insert_unique(hash(&value), value, &hash);
-    }
-    drop(core::mem::replace(table, replacement));
+    // The successful native swap already destroyed the original allocation.
     memory.release_bytes(old)
 }
 

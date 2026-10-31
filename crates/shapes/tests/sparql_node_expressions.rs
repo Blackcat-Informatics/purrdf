@@ -878,7 +878,13 @@ fn a_product_restore_keeps_the_authored_spelling() {
     )
     .expect("shapes parse");
     let bytes = PreparedShapes::new(Arc::new(shapes))
-        .to_product(&ShapesProfile::CORE)
+        .to_product(
+            &ShapesProfile::CORE,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
         .expect("the shapes graph packs");
     let restored = ShapesProduct::open(&bytes)
         .expect("the product opens")

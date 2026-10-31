@@ -25,6 +25,7 @@ pub fn canonical_solutions(
     variables: &[String],
     rows: &[Vec<Option<TermValue>>],
     ordered: bool,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<String, GradeError> {
     let names: BTreeSet<&str> = variables.iter().map(String::as_str).collect();
     if names.len() != variables.len() {
@@ -82,7 +83,7 @@ pub fn canonical_solutions(
         }
     }
     let dataset = builder.freeze().map_err(GradeError::from)?;
-    purrdf_core::try_canonicalize(&dataset)
+    purrdf_core::try_canonicalize(&dataset, control)
         .map(|canonical| canonical.nquads)
         .map_err(GradeError::from)
 }
@@ -100,9 +101,10 @@ pub fn compare_solutions(
     actual_variables: &[String],
     actual_rows: &[Vec<Option<TermValue>>],
     ordered: bool,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<(), GradeError> {
-    let expected = canonical_solutions(expected_variables, expected_rows, ordered)?;
-    let actual = canonical_solutions(actual_variables, actual_rows, ordered)?;
+    let expected = canonical_solutions(expected_variables, expected_rows, ordered, control)?;
+    let actual = canonical_solutions(actual_variables, actual_rows, ordered, control)?;
     if expected == actual {
         Ok(())
     } else {

@@ -113,8 +113,24 @@ const SEED_C: &str = concat!(
 /// THE BINARY via `--canonical`. Byte-equality of two such documents is an isomorphism
 /// test (canonical N-Quads are order- and blank-label-independent).
 fn canonical(dir: &Path, from: &str, input: &str) -> Vec<u8> {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let out = path(dir, "canonical.scratch.nq");
-    let o = run(&["convert", "--from", from, "--canonical", input, &out]);
+    let o = run(&[
+        "convert",
+        "--from",
+        from,
+        "--canonical",
+        input,
+        &out,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(
         o.status.success(),
         "canonicalizing {input} as {from} failed: {}",
@@ -820,6 +836,10 @@ fn stdin_to_stdout_with_explicit_formats() {
 /// identically).
 #[test]
 fn text_via_pack_equals_direct_text() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(dir, "seedA.nq", SEED_A);
@@ -829,13 +849,39 @@ fn text_via_pack_equals_direct_text() {
     let direct = path(dir, "direct.nt");
 
     assert!(
-        run(&["convert", "--from", "nquads", "--to", "pack", &seed, &pack])
-            .status
-            .success()
+        run(&[
+            "convert",
+            "--from",
+            "nquads",
+            "--to",
+            "pack",
+            &seed,
+            &pack,
+            "--canonical-search",
+            "unlimited",
+            "--canonicalization-receipts",
+            canonical_receipt_1
+                .to_str()
+                .expect("UTF-8 canonical receipt path"),
+        ])
+        .status
+        .success()
     );
     assert!(
         run(&[
-            "convert", "--from", "pack", "--to", "ntriples", &pack, &via_pack
+            "convert",
+            "--from",
+            "pack",
+            "--to",
+            "ntriples",
+            &pack,
+            &via_pack,
+            "--canonical-search",
+            "unlimited",
+            "--canonicalization-receipts",
+            canonical_receipt_2
+                .to_str()
+                .expect("UTF-8 canonical receipt path"),
         ])
         .status
         .success()
@@ -860,6 +906,10 @@ fn text_via_pack_equals_direct_text() {
 /// serialization path.
 #[test]
 fn pack_to_trig_equals_direct_dataset_to_trig() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(dir, "seedB.nq", SEED_B);
@@ -869,13 +919,39 @@ fn pack_to_trig_equals_direct_dataset_to_trig() {
     let direct = path(dir, "direct.trig");
 
     assert!(
-        run(&["convert", "--from", "nquads", "--to", "pack", &seed, &pack])
-            .status
-            .success()
+        run(&[
+            "convert",
+            "--from",
+            "nquads",
+            "--to",
+            "pack",
+            &seed,
+            &pack,
+            "--canonical-search",
+            "unlimited",
+            "--canonicalization-receipts",
+            canonical_receipt_1
+                .to_str()
+                .expect("UTF-8 canonical receipt path"),
+        ])
+        .status
+        .success()
     );
     assert!(
         run(&[
-            "convert", "--from", "pack", "--to", "trig", &pack, &via_pack
+            "convert",
+            "--from",
+            "pack",
+            "--to",
+            "trig",
+            &pack,
+            &via_pack,
+            "--canonical-search",
+            "unlimited",
+            "--canonicalization-receipts",
+            canonical_receipt_2
+                .to_str()
+                .expect("UTF-8 canonical receipt path"),
         ])
         .status
         .success()
@@ -901,6 +977,10 @@ fn pack_to_trig_equals_direct_dataset_to_trig() {
 /// `crates/cli/src/source.rs::verified_pack_mmap`).
 #[test]
 fn disk_pack_to_pack_is_byte_identical_passthrough() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(dir, "seedC.nq", SEED_C);
@@ -910,14 +990,36 @@ fn disk_pack_to_pack_is_byte_identical_passthrough() {
 
     assert!(
         run(&[
-            "convert", "--from", "nquads", "--to", "pack", &seed, &pack_in
+            "convert",
+            "--from",
+            "nquads",
+            "--to",
+            "pack",
+            &seed,
+            &pack_in,
+            "--canonical-search",
+            "unlimited",
+            "--canonicalization-receipts",
+            canonical_receipt_1
+                .to_str()
+                .expect("UTF-8 canonical receipt path"),
         ])
         .status
         .success(),
         "seeding the source pack must succeed"
     );
 
-    let o = run(&["convert", &pack_in, &pack_out]);
+    let o = run(&[
+        "convert",
+        &pack_in,
+        &pack_out,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(
         o.status.success(),
         "pack -> pack passthrough must exit 0: {}",
@@ -936,12 +1038,25 @@ fn disk_pack_to_pack_is_byte_identical_passthrough() {
 /// bytes are written to the output.
 #[test]
 fn disk_pack_to_pack_corrupt_input_fails_closed() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let bad = write_file(dir, "bad.purrpck", "not a pack file at all — pure garbage");
     let out = path(dir, "out.purrpck");
 
-    let o = run(&["convert", &bad, &out]);
+    let o = run(&[
+        "convert",
+        &bad,
+        &out,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(
         !o.status.success(),
         "a corrupt pack must fail closed (exit non-zero)"
@@ -995,6 +1110,10 @@ fn large_ntriples_ingress_preserves_every_triple() {
 /// different serializations of the same data canonicalize to the same bytes).
 #[test]
 fn canonical_output_is_stable_and_serialization_independent() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed_nq = write_file(dir, "seedA.nq", SEED_A);
@@ -1003,14 +1122,40 @@ fn canonical_output_is_stable_and_serialization_independent() {
     let c1 = path(dir, "c1.nq");
     let c2 = path(dir, "c2.nq");
     assert!(
-        run(&["convert", "--from", "nquads", "--canonical", &seed_nq, &c1])
-            .status
-            .success()
+        run(&[
+            "convert",
+            "--from",
+            "nquads",
+            "--canonical",
+            &seed_nq,
+            &c1,
+            "--canonical-search",
+            "unlimited",
+            "--canonicalization-receipts",
+            canonical_receipt_1
+                .to_str()
+                .expect("UTF-8 canonical receipt path"),
+        ])
+        .status
+        .success()
     );
     assert!(
-        run(&["convert", "--from", "nquads", "--canonical", &seed_nq, &c2])
-            .status
-            .success()
+        run(&[
+            "convert",
+            "--from",
+            "nquads",
+            "--canonical",
+            &seed_nq,
+            &c2,
+            "--canonical-search",
+            "unlimited",
+            "--canonicalization-receipts",
+            canonical_receipt_2
+                .to_str()
+                .expect("UTF-8 canonical receipt path"),
+        ])
+        .status
+        .success()
     );
     assert_eq!(
         std::fs::read(&c1).expect("c1"),
@@ -1246,13 +1391,29 @@ fn rules_without_entailment_is_refused_by_name() {
 /// the base they are handed. Refused by name instead of accepted and ignored.
 #[test]
 fn base_with_pack_from_is_refused_by_name() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(dir, "seedA.nt", SEED_A);
     let pack = path(dir, "seedA.purrpck");
     assert!(
         run(&[
-            "convert", "--from", "ntriples", "--to", "pack", &seed, &pack
+            "convert",
+            "--from",
+            "ntriples",
+            "--to",
+            "pack",
+            &seed,
+            &pack,
+            "--canonical-search",
+            "unlimited",
+            "--canonicalization-receipts",
+            canonical_receipt_1
+                .to_str()
+                .expect("UTF-8 canonical receipt path"),
         ])
         .status
         .success(),
@@ -1269,6 +1430,12 @@ fn base_with_pack_from_is_refused_by_name() {
         "http://example.org/base/",
         &pack,
         &out,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert!(
         !o.status.success(),
@@ -1286,6 +1453,9 @@ fn base_with_pack_from_is_refused_by_name() {
 /// N-Triples source, so neither leg can spend the base either way round.
 #[test]
 fn base_with_pack_to_is_refused_by_name() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(dir, "seedA.nt", SEED_A);
@@ -1300,6 +1470,12 @@ fn base_with_pack_to_is_refused_by_name() {
         "http://example.org/base/",
         &seed,
         &out,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert!(
         !o.status.success(),
@@ -1379,6 +1555,10 @@ fn entailment_rdfs_infers_type_from_text_input() {
 /// same inferred triple (the reconstruct-then-entail path).
 #[test]
 fn entailment_rdfs_infers_type_from_pack_input() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(
@@ -1396,9 +1576,23 @@ fn entailment_rdfs_infers_type_from_pack_input() {
     // Build a pack, then entail from the pack.
     let pack = path(dir, "sub.purrpck");
     assert!(
-        run(&["convert", "--from", "turtle", "--to", "pack", &ttl, &pack])
-            .status
-            .success()
+        run(&[
+            "convert",
+            "--from",
+            "turtle",
+            "--to",
+            "pack",
+            &ttl,
+            &pack,
+            "--canonical-search",
+            "unlimited",
+            "--canonicalization-receipts",
+            canonical_receipt_1
+                .to_str()
+                .expect("UTF-8 canonical receipt path"),
+        ])
+        .status
+        .success()
     );
     let entailed = path(dir, "entailed_from_pack.nt");
     let o = run(&[
@@ -1411,6 +1605,12 @@ fn entailment_rdfs_infers_type_from_pack_input() {
         "rdfs",
         &pack,
         &entailed,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert!(
         o.status.success(),
@@ -1429,6 +1629,10 @@ fn entailment_rdfs_infers_type_from_pack_input() {
 /// containing the inferred triple.
 #[test]
 fn entailment_then_canonical_composes() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let ttl = write_file(
@@ -1451,6 +1655,12 @@ fn entailment_then_canonical_composes() {
         "--canonical",
         &ttl,
         &out,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert!(
         o.status.success(),
@@ -1476,6 +1686,12 @@ fn entailment_then_canonical_composes() {
             "--canonical",
             &ttl,
             &out2,
+            "--canonical-search",
+            "unlimited",
+            "--canonicalization-receipts",
+            canonical_receipt_2
+                .to_str()
+                .expect("UTF-8 canonical receipt path"),
         ])
         .status
         .success()
@@ -1594,6 +1810,9 @@ fn stdout_broken_pipe_exits_clean() {
 /// `--canonical`).
 #[test]
 fn canonical_with_to_is_refused_by_name() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(dir, "seedA.nq", SEED_A);
@@ -1607,6 +1826,12 @@ fn canonical_with_to_is_refused_by_name() {
         "--canonical",
         &seed,
         &out,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert!(!o.status.success(), "--canonical with --to must be refused");
     assert_eq!(o.status.code(), Some(2), "usage errors exit 2");
@@ -1621,11 +1846,27 @@ fn canonical_with_to_is_refused_by_name() {
 /// omitted, since canonical output is always N-Quads.
 #[test]
 fn canonical_without_to_emits_canonical_nquads() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(dir, "seedA.nq", SEED_A);
     let out = path(dir, "out.canon");
-    let o = run(&["convert", "--from", "nquads", "--canonical", &seed, &out]);
+    let o = run(&[
+        "convert",
+        "--from",
+        "nquads",
+        "--canonical",
+        &seed,
+        &out,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert!(
         o.status.success(),
         "--canonical without --to failed: {}",
@@ -1657,6 +1898,9 @@ fn canonical_without_to_emits_canonical_nquads() {
 /// would take the whole process down over a caller-supplied document.
 #[test]
 fn canonical_refuses_reserved_vocabulary_without_aborting() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     const RESERVED_VOCAB_NQUADS: &str = concat!(
@@ -1665,7 +1909,20 @@ fn canonical_refuses_reserved_vocabulary_without_aborting() {
     );
     let seed = write_file(dir, "reserved.nq", RESERVED_VOCAB_NQUADS);
     let out = path(dir, "out.canon");
-    let o = run(&["convert", "--from", "nquads", "--canonical", &seed, &out]);
+    let o = run(&[
+        "convert",
+        "--from",
+        "nquads",
+        "--canonical",
+        &seed,
+        &out,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
+    ]);
     assert_eq!(
         o.status.code(),
         Some(1),
@@ -2093,6 +2350,10 @@ fn base_is_refused_exactly_when_neither_leg_can_consume_it() {
 /// nowhere to go on that lane either.
 #[test]
 fn base_under_canonical_is_refused_when_the_source_cannot_spend_it() {
+    let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
+    let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
+    let canonical_receipt_2 = canonical_receipt_dir.path().join("request-2.json");
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
     let seed = write_file(dir, "seedA.nq", SEED_A);
@@ -2107,6 +2368,12 @@ fn base_under_canonical_is_refused_when_the_source_cannot_spend_it() {
         "http://example.org/",
         &seed,
         &out,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_1
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
     assert!(
@@ -2127,6 +2394,12 @@ fn base_under_canonical_is_refused_when_the_source_cannot_spend_it() {
         "http://example.org/",
         &ttl,
         &out,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        canonical_receipt_2
+            .to_str()
+            .expect("UTF-8 canonical receipt path"),
     ]);
     assert!(o.status.success(), "{}", stderr(&o));
     let text = std::fs::read_to_string(&out).expect("read canonical output");

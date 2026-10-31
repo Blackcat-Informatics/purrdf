@@ -754,17 +754,31 @@ impl Dataset {
     /// thrown `JsError` via the typed [`try_canonicalize_flat_view`] path, never as a
     /// wasm trap/process abort.
     #[wasm_bindgen(js_name = canonicalize)]
-    pub fn canonicalize(&self) -> Result<String, JsValue> {
-        let frozen = self.inner.freeze().map_err(|e| diag_to_err(&e))?;
-        match try_canonicalize_flat_view(&frozen, CanonHash::Sha256) {
-            Ok(canonicalized) => Ok(canonicalized.nquads),
-            Err(ViewCanonError::Refused(err)) => Err(JsError::new(&err.to_string()).into()),
-            Err(ViewCanonError::NotReady { error, .. }) => match error {
-                // LAW: a freshly-frozen `Arc<RdfDataset>`'s `FallibleDatasetView::Error`
-                // is `Infallible` — the frozen dataset never faults, so this arm is
-                // unreachable by construction.
-            },
-        }
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "wasm-bindgen requires owned optional exported-class handles; optional references have no ABI conversion"
+    )]
+    pub fn canonicalize(
+        &self,
+        canonical_search: &str,
+        cancel: Option<crate::query::CancellationToken>,
+    ) -> Result<crate::CanonicalResult, JsValue> {
+        let (text, receipts) =
+            crate::canonical::run(canonical_search, cancel.as_ref(), |control| {
+                let frozen = self
+                    .inner
+                    .freeze()
+                    .map_err(purrdf_core::CanonError::Invalid)?;
+                match try_canonicalize_flat_view(&frozen, CanonHash::Sha256, control) {
+                    Ok(canonicalized) => Ok(canonicalized.nquads),
+                    Err(ViewCanonError::Refused(cause)) => Err(cause),
+                    Err(ViewCanonError::NotReady { error, .. }) => match error {},
+                }
+            })?;
+        Ok(crate::CanonicalResult::new(
+            JsValue::from_str(&text),
+            receipts,
+        ))
     }
 
     /// `isomorphic(other)` → whether this dataset and `other` are the same RDF graph
@@ -775,10 +789,32 @@ impl Dataset {
     /// comparing the two [`canonicalize`](Self::canonicalize) strings, but avoids
     /// materializing them for obviously-different inputs.
     #[wasm_bindgen(js_name = isomorphic)]
-    pub fn isomorphic(&self, other: &Self) -> Result<bool, JsValue> {
-        let a = self.inner.freeze().map_err(|e| diag_to_err(&e))?;
-        let b = other.inner.freeze().map_err(|e| diag_to_err(&e))?;
-        datasets_isomorphic(&a, &b).map_err(|error| JsError::new(&error.to_string()).into())
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "wasm-bindgen requires owned optional exported-class handles; optional references have no ABI conversion"
+    )]
+    pub fn isomorphic(
+        &self,
+        other: &Self,
+        canonical_search: &str,
+        cancel: Option<crate::query::CancellationToken>,
+    ) -> Result<crate::CanonicalResult, JsValue> {
+        let (equal, receipts) =
+            crate::canonical::run(canonical_search, cancel.as_ref(), |control| {
+                let a = self
+                    .inner
+                    .freeze()
+                    .map_err(purrdf_core::CanonError::Invalid)?;
+                let b = other
+                    .inner
+                    .freeze()
+                    .map_err(purrdf_core::CanonError::Invalid)?;
+                datasets_isomorphic(&a, &b, control)
+            })?;
+        Ok(crate::CanonicalResult::new(
+            JsValue::from_bool(equal),
+            receipts,
+        ))
     }
 
     /// `size` — the number of effective quads.
@@ -1059,8 +1095,8 @@ mod identity_fixture {
     use super::Dataset;
     use wasm_bindgen::prelude::*;
 
-    /// Unit-test-module fixture only: seed the real exported getters beyond binary64's
-    /// exact integer range without adding a seed operation to the release package.
+    /// Unit-test-module fixture only: seed the real exported getters beyond JavaScript's
+    /// safe integer range without adding a seed operation to the release package.
     #[wasm_bindgen]
     pub fn __purrdf_test_large_dataset_identity() -> Result<Dataset, JsValue> {
         let mut dataset = Dataset::new(None)?;
@@ -1250,7 +1286,14 @@ mod tests {
             let Ok(reparsed) = Dataset::parse(&text, fmt, None, None) else {
                 panic!("re-parse {fmt} failed");
             };
-            let Ok(iso) = reparsed.isomorphic(&ds) else {
+            let Ok(iso) = datasets_isomorphic(
+                &reparsed.inner.freeze().expect("parsed dataset freezes"),
+                &ds.inner.freeze().expect("parsed dataset freezes"),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::SearchPolicy::Unlimited,
+                    None,
+                ),
+            ) else {
                 panic!("isomorphic {fmt} failed");
             };
             assert!(iso, "wasm round-trip via {fmt} preserves the graph");

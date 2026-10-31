@@ -39,7 +39,7 @@ import init, {
 } from "../pkg/purrdf_wasm.js";
 import { NO_JSPI_MESSAGE, runJob } from "../pkg/purrdf_jspi.mjs";
 import { CROSS_COUNT, crossDataset, expectedCrossCount } from "./fixtures/yield-workload.mjs";
-
+import { canonicalValue } from "./fixtures/poisoned-surface.mjs";
 // One-time wasm instantiation before any test runs.
 await ready();
 
@@ -696,10 +696,10 @@ graph <https://example.org/g> { ex:c ex:knows ex:a . }
   assert.equal("a" in json.results.bindings[0], false, "nothing remote may be bound");
   assert.equal(json.results.bindings[0].s.value, "https://example.org/a");
   const engine = new QueryEngine();
-  const before = ds.canonicalize();
+  const before = canonicalValue(ds.canonicalize("unlimited"));
   assert.throws(() => engine.update(ds, "LOAD <https://example.org/doc>").dataset);
   engine.update(ds, "LOAD SILENT <https://example.org/doc>").dataset;
-  assert.equal(ds.canonicalize(), before, "LOAD SILENT must leave the dataset untouched");
+  assert.equal(canonicalValue(ds.canonicalize("unlimited")), before, "LOAD SILENT must leave the dataset untouched");
 
   // A genuine query error still throws on the governed lane.
   const governed = Dataset.parse(TRIG, "trig");
@@ -750,12 +750,12 @@ test("every async twin evaluates", async () => {
   const constructed = await engine.constructAsync(data, CONSTRUCT).then(result => result.dataset);
   assert.ok(constructed instanceof Dataset);
   assert.equal(constructed.size, 2);
-  assert.ok(constructed.isomorphic(engine.construct(data, CONSTRUCT).dataset));
+  assert.ok(canonicalValue(constructed.isomorphic(engine.construct(data, CONSTRUCT).dataset, "unlimited")));
 
   const described = await engine.describeAsync(data, DESCRIBE).then(result => result.dataset);
   const describedSync = engine.describe(data, DESCRIBE).dataset;
   assert.ok(described.size > 0);
-  assert.ok(described.isomorphic(describedSync));
+  assert.ok(canonicalValue(described.isomorphic(describedSync, "unlimited")));
 
   // queryRawAsync: JSON and Turtle, the default format, and a provenance namespace.
   assert.equal(await engine.queryRawAsync(data, SELECT, { format: "json" }).then(result => result.body), engine.queryRaw(data, SELECT, { format: "json" }).body);
@@ -826,7 +826,7 @@ test("every async twin evaluates", async () => {
   const generation = target.generation;
   assert.equal(await engine.updateAsync(target, INSERT).then(result => result.dataset), target);
   const control = engine.update(twinData(), INSERT).dataset;
-  assert.ok(target.isomorphic(control));
+  assert.ok(canonicalValue(target.isomorphic(control, "unlimited")));
   assert.equal(target.size, 6);
   assert.equal(target.generation, generation + 1n);
   const governedTarget = twinData();
@@ -834,7 +834,7 @@ test("every async twin evaluates", async () => {
   const governedControl = twinData();
   assert.equal(engine.updateGoverned(governedControl, INSERT, { fuel: 1_000_000 }).isApplied, true);
   assert.equal(applied.isApplied, true);
-  assert.ok(governedTarget.isomorphic(governedControl));
+  assert.ok(canonicalValue(governedTarget.isomorphic(governedControl, "unlimited")));
   assert.equal(typeof applied.evidence.async.polls, "number");
   const trippedTarget = twinData();
   const tripped = await engine.updateGovernedAsync(trippedTarget, INSERT, { fuel: 0 });
@@ -1241,19 +1241,19 @@ test("LOAD resolves through resolveLoad", async () => {
 test("LOAD without resolveLoad fails unless SILENT", async () => {
   const engine = new QueryEngine();
   const target = Dataset.parse(`<${EX}a> <${EX}p> <${EX}o> .\n`, "nquads");
-  const before = target.canonicalize();
+  const before = canonicalValue(target.canonicalize("unlimited"));
   const error = await rejection(engine.updateAsync(target, `LOAD <${DOC}>`).then(result => result.dataset));
   const syncError = syncThrow(() => engine.update(Dataset.parse(`<${EX}a> <${EX}p> <${EX}o> .\n`, "nquads"), `LOAD <${DOC}>`).dataset);
   assert.equal(error.message, syncError.message);
   assert.match(error.message, /^error native-sparql-load-no-resolver: /);
-  assert.equal(target.canonicalize(), before);
+  assert.equal(canonicalValue(target.canonicalize("unlimited")), before);
   // The neighbour: LOAD SILENT succeeds with nothing fetched.
   assert.equal(await engine.updateAsync(target, `LOAD SILENT <${DOC}>`).then(result => result.dataset), target);
-  assert.equal(target.canonicalize(), before);
+  assert.equal(canonicalValue(target.canonicalize("unlimited")), before);
   // And with a resolveLoad whose document cannot be fetched, the same.
   const resolveLoad = async () => ({ kind: "transport", message: "the example.org host is down" });
   assert.equal(await engine.updateAsync(target, `LOAD SILENT <${DOC}>`, { resolveLoad }).then(result => result.dataset), target);
-  assert.equal(target.canonicalize(), before);
+  assert.equal(canonicalValue(target.canonicalize("unlimited")), before);
   await rejection(engine.updateAsync(target, `LOAD <${DOC}>`, { resolveLoad }).then(result => result.dataset));
 });
 

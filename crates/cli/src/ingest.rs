@@ -161,14 +161,20 @@ impl<'a> Sources<'a> {
 pub(crate) fn ingest(
     sources: &Sources<'_>,
     formats: &[SourceFormat],
+    canonical: &mut crate::canonical::Request,
 ) -> Result<(Arc<RdfDataset>, LossLedger), CliError> {
     debug_assert_eq!(sources.paths.len(), formats.len());
 
     let mut datasets: Vec<Arc<RdfDataset>> = Vec::with_capacity(sources.paths.len());
     let mut ledger = LossLedger::new();
     for (path, format) in sources.paths.iter().zip(formats.iter().copied()) {
-        let (dataset, source_ledger) =
-            source::load_dataset_reporting(path, format, sources.base, sources.transport)?;
+        let (dataset, source_ledger) = source::load_dataset_reporting(
+            path,
+            format,
+            sources.base,
+            sources.transport,
+            canonical,
+        )?;
         for entry in source_ledger.entries() {
             ledger.record(entry.clone());
         }

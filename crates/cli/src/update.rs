@@ -55,6 +55,7 @@ pub(crate) struct UpdateOptions<'a> {
 pub(crate) fn run(
     options: &UpdateOptions<'_>,
     ledger_target: &LedgerTarget,
+    canonical: &mut crate::canonical::Request,
 ) -> Result<CliOutcome, CliError> {
     let coordinates =
         purrdf_validate::query::CoordinateInputs::from_parts(options.now, options.entropy_seed)
@@ -70,7 +71,7 @@ pub(crate) fn run(
             })?;
     let source_format = format::resolve(options.from, options.data)?;
     let target_format = format::resolve_target(options.to, options.output, "the --to target")?;
-    let mut dataset = source::load_dataset(options.data, source_format, options.base)?;
+    let mut dataset = source::load_dataset(options.data, source_format, options.base, canonical)?;
     // The same engine `query` builds: one law for the whole request, and a native
     // resource refusal is an `Err` that applies nothing and writes no dataset.
     let engine = purrdf_validate::xpath_regex::sparql_engine(options.xpath_regex);
@@ -159,6 +160,7 @@ pub(crate) fn run(
         options.base,
         source_format.loss_codec_name(),
         options.jsonld_options,
+        canonical,
     )?;
     ledger::surface(ledger_target, &loss)?;
     Ok(CliOutcome::Complete)

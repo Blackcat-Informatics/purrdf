@@ -49,7 +49,17 @@ fn public_visitor_and_sink_surfaces_are_bidirectional_and_stable() {
     assert!(direct.losses.is_empty());
 
     let reparsed = lift(&direct.bundle, &config);
-    assert!(datasets_isomorphic(&dataset, &reparsed).unwrap());
+    assert!(
+        datasets_isomorphic(
+            &dataset,
+            &reparsed,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+    );
     let stable = write_okf_bundle(&reparsed, &config).expect("rewrite bundle");
     assert_eq!(direct.bundle, stable.bundle);
 }

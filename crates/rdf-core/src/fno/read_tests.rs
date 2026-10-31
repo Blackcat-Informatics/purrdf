@@ -34,18 +34,21 @@ pub(super) fn dataset(rows: &[RdfQuad]) -> Arc<RdfDataset> {
     builder(rows).freeze().unwrap()
 }
 
-fn roundtrip(catalog: &FnoCatalog) {
+fn roundtrip(catalog: &FnoCatalog, control: &mut crate::CanonicalizationControl<'_>) {
     let source = dataset(&to_quads(catalog));
     let read = FnoCatalog::from_dataset(&source, &catalog.as_input().ontology_iri).unwrap();
     assert_eq!(&read, catalog);
     let emitted = dataset(&to_quads(&read));
-    assert!(crate::datasets_isomorphic(&source, &emitted).unwrap());
+    assert!(crate::datasets_isomorphic(&source, &emitted, control).unwrap());
 }
 
 #[test]
 fn admitted_catalogs_preserve_native_identity_and_both_graph_laws() {
     let base = sample_catalog();
-    roundtrip(&base);
+    roundtrip(
+        &base,
+        &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+    );
     let mut input = base.as_input().clone();
     input.functions[0].expects.reverse();
     input.functions[0]
@@ -71,7 +74,10 @@ fn admitted_catalogs_preserve_native_identity_and_both_graph_laws() {
     let mut unused = input.implementations[0].clone();
     unused.iri = "urn:test:unused-implementation".to_owned();
     input.implementations.push(unused);
-    roundtrip(&FnoCatalog::try_new(input).unwrap());
+    roundtrip(
+        &FnoCatalog::try_new(input).unwrap(),
+        &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+    );
 
     let mut input = base.as_input().clone();
     input.functions[0].expects.clear();
@@ -79,7 +85,10 @@ fn admitted_catalogs_preserve_native_identity_and_both_graph_laws() {
     let mut other = input.functions[0].clone();
     other.iri = "urn:test:another-function".to_owned();
     input.functions.push(other);
-    roundtrip(&FnoCatalog::try_new(input).unwrap());
+    roundtrip(
+        &FnoCatalog::try_new(input).unwrap(),
+        &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+    );
 
     let mut input = base.as_input().clone();
     let param = &input.params[0];
@@ -94,7 +103,10 @@ fn admitted_catalogs_preserve_native_identity_and_both_graph_laws() {
     input.mappings[0].return_mappings[0]
         .function_output
         .clone_from(&param.iri);
-    roundtrip(&FnoCatalog::try_new(input).unwrap());
+    roundtrip(
+        &FnoCatalog::try_new(input).unwrap(),
+        &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+    );
 }
 
 #[test]
@@ -347,7 +359,10 @@ fn strict_reader_refuses_unreproducible_rows_and_retains_original_operands() {
             ),
             _ => unreachable!("the selected profile boundary has a native refusal"),
         }
-        roundtrip(&catalog);
+        roundtrip(
+            &catalog,
+            &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+        );
     }
 }
 
@@ -391,7 +406,10 @@ fn document_empty_graph_and_foreign_identifier_boundaries_have_healthy_neighbors
         FnoCatalog::from_dataset(&foreign, &catalog.as_input().ontology_iri).unwrap(),
         catalog
     );
-    roundtrip(&catalog);
+    roundtrip(
+        &catalog,
+        &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+    );
 }
 
 #[test]
@@ -478,6 +496,9 @@ fn source_failures_and_rdf_statement_layers_never_publish_a_partial_catalog() {
             }
         );
         assert_eq!(row.s, TermValue::iri("urn:test:reifier"));
-        roundtrip(&catalog);
+        roundtrip(
+            &catalog,
+            &mut crate::CanonicalizationControl::new(crate::RDFC_V2_CORPUS_POLICY, None),
+        );
     }
 }

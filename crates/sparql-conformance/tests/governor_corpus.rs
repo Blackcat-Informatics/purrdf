@@ -1542,7 +1542,17 @@ fn render_result(result: &SparqlResult, out: &mut String) {
         }
         SparqlResult::Graph(graph) => {
             out.push_str("graph\n");
-            out.push_str(&purrdf_core::try_canonicalize(graph).unwrap().nquads);
+            out.push_str(
+                &purrdf_core::try_canonicalize(
+                    graph,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
+                )
+                .unwrap()
+                .nquads,
+            );
         }
         SparqlResult::Solutions {
             variables,
@@ -1570,7 +1580,17 @@ fn render_result(result: &SparqlResult, out: &mut String) {
             // an ordinary SELECT's record is not padded with an empty section.
             if aux.quad_count() > 0 {
                 out.push_str("aux\n");
-                out.push_str(&purrdf_core::try_canonicalize(aux).unwrap().nquads);
+                out.push_str(
+                    &purrdf_core::try_canonicalize(
+                        aux,
+                        &mut purrdf_core::CanonicalizationControl::new(
+                            purrdf_core::RDFC_V2_CORPUS_POLICY,
+                            None,
+                        ),
+                    )
+                    .unwrap()
+                    .nquads,
+                );
             }
         }
     }

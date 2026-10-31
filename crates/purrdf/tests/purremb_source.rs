@@ -38,8 +38,11 @@ fn source_fixture(
     let object = dataset.intern_iri("https://example.org/source/o").unwrap();
     dataset.push_quad(subject, predicate, object, None).unwrap();
     let dataset = dataset.freeze().expect("dataset");
-    let (source, source_bytes) =
-        CertifiedEmbeddingSource::from_dataset(&dataset).expect("source pack");
+    let (source, source_bytes) = CertifiedEmbeddingSource::from_dataset(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("source pack");
     let columnar_files = compression.map(|compression| {
         let mut blobs = purrdf::ContentStore::new();
         blobs.insert(b"source-only payload".to_vec());
@@ -48,7 +51,14 @@ fn source_fixture(
             .files
     });
     let source = columnar_files.as_ref().map_or(source, |files| {
-        CertifiedEmbeddingSource::certify(EmbeddingSource::Columnar(files)).unwrap()
+        CertifiedEmbeddingSource::certify(
+            EmbeddingSource::Columnar(files),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap()
     });
     let dataset_target = source.dataset_target(true).expect("dataset target");
     let corpus_target = CorpusTarget {
@@ -101,12 +111,23 @@ fn source_length_and_exact_digest_mismatches_are_distinct() {
     let fixture = fixture(Vec::new());
     let mut view = EmbeddingView::from_bytes(&fixture.artifact_bytes).expect("view");
     verify_embedding(&mut view).expect("artifact integrity");
-    verify_embedding_source(&view, EmbeddingSource::Purrpck(&fixture.source_bytes))
-        .expect("exact source");
+    verify_embedding_source(
+        &view,
+        EmbeddingSource::Purrpck(&fixture.source_bytes),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("exact source");
 
     let short = &fixture.source_bytes[..fixture.source_bytes.len() - 1];
     assert!(matches!(
-        verify_embedding_source(&view, EmbeddingSource::Purrpck(short)),
+        verify_embedding_source(
+            &view,
+            EmbeddingSource::Purrpck(short),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        ),
         Err(SourceAttachmentError::Embedding(
             EmbeddingError::SourceLengthMismatch { .. }
         ))
@@ -114,7 +135,14 @@ fn source_length_and_exact_digest_mismatches_are_distinct() {
     let mut changed = fixture.source_bytes.clone();
     changed[0] ^= 1;
     assert!(matches!(
-        verify_embedding_source(&view, EmbeddingSource::Purrpck(&changed)),
+        verify_embedding_source(
+            &view,
+            EmbeddingSource::Purrpck(&changed),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        ),
         Err(SourceAttachmentError::Embedding(
             EmbeddingError::DigestMismatch { .. }
         ))
@@ -176,6 +204,10 @@ fn assert_wrong_rdf_claim(fixture: &Fixture) {
             fixture.columnar_files.as_ref().map_or(
                 EmbeddingSource::Purrpck(&fixture.source_bytes),
                 EmbeddingSource::Columnar,
+            ),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
             )
         ),
         Err(SourceAttachmentError::Embedding(
@@ -205,7 +237,14 @@ fn attachment_verification_rejects_a_stale_source_ordinal() {
         let mut view = EmbeddingView::from_bytes(&fixture.artifact_bytes).expect("view");
         verify_embedding(&mut view).expect("artifact integrity");
         assert!(matches!(
-            verify_embedding_source(&view, EmbeddingSource::Purrpck(&fixture.source_bytes)),
+            verify_embedding_source(
+                &view,
+                EmbeddingSource::Purrpck(&fixture.source_bytes),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            ),
             Err(SourceAttachmentError::Embedding(
                 EmbeddingError::OrdinalMismatch { .. }
             ))
@@ -248,14 +287,29 @@ fn columnar_manifest_binds_every_actual_file_in_normative_order() {
             view.source().source_exact_digest(),
             ContentDigest::of(&manifest)
         );
-        let report = verify_embedding_source(&view, EmbeddingSource::Columnar(files)).unwrap();
+        let report = verify_embedding_source(
+            &view,
+            EmbeddingSource::Columnar(files),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         assert_eq!(
             report.source_format(),
             purrdf::EmbeddingSourceFormat::ColumnarV1
         );
         assert_eq!(report.ordinals_checked(), 0);
         assert!(matches!(
-            verify_embedding_source(&view, EmbeddingSource::Purrpck(&fixture.source_bytes)),
+            verify_embedding_source(
+                &view,
+                EmbeddingSource::Purrpck(&fixture.source_bytes),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            ),
             Err(SourceAttachmentError::FormatMismatch { .. })
         ));
 
@@ -264,7 +318,14 @@ fn columnar_manifest_binds_every_actual_file_in_normative_order() {
             changed[index][0] ^= 1;
             let changed = purrdf::columnar::ParquetFiles::from_array(changed);
             assert!(matches!(
-                verify_embedding_source(&view, EmbeddingSource::Columnar(&changed)),
+                verify_embedding_source(
+                    &view,
+                    EmbeddingSource::Columnar(&changed),
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
+                ),
                 Err(SourceAttachmentError::Embedding(
                     EmbeddingError::DigestMismatch { .. }
                 ))
@@ -276,15 +337,28 @@ fn columnar_manifest_binds_every_actual_file_in_normative_order() {
         let mut blobs = read.blobs;
         blobs.insert(b"another payload".to_vec());
         let changed = purrdf::columnar::write(&*read.dataset, &blobs, compression).unwrap();
-        let certificate =
-            CertifiedEmbeddingSource::certify(EmbeddingSource::Columnar(&changed.files)).unwrap();
+        let certificate = CertifiedEmbeddingSource::certify(
+            EmbeddingSource::Columnar(&changed.files),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
         assert_eq!(
             certificate.certified_rdf_digest(),
             report.certified_rdf_digest()
         );
         assert_ne!(certificate.source_exact_digest(), report.exact_digest());
         assert!(matches!(
-            verify_embedding_source(&view, EmbeddingSource::Columnar(&changed.files)),
+            verify_embedding_source(
+                &view,
+                EmbeddingSource::Columnar(&changed.files),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            ),
             Err(SourceAttachmentError::Embedding(
                 EmbeddingError::DigestMismatch { .. }
             ))
@@ -303,8 +377,16 @@ fn columnar_empty_tables_require_five_valid_files_and_preserve_native_causes() {
     )
     .unwrap()
     .files;
-    let certificate = CertifiedEmbeddingSource::certify(EmbeddingSource::Columnar(&files)).unwrap();
-    let (pack, _) = CertifiedEmbeddingSource::from_dataset(&dataset).unwrap();
+    let certificate = CertifiedEmbeddingSource::certify(
+        EmbeddingSource::Columnar(&files),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
+    let (pack, _) = CertifiedEmbeddingSource::from_dataset(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
     assert_eq!(
         certificate.certified_rdf_digest(),
         pack.certified_rdf_digest()
@@ -313,8 +395,14 @@ fn columnar_empty_tables_require_five_valid_files_and_preserve_native_causes() {
         let mut missing = files.clone().into_array();
         missing[index].clear();
         let missing = ParquetFiles::from_array(missing);
-        let error =
-            CertifiedEmbeddingSource::certify(EmbeddingSource::Columnar(&missing)).unwrap_err();
+        let error = CertifiedEmbeddingSource::certify(
+            EmbeddingSource::Columnar(&missing),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap_err();
         drop(missing);
         let SourceAttachmentError::Columnar(cause) = &error else {
             panic!("native Columnar refusal")
@@ -350,7 +438,14 @@ fn exact_columnar_files_still_require_complete_strict_validation() {
     let mut view = EmbeddingView::from_bytes(&artifact).unwrap();
     verify_embedding(&mut view).unwrap();
     assert!(matches!(
-        verify_embedding_source(&view, EmbeddingSource::Columnar(&files)),
+        verify_embedding_source(
+            &view,
+            EmbeddingSource::Columnar(&files),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        ),
         Err(SourceAttachmentError::Columnar(_))
     ));
 }

@@ -207,7 +207,13 @@ fn a_prepared_product_keeps_the_annotations() {
     );
     let fresh = PreparedShapes::new(Arc::new(parse_shapes(&shapes_ttl, None).expect("parses")));
     let bytes = fresh
-        .to_product(&ShapesProfile::CORE)
+        .to_product(
+            &ShapesProfile::CORE,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
         .expect("the shapes are representable as a product");
     let restored = ShapesProduct::open(&bytes)
         .expect("the product opens")

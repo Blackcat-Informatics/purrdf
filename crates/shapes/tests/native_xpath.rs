@@ -827,7 +827,15 @@ fn selected_execution_preserves_prepared_product_bytes_and_restore_provenance() 
             sh:property [ sh:path ex:p; sh:pattern "(a)\\1" ] .
     "#,
     )));
-    let bytes = preparation.to_product(&ShapesProfile::CORE).unwrap();
+    let bytes = preparation
+        .to_product(
+            &ShapesProfile::CORE,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
     let admitted = ShapesProduct::open(&bytes)
         .unwrap()
         .admit(&ShapesProfile::CORE, &HostBindings::empty())
@@ -837,7 +845,15 @@ fn selected_execution_preserves_prepared_product_bytes_and_restore_provenance() 
         .rebuild(&ShapesProfile::CORE, &HostBindings::empty())
         .unwrap();
     for prepared in [preparation, admitted, rebuilt] {
-        let original = prepared.to_product(&ShapesProfile::CORE).unwrap();
+        let original = prepared
+            .to_product(
+                &ShapesProfile::CORE,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
+            )
+            .unwrap();
         let provenance = prepared.provenance().clone();
         let selected = prepared.with_xpath_regex(Profile::Xpath31, Limits::new());
         selected.admit_declared_patterns().unwrap();
@@ -847,7 +863,13 @@ fn selected_execution_preserves_prepared_product_bytes_and_restore_provenance() 
         assert_eq!(
             selected
                 .preparation()
-                .to_product(&ShapesProfile::CORE)
+                .to_product(
+                    &ShapesProfile::CORE,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
+                )
                 .unwrap(),
             original
         );

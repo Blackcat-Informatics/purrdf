@@ -324,7 +324,7 @@ def test_a_restored_product_reaches_the_same_change_verdict_as_a_parse() -> None
 
     parsed = purrdf.shapes.Shapes(_SHAPES).prepare().validate_store_changes(store)
     restored = (
-        purrdf.shapes.ShapesProduct.open(purrdf.shapes.pack_product(_SHAPES))
+        purrdf.shapes.ShapesProduct.open(purrdf.shapes.pack_product(_SHAPES, canonical_search="1000000").value)
         .admit()
         .validate_store_changes(store)
     )

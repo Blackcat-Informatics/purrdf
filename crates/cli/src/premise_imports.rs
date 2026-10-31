@@ -94,6 +94,7 @@ impl PremiseImports {
         from: Option<CliRdfFormat>,
         base: Option<&str>,
         premises: &[(&str, SourceFormat)],
+        canonical: &mut crate::canonical::Request,
     ) -> Result<Self, CliError> {
         let pairs = parse_import_pairs(specs, ImportRole::PREMISE)?;
         let mut readers: Vec<(String, &str)> = premises
@@ -105,7 +106,7 @@ impl PremiseImports {
         let mut map = ImportMap::default();
         for pair in &pairs {
             let document_format = format::resolve(from, pair.path)?;
-            let document = source::load_dataset(pair.path, document_format, base)?;
+            let document = source::load_dataset(pair.path, document_format, base, canonical)?;
             // `parse_import_pairs` already blamed the argument for a repeated or relative IRI;
             // the table's own key policy is the one every insertion site shares.
             map.try_insert(pair.iri, document)
@@ -154,6 +155,7 @@ impl PremiseImports {
         plan: Materialization<'_>,
         limits: &MaterializeLimits,
         target: &ReportTarget,
+        canonical: &crate::canonical::Request,
     ) -> Result<Arc<purrdf_core::RdfDataset>, CliError> {
         let loaded: Vec<&str> = self.map.loaded().collect();
         if self.map.is_empty()
@@ -161,9 +163,11 @@ impl PremiseImports {
                 .map_err(purrdf_entail::EntailError::SourceRead)?
                 .is_empty()
         {
-            return report::materialize_reported(view, plan, limits, target);
+            return report::materialize_reported(view, plan, limits, target, canonical);
         }
         let premise = purrdf_core::dataset_from_view(view)?;
-        report::materialize_reported_with_imports(&premise, plan, &self.map, limits, target)
+        report::materialize_reported_with_imports(
+            &premise, plan, &self.map, limits, target, canonical,
+        )
     }
 }

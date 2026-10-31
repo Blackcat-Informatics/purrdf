@@ -160,14 +160,14 @@ purrdf convert people.ttl people.nt
 cat people.jsonld | purrdf convert --from jsonld --to turtle - -
 
 # Pack a graph into the native lossless container, then unpack it.
-purrdf convert people.ttl people.purrpck
-purrdf convert people.purrpck restored.trig
+purrdf --canonical-search unlimited --canonicalization-receipts canonicalization.json convert people.ttl people.purrpck
+purrdf --canonical-search unlimited --canonicalization-receipts canonicalization.json convert people.purrpck restored.trig
 
 # Emit RDFC-1.0 canonical N-Quads (no `--to` needed; canonical is always N-Quads).
-purrdf convert --canonical people.ttl people.nq
+purrdf --canonical-search unlimited --canonicalization-receipts canonicalization.json convert --canonical people.ttl people.nq
 
 # Materialize the RDFS closure, then canonicalize it.
-purrdf convert --entailment rdfs --canonical people.ttl closure.nq
+purrdf --canonical-search unlimited --canonicalization-receipts canonicalization.json convert --entailment rdfs --canonical people.ttl closure.nq
 
 # Resolve relative IRIs against a base while converting.
 purrdf convert --base http://example.org/ data.ttl data.nt
@@ -398,7 +398,7 @@ purrdf query --data people.ttl --results-format turtle \
   'CONSTRUCT { ?p <http://example.org/label> ?name } WHERE { ?p <http://example.org/name> ?name }'
 
 # Query a pack zero-copy (mmap'd, verified, no materialization).
-purrdf query --data people.purrpck --results-format tsv \
+purrdf --canonical-search unlimited --canonicalization-receipts canonicalization.json query --data people.purrpck --results-format tsv \
   'SELECT * WHERE { ?s ?p ?o } LIMIT 10'
 
 # Query the RDFS closure rather than the raw graph.
@@ -701,18 +701,18 @@ doing nothing.
 
 ```sh
 # An ordinary ontology decides well inside its derived budgets.
-purrdf consistency ontology.ttl
+purrdf --canonical-search unlimited --canonicalization-receipts canonicalization.json consistency ontology.ttl
 # consistency true
 # completeness decided
 # …
 
 # Narrow the round cap to force an early `unknown` rather than let the search run to
 # its derived budget.
-purrdf consistency --step-cap 1 ontology.ttl
+purrdf --canonical-search unlimited --canonicalization-receipts canonicalization.json consistency --step-cap 1 ontology.ttl
 echo $?   # 3
 
 # A pack source: verified, then reverse-mapped into the tableau like any other input.
-purrdf consistency ontology.purrpck
+purrdf --canonical-search unlimited --canonicalization-receipts canonicalization.json consistency ontology.purrpck
 ```
 
 ## `validate`
@@ -867,7 +867,7 @@ purrdf validate --shapes shapes.ttl data.ttl
 purrdf validate --shapes shapes.ttl --format sarif data.ttl > results.sarif
 
 # A verified pack data source and a Turtle report file.
-purrdf validate --shapes shapes.ttl --format turtle data.purrpck report.ttl
+purrdf --canonical-search unlimited --canonicalization-receipts canonicalization.json validate --shapes shapes.ttl --format turtle data.purrpck report.ttl
 
 # Query the report the binary just produced.
 purrdf validate --shapes shapes.ttl data.ttl report.nt
@@ -1272,7 +1272,7 @@ purrdf shex --schema user.shex --data data.ttl \
   '{FOCUS a <http://example.org/Person>}@<http://example.org/UserShape>'
 
 # A ShExJ schema with a caller-resolved IMPORT, over a verified pack.
-purrdf shex --schema user.shexj --import http://example.org/ages=ages.shex \
+purrdf --canonical-search unlimited --canonicalization-receipts canonicalization.json shex --schema user.shexj --import http://example.org/ages=ages.shex \
   --data data.purrpck '<http://example.org/alice>@<http://example.org/UserShape>'
 ```
 
@@ -1313,7 +1313,7 @@ purrdf describe --iri http://example.org/alice --iri http://example.org/bob \
   --to ntriples data.ttl
 
 # From a verified pack (zero-copy) into the lossless pack container.
-purrdf describe --iri http://example.org/alice source.purrpck alice.purrpck
+purrdf --canonical-search unlimited --canonicalization-receipts canonicalization.json describe --iri http://example.org/alice source.purrpck alice.purrpck
 
 # A description carrying RDF 1.2 statement metadata into a star-incapable
 # syntax: the dropped reifier rows are recorded, not lost silently.
@@ -1516,3 +1516,20 @@ has for carrying that distinction.
 Licensed under any one of [MIT](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MIT),
 [Apache-2.0](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-APACHE),
 or [MulanPSL-2.0](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MULAN), at your option.
+
+Canonicalizing paths require both `--canonical-search POLICY` and
+`--canonicalization-receipts DEST`. The policy is `unlimited` or canonical unsigned
+decimal `u64` text, without leading zeros. There is no default. This includes PACK
+input verification, PACK output, `convert --canonical`, `consistency` and SHACL
+product creation or certification. Ordinary native RDF conversions need neither flag.
+Policy-required reasoning services can return `[]` when the actual request needs
+no canonical run; the array reports execution, rather than promising a search.
+
+The receipt destination is separate from raw output. `-` writes its JSON array to
+stderr. Every constituent run has an independent ceiling; the array states no
+aggregate work limit. Exactly one finalized receipt array is emitted per request,
+including when several constituent runs occur. Receipts are published before queued
+reports and raw output, and on refusal.
+Known input, import, raw-output and report aliases are refused before execution.
+An evidence I/O refusal retains and reports any original native canonicalization
+failure, and a failure to publish evidence prevents raw output publication.

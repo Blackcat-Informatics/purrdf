@@ -8,19 +8,19 @@ import assert from "node:assert/strict";
 import { ready, Dataset } from "../index.mjs";
 
 await ready();
-
 test("isomorphic refusal crosses the wasm boundary as a JavaScript Error", () => {
   const dataset = Dataset.parse(
     "<https://example.org/s> <https://example.org/p> <urn:purrdf:rdfc:bad> .",
     "turtle",
   );
-  assert.throws(() => dataset.isomorphic(dataset), (error) => {
+  let cause;
+  assert.throws(() => dataset.isomorphic(dataset, "18446744073709551615"), (error) => {
     assert.ok(error instanceof Error);
     assert.equal(error instanceof WebAssembly.RuntimeError, false);
-    assert.equal(error.name, "Error");
-    assert.equal(typeof error.message, "string");
+    assert.equal(JSON.parse(error.canonicalizationJson).at(-1).policy.finite, "18446744073709551615");
+    cause = error.nativeCause;
     assert.match(error.message, /urn:purrdf:rdfc:bad/);
     return true;
   });
-  assert.equal(dataset.size, 1);
+  dataset.free(); assert.match(cause.json, /urn:purrdf:rdfc:bad/); cause.free();
 });

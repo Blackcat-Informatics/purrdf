@@ -30,7 +30,7 @@ test("playground rule messages forward coordinates and preserve dataset ownershi
     sh:rule [ a sh:SPARQLRule ; sh:runOnce true ; sh:construct """
       CONSTRUCT { <http://example.org/s> <http://example.org/time> ?t ; <http://example.org/id> ?u }
       WHERE { BIND(NOW() AS ?t) BIND(UUID() AS ?u) } """ ] .`;
-  const controls = { shapes, now: "-12345-06-07T08:09:10.123456789123456789+05:30", entropySeed: 18446744073709551615n };
+  const controls = { shapes, now: "-12345-06-07T08:09:10.123456789123456789+05:30", entropySeed: 18446744073709551615n, canonicalSearch: "1000000" };
   const first = await call("shaclEntail", controls);
   assert.equal(first.ok, true, first.error);
   assert.ok(first.result.ntriples.includes(controls.now));

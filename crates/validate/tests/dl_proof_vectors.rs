@@ -7,7 +7,10 @@
 fn all_shared_dl_proof_vectors_match_the_current_native_boundary() {
     let cases = purrdf_validate::regime::dl_proof_golden_vectors().unwrap();
     assert_eq!(cases.len(), 17, "the complete service and schema inventory");
-    purrdf_validate::regime::check_dl_proof_golden_vectors().unwrap();
+    purrdf_validate::regime::check_dl_proof_golden_vectors(
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .unwrap();
 }
 
 fn imported_closure_proofs_check_against_the_consumers_native_snapshot() {
@@ -54,7 +57,16 @@ fn imported_closure_proofs_check_against_the_consumers_native_snapshot() {
         let produced = {
             let mut producer =
                 ReasonerSession::open_premise(&premise, &imports, &[], 0, 0, true).unwrap();
-            producer.prove("consistency", "").unwrap()
+            producer
+                .prove(
+                    "consistency",
+                    "",
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None,
+                    ),
+                )
+                .unwrap()
         };
         assert_eq!(produced.answer(), "consistency false\n");
         // This is an independent consumer source load, with no recording or
@@ -68,6 +80,10 @@ fn imported_closure_proofs_check_against_the_consumers_native_snapshot() {
                 produced.answer(),
                 produced.certificate(),
                 produced.proof_document(),
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None,
+                ),
             )
             .unwrap();
         assert!(checked.contains("\nanswer checked 0\n"));
@@ -80,6 +96,10 @@ fn imported_closure_proofs_check_against_the_consumers_native_snapshot() {
                     "consistency true\n",
                     produced.certificate(),
                     produced.proof_document(),
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    ),
                 )
                 .is_err()
         );
@@ -93,6 +113,10 @@ fn imported_closure_proofs_check_against_the_consumers_native_snapshot() {
                     produced.answer(),
                     produced.certificate(),
                     &forged,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    ),
                 )
                 .is_err()
         );
@@ -108,6 +132,10 @@ fn imported_closure_proofs_check_against_the_consumers_native_snapshot() {
                     produced.answer(),
                     produced.certificate(),
                     produced.proof_document(),
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    ),
                 )
                 .is_err()
         );

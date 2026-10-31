@@ -307,12 +307,20 @@ namespace fallback. `project_statements_rdf12` and `normalize_rdf12_to_owl`
 provide the statement-codec conversions; `canonicalize_turtle` returns canonical
 bytes with optional extra prefix mappings.
 
-`Dataset.canonicalize` relabels blank nodes in place under
-`CanonicalizationAlgorithm.RDFC_1_0` or `UNSTABLE`. `RdfDataset.to_nquads()`
-uses the shipped flat canonicalization profile: it agrees with RDFC-1.0 on
-the RDF 1.1 subset, while the RDF 1.2 profile has its own reserved-vocabulary,
-statement-layer and refusal contract. Do not label an RDF 1.2 digest as RDFC-1.0.
-Canonicalization refusal raises `ValueError`. Read the
+`Dataset.canonicalize(canonical_search="unlimited")` relabels blank nodes in
+place and returns a `CanonicalResult` whose `value` is `None`. Refusal leaves the
+dataset unchanged. `RdfDataset.to_nquads(canonical_search="unlimited")` returns
+canonical N-Quads in its result's `value`, using the flat assertion presentation.
+It agrees with RDFC-1.0 on the RDF 1.1 subset; the RDF 1.2 profile has its own
+reserved-vocabulary, statement-layer and refusal contract. Do not label an RDF
+1.2 digest as RDFC-1.0.
+
+Both calls require an explicit `canonical_search`: `"unlimited"` or a canonical
+unsigned decimal `u64` string for a finite per-run limit. Both accept an optional
+`cancel` token. Each result carries immutable `canonicalization_json` receipt
+text. Canonicalization refusal raises `ValueError` with the finalized receipts;
+when a native canonical cause exists, `native_cause` and `native_cause_json`
+preserve its metadata. Read the
 [canonicalization chapter](../concepts/canonicalization.md) before using bytes
 as identities.
 

@@ -53,7 +53,11 @@ fn public_csv_surfaces_round_trip_without_hidden_vocabulary() {
             &dataset,
             &lift_lpg(&generic_graph, &config)
                 .expect("generic lift")
-                .dataset
+                .dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
         )
         .unwrap()
     );
@@ -72,7 +76,11 @@ fn public_csv_surfaces_round_trip_without_hidden_vocabulary() {
     assert!(
         datasets_isomorphic(
             &dataset,
-            &lift_lpg(&neo4j_graph, &config).expect("Neo4j lift").dataset
+            &lift_lpg(&neo4j_graph, &config).expect("Neo4j lift").dataset,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
         )
         .unwrap()
     );

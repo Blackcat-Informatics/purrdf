@@ -44,8 +44,11 @@ fn a_two_anchor_citation_certifies_with_a_source_ordinal_embedding_target() {
         panic!("the projected citation must have an IRI");
     };
 
-    let (source, source_bytes) =
-        CertifiedEmbeddingSource::from_dataset(&dataset).expect("certified source pack");
+    let (source, source_bytes) = CertifiedEmbeddingSource::from_dataset(
+        &dataset,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("certified source pack");
     let dataset_target = source.dataset_target(true).expect("dataset target");
     let pack = PackView::from_bytes(&source_bytes).expect("source pack view");
     let ordinal = pack
@@ -84,8 +87,12 @@ fn a_two_anchor_citation_certifies_with_a_source_ordinal_embedding_target() {
     let artifact = builder.build().expect("embedding artifact");
     let mut embedding = EmbeddingView::from_bytes(&artifact.bytes).expect("embedding view");
     verify_embedding(&mut embedding).expect("embedding integrity");
-    let report = verify_embedding_source(&embedding, EmbeddingSource::Purrpck(&source_bytes))
-        .expect("a multi-anchor citation is a valid certified RDF 1.2 source");
+    let report = verify_embedding_source(
+        &embedding,
+        EmbeddingSource::Purrpck(&source_bytes),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+    )
+    .expect("a multi-anchor citation is a valid certified RDF 1.2 source");
     assert_eq!(
         report.ordinals_checked(),
         1,

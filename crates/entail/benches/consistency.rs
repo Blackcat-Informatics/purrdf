@@ -611,9 +611,15 @@ fn bench_proof_recording(c: &mut Bench) {
             &dataset,
             |bencher, dataset| {
                 bencher.iter(|| {
-                    Reasoner::with_proofs(dataset)
-                        .expect("reverse-map the ontology")
-                        .consistency()
+                    Reasoner::with_proofs(
+                        dataset,
+                        &mut purrdf_core::CanonicalizationControl::new(
+                            purrdf_core::RDFC_V2_CORPUS_POLICY,
+                            None,
+                        ),
+                    )
+                    .expect("reverse-map the ontology")
+                    .consistency()
                 });
             },
         );
