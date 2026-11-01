@@ -74,11 +74,13 @@ change with `python3 scripts/conformance-matrix.py --write-doc`:
 | JSON Schema draft 2019-09 (official suite) | JSON-Schema-Test-Suite 5b0ee16 | 2298 | 0 | 0 | 0 | GREEN |
 | JSON Schema draft-07 (official suite) | JSON-Schema-Test-Suite 5b0ee16 | 1841 | 0 | 0 | 0 | GREEN |
 | GTS transport (frozen vectors) | gmeow-gts frozen corpus, vectors/ | 38 | 1 | 1 | 0 | GREEN |
-| rdflib LSP drop-in gate | rdflib 7.6 own tests | 81 | 5 | 5 | 0 | GREEN |
+| rdflib LSP drop-in gate | rdflib 7.6 own tests | 79 | 7 | 7 | 0 | GREEN |
 | Python binding suite | first-party (incl. compat differential vs rdflib) | 4279 | 4 | 4 | 0 | GREEN |
 <!-- END GENERATED: conformance-matrix -->
 
-The Python rows retain the last complete broad-suite snapshot. Contextual SPARQL
+The RDFLib row states the required scoreboard under native XSD string-subtype
+value equality, including seven explicit semantic differences checked by strict
+xfail. The Python binding row retains its last complete broad-suite snapshot. Contextual SPARQL
 semantics are checked by the Rust `rdflib_contextual` target. Focused Python
 checks cover receiver dispatch, keyword extraction, term and result carriers,
 exceptions and shadow imports; their totals do not refresh the broad-suite rows.
@@ -146,7 +148,7 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
 | SPARQL embedding kNN | first-party, `crates/purrdf/tests/embedding_knn_e2e.rs` + `knn_wasm_determinism.rs` | **15 / 15** cases · 0 ledgered. Counts **test functions, not fixtures** — the lane grades a *seam*, not a document format, so it has no corpus: every fixture is a PURREMB artifact sealed in-process by `purrdf::embedding`'s own writer and reached only through query text. 12 are the e2e surface — rank order, an unregistered IRI reading as an ordinary triple pattern, join-back by basic graph pattern, the `LIMIT`-is-a-prefix law at every k, byte identity across two independently built artifacts, the true k-nearest of a crowded space, four governor cases pinning that the search is charged in proportion to the candidates **examined** rather than the rows returned, and two pinning the generation a space attests — one artifact under one binding attests one generation, and the same artifact under different term bindings attests a different one, because the map from a row to the term it stands for is a host argument and a matrix-only identity would call those two spaces the same index. Those four are why this row exists beside the governor row: `property-function-work` is *reported by the relation* rather than counted by the evaluator, and every relation in `vectors/sparql-governors/` is a scripted fixture with nothing to report, so this is the only surface that bands that charge point non-zero. The remaining three are native arithmetic pins, including cosine and squared-Euclidean lane trees: five neighbours and their exact `xsd:double` distance lexicals held as Rust literals rather than recomputed — a test that recomputes its expectation with the kernel under test agrees with any kernel at all — so a reassociated sum or a fused multiply-add that swaps two near-tied neighbours fails here rather than surfacing as a mystery reordering in a browser. These numeric expectations run natively; actual WASM dispatch and SIMD kernels are selected separately by `make wasm-test` |
 | GeoSPARQL 1.1 determinism corpus | first-party, `purrdf_geo::determinism::CORPUS` | **20 / 20** geometries · 0 ledgered. Counts corpus geometries, not test functions. Their WKT/GeoJSON bytes, DE-9IM matrices, exact planar measures and IEEE encodings fold into the single `GOLDEN_DIGEST` in `crates/geo/tests/determinism.rs`; the conformance matrix compares the printed digest with that frozen source value. The polygon/mixed-collection length correction includes polygon boundaries and selects the greatest dimension-total; its deliberate byte change is documented beside the golden. This row grades deterministic planar output, not independent OGC semantic conformance or the geographic numerical corpus. No OGC GeoSPARQL conformance suite is vendored or claimed. The twelve first-party SHACL cases mirror the published validator using caller-selected `example.org` vocabulary; nine query-rewrite, nine scalar-function and four layout cases run separately in `make check`. The explicit carrier-only scalar adapter registers twelve construction/serialization refusals and checks representative named errors rather than plausible default answers. The standard geographic adapter additionally implements `transform`, `buffer` and `metricBuffer` through its selected operation/profile law; nine construction/serialization functions remain named hard errors. The neutral geographic kernel's numerical, geometry, cover, ownership and host cases are separate acceptance, not additional entries in this twenty-geometry row. Native digest execution, release WASM compilation and actual portable/SIMD geographic transcript execution are distinct checks (`make check`, `make wasm`, `make geo-determinism`). |
 | RDFC-1.0 canonicalization | W3C fixtures, `crates/rdf/tests/fixtures/rdfc/` | **65** vectors (64 eval + 1 negative), green |
-| rdflib drop-in (LSP) gate | rdflib 7.6 own vendored tests | Last complete broad-suite snapshot: **81** pass · 5 strict-xfail (ledgered) |
+| rdflib drop-in (LSP) gate | rdflib 7.6 own vendored tests | Required current-gate scoreboard: **79** pass · 7 strict-xfail (ledgered) |
 | Python binding suite | first-party, compat differential vs rdflib 7.6 included | **4279** pass · 4 strict-xfail (ledgered; last complete broad-suite snapshot) · 1 skipped. The count is the WHOLE binding suite — entailment, GTS, projections, shapes — not the rdflib differential alone; the 4 ledgered entries are that differential's |
 | GTS transport | frozen cross-language vectors, `vectors/` | **38 / 39** vectors fold byte-exactly into the `<id>.expected.json` the corpus ships · 1 ledgered divergence. `12-conflicting-reifier` binds one reifier id to two triples and carries no quoted-triple term; `rdf:reifies` is not a functional property, so both bindings are legitimate and this reader keeps both without complaint (two rows, no diagnostic) where the committed expectation still states the superseded single-binding reading (one row plus a `ConflictingReifier` diagnostic). The expectation encodes a premise the reader has shed, and the corpus is governed upstream in [`gmeow-gts`](https://github.com/Blackcat-Informatics/gmeow-gts) and never regenerated here, so the disagreement stands until it is corrected there. It is held to XPASS discipline in both directions: the ledgered vector must STILL disagree, and no unlisted vector may start disagreeing |
 
@@ -376,19 +378,24 @@ reason):
 - `bindings/python/tests/xfail_ledger.toml` — the first-party
   `purrdf.compat` parity ledger (**4** strict xfails).
 - `bindings/python/tests/rdflib_suite/xfail_ledger.toml` — the rdflib
-  drop-in (LSP) gate ledger governing rdflib's own vendored tests (**5** strict
+  drop-in (LSP) gate ledger governing rdflib's own vendored tests (**7** strict
   xfails). Both are applied as **strict** xfails, so an XPASS or a stale key
   fails the run.
 
-  All five rdflib entries are PurRDF being **stricter** than rdflib, not PurRDF
-  gaps. One is an upstream test typo that projects a non-group-key variable under
-  `GROUP BY`. The other four are `BatchAddGraph` tests that name terms with bare
+  Five entries are PurRDF being **stricter** than rdflib. One is an upstream
+  test typo that projects a non-group-key variable under `GROUP BY`. Four are
+  `BatchAddGraph` tests that name terms with bare
   relative `URIRef`s: rdflib's `URIRef` is an unvalidated `str` subclass, while
   the PurRDF IR carries no base, so a relative reference has no knowable identity
   there and is refused with `iri-relative-no-base`. Closing them would mean either
   inventing a base — which would differ per machine and leak local paths into
   published RDF — or admitting unrepresentable terms into the store, so unlike
-  every other ledger entry these four are **not** expected to shrink.
+  implementation gaps these four are **not** expected to shrink. Two further
+  entries concern value equality across `xsd:string`, `xsd:normalizedString`
+  and `xsd:token`: the native engine compares their shared character-sequence
+  values after whitespace mapping, while RDFLib expects different datatype IRIs
+  to make `Literal.eq` false. `Literal.__eq__` retains distinct RDF term identity.
+  All seven cases still execute; unexpected passes and stale keys fail the gate.
 - The Rust harnesses embed their ledgers in-code (e.g. the SHACL `w3c_conformance`
   xfail table, the SPARQL `purrdf-sparql-conformance` `xfail` module, the codec
   allowlist) and assert each entry still fails.

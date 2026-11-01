@@ -566,11 +566,9 @@ def self_test() -> int:
 # a tri-licensed crate under two licences, and `crates/retrieval` -- publishable,
 # `readme` declared -- with no licence offer at all.
 #
-# A crate whose `Cargo.toml` names a README is publishing that file to crates.io
-# beside three-license metadata. So the README must carry a licence section, and
-# that section must name every term of the offer. Naming a PROPER SUBSET is the
-# defect that matters: the metadata says three, the page a human reads says two,
-# and the page is the one they believe.
+# A published README must name every term of its package licence offer in its
+# licence section, including required third-party terms in compound expressions.
+# Naming a proper subset understates what the distributed crate actually offers.
 # `Licensing` as well as `License`/`Licence`, and a single `#` as well as `##`. The first
 # pattern was `^##+\s+Licen[cs]e`, which refused a section headed `## Licensing` -- the name
 # of this repository's own LICENSING.md -- and a top-level `# License`.
@@ -591,6 +589,8 @@ LICENCE_HEADING = re.compile(r"^(#{1,6})\s+(?:Licen[cs]|许可|授权)", re.MULT
 # the moment the rule reached it. `\s+` rather than a space in every multi-word alias.
 LICENCE_ALIASES: dict[str, tuple[str, ...]] = {
     "MIT": (r"\bMIT\b",),
+    "Unicode-3.0": (r"Unicode-3\.0", r"Unicode\s+License\s+v3"),
+    "BSD-3-Clause": (r"BSD-3-Clause",),
     "Apache-2.0": (
         r"Apache-2\.0",
         r"Apache\s+License,?\s+Version\s+2\.0",
@@ -605,11 +605,13 @@ LICENCE_ALIASES: dict[str, tuple[str, ...]] = {
 
 def published_readme_offenders(root: Path, expected: str) -> list[str]:
     """Every crate that publishes a README not stating the full licence offer."""
-    terms = [term.strip() for term in expected.split(" OR ")]
     offenders: list[str] = []
     for manifest in sorted((root / "crates").glob("*/Cargo.toml")):
         data = tomllib.loads(manifest.read_text(encoding="utf-8"))
         package = data.get("package", {})
+        offer = package.get("license", expected)
+        offer = offer if isinstance(offer, str) else expected
+        terms = [term.strip() for term in re.split(r"\s+(?:AND|OR)\s+|[()]", offer) if term.strip()]
         # `publish = []` is cargo's other spelling of "never publish", and it was missed.
         if package.get("publish") in (False, []):
             continue
@@ -642,8 +644,7 @@ def published_readme_offenders(root: Path, expected: str) -> list[str]:
             )
             continue
         # SCOPED TO THE SECTION, not the whole file. Reading the body let the file's own
-        # SPDX header -- which names all three by construction -- satisfy a section that
-        # named two, so the subset case the gate exists for could never fire.
+        # SPDX header alone cannot establish the README section states its package offer.
         #
         # The section ends at a heading of the SAME OR SHALLOWER depth. `^##+\s` matched
         # `###` too, so a legitimate sub-heading inside a licence section truncated it to
@@ -675,8 +676,7 @@ def published_readme_offenders(root: Path, expected: str) -> list[str]:
         #   "No warranty is provided and support is not offered"
         #   "You may not remove the notice except under the terms"
         #
-        # -- while missing two of three real withdrawals ("do NOT apply to this crate",
-        # "were withdrawn"). `\bonly\b(?=[^.]*\bnot\b)` was the worst of it: `[^.]`
+        # -- while missing explicit withdrawals. `\bonly\b(?=[^.]*\bnot\b)` used `[^.]`, which
         # matches newlines, so any `only` before any `not` with no intervening period fired.
         #
         # It passed the four neighbours I wrote for it because I chose neighbours that did
@@ -688,7 +688,7 @@ def published_readme_offenders(root: Path, expected: str) -> list[str]:
         if missing:
             offenders.append(
                 f"crates/{name}/README.md: its licence section does not name {missing}; the "
-                f"crate's metadata offers {expected!r}, so the page states a proper subset "
+                f"crate's metadata offers {offer!r}, so the page states a proper subset "
                 f"of what the crate actually offers"
             )
     return offenders
@@ -810,7 +810,7 @@ def main() -> int:
     print(
         f"OK: {total} vendored root(s) license-clean; MulanPSL-2.0 text matches its pin; "
         f"every first-party SPDX header declares {expected!r}; every published crate "
-        f"README states that offer in full; {provenance_count} PROVENANCE.toml file(s) "
+        f"README states its package offer in full; {provenance_count} PROVENANCE.toml file(s) "
         f"follow the provenance schema."
     )
     return 0

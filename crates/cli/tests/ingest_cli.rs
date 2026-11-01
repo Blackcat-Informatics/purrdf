@@ -87,9 +87,9 @@ fn gzip(payload: &[u8]) -> Vec<u8> {
 
 /// zstd-frame `payload`.
 fn zstd(payload: &[u8]) -> Vec<u8> {
-    structured_zstd::encoding::compress_to_vec(
+    purrdf_zstd::encoding::compress_to_vec(
         payload,
-        structured_zstd::encoding::CompressionLevel::Fastest,
+        purrdf_zstd::encoding::CompressionLevel::Fastest,
     )
 }
 

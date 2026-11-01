@@ -112,9 +112,17 @@ impl Measure {
             }
             (ProjectionCell::Null, _) if schema.repetition == Repetition::Optional => 0,
             _ => {
-                return Err(ColumnarError::malformed(
-                    "canonical row",
-                    "cell type or required presence",
+                return Err(ColumnarError::Canonical(
+                    crate::error::CanonicalReason::Cell {
+                        column: schema.name,
+                        actual: match cell {
+                            ProjectionCell::Null => None,
+                            ProjectionCell::Int64(_) => Some(PhysicalType::Int64),
+                            ProjectionCell::Bytes(_) => Some(PhysicalType::ByteArray),
+                        },
+                        expected: schema.physical_type,
+                        repetition: schema.repetition,
+                    },
                 ));
             }
         };
@@ -170,7 +178,12 @@ fn write_rows_bounded<'a>(
     for row in rows {
         let row = row?;
         if row.len() != column_count {
-            return Err(ColumnarError::malformed("canonical row", "column count"));
+            return Err(ColumnarError::Canonical(
+                crate::error::CanonicalReason::ColumnCount {
+                    actual: row.len(),
+                    expected: column_count,
+                },
+            ));
         }
         let measure = |sizes: &[Measure], next: &mut [Measure]| -> Result<(), ColumnarError> {
             for (((&cell, schema), &size), next) in

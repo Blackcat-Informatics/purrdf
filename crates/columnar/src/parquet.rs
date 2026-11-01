@@ -6,11 +6,11 @@
 use std::collections::BTreeMap;
 
 use purrdf_core::ir::pack::bits::{read_varint, write_varint};
-use structured_zstd::decoding::{
+use purrdf_zstd::decoding::{
     ContentChecksum, FrameContentSize, FrameDecoder, find_frame_compressed_size,
     read_frame_header_info,
 };
-use structured_zstd::encoding::{CompressionLevel, compress_slice_to_vec};
+use purrdf_zstd::encoding::{CompressionLevel, compress_slice_to_vec};
 
 use std::borrow::Cow;
 
@@ -1699,7 +1699,10 @@ fn decode_page(
             let written = decoder
                 .decode_all(encoded_values, &mut plain)
                 .map_err(|error| {
-                    ColumnarError::malformed("Zstandard page body", error.to_string())
+                    ColumnarError::zstd(
+                        "Zstandard page body",
+                        crate::error::ZstdReason::PageDecode(error),
+                    )
                 })?;
             if written != plain_len {
                 return Err(ColumnarError::page_body(
@@ -1720,21 +1723,22 @@ fn decode_page(
 /// allocating a page. Unknown frame sizes are verified by actual decompression;
 /// matching declarations do not establish a caller resource-admission policy.
 fn validate_zstd_frames(mut encoded: &[u8], expected: usize) -> Result<(), ColumnarError> {
-    use structured_zstd::decoding::errors::ReadFrameHeaderError;
+    use purrdf_zstd::decoding::errors::ReadFrameHeaderError;
 
     if encoded.is_empty() {
-        return Err(ColumnarError::malformed(
+        return Err(ColumnarError::page_body(
             "Zstandard page body",
-            "empty frame stream",
+            PageBodyReason::EmptyFrameStream,
         ));
     }
     let mut known = 0usize;
     let mut all_known = true;
     while !encoded.is_empty() {
         let length = find_frame_compressed_size(encoded).map_err(|error| {
-            // Keep the existing external-codec presentation boundary; native
-            // Parquet size operands below remain structured and full width.
-            ColumnarError::malformed("Zstandard frame extent", format!("{error:?}"))
+            ColumnarError::zstd(
+                "Zstandard frame extent",
+                crate::error::ZstdReason::FrameExtent(error),
+            )
         })?;
         match read_frame_header_info(encoded, false) {
             Ok(header) => match header.content_size {
@@ -1756,9 +1760,9 @@ fn validate_zstd_frames(mut encoded: &[u8], expected: usize) -> Result<(), Colum
             },
             Err(ReadFrameHeaderError::SkipFrame { .. }) => {}
             Err(error) => {
-                return Err(ColumnarError::malformed(
+                return Err(ColumnarError::zstd(
                     "Zstandard frame header",
-                    error.to_string(),
+                    crate::error::ZstdReason::FrameHeader(error),
                 ));
             }
         }
@@ -2043,6 +2047,43 @@ mod tests {
         (page, header)
     }
 
+    /// Compare the bounded native families emitted by the scalar decoder oracle.
+    /// Arbitrary codec errors deliberately have no equality implementation.
+    fn assert_native_refusal(actual: &ColumnarError, expected: &ColumnarError) {
+        match (actual, expected) {
+            (
+                ColumnarError::Truncated {
+                    context,
+                    needed,
+                    available,
+                },
+                ColumnarError::Truncated {
+                    context: other_context,
+                    needed: other_needed,
+                    available: other_available,
+                },
+            ) => assert_eq!(
+                (context, needed, available),
+                (other_context, other_needed, other_available)
+            ),
+            (
+                ColumnarError::ValueBody { context, reason },
+                ColumnarError::ValueBody {
+                    context: other_context,
+                    reason: other_reason,
+                },
+            ) => assert_eq!((context, reason), (other_context, other_reason)),
+            (
+                ColumnarError::PageBody { context, reason },
+                ColumnarError::PageBody {
+                    context: other_context,
+                    reason: other_reason,
+                },
+            ) => assert_eq!((context, reason), (other_context, other_reason)),
+            _ => panic!("unexpected native refusal comparison: {actual:?} versus {expected:?}"),
+        }
+    }
+
     /// Native inspection and cloning retain original fields without allocating.
     fn assert_page_refusal(error: ColumnarError, expected: PageBodyReason, message: &str) {
         use purrdf_hash::error::ErrorValue;
@@ -2088,6 +2129,7 @@ mod tests {
                 PageBodyReason::DecodedSize { .. } => "columnar-decoded-size",
                 PageBodyReason::Cardinality { .. } => "columnar-plain-cardinality",
                 PageBodyReason::NullCount { .. } => "columnar-null-count",
+                PageBodyReason::EmptyFrameStream => "columnar-zstd-empty-frame-stream",
             }
         );
         match expected {
@@ -2165,6 +2207,7 @@ mod tests {
                     matches!(fields.field("declared"), ErrorValue::Signed(value) if value == i128::from(declared))
                 );
             }
+            PageBodyReason::EmptyFrameStream => {}
         }
     }
 
@@ -2259,17 +2302,17 @@ mod tests {
             "columnar definition levels is malformed: encode 0 nulls, header declares 1",
         );
         header.data_v2.num_nulls = 0;
-        assert_eq!(
-            decode_page(&page, &header, schema, 2, Compression::Uncompressed),
-            Err(ColumnarError::page_body(
+        assert_native_refusal(
+            &decode_page(&page, &header, schema, 2, Compression::Uncompressed).unwrap_err(),
+            &ColumnarError::page_body(
                 "PLAIN value cardinality",
                 PageBodyReason::Cardinality {
                     declared: 8,
                     required: 16,
                     physical_type: PhysicalType::Int64,
                     present: 2,
-                }
-            ))
+                },
+            ),
         );
         // A malformed run wins even when both the null count and PLAIN disagree.
         header.data_v2.num_nulls = 1;
@@ -2802,15 +2845,15 @@ mod tests {
         ));
         let mut encoded = encode_definition_levels(&[true, true, false].into_iter().collect());
         encoded.push(0);
-        assert_eq!(
-            decode_definition_levels(&encoded, 3),
-            Err(ColumnarError::value_body(
+        assert_native_refusal(
+            &decode_definition_levels(&encoded, 3).unwrap_err(),
+            &ColumnarError::value_body(
                 "definition levels",
                 ValueBodyReason::TrailingLevels {
                     offset: 4,
                     available: 5,
                 },
-            ))
+            ),
         );
 
         let mut header = Vec::new();
@@ -2897,12 +2940,12 @@ mod tests {
             );
             // Refusal also releases the input bitmap allocated before the window.
             assert_eq!(measured.retained_bytes, -(size_of::<u64>() as i64));
-            assert_eq!(
-                error,
-                ColumnarError::value_body(
+            assert_native_refusal(
+                &error,
+                &ColumnarError::value_body(
                     "PLAIN BYTE_ARRAY length",
                     ValueBodyReason::NegativeLength { length },
-                )
+                ),
             );
             assert_eq!(
                 error.to_string(),
@@ -2910,24 +2953,24 @@ mod tests {
             );
         }
         let body = [1, 0, 0, 0, b'x', 9];
-        assert_eq!(
-            decode_plain(&body, PhysicalType::ByteArray, Presence::full(1), 1),
-            Err(ColumnarError::value_body(
+        assert_native_refusal(
+            &decode_plain(&body, PhysicalType::ByteArray, Presence::full(1), 1).unwrap_err(),
+            &ColumnarError::value_body(
                 "PLAIN BYTE_ARRAY",
                 ValueBodyReason::TrailingValues {
                     offset: 5,
-                    available: 6
+                    available: 6,
                 },
-            ))
+            ),
         );
         assert_eq!(
             decode_plain(&body[..5], PhysicalType::ByteArray, Presence::full(1), 1).unwrap(),
             ColumnValues::bytes(vec![Some(vec![b'x'])])
         );
         // An impossible total byte count still reports the first missing word.
-        assert_eq!(
-            decode_int64_plain(&[], Presence::default(), usize::MAX),
-            Err(ColumnarError::truncated("PLAIN INT64", 8, 0))
+        assert_native_refusal(
+            &decode_int64_plain(&[], Presence::default(), usize::MAX).unwrap_err(),
+            &ColumnarError::truncated("PLAIN INT64", 8, 0),
         );
     }
 
@@ -2945,7 +2988,7 @@ mod tests {
 
     #[test]
     fn compressed_frames_validate_sizes_extents_and_each_checksum() {
-        use structured_zstd::encoding::{FrameCompressor, MatchGeneratorDriver};
+        use purrdf_zstd::encoding::{FrameCompressor, MatchGeneratorDriver};
         let frame = |bytes: &[u8]| {
             let mut encoder: FrameCompressor<std::io::Empty, std::io::Sink, MatchGeneratorDriver> =
                 FrameCompressor::new(CompressionLevel::Level(3));
@@ -2992,7 +3035,15 @@ mod tests {
         }
         assert!(validate_zstd_frames(&frame(b""), 0).is_ok());
         assert!(validate_zstd_frames(&skip, 0).is_ok());
-        assert!(validate_zstd_frames(&[], 0).is_err());
+        let window = CurrentThreadWindow::open();
+        let empty = validate_zstd_frames(&[], 0).unwrap_err();
+        let measured = window.close();
+        assert_eq!((measured.allocations, measured.requested_bytes), (0, 0));
+        assert_page_refusal(
+            empty,
+            PageBodyReason::EmptyFrameStream,
+            "columnar Zstandard page body is malformed: empty frame stream",
+        );
         for (index, mut encoded) in [first.clone(), second.clone()].into_iter().enumerate() {
             *encoded.last_mut().unwrap() ^= 1;
             let damaged = if index == 0 {
@@ -3290,9 +3341,12 @@ mod tests {
                     decode_definition_levels(&levels, len).unwrap(),
                     *column.presence()
                 );
-                let decoded = decode_split(&bytes, &definitions);
-                assert_eq!(decoded, reference_decode_int64_plain(&bytes, &definitions));
-                assert_eq!(decoded.unwrap(), values, "len {len}");
+                let decoded = decode_split(&bytes, &definitions).unwrap();
+                assert_eq!(
+                    decoded,
+                    reference_decode_int64_plain(&bytes, &definitions).unwrap()
+                );
+                assert_eq!(decoded, values, "len {len}");
                 let present = column.presence().count();
                 assert_eq!(
                     decode_plain(
@@ -3330,7 +3384,14 @@ mod tests {
                 for body in bodies {
                     let got = decode_split(&body, &definitions);
                     let want = reference_decode_int64_plain(&body, &definitions);
-                    assert_eq!(got, want, "len {len}, body {} bytes", body.len());
+                    match (&got, &want) {
+                        (Ok(actual), Ok(expected)) => assert_eq!(actual, expected),
+                        (Err(actual), Err(expected)) => assert_native_refusal(actual, expected),
+                        _ => panic!(
+                            "len {len}, body {} bytes: {got:?} versus {want:?}",
+                            body.len()
+                        ),
+                    }
                     if body.len() != bytes.len() {
                         assert!(want.is_err(), "len {len}: a {}-byte body", body.len());
                     }
@@ -3353,19 +3414,19 @@ mod tests {
             );
             assert_eq!(decoded.len(), definitions.len());
         }
-        assert_eq!(
-            decode_split(&[0; 7], &[true]),
-            Err(ColumnarError::truncated("PLAIN INT64", 8, 7))
+        assert_native_refusal(
+            &decode_split(&[0; 7], &[true]).unwrap_err(),
+            &ColumnarError::truncated("PLAIN INT64", 8, 7),
         );
-        assert_eq!(
-            decode_split(&[0; 17], &[true, false, true]),
-            Err(ColumnarError::value_body(
+        assert_native_refusal(
+            &decode_split(&[0; 17], &[true, false, true]).unwrap_err(),
+            &ColumnarError::value_body(
                 "PLAIN INT64",
                 ValueBodyReason::TrailingValues {
                     offset: 16,
                     available: 17,
-                }
-            ))
+                },
+            ),
         );
     }
 }

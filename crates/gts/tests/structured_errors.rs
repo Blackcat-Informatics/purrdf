@@ -345,10 +345,10 @@ fn native_transport_framing_and_decoder_fields_survive() {
 }
 
 fn dictionary_and_key_envelope_errors_keep_native_fields() {
-    use purrdf_gts::dict::{DictSeed, dictionary_id, raw_content_dict, trained_dict};
+    use purrdf_gts::dict::{dictionary_id, raw_content_dict, trained_dict};
     let samples: &[&[u8]] = &[b"", b""];
     let raw = raw_content_dict(samples, 1024).unwrap_err();
-    let trained = trained_dict(samples, 1024, DictSeed::FromCorpus).unwrap_err();
+    let trained = trained_dict(samples, 1024).unwrap_err();
     assert_ne!(raw, trained, "the native authoring operations differ");
     assert_eq!(raw.detail(), trained.detail());
     for (error, operation) in [(raw, "raw-content"), (trained, "train")] {

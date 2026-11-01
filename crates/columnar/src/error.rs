@@ -5,6 +5,10 @@
 
 use std::fmt;
 
+mod canonical;
+pub use canonical::CanonicalReason;
+mod zstd;
+pub use zstd::ZstdReason;
 mod compact;
 mod construction;
 pub use construction::ConstructionReason;
@@ -24,7 +28,7 @@ mod page_body;
 pub use page_body::PageBodyReason;
 
 /// A fail-closed Parquet encoding, decoding, or RDF reconstruction error.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum ColumnarError {
     /// An exact file length cannot fit the canonical source manifest.
@@ -63,12 +67,14 @@ pub enum ColumnarError {
         /// Bytes available in the enclosing buffer.
         available: usize,
     },
-    /// Bytes were present but violated the fixed schema or encoding contract.
-    Malformed {
-        /// Structure being decoded or constructed.
+    /// Original canonical-row shape refusal.
+    Canonical(CanonicalReason),
+    /// Original native codec refusal, retained in one fallible shared owner.
+    Zstd {
+        /// Structure being decoded.
         context: &'static str,
-        /// Stable diagnostic detail.
-        detail: String,
+        /// Original codec error and its complete native ownership.
+        reason: purrdf_lex::allocation::Shared<ZstdReason>,
     },
     /// Original native fixed-schema construction or encoding refusal.
     Construction {
@@ -154,7 +160,8 @@ impl purrdf_hash::error::StructuredError for ColumnarError {
         Truncated { context, needed, available } => "columnar-truncated" {
             "context" => Code(context), "needed" => ByteCount(*needed as u128), "available" => ByteCount(*available as u128),
         },
-        Malformed { context, detail } => "columnar-malformed" { "context" => Code(context), "detail" => Text(detail) },
+        Canonical(reason) => "columnar-malformed" { "context" => Code("canonical row"), "reason" => Cause(reason) },
+        Zstd { context, reason } => "columnar-malformed" { "context" => Code(context), "reason" => Cause(&**reason) },
         Construction { context, reason } => "columnar-malformed" { "context" => Code(context), "reason" => Cause(reason) },
         Reader { context, reason } => "columnar-malformed" { "context" => Code(context), "reason" => Cause(reason) },
         Compact { context, reason } => "columnar-malformed" { "context" => Code(context), "reason" => Cause(reason) },
@@ -198,10 +205,10 @@ impl ColumnarError {
         Self::Compact { context, reason }
     }
 
-    pub(crate) fn malformed(context: &'static str, detail: impl Into<String>) -> Self {
-        Self::Malformed {
-            context,
-            detail: detail.into(),
+    pub(crate) fn zstd(context: &'static str, reason: ZstdReason) -> Self {
+        match purrdf_lex::allocation::Shared::try_new(reason) {
+            Ok(reason) => Self::Zstd { context, reason },
+            Err(_) => Self::Storage(purrdf_lex::allocation::StorageError::AllocationFailed),
         }
     }
 
@@ -259,8 +266,9 @@ impl fmt::Display for ColumnarError {
                 f,
                 "columnar {context} is truncated: needs {needed} bytes, has {available}"
             ),
-            Self::Malformed { context, detail } => {
-                write!(f, "columnar {context} is malformed: {detail}")
+            Self::Canonical(reason) => write!(f, "columnar canonical row is malformed: {reason}"),
+            Self::Zstd { context, reason } => {
+                write!(f, "columnar {context} is malformed: {}", **reason)
             }
             Self::Construction { context, reason } => {
                 write!(f, "columnar {context} is malformed: {reason}")
@@ -303,6 +311,8 @@ impl fmt::Display for ColumnarError {
 }
 
 purrdf_lex::error_source!(ColumnarError => {
+    Self::Canonical(reason) => reason,
+    Self::Zstd { reason, .. } => &**reason,
     Self::Construction { reason, .. } => reason,
     Self::PageBody { reason, .. } => reason,
     Self::ValueBody { reason, .. } => reason,
@@ -322,7 +332,7 @@ purrdf_lex::variant_from!(ColumnarError { Storage(purrdf_lex::allocation::Storag
 ///
 /// The source error remains owned and typed until the caller selects its human
 /// presentation. Inspection borrows it without rendering or cloning it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum ColumnarWriteError<E> {
     /// The native fixed-schema codec refused the input or output.

@@ -472,9 +472,9 @@ allocations(N) == CHANGE_PATH_CONSTANT + per_focus_node * N
 
 `CHANGE_PATH_CONSTANT` is the same entry cost the zero-growth cases pin.
 `per_focus_node` is measured and asserted EXACTLY, at `N` and at `2N`, in
-`tests/sparql_path_alloc.rs`: **42** for a `sh:sparql` SELECT constraint, **97**
-for a custom `sh:ask` component over a two-valued path, **54** for a custom
-`sh:select` component, and **95** for a `sh:expression` function call over two
+`tests/sparql_path_alloc.rs`: **43** for a `sh:sparql` SELECT constraint, **99**
+for a custom `sh:ask` component over a two-valued path, **55** for a custom
+`sh:select` component, and **97** for a `sh:expression` function call over two
 argument tuples.
 
 Two properties of that term are worth separating from its size. It is **flat in

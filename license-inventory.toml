@@ -4,6 +4,15 @@
 # Inherited material: grants and byte-preserved notice evidence.
 # Generated payloads are projections of this ledger and Cargo.lock, never hand edited.
 
+[[material]]
+id = "structured-zstd-native"
+license = "Apache-2.0"
+source = "https://crates.io/crates/structured-zstd/0.0.49"
+scope = "modified inherited Zstandard codec and dictionary trainer; original Apache grant retained, fixed product and local modifications documented in the accompanying notice"
+paths = ["crates/zstd/src/**"]
+notices = ["crates/zstd/LICENSE", "crates/zstd/NOTICE"]
+provenance = ["crates/zstd/PROVENANCE.md", "crates/zstd/UPSTREAM-SHA256.json"]
+
 # Exact SPDX offers for separately noticed prose and generated data. Every other
 # first-party header must match workspace.package.license. The header gate
 # checks these paths and refuses stale or unchecked registrations.

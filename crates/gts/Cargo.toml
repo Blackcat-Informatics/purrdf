@@ -56,14 +56,9 @@ rayon = { workspace = true }
 # gzip (RFC 1952) for the `gzip` transform, the transport decoder and gzip tar
 # streams: the workspace's native DEFLATE leaf, deterministic and wasm-clean.
 purrdf-deflate = { workspace = true }
-# pure-Rust zstd encoder/decoder — no C toolchain, wasm-friendly. The
-# `dict_builder` capability (pure-Rust FastCOVER training) is enabled here for the
-# in-band pack dictionaries (GTS-SPEC §5 "dct"); it pulls only std + fastrand,
-# both wasm32-unknown-unknown-clean, so `make wasm` stays green. This enables an
-# upstream capability, not a purrdf `[features]` table.
-structured-zstd = { workspace = true, features = ["dict_builder"] }
-# Seeds structured-zstd's ambient FastCOVER reservoir RNG for reproducible dicts.
-fastrand = { workspace = true }
+# Shared pure-Rust Zstandard codec and fixed FastCOVER dictionary trainer for
+# in-band pack dictionaries (GTS-SPEC §5 "dct"). No C toolchain or Cargo features.
+purrdf-zstd = { workspace = true }
 # Ed25519 (COSE_Sign1, §9.2; OpenPGP key import; packaging signatures):
 # deterministic RFC 8032 signing and strict verification, wasm-clean.
 purrdf-ed25519 = { workspace = true }

@@ -6,8 +6,7 @@
 
 ``BANNED_ANY_EDGE`` records the complete removed dependency inventory,
 including the ox-family and ``hex``. Every one is forbidden on runtime,
-build, dev/test and transitive
-edges. The check reads **every git-tracked Cargo.lock**, including the lock of
+build, dev/test and transitive edges. It reads **every git-tracked Cargo.lock**, including the lock of
 an excluded test fixture, and names the violating lockfile in its error. A
 root-only scan would miss a stale resolution in an excluded workspace.
 
@@ -116,6 +115,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # dev/test, transitive) because a first-party replacement exists for every
 # edge kind; reintroduction anywhere in the resolved Cargo.lock closure fails.
 BANNED_ANY_EDGE: dict[str, str] = {
+    "structured-zstd": "purrdf_zstd (shared native frame codec and FastCOVER trainer)",
     "hashbrown": "purrdf_core::hash::table (shared native probes and transactional growth)",
     "petgraph": "purrdf_core::graph::tarjan_scc (the first-party iterative Tarjan SCC)",
     "thiserror": "plain error types and std::error::Error implementations",

@@ -1135,9 +1135,7 @@ fn build_pack_dicts(
         let bytes = match strategy {
             // The seed is derived from the corpus, so two names sharing a
             // strategy pin identical bytes — deliberate and deterministic.
-            DictStrategy::Trained => {
-                dict::trained_dict(&refs, DICT_TARGET_LEN, dict::DictSeed::FromCorpus)
-            }
+            DictStrategy::Trained => dict::trained_dict(&refs, DICT_TARGET_LEN),
             DictStrategy::RawContent => dict::raw_content_dict(&refs, DICT_TARGET_LEN),
             // Verbatim: the caller's bytes ARE the dictionary. Validated as a
             // parseable finalized dictionary by `DictPlan::validate`.

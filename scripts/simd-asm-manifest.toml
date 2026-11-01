@@ -39,7 +39,7 @@ packages = [
   "purrdf-sparql-eval", "purrdf-sparql-results", "purrdf-datalog", "purrdf-entail", "purrdf-shapes",
   "purrdf-shex", "purrdf-markdown", "purrdf-hnsw", "purrdf-text", "purrdf-retrieval",
   "purrdf-columnar", "purrdf-geo", "purrdf-geo-kernel", "purrdf-gts", "purrdf-slice", "purrdf-deflate",
-  "purrdf-hash", "purrdf-jsonschema", "purrdf-lex", "purrdf-ed25519",
+  "purrdf-hash", "purrdf-jsonschema", "purrdf-lex", "purrdf-ed25519", "purrdf-zstd",
 ]
 # purrdf-wasm is also a cdylib, and linking one needs a linker for the target, which the
 # cross configurations do not have and the asm does not need: it is built as an rlib.
@@ -7383,5 +7383,102 @@ summary = "Bounded positional and explicit exhaustive substring retrieval"
   crate = "purrdf_text"
   symbol = "<purrdf_text::surface::SurfaceIndex>::run_substring"
   min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "zstd.match-length"
+summary = "Zstandard encoder match extension through the architecture-specific common_prefix_len_ptr kernels; scalar fallback measured in the BT walker that inlines it"
+
+  # These #[inline] kernels export MIR and may also be materialized in GTS or
+  # other codec consumers. Every emitted copy must satisfy the same floors and
+  # mnemonic proofs; a unique machine-code copy is not their source contract.
+
+  # Measured v2 on baseline; the two operations are byte compare and lane mask.
+  [[site.measure]]
+  label = "prefix sse42"
+  configs = ["x86_64"]
+  crate = "purrdf_zstd"
+  symbol = "purrdf_zstd::encoding::fastpath::sse42::common_prefix_len_ptr"
+  min_vector_ops = 1
+  require_mnemonics = ["pcmpeqb", "pmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Global AVX enables VEX encoding in the SSE-width kernel. Measured v2.
+  [[site.measure]]
+  label = "prefix sse42"
+  configs = ["x86_64-v3"]
+  crate = "purrdf_zstd"
+  symbol = "purrdf_zstd::encoding::fastpath::sse42::common_prefix_len_ptr"
+  min_vector_ops = 1
+  require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Measured v2 on both builds, retaining the explicit 32-byte byte comparison.
+  [[site.measure]]
+  label = "prefix avx2"
+  configs = ["x86_64", "x86_64-v3"]
+  crate = "purrdf_zstd"
+  symbol = "purrdf_zstd::encoding::fastpath::avx2_bmi2::common_prefix_len_ptr"
+  min_vector_ops = 1
+  require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # AVX-512 lowers each compare directly to a mask register. Measured v1;
+  # retain that one operation rather than rounding its floor down to zero.
+  [[site.measure]]
+  label = "prefix sse42 masks"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_zstd"
+  symbol = "purrdf_zstd::encoding::fastpath::sse42::common_prefix_len_ptr"
+  min_vector_ops = 1
+  require_mnemonics = ["vpcmpeqb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "prefix avx2 masks"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_zstd"
+  symbol = "purrdf_zstd::encoding::fastpath::avx2_bmi2::common_prefix_len_ptr"
+  min_vector_ops = 1
+  require_mnemonics = ["vpcmpeqb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Baseline wasm has no SIMD proposal. The scalar count_match_from_indices
+  # and common-prefix scan inline into this real BT walker. Measured v0.
+  [[site.measure]]
+  label = "prefix scalar (in BT step)"
+  configs = ["wasm32"]
+  crate = "purrdf_zstd"
+  symbol = "<purrdf_zstd::encoding::match_table::storage::MatchTable>::bt_insert_step_no_rebase_scalar"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Measured v2: sixteen byte-equality lanes followed by the lane bitmask.
+  [[site.measure]]
+  label = "prefix simd128"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_zstd"
+  symbol = "purrdf_zstd::encoding::fastpath::simd128::common_prefix_len_ptr"
+  min_vector_ops = 1
+  require_mnemonics = ["i8x16.eq", "i8x16.bitmask"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # Measured v1 on baseline NEON and Neoverse V1: compare sixteen bytes,
+  # inspect each eight-byte lane and find the first mismatch with scalar ctz.
+  [[site.measure]]
+  label = "prefix neon"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_zstd"
+  symbol = "purrdf_zstd::encoding::fastpath::neon::common_prefix_len_ptr"
+  min_vector_ops = 1
+  require_mnemonics = ["cmeq .16b"]
   max_fma = 0
   forbid_relaxed = true

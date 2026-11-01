@@ -272,6 +272,11 @@ fn any_lane(lanes: &[u8; CHUNK]) -> bool {
 /// clean-chunk test — and the one chunk holding a hit is handed to
 /// [`first_replaced_lane`]. The bytes after the last whole chunk are tested one at
 /// a time.
+#[allow(
+    clippy::inline_always,
+    reason = "the audited replace entry must retain this chunked SIMD precheck"
+)]
+#[inline(always)]
 fn find_first_replaced(bytes: &[u8]) -> Option<usize> {
     let (chunks, tail) = bytes.as_chunks::<CHUNK>();
     for (k, chunk) in chunks.iter().enumerate() {

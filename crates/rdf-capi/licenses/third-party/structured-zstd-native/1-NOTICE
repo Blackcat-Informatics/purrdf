@@ -1,0 +1,6 @@
+purrdf-zstd incorporates structured-zstd 0.0.49, a managed fork of ruzstd.
+Upstream authors: Moritz Borcherding <moritz.borcherding@web.de> and
+Structured World Foundation <foundation@sw.foundation>.
+The imported code and local modifications are distributed under Apache-2.0.
+Local modifications: copyright 2026 Blackcat Informatics Inc.
+See PROVENANCE.md and UPSTREAM-SHA256.json for source identity and scope.

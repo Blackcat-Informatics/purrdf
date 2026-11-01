@@ -55,10 +55,10 @@
 //!
 //! | surface | historical allocations before | current allocations | historical requested bytes before | historical requested bytes after |
 //! |---|---|---|---|---|
-//! | `sh:sparql` constraint | 2,695 | 42 | 1,277,672 | 3,119 |
-//! | custom `sh:ask` component (2 value nodes) | 350 | 97 | 16,156 | 6,555 |
-//! | custom `sh:select` component | 2,738 | 54 | 1,278,972 | 3,694 |
-//! | SHACL-AF `sh:expression` call (2 tuples) | 236 | 95 | 13,393 | 6,744 |
+//! | `sh:sparql` constraint | 2,695 | 43 | 1,277,672 | 3,119 |
+//! | custom `sh:ask` component (2 value nodes) | 350 | 99 | 16,156 | 6,555 |
+//! | custom `sh:select` component | 2,738 | 55 | 1,278,972 | 3,694 |
+//! | SHACL-AF `sh:expression` call (2 tuples) | 236 | 97 | 13,393 | 6,744 |
 //!
 //! The current allocations column is pinned below and moves whenever the
 //! evaluator's per-query setup changes. The byte columns retain their historical
@@ -87,8 +87,18 @@
 //! 20 for ASK (two runs, each with current shape 2, boolean parameter 4 and value 4),
 //! 6 for SELECT (current shape 2 and boolean parameter 4), and 16 for the expression
 //! (two runs with two literals at 4 each). Both lanes pay the same increments:
-//! 42/97/54/95 ungoverned and 58/117/70/119 governed. Entry and doubling terms
-//! are unchanged. Receipt grounding is separate from the rewrite's retained probes.
+//! 42/97/54/95 ungoverned and 58/117/70/119 governed at that revision. Entry and
+//! doubling terms are unchanged. Receipt grounding is separate from the rewrite's
+//! retained probes.
+//!
+//! The heap driver now retains nested operator continuations in an admitted
+//! spill buffer. A symbolized allocation trace over 512 warmed SELECT calls
+//! identifies one such allocation per query. The expression reentry classifier
+//! keeps its first 32 pending parts inline, removing its two avoidable allocations
+//! on these fixtures. Current ungoverned costs are 43/99/55/97: one additional
+//! allocation for each query, including the two calls made by ASK and expression.
+//! Restored seeded positive execution brings governed costs to 46/101/58/101.
+//! Entry and doubling terms, exact equality and conformance checks are unchanged.
 //!
 //! # What a run does not pay for
 //!
@@ -545,8 +555,8 @@ const CASES: &[SparqlCase] = &[
             "          FILTER(!isLiteral(?n))\n",
             "        }\"\"\" ] .\n",
         ),
-        per_focus_node: 42,
-        governed_per_focus_node: 58,
+        per_focus_node: 43,
+        governed_per_focus_node: 46,
         governed_entry: 29,
         footprint_is_boundable: false,
         results_per_violation: 1,
@@ -565,12 +575,12 @@ const CASES: &[SparqlCase] = &[
             "ex:AskShape a sh:NodeShape ; sh:targetClass ex:Focus ;\n",
             "    sh:property [ sh:path ex:name ; ex:askParam true ] .\n",
         ),
-        per_focus_node: 97,
+        per_focus_node: 99,
         // The validator's `&&` is one node holding its two operands in one vector,
         // where the binary node boxed each: the governed lane's per-run copy of the
         // substituted query allocates once less for it, on each of the two value
         // nodes.
-        governed_per_focus_node: 117,
+        governed_per_focus_node: 101,
         governed_entry: 29,
         footprint_is_boundable: false,
         results_per_violation: 1,
@@ -593,8 +603,8 @@ const CASES: &[SparqlCase] = &[
             "ex:SelectShape a sh:NodeShape ; sh:targetClass ex:Focus ;\n",
             "    ex:selectParam true .\n",
         ),
-        per_focus_node: 54,
-        governed_per_focus_node: 70,
+        per_focus_node: 55,
+        governed_per_focus_node: 58,
         governed_entry: 29,
         footprint_is_boundable: false,
         results_per_violation: 1,
@@ -611,8 +621,8 @@ const CASES: &[SparqlCase] = &[
             "    sh:expression [ <http://www.w3.org/2005/xpath-functions#contains>\n",
             "        ( [ shnex:pathValues ex:name ] \"item\" ) ] .\n",
         ),
-        per_focus_node: 95,
-        governed_per_focus_node: 119,
+        per_focus_node: 97,
+        governed_per_focus_node: 101,
         governed_entry: 37,
         footprint_is_boundable: true,
         results_per_violation: 1,
@@ -850,25 +860,29 @@ fn warm_every_worker(fixture: &Fixture, case: usize) {
 ///
 /// # Why a second `rayon::broadcast`, not the flag alone
 ///
-/// The flag is a thread-local: setting it on the calling (test) thread does nothing
-/// for the pool workers the parallel validation path actually runs on. This reuses
+/// The flag is a thread-local. Governed validation runs on the calling thread;
+/// ordinary parallel validation runs on the pool workers. The window brackets
+/// both. Setting the caller's flag alone does nothing for the workers. This reuses
 /// exactly the mechanism [`warm_every_worker`] already uses to reach every worker
 /// deterministically before a window opens — a `rayon::broadcast` call runs its
 /// closure once on every thread in the pool, so no worker is left with the oracle
 /// on (or, afterwards, left with it off) by chance of which workers a chunked pass
 /// happened to schedule onto.
 ///
-/// # Scope: exactly this window, exactly these workers
+/// # Scope: exactly this window, on the caller and pool workers
 ///
-/// The flag is restored with a second broadcast before returning, including on a
+/// The caller's flag and all worker flags are restored before returning, including on a
 /// panicking `operation` (`std::panic::catch_unwind` plus a resume), so a failing
 /// assertion inside `operation` cannot leave a later, unrelated test's oracle
-/// silently disabled. Nothing outside the broadcasts is touched: a thread that is
-/// never a worker in this pool (there is only one process-wide `rayon` pool, so
-/// that means no other thread at all) never sees the flag change.
+/// silently disabled. Threads outside the calling thread and this worker pool
+/// never see the flag change. Every call outside the measured window retains
+/// its ordinary differential verification.
 fn without_memo_verification<T>(operation: impl FnOnce() -> T) -> T {
     #[cfg(debug_assertions)]
-    rayon::broadcast(|_| purrdf_sparql_eval::set_memo_verification_enabled(false));
+    {
+        purrdf_sparql_eval::set_memo_verification_enabled(false);
+        rayon::broadcast(|_| purrdf_sparql_eval::set_memo_verification_enabled(false));
+    }
     // `AssertUnwindSafe`, not a real `UnwindSafe` bound: `operation` only reads the
     // fixture (validation takes `&self`) and this function never inspects any state
     // `operation` touched after a panic, it only resumes the payload unchanged — the
@@ -876,7 +890,10 @@ fn without_memo_verification<T>(operation: impl FnOnce() -> T) -> T {
     // half-written) does not apply to a caller that never looks.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(operation));
     #[cfg(debug_assertions)]
-    rayon::broadcast(|_| purrdf_sparql_eval::set_memo_verification_enabled(true));
+    {
+        rayon::broadcast(|_| purrdf_sparql_eval::set_memo_verification_enabled(true));
+        purrdf_sparql_eval::set_memo_verification_enabled(true);
+    }
     match result {
         Ok(value) => value,
         Err(payload) => std::panic::resume_unwind(payload),
@@ -1381,7 +1398,7 @@ const ASK_FALLBACK_SHAPES: &str = concat!(
 /// exactly as [`SparqlCase::per_focus_node`] is measured for the cases in
 /// [`CASES`] — same harness, same closed form, same two populations.
 ///
-/// It sits well above [`CASES`]'s `97` for the prepared `sh:ask component`
+/// It sits well above [`CASES`]'s `99` for the prepared `sh:ask component`
 /// case: the `&str` door re-probes the plan cache by hashing the whole query
 /// text on every run, re-interns every parameter name, and rebuilds the
 /// pre-binding list from scratch per value node, none of which the prepared
@@ -1406,7 +1423,9 @@ const ASK_FALLBACK_SHAPES: &str = concat!(
 /// current-shape IRI (2 each). Unlike the prepared door, this fallback carries
 /// the focus as an owned value too. Repeated names remain part of the request
 /// identity; neither binding is discarded.
-const ASK_FALLBACK_PER_FOCUS_NODE: u64 = 218;
+/// The admitted continuation spill adds one allocation per query, making the
+/// current two-run cost 220. The classifier's short walk stays inline.
+const ASK_FALLBACK_PER_FOCUS_NODE: u64 = 220;
 
 /// One dataset and one validator for [`ASK_FALLBACK_SHAPES`], built the same
 /// way [`Fixture::build`] builds each of [`CASES`]'s entries.

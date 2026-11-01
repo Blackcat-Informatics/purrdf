@@ -29,7 +29,7 @@ name = "purrdf_columnar"
 purrdf-hash.workspace = true
 purrdf-core = { workspace = true }
 purrdf-lex.workspace = true
-structured-zstd = { workspace = true }
+purrdf-zstd = { workspace = true }
 
 [dev-dependencies]
 purrdf-alloc-probe.workspace = true

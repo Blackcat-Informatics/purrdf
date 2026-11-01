@@ -172,7 +172,7 @@ fn without_memo_verification<T>(operation: impl FnOnce() -> T) -> T {
 /// test does, and update this constant to match: it is not a ceiling, it is the
 /// currently-measured marginal cost.
 ///
-/// The native ownership path measures **23** allocations on each of five
+/// The native ownership path measures **24** allocations on each of five
 /// consecutive steady-state runs. The call includes the original probe write,
 /// evaluation context, admitted VALUES/BGP/join schemas and row buffers, and
 /// interned projection. The old component breakdown described the previous
@@ -185,10 +185,12 @@ fn without_memo_verification<T>(operation: impl FnOnce() -> T) -> T {
 /// Request identity capture grounds this fixture's one owned IRI binding, adding
 /// two allocations to the previous 21: its admitted lexical bytes and shared owner.
 /// The prepared algebra identity is cached outside these steady-state readings.
+/// Iterative projection retains its parent beside the inserted VALUES join,
+/// adding one admitted continuation buffer to the previous 23 allocations.
 ///
 /// None of it is the plan: the numbered tree and its compiled expressions are the
 /// retained substituted tree's, built once and shared by every run.
-const PREPARED_EXECUTION_RUN_ALLOCATIONS: u64 = 23;
+const PREPARED_EXECUTION_RUN_ALLOCATIONS: u64 = 24;
 
 const QUERY: &str = "SELECT ?o WHERE { ?this <http://example.org/p> ?o }";
 
@@ -499,7 +501,7 @@ fn a_reused_handle_answers_and_charges_exactly_as_a_fresh_one_does() {
 /// query carries three distinct IRIs rather than one: a per-occurrence cost would show
 /// here as a multiple of three.
 ///
-/// The current native ownership representation measures **50** allocations on
+/// The current native ownership representation measures **51** allocations on
 /// each of five consecutive calls. That complete call includes re-admission,
 /// both BGPs, FILTER and parsed-value owners, projection, and materialized rows
 /// with their auxiliary dataset handle. The former per-component counts belonged
@@ -508,10 +510,12 @@ fn a_reused_handle_answers_and_charges_exactly_as_a_fresh_one_does() {
 /// argument leases are sparse. This complete native call also retains its own
 /// admitted controls and buffers; the pin measures their combined marginal cost,
 /// rather than treating the former raw-buffer cost as an allocation allowance.
+/// Iterative projection and FILTER share one pending continuation buffer beyond
+/// the inline parent, adding one allocation to the previous 50.
 ///
 /// None of it is the plan: the numbered tree and the `FILTER`'s compiled program are
 /// the admitted plan's, built on its first evaluation and shared by every later one.
-const PREPARED_PLAN_CALL_ALLOCATIONS: u64 = 50;
+const PREPARED_PLAN_CALL_ALLOCATIONS: u64 = 51;
 
 /// The query [`PREPARED_PLAN_CALL_ALLOCATIONS`] is measured over.
 ///

@@ -481,8 +481,8 @@ impl ReportRun<'_> {
 
 impl<'a> ValidationContext<'a, '_> {
     fn report_profile(self) -> crate::profile::ShaclProfile {
-        self.capture.map_or(
-            self.plan.binding().validation_request().shacl_profile,
+        self.capture.map_or_else(
+            || self.plan.binding().validation_request().shacl_profile,
             |capture| capture.profile,
         )
     }

@@ -1492,7 +1492,7 @@ def render_matrix_table(results: list[SuiteResult]) -> str:
         budget_cell = "—" if r.budget is None else str(r.budget)
         badge = "GREEN" if r.ok else "RED"
         rows.append(
-            f"| {r.name} | {r.source} | {r.passed} | {r.xskip} | "
+            f"| {r.name} | {re.sub('(?<![A-Za-z0-9_-])(sparql1[012]|shacl12-test-suite)(?![A-Za-z0-9_-])', lambda match: '`' + match[0] + '`', r.source)} | {r.passed} | {r.xskip} | "
             f"{budget_cell} | {fail_cell} | {badge} |"
         )
     return "\n".join(rows)

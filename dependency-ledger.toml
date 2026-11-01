@@ -381,12 +381,6 @@ distinct = "internal to rayon's work-stealing pool; PurRDF has no thread pool of
 holder = "rayon"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
-[packages.fastrand]
-category = "runtime"
-reason = "seeds structured-zstd FastCOVER dictionary training reproducibly in GTS"
-distinct = "the thread-local generator structured-zstd's FastCOVER sampler draws from; GTS only seeds and restores it, and no native generator can stand in for the one that crate calls"
-metrics = { direct = true, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
-
 [packages.getrandom]
 category = "runtime"
 reason = "native OS entropy for SPARQL RAND()/UUID() seeds and GTS test keys"
@@ -582,12 +576,6 @@ distinct = "internal to clap's argument suggestions; no first-party code calls i
 holder = "clap"
 metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
 
-[packages.structured-zstd]
-category = "spec-codec"
-reason = "pure-Rust Zstandard (RFC 8878) with dictionary training for GTS and columnar"
-distinct = "Zstandard (RFC 8878) with dictionary training for GTS and columnar; PurRDF has no native Zstandard codec"
-metrics = { direct = true, exclusive_closure = 2, release = true, wasm = true, build_script = false, proc_macro = false }
-
 [packages.syn]
 category = "oracle"
 reason = "Rust source parser for the source-census tests in rdf and shapes and the unpublished helper-census tool"
@@ -602,11 +590,10 @@ holder = "pyo3"
 metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = true, proc_macro = false }
 
 [packages.twox-hash]
-category = "transitive:structured-zstd"
+category = "spec-codec"
 reason = "xxHash64 frame checksums for Zstandard"
-distinct = "xxHash64 frame checksums inside structured-zstd; purrdf-hash has no xxHash"
-holder = "structured-zstd"
-metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
+distinct = "xxHash64 frame checksums inside purrdf-zstd; purrdf-hash has no xxHash"
+metrics = { direct = true, exclusive_closure = 1, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.typenum]
 category = "transitive:sha2"

@@ -27635,7 +27635,7 @@ node 0 depth=0 Project rows=3 cells=3 algebra-node-entry=1 committed-output-row=
 node 1 depth=1 Union rows=3 cells=6 algebra-node-entry=1 committed-output-row=3
 node 2 depth=2 Join rows=2 cells=4 algebra-node-entry=1 committed-output-row=2
 node 3 depth=3 Bgp rows=2 cells=4 algebra-node-entry=1 committed-output-row=2 bgp-candidate-quad=2
-node 4 depth=3 Union rows=2 cells=4 algebra-node-entry=1 committed-output-row=2
+node 4 depth=3 Union rows=2 cells=2 algebra-node-entry=1 committed-output-row=2
 node 5 depth=4 Bgp rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 bgp-candidate-quad=1
 node 6 depth=4 Bgp rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 bgp-candidate-quad=1
 node 7 depth=2 Bgp rows=1 cells=1 algebra-node-entry=1 committed-output-row=1 bgp-candidate-quad=1

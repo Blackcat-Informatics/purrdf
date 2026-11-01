@@ -51,6 +51,7 @@ members = [
     "crates/validate",
     "crates/wasm-link",
     "crates/xsd",
+    "crates/zstd",
 ]
 exclude = [
     "crates/gts/fuzz",
@@ -125,6 +126,7 @@ purrdf-stack = { path = "crates/stack", version = "3.0.1" }
 purrdf-text = { path = "crates/text", version = "3.0.1" }
 purrdf-validate = { path = "crates/validate", version = "3.0.1" }
 purrdf-xsd = { path = "crates/xsd", version = "3.0.1" }
+purrdf-zstd = { path = "crates/zstd", version = "3.0.1" }
 
 # --- external crates ---
 # The structural source censuses (the rdf and shapes census tests and the
@@ -161,11 +163,8 @@ regex = { version = "1", default-features = false, features = ["std", "unicode",
 regex-syntax = "0.8.11"
 # SHA-256/384/512 (the SPARQL SHA-2 built-ins, content digests); pure software.
 sha2 = { version = "0.11", default-features = false }
-structured-zstd = "0.0.49"
-# pure-Rust PRNG; used ONLY to deterministically seed structured-zstd's ambient
-# FastCOVER reservoir sampling (which has no seed parameter) so pack dictionaries
-# are byte-reproducible. wasm32-unknown-unknown-clean.
-fastrand = "2"
+# RFC 8878 frame checksums in the shared Zstandard provider.
+twox-hash = { version = "2", default-features = false, features = ["xxhash64"] }
 # 1.0.0 is the tri-licensed release and a zero-runtime-dependency leaf (its
 # BLAKE3 is in-tree; the blake3 crate remains only as its dev-dependency).
 visual-hashing = "1.0.0"

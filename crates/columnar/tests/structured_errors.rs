@@ -1110,6 +1110,55 @@ fn public_plain_value_refusals_survive_file_disposal() {
     }
 }
 
+/// A real compressed file retains its native refusal after disposal and cloning.
+fn public_zstd_cause_survives_file_disposal_without_inspection_allocations() {
+    let mut blobs = ContentStore::new();
+    blobs.insert(b"original compressed payload".to_vec());
+    let dataset = RdfDatasetBuilder::new().freeze().unwrap();
+    let files = write(&dataset, &blobs, Compression::Zstd).unwrap().files;
+    assert_eq!(read(&files).unwrap().blobs.len(), 1);
+    let mut array = files.into_array();
+    let offset = array[4]
+        .windows(4)
+        .position(|bytes| bytes == [0x28, 0xb5, 0x2f, 0xfd])
+        .expect("the blob table contains a compressed frame");
+    array[4][offset] ^= 1;
+    let magic = u32::from_le_bytes(array[4][offset..offset + 4].try_into().unwrap());
+    let files = ParquetFiles::from_array(array);
+    let error = read(&files).unwrap_err();
+    drop(files);
+    let original = std::ptr::from_ref(
+        std::error::Error::source(&error)
+            .unwrap()
+            .downcast_ref::<purrdf_columnar::ZstdReason>()
+            .unwrap(),
+    );
+    let window = CurrentThreadWindow::open();
+    let copy = error.clone();
+    let cloned = window.close();
+    assert_eq!((cloned.allocations, cloned.requested_bytes), (0, 0));
+    drop(error);
+    assert!(std::ptr::eq(
+        original,
+        std::error::Error::source(&copy)
+            .unwrap()
+            .downcast_ref::<purrdf_columnar::ZstdReason>()
+            .unwrap()
+    ));
+    inspect_without_allocation(&copy);
+    let fields = Capture::read(&copy);
+    assert_eq!(fields.code, "columnar-malformed");
+    let native = fields.child("reason").child("cause").child("cause");
+    assert_eq!(native.code, "zstd-read-frame-header-bad-magic-number");
+    assert!(
+        matches!(native.field("magic_number"), ErrorValue::Unsigned(value) if value == u128::from(magic))
+    );
+    assert_eq!(
+        copy.to_string(),
+        format!("columnar Zstandard frame extent is malformed: Header(BadMagicNumber({magic}))")
+    );
+}
+
 purrdf_testkit::harness_main!(
     original_parquet_bounds_survive_file_disposal_without_narrowing,
     public_projection_and_write_preserve_source_owners_and_fields,
@@ -1120,4 +1169,5 @@ purrdf_testkit::harness_main!(
     public_compact_causes_survive_input_disposal,
     public_compact_first_fault_and_unknown_skips_do_not_allocate,
     public_plain_value_refusals_survive_file_disposal,
+    public_zstd_cause_survives_file_disposal_without_inspection_allocations,
 );

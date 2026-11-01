@@ -54,6 +54,7 @@ PURRDF_RELEASE_CRATES=(
   purrdf-cdt
   purrdf-jsonschema
   purrdf-deflate
+  purrdf-zstd
   purrdf-ed25519
   purrdf-gts
   purrdf-core
@@ -103,4 +104,4 @@ PURRDF_RELEASE_CRATES=(
 # refuses any entry that has a record, by name.
 
 # shellcheck disable=SC2034  # consumed by the sourcing script.
-PURRDF_UNBOOTSTRAPPED_CRATES=(purrdf-geo-kernel purrdf-mime purrdf-toml purrdf-glob)
+PURRDF_UNBOOTSTRAPPED_CRATES=(purrdf-zstd purrdf-geo-kernel purrdf-mime purrdf-toml purrdf-glob)

@@ -302,7 +302,7 @@ test-gts-selected-blobs: ## Check bounded selected-blob import and native scope 
 	cargo test -p purrdf-rdf --test gts_selected_blobs --locked
 	cargo test -p purrdf-shapes --test shared_shapes_dataset --locked
 
-doc: ## Build docs for the 35 publishable crates with rustdoc warnings denied.
+doc: ## Build docs for the 36 publishable crates with rustdoc warnings denied.
 	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --exclude purrdf-capi --exclude purrdf-python --exclude purrdf-sparql-conformance --exclude purrdf-cli
 
 book-samples: ## Regenerate deterministic SVG visualization samples embedded in The PurRDF Book.

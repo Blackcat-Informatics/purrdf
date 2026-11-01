@@ -756,7 +756,7 @@
   boundaries: (2)
       generalized-rdf datatype-value-space
   withheld-surrogates: 0
-  budget: join-steps=1321 stored-facts=111 term-arena-bytes=2422
+  budget: join-steps=1335 stored-facts=115 term-arena-bytes=2422
   contract-hash: e0af06828995412165618c0938cdedb6d597525b65906bdef476710595047e7c
   termination: none
   inconsistency: none
@@ -808,7 +808,7 @@
   boundaries: (2)
       generalized-rdf datatype-value-space
   withheld-surrogates: 0
-  budget: join-steps=34 stored-facts=39 term-arena-bytes=1746
+  budget: join-steps=36 stored-facts=43 term-arena-bytes=1746
   contract-hash: 82674ca392c68d4ac789e7c7c9b517dbfcdfd02e344aafd961b2b1105bda5aea
   termination: none
   inconsistency: none

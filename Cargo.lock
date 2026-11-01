@@ -271,12 +271,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0e9c71c2167ca323c882b99918929403426e2373ea17242ff5653e0d5e1058be"
 
 [[package]]
-name = "fastrand"
-version = "2.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
-
-[[package]]
 name = "getrandom"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -501,8 +495,8 @@ dependencies = [
  "purrdf-sparql-results",
  "purrdf-testkit",
  "purrdf-validate",
+ "purrdf-zstd",
  "sha2",
- "structured-zstd",
 ]
 
 [[package]]
@@ -515,7 +509,7 @@ dependencies = [
  "purrdf-lex",
  "purrdf-stack",
  "purrdf-testkit",
- "structured-zstd",
+ "purrdf-zstd",
 ]
 
 [[package]]
@@ -665,7 +659,6 @@ name = "purrdf-gts"
 version = "3.0.1"
 dependencies = [
  "aes-gcm",
- "fastrand",
  "getrandom",
  "purrdf-alloc-probe",
  "purrdf-deflate",
@@ -677,9 +670,9 @@ dependencies = [
  "purrdf-stack",
  "purrdf-testkit",
  "purrdf-xsd",
+ "purrdf-zstd",
  "rayon",
  "sha2",
- "structured-zstd",
  "visual-hashing",
 ]
 
@@ -1074,6 +1067,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "purrdf-zstd"
+version = "3.0.1"
+dependencies = [
+ "purrdf-hash",
+ "purrdf-lex",
+ "twox-hash",
+]
+
+[[package]]
 name = "pyo3"
 version = "0.30.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1216,16 +1218,6 @@ name = "strsim"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
-
-[[package]]
-name = "structured-zstd"
-version = "0.0.49"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "392eea135985654a313cdfee001e93031bacd96a3693a5dc4b0d13793e40b27a"
-dependencies = [
- "fastrand",
- "twox-hash",
-]
 
 [[package]]
 name = "syn"

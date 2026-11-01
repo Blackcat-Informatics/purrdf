@@ -72,6 +72,11 @@ deps = ["purrdf-hash"]
 external = []
 
 [[crate]]
+name = "purrdf-zstd"
+deps = ["purrdf-hash", "purrdf-lex"]
+external = ["twox-hash"]
+
+[[crate]]
 name = "purrdf-events"
 deps = ["purrdf-hash"]
 external = []
@@ -130,6 +135,7 @@ deps = [
     "purrdf-iri",
     "purrdf-xsd",
     "purrdf-lex",
+    "purrdf-zstd",
 ]
 
 [[crate]]
@@ -169,7 +175,7 @@ deps = [
 
 [[crate]]
 name = "purrdf-columnar"
-deps = ["purrdf-core", "purrdf-hash", "purrdf-lex"]
+deps = ["purrdf-core", "purrdf-hash", "purrdf-lex", "purrdf-zstd"]
 
 [[crate]]
 name = "purrdf-datalog"
