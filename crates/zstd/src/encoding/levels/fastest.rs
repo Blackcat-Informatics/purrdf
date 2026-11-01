@@ -181,7 +181,7 @@ pub(crate) fn compress_block_encoded<M: Matcher>(
                 block_size: payload_len as u32,
             };
             // Backfill the reserved 3-byte header in place.
-            output[hdr_off..hdr_off + 3].copy_from_slice(&header.to_le_bytes());
+            *output[hdr_off..].first_chunk_mut::<3>().unwrap() = header.to_le_bytes();
             BlockType::Compressed
         }
     }
@@ -320,7 +320,7 @@ pub(crate) fn compress_block_encoded_borrowed(
                 block_type: BlockType::Compressed,
                 block_size: payload_len as u32,
             };
-            output[hdr_off..hdr_off + 3].copy_from_slice(&header.to_le_bytes());
+            *output[hdr_off..].first_chunk_mut::<3>().unwrap() = header.to_le_bytes();
             BlockType::Compressed
         }
     }

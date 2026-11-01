@@ -925,7 +925,7 @@ impl<R: Read, W: Write> FrameCompressor<R, W, MatchGeneratorDriver> {
                 last_huff_table: None,
                 huff_table_spare: None,
                 fse_tables: FseTables::new(),
-                block_scratch: crate::encoding::blocks::CompressedBlockScratch::new(),
+                block_scratch: crate::encoding::blocks::CompressedBlockScratch::default(),
                 offset_hist: [1, 4, 8],
                 strategy_tag: crate::encoding::strategy::StrategyTag::for_compression_level(
                     compression_level,
@@ -1310,7 +1310,7 @@ impl<R: Read, W: Write, M: Matcher> FrameCompressor<R, W, M> {
                 last_huff_table: None,
                 huff_table_spare: None,
                 fse_tables: FseTables::new(),
-                block_scratch: crate::encoding::blocks::CompressedBlockScratch::new(),
+                block_scratch: crate::encoding::blocks::CompressedBlockScratch::default(),
                 offset_hist: [1, 4, 8],
                 strategy_tag: crate::encoding::strategy::StrategyTag::for_compression_level(
                     compression_level,

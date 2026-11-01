@@ -44,6 +44,8 @@ pub(crate) const INCOMPRESSIBLE_SKIP_STEP: usize = 8;
 /// the per-CPU `common_prefix_len_ptr` kernel (NEON / SSE4.2 / AVX2+BMI2 /
 /// scalar) so the SIMD/CRC heavy lifting lives in one place. See
 /// [`crate::encoding::fastpath`] for the per-CPU implementations.
+/// This slice bridge retains the codec's CRC/BMI2/NEON dispatch family; match
+/// loops also use its already selected kernel through the companion entry.
 #[inline(always)]
 pub(crate) fn common_prefix_len(a: &[u8], b: &[u8]) -> usize {
     let max = a.len().min(b.len());

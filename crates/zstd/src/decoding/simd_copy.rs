@@ -532,6 +532,8 @@ unsafe fn copy_sse2(mut src: *const u8, mut dst: *mut u8, len: usize) {
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 #[target_feature(enable = "avx2")]
 #[allow(dead_code)]
+/// Copy full 64-byte iterations, then the remaining 32-byte tail. The mask
+/// rounds the iteration boundary down; it never rounds an output extent up.
 unsafe fn copy_avx2(mut src: *const u8, mut dst: *mut u8, len: usize) {
     debug_assert!(
         len.is_multiple_of(32),

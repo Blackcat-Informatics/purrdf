@@ -82,25 +82,12 @@ pub(crate) unsafe fn prefix_len_simd(lhs: *const u8, rhs: *const u8, max: usize)
 #[target_feature(enable = "avx2,bmi2")]
 #[inline]
 pub(crate) unsafe fn common_prefix_len_ptr(lhs: *const u8, rhs: *const u8, max: usize) -> usize {
-    // Leading scalar word probe (mirrors upstream C `ZSTD_count`'s first
-    // `MEM_readST` check). A prefix extension that diverges inside the first 8
-    // bytes — the common case on high-entropy / dictionary-seeded BT-tree node
-    // compares, where the candidate and the cursor share only a short run —
-    // returns here on a single 8-byte read + `xor` + `tzcnt`, skipping the
-    // 32-byte vector load + AVX2 compare entirely. A longer match (first word
-    // equal) falls through to the vector loop, which re-covers those 8 bytes;
-    // the one redundant word read is negligible against the wide-match win.
-    let chunk = size_of::<usize>();
-    if chunk <= max {
-        let lhs_word = unsafe { core::ptr::read_unaligned(lhs.cast::<usize>()) };
-        let rhs_word = unsafe { core::ptr::read_unaligned(rhs.cast::<usize>()) };
-        let diff = lhs_word ^ rhs_word;
-        if diff != 0 {
-            return scalar::mismatch_byte_index(diff);
-        }
+    // SAFETY: this entry retains its ISA contract and the original pointer bounds.
+    unsafe {
+        scalar::common_prefix_len_with(lhs, rhs, max, |lhs, rhs, max| {
+            prefix_len_simd(lhs, rhs, max)
+        })
     }
-    let off = unsafe { prefix_len_simd(lhs, rhs, max) };
-    unsafe { scalar::common_prefix_len_scalar_ptr(lhs, rhs, off, max) }
 }
 
 /// AVX2+BMI2 variant of `count_match_from_indices`. Same invariants as the
@@ -118,14 +105,15 @@ pub(crate) unsafe fn count_match_from_indices(
     tail_limit: usize,
     seed_len: usize,
 ) -> usize {
-    let seed = seed_len.min(tail_limit);
-    if seed == tail_limit {
-        return seed;
+    // SAFETY: this entry retains its ISA contract and the original index bounds.
+    unsafe {
+        scalar::count_match_with(
+            concat,
+            current_idx,
+            candidate_idx,
+            tail_limit,
+            seed_len,
+            |lhs, rhs, remaining| common_prefix_len_ptr(lhs, rhs, remaining),
+        )
     }
-    let remaining = tail_limit - seed;
-    let base = concat.as_ptr();
-    let lhs = unsafe { base.add(candidate_idx + seed) };
-    let rhs = unsafe { base.add(current_idx + seed) };
-    let extra = unsafe { common_prefix_len_ptr(lhs, rhs, remaining) };
-    seed + extra
 }

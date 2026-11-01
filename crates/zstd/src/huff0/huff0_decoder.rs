@@ -889,11 +889,7 @@ impl HuffmanTable {
     }
 }
 
-impl Default for HuffmanTable {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+purrdf_hash::default_from_new!(HuffmanTable);
 
 /// Assert that the provided value is greater than zero, and returns the
 /// 32 - the number of leading zeros

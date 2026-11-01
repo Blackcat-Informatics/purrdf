@@ -219,11 +219,7 @@ fn finalized_content_budget(
 }
 
 fn derive_dict_id(raw_content: &[u8]) -> u32 {
-    let mut h = 0xcbf29ce484222325u64;
-    for &b in raw_content {
-        h ^= u64::from(b);
-        h = h.wrapping_mul(0x100000001b3);
-    }
+    let h = purrdf_hash::fnv::fnv1a64(raw_content);
     let compliant = (h % ((1u64 << 31) - 32768)) + 32768;
     compliant as u32
 }

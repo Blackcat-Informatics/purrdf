@@ -55,11 +55,7 @@ pub(crate) enum LiteralsSectionType {
     Treeless,
 }
 
-impl Default for LiteralsSection {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+purrdf_hash::default_from_new!(LiteralsSection);
 
 impl LiteralsSection {
     /// Create a new [LiteralsSection].

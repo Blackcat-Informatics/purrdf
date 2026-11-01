@@ -92,11 +92,7 @@ impl StdError for FrameHeaderError {
     }
 }
 
-impl From<FrameDescriptorError> for FrameHeaderError {
-    fn from(error: FrameDescriptorError) -> Self {
-        Self::FrameDescriptorError(error)
-    }
-}
+purrdf_lex::variant_from!(FrameHeaderError { FrameDescriptorError(FrameDescriptorError) });
 
 #[derive(Debug)]
 #[non_exhaustive]
@@ -152,11 +148,7 @@ impl StdError for ReadFrameHeaderError {
     }
 }
 
-impl From<FrameDescriptorError> for ReadFrameHeaderError {
-    fn from(error: FrameDescriptorError) -> Self {
-        Self::InvalidFrameDescriptor(error)
-    }
-}
+purrdf_lex::variant_from!(ReadFrameHeaderError { InvalidFrameDescriptor(FrameDescriptorError) });
 
 #[derive(Debug)]
 #[non_exhaustive]
@@ -194,23 +186,11 @@ impl ::core::fmt::Display for BlockHeaderReadError {
     }
 }
 
-impl From<Error> for BlockHeaderReadError {
-    fn from(val: Error) -> Self {
-        Self::ReadError(val)
-    }
-}
+purrdf_lex::variant_from!(BlockHeaderReadError { ReadError(Error) });
 
-impl From<BlockTypeError> for BlockHeaderReadError {
-    fn from(val: BlockTypeError) -> Self {
-        Self::BlockTypeError(val)
-    }
-}
+purrdf_lex::variant_from!(BlockHeaderReadError { BlockTypeError(BlockTypeError) });
 
-impl From<BlockSizeError> for BlockHeaderReadError {
-    fn from(val: BlockSizeError) -> Self {
-        Self::BlockSizeError(val)
-    }
-}
+purrdf_lex::variant_from!(BlockHeaderReadError { BlockSizeError(BlockSizeError) });
 
 #[derive(Debug)]
 #[non_exhaustive]
@@ -309,41 +289,17 @@ impl fmt::Display for DecompressBlockError {
     }
 }
 
-impl From<Error> for DecompressBlockError {
-    fn from(val: Error) -> Self {
-        Self::BlockContentReadError(val)
-    }
-}
+purrdf_lex::variant_from!(DecompressBlockError { BlockContentReadError(Error) });
 
-impl From<DecompressLiteralsError> for DecompressBlockError {
-    fn from(val: DecompressLiteralsError) -> Self {
-        Self::DecompressLiteralsError(val)
-    }
-}
+purrdf_lex::variant_from!(DecompressBlockError { DecompressLiteralsError(DecompressLiteralsError) });
 
-impl From<LiteralsSectionParseError> for DecompressBlockError {
-    fn from(val: LiteralsSectionParseError) -> Self {
-        Self::LiteralsSectionParseError(val)
-    }
-}
+purrdf_lex::variant_from!(DecompressBlockError { LiteralsSectionParseError(LiteralsSectionParseError) });
 
-impl From<SequencesHeaderParseError> for DecompressBlockError {
-    fn from(val: SequencesHeaderParseError) -> Self {
-        Self::SequencesHeaderParseError(val)
-    }
-}
+purrdf_lex::variant_from!(DecompressBlockError { SequencesHeaderParseError(SequencesHeaderParseError) });
 
-impl From<DecodeSequenceError> for DecompressBlockError {
-    fn from(val: DecodeSequenceError) -> Self {
-        Self::DecodeSequenceError(val)
-    }
-}
+purrdf_lex::variant_from!(DecompressBlockError { DecodeSequenceError(DecodeSequenceError) });
 
-impl From<ExecuteSequencesError> for DecompressBlockError {
-    fn from(val: ExecuteSequencesError) -> Self {
-        Self::ExecuteSequencesError(val)
-    }
-}
+purrdf_lex::variant_from!(DecompressBlockError { ExecuteSequencesError(ExecuteSequencesError) });
 
 #[derive(Debug)]
 #[non_exhaustive]
@@ -407,11 +363,7 @@ impl fmt::Display for DecodeBlockContentError {
     }
 }
 
-impl From<DecompressBlockError> for DecodeBlockContentError {
-    fn from(val: DecompressBlockError) -> Self {
-        Self::DecompressBlockError(val)
-    }
-}
+purrdf_lex::variant_from!(DecodeBlockContentError { DecompressBlockError(DecompressBlockError) });
 
 #[derive(Debug)]
 #[non_exhaustive]
@@ -540,17 +492,9 @@ impl fmt::Display for DictionaryDecodeError {
     }
 }
 
-impl From<FSETableError> for DictionaryDecodeError {
-    fn from(val: FSETableError) -> Self {
-        Self::FSETableError(val)
-    }
-}
+purrdf_lex::variant_from!(DictionaryDecodeError { FSETableError(FSETableError) });
 
-impl From<HuffmanTableError> for DictionaryDecodeError {
-    fn from(val: HuffmanTableError) -> Self {
-        Self::HuffmanTableError(val)
-    }
-}
+purrdf_lex::variant_from!(DictionaryDecodeError { HuffmanTableError(HuffmanTableError) });
 
 #[derive(Debug)]
 #[non_exhaustive]
@@ -727,29 +671,13 @@ impl fmt::Display for FrameDecoderError {
     }
 }
 
-impl From<DictionaryDecodeError> for FrameDecoderError {
-    fn from(val: DictionaryDecodeError) -> Self {
-        Self::DictionaryDecodeError(val)
-    }
-}
+purrdf_lex::variant_from!(FrameDecoderError { DictionaryDecodeError(DictionaryDecodeError) });
 
-impl From<BlockHeaderReadError> for FrameDecoderError {
-    fn from(val: BlockHeaderReadError) -> Self {
-        Self::FailedToReadBlockHeader(val)
-    }
-}
+purrdf_lex::variant_from!(FrameDecoderError { FailedToReadBlockHeader(BlockHeaderReadError) });
 
-impl From<FrameHeaderError> for FrameDecoderError {
-    fn from(val: FrameHeaderError) -> Self {
-        Self::FrameHeaderError(val)
-    }
-}
+purrdf_lex::variant_from!(FrameDecoderError { FrameHeaderError(FrameHeaderError) });
 
-impl From<ReadFrameHeaderError> for FrameDecoderError {
-    fn from(val: ReadFrameHeaderError) -> Self {
-        Self::ReadFrameHeaderError(val)
-    }
-}
+purrdf_lex::variant_from!(FrameDecoderError { ReadFrameHeaderError(ReadFrameHeaderError) });
 
 #[derive(Debug)]
 #[non_exhaustive]
@@ -832,23 +760,11 @@ impl fmt::Display for DecompressLiteralsError {
     }
 }
 
-impl From<HuffmanDecoderError> for DecompressLiteralsError {
-    fn from(val: HuffmanDecoderError) -> Self {
-        Self::HuffmanDecoderError(val)
-    }
-}
+purrdf_lex::variant_from!(DecompressLiteralsError { HuffmanDecoderError(HuffmanDecoderError) });
 
-impl From<GetBitsError> for DecompressLiteralsError {
-    fn from(val: GetBitsError) -> Self {
-        Self::GetBitsError(val)
-    }
-}
+purrdf_lex::variant_from!(DecompressLiteralsError { GetBitsError(GetBitsError) });
 
-impl From<HuffmanTableError> for DecompressLiteralsError {
-    fn from(val: HuffmanTableError) -> Self {
-        Self::HuffmanTableError(val)
-    }
-}
+purrdf_lex::variant_from!(DecompressLiteralsError { HuffmanTableError(HuffmanTableError) });
 
 #[derive(Debug)]
 #[non_exhaustive]
@@ -913,11 +829,7 @@ impl std::error::Error for ExecuteSequencesError {
     }
 }
 
-impl From<DecodeBufferError> for ExecuteSequencesError {
-    fn from(val: DecodeBufferError) -> Self {
-        Self::DecodebufferError(val)
-    }
-}
+purrdf_lex::variant_from!(ExecuteSequencesError { DecodebufferError(DecodeBufferError) });
 
 impl From<crate::decoding::buffer_backend::BackendOverflow> for ExecuteSequencesError {
     fn from(val: crate::decoding::buffer_backend::BackendOverflow) -> Self {
@@ -1043,23 +955,11 @@ impl fmt::Display for DecodeSequenceError {
     }
 }
 
-impl From<GetBitsError> for DecodeSequenceError {
-    fn from(val: GetBitsError) -> Self {
-        Self::GetBitsError(val)
-    }
-}
+purrdf_lex::variant_from!(DecodeSequenceError { GetBitsError(GetBitsError) });
 
-impl From<FSETableError> for DecodeSequenceError {
-    fn from(val: FSETableError) -> Self {
-        Self::FSETableError(val)
-    }
-}
+purrdf_lex::variant_from!(DecodeSequenceError { FSETableError(FSETableError) });
 
-impl From<FSEDecoderError> for DecodeSequenceError {
-    fn from(val: FSEDecoderError) -> Self {
-        Self::FSEDecoderError(val)
-    }
-}
+purrdf_lex::variant_from!(DecodeSequenceError { FSEDecoderError(FSEDecoderError) });
 
 #[derive(Debug)]
 #[non_exhaustive]
@@ -1097,11 +997,7 @@ impl fmt::Display for LiteralsSectionParseError {
     }
 }
 
-impl From<GetBitsError> for LiteralsSectionParseError {
-    fn from(val: GetBitsError) -> Self {
-        Self::GetBitsError(val)
-    }
-}
+purrdf_lex::variant_from!(LiteralsSectionParseError { GetBitsError(GetBitsError) });
 
 impl fmt::Display for LiteralsSectionType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
@@ -1237,11 +1133,7 @@ impl fmt::Display for FSETableError {
     }
 }
 
-impl From<GetBitsError> for FSETableError {
-    fn from(val: GetBitsError) -> Self {
-        Self::GetBitsError(val)
-    }
-}
+purrdf_lex::variant_from!(FSETableError { GetBitsError(GetBitsError) });
 
 #[derive(Debug)]
 #[non_exhaustive]
@@ -1292,11 +1184,7 @@ impl fmt::Display for FSEDecoderError {
     }
 }
 
-impl From<GetBitsError> for FSEDecoderError {
-    fn from(val: GetBitsError) -> Self {
-        Self::GetBitsError(val)
-    }
-}
+purrdf_lex::variant_from!(FSEDecoderError { GetBitsError(GetBitsError) });
 
 #[derive(Debug)]
 #[non_exhaustive]
@@ -1422,23 +1310,11 @@ impl fmt::Display for HuffmanTableError {
     }
 }
 
-impl From<GetBitsError> for HuffmanTableError {
-    fn from(val: GetBitsError) -> Self {
-        Self::GetBitsError(val)
-    }
-}
+purrdf_lex::variant_from!(HuffmanTableError { GetBitsError(GetBitsError) });
 
-impl From<FSEDecoderError> for HuffmanTableError {
-    fn from(val: FSEDecoderError) -> Self {
-        Self::FSEDecoderError(val)
-    }
-}
+purrdf_lex::variant_from!(HuffmanTableError { FSEDecoderError(FSEDecoderError) });
 
-impl From<FSETableError> for HuffmanTableError {
-    fn from(val: FSETableError) -> Self {
-        Self::FSETableError(val)
-    }
-}
+purrdf_lex::variant_from!(HuffmanTableError { FSETableError(FSETableError) });
 
 #[derive(Debug)]
 #[non_exhaustive]
@@ -1462,8 +1338,4 @@ impl StdError for HuffmanDecoderError {
     }
 }
 
-impl From<GetBitsError> for HuffmanDecoderError {
-    fn from(val: GetBitsError) -> Self {
-        Self::GetBitsError(val)
-    }
-}
+purrdf_lex::variant_from!(HuffmanDecoderError { GetBitsError(GetBitsError) });

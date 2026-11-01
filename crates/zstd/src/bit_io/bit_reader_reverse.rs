@@ -12,7 +12,6 @@
     reason = "Inherited codec API; source identity and modifications are documented in PROVENANCE.md"
 )]
 use crate::cpu_kernel::{CpuKernel, ScalarKernel};
-use core::convert::TryInto;
 use core::marker::PhantomData;
 #[cfg(target_arch = "x86_64")]
 use std::sync::OnceLock;
@@ -71,9 +70,9 @@ fn detect_triple_extract_dispatch() -> TripleExtractDispatch {
     // Keep scalar extraction there and enable PEXT on Intel and newer AMD.
     let leaf0 = __cpuid(0);
     let mut vendor = [0u8; 12];
-    vendor[0..4].copy_from_slice(&leaf0.ebx.to_le_bytes());
-    vendor[4..8].copy_from_slice(&leaf0.edx.to_le_bytes());
-    vendor[8..12].copy_from_slice(&leaf0.ecx.to_le_bytes());
+    *vendor.first_chunk_mut::<4>().unwrap() = leaf0.ebx.to_le_bytes();
+    *vendor[4..].first_chunk_mut::<4>().unwrap() = leaf0.edx.to_le_bytes();
+    *vendor[8..].first_chunk_mut::<4>().unwrap() = leaf0.ecx.to_le_bytes();
     let eax = __cpuid(1).eax;
     let base_family = (eax >> 8) & 0xF;
     let ext_family = (eax >> 20) & 0xFF;
@@ -239,7 +238,7 @@ impl<'s, K: CpuKernel> BitReaderReversed<'s, K> {
             // Some bits of the `bits_container` might have been consumed already because we read the window byte aligned
             self.bits_consumed &= 7;
             self.bit_container =
-                u64::from_le_bytes((&self.source[self.index..][..8]).try_into().unwrap());
+                u64::from_le_bytes(*self.source[self.index..].first_chunk::<8>().unwrap());
         } else {
             self.refill_slow();
         }
@@ -258,7 +257,7 @@ impl<'s, K: CpuKernel> BitReaderReversed<'s, K> {
         if self.index > 0 {
             // Read the last portion of source into the `bit_container`
             if self.source.len() >= 8 {
-                self.bit_container = u64::from_le_bytes((&self.source[..8]).try_into().unwrap());
+                self.bit_container = u64::from_le_bytes(*self.source.first_chunk::<8>().unwrap());
             } else {
                 let mut value = [0; 8];
                 value[..self.source.len()].copy_from_slice(self.source);

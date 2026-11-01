@@ -373,11 +373,7 @@ impl HuffmanScratch {
     }
 }
 
-impl Default for HuffmanScratch {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+purrdf_hash::default_from_new!(HuffmanScratch);
 
 /// Whether an entropy table (a sequence FSE axis, or the Huffman
 /// literals table) reads its own freshly-built table (`Local`) or the
@@ -560,11 +556,7 @@ impl FSEScratch {
     }
 }
 
-impl Default for FSEScratch {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+purrdf_hash::default_from_new!(FSEScratch);
 
 // Keep LL/ML/OF table *objects* cache-line aligned to avoid cross-table placement
 // effects in DecoderScratch when they are accessed in the same decode hot loop.

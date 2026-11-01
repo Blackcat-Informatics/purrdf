@@ -57,6 +57,142 @@ pub(crate) mod cparams;
 pub(crate) mod dict_attach;
 pub(crate) mod fastpath;
 pub(crate) mod frame_header;
+pub(crate) mod history {
+    //! Shared history-window operations for the encoder's match finders.
+
+    use alloc::collections::VecDeque;
+    use alloc::vec::Vec;
+
+    /// Compact a dead prefix at the common quarter-window or half-buffer threshold.
+    #[inline]
+    pub(crate) fn compact_history(
+        history: &mut Vec<u8>,
+        history_start: &mut usize,
+        max_window_size: usize,
+    ) {
+        if *history_start == 0 {
+            return;
+        }
+        if *history_start >= (max_window_size >> 2) || *history_start * 2 >= history.len() {
+            history.drain(..*history_start);
+            *history_start = 0;
+        }
+    }
+
+    /// Register the borrowed window and reset the owned-history coordinate floor.
+    #[inline]
+    pub(crate) fn set_borrowed_window(
+        buffer: &[u8],
+        borrowed_input: &mut Option<(*const u8, usize)>,
+        borrowed_block: &mut Option<(usize, usize)>,
+        history_abs_start: &mut usize,
+    ) {
+        *borrowed_input = Some((buffer.as_ptr(), buffer.len()));
+        *borrowed_block = None;
+        *history_abs_start = 0;
+    }
+
+    /// Validate an active block before any raw-pointer slice can observe its range.
+    #[inline]
+    pub(crate) fn stage_borrowed_block(
+        borrowed_input: Option<(*const u8, usize)>,
+        borrowed_block: &mut Option<(usize, usize)>,
+        block_start: usize,
+        block_end: usize,
+    ) {
+        let (_ptr, total) =
+            borrowed_input.expect("stage_borrowed_block requires a registered borrowed window");
+        assert!(
+            block_start <= block_end && block_end <= total,
+            "borrowed block bounds out of range: start={block_start} end={block_end} total={total}",
+        );
+        *borrowed_block = Some((block_start, block_end));
+    }
+
+    /// Read the live owned history or the borrowed prefix through the active block.
+    ///
+    /// # Safety
+    /// Any registered borrowed window must remain live and unmodified for the
+    /// returned borrow. Its active block was validated by `stage_borrowed_block`.
+    #[inline]
+    pub(crate) unsafe fn live_history(
+        history: &[u8],
+        history_start: usize,
+        borrowed_input: Option<(*const u8, usize)>,
+        borrowed_block: Option<(usize, usize)>,
+    ) -> &[u8] {
+        if let Some((_start, end)) = borrowed_block {
+            let (ptr, total) =
+                borrowed_input.expect("borrowed_block set without a registered borrowed window");
+            debug_assert!(
+                end <= total,
+                "borrowed block end {end} exceeds window {total}"
+            );
+            // SAFETY: the caller retains the registered window; staging checked end.
+            return unsafe { core::slice::from_raw_parts(ptr, end) };
+        }
+        &history[history_start..]
+    }
+
+    /// Read the last owned chunk or the staged borrowed block.
+    ///
+    /// # Safety
+    /// Any registered borrowed window must remain live and unmodified for the
+    /// returned borrow. Its active block was validated by `stage_borrowed_block`.
+    #[inline]
+    pub(crate) unsafe fn get_last_space<'a>(
+        history: &'a [u8],
+        chunk_lens: &VecDeque<usize>,
+        borrowed_input: Option<(*const u8, usize)>,
+        borrowed_block: Option<(usize, usize)>,
+    ) -> &'a [u8] {
+        if let (Some((ptr, _total)), Some((block_start, block_end))) =
+            (borrowed_input, borrowed_block)
+        {
+            // SAFETY: the caller retains the window and staging validated this range.
+            return unsafe {
+                core::slice::from_raw_parts(ptr.add(block_start), block_end - block_start)
+            };
+        }
+        let last = *chunk_lens.back().unwrap();
+        &history[history.len() - last..]
+    }
+
+    /// Locate the active scan without consulting owned chunks on the borrowed path.
+    #[inline]
+    pub(crate) fn current_block_range(
+        borrowed_block: Option<(usize, usize)>,
+        chunk_lens: &VecDeque<usize>,
+        history_abs_start: usize,
+        window_size: usize,
+    ) -> (usize, usize) {
+        if let Some((start, end)) = borrowed_block {
+            (start, end - start)
+        } else {
+            let current_len = *chunk_lens.back().unwrap();
+            (history_abs_start + window_size - current_len, current_len)
+        }
+    }
+
+    /// Visit the match span's boundary anchors, capping long spans at 96 + 32 slots.
+    #[inline]
+    pub(crate) fn insert_match_span(
+        start: usize,
+        end: usize,
+        mut insert: impl FnMut(usize, usize),
+    ) {
+        const SKIP_THRESHOLD: usize = 384;
+        const MAX_START: usize = 96;
+        const MAX_END: usize = 32;
+        if end.saturating_sub(start) > SKIP_THRESHOLD {
+            // The span exceeds 384 and the frame headroom covers the 96-byte prefix.
+            insert(start, start + MAX_START);
+            insert(end - MAX_END, end);
+        } else {
+            insert(start, end);
+        }
+    }
+}
 pub(crate) mod incompressible;
 pub(crate) mod match_generator;
 pub(crate) mod util;

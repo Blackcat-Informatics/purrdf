@@ -51,10 +51,10 @@ fn dmer_read_len(d: usize) -> usize {
 #[inline]
 fn hash_dmer_index(sample: &[u8], pos: usize, f: u32, d: usize) -> usize {
     if d.min(8) == 4 {
-        let v = u32::from_le_bytes(sample[pos..pos + 4].try_into().unwrap());
+        let v = u32::from_le_bytes(*sample[pos..].first_chunk::<4>().unwrap());
         return (v.wrapping_mul(PRIME_4_BYTES) >> (32 - f)) as usize;
     }
-    let v = u64::from_le_bytes(sample[pos..pos + 8].try_into().unwrap());
+    let v = u64::from_le_bytes(*sample[pos..].first_chunk::<8>().unwrap());
     let h = match d.min(8) {
         5 => (v << 24).wrapping_mul(PRIME_5_BYTES),
         6 => (v << 16).wrapping_mul(PRIME_6_BYTES),

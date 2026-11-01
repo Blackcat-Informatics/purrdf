@@ -182,12 +182,6 @@ pub(crate) struct CompressedBlockScratch {
     pub(crate) huff_rollback: Option<huff0_encoder::HuffmanTable>,
 }
 
-impl CompressedBlockScratch {
-    pub(crate) fn new() -> Self {
-        Self::default()
-    }
-}
-
 #[derive(Default)]
 struct SequencePrefixSums {
     lit: Vec<usize>,

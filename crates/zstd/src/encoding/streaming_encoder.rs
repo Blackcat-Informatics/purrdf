@@ -162,7 +162,7 @@ impl<W: Write, M: Matcher> StreamingEncoder<W, M> {
                 last_huff_table: None,
                 huff_table_spare: None,
                 fse_tables: FseTables::new(),
-                block_scratch: crate::encoding::blocks::CompressedBlockScratch::new(),
+                block_scratch: crate::encoding::blocks::CompressedBlockScratch::default(),
                 offset_hist: [1, 4, 8],
                 strategy_tag: crate::encoding::strategy::StrategyTag::for_compression_level(
                     compression_level,
@@ -473,9 +473,7 @@ impl<W: Write, M: Matcher> StreamingEncoder<W, M> {
         Ok(())
     }
 
-    // Cold path (only reached after poisoning). The format!() calls still allocate
-    // in no_std even though error_with_kind_message/other_error_owned drop the
-    // message; this is acceptable on an error recovery path to keep match arms simple.
+    // Cold path, only reached after poisoning.
     fn sticky_error(&self) -> Error {
         match (self.last_error_kind, self.last_error_message.as_deref()) {
             (Some(kind), Some(message)) => error_with_kind_message(
@@ -485,7 +483,7 @@ impl<W: Write, M: Matcher> StreamingEncoder<W, M> {
                 ),
             ),
             (Some(kind), None) => error_from_kind(kind),
-            (None, Some(message)) => other_error_owned(format!(
+            (None, Some(message)) => Error::other(format!(
                 "streaming encoder is in an errored state: {message}"
             )),
             (None, None) => other_error("streaming encoder is in an errored state"),
@@ -937,10 +935,6 @@ fn error_with_kind_message(kind: ErrorKind, message: String) -> Error {
 
 fn invalid_input_error(message: &str) -> Error {
     Error::new(ErrorKind::InvalidInput, message)
-}
-
-fn other_error_owned(message: String) -> Error {
-    Error::other(message)
 }
 
 fn other_error(message: &str) -> Error {

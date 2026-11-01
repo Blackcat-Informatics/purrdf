@@ -254,6 +254,122 @@ macro_rules! exec_sequence_sse2_inline {
 #[cfg(target_arch = "x86_64")]
 pub(crate) use exec_sequence_sse2_inline;
 
+// Keep the byte-copy algorithms shared; only the 16-byte move is target-specific.
+#[cfg(not(target_arch = "x86_64"))]
+use portable::copy16;
+#[cfg(target_arch = "x86_64")]
+use x86::copy16;
+
+/// Upstream zstd's `ZSTD_wildcopy(..., ZSTD_no_overlap)`: 16-byte
+/// loop until at least `length` bytes are written. May overshoot
+/// up to 15 bytes past `dst + length`; caller's
+/// `WILDCOPY_OVERLENGTH` slack accommodates.
+///
+/// # Safety
+/// `length > 0`; the destination is writable for `length + 15` bytes and each
+/// 16-byte source read is initialized. An overlapping source behind the
+/// destination must be at least 16 bytes behind, preserving forward-copy order.
+#[inline(always)]
+pub(crate) unsafe fn wildcopy_no_overlap(dst: *mut u8, src: *const u8, length: usize) {
+    debug_assert!(length > 0);
+    unsafe {
+        let mut off = 0usize;
+        loop {
+            copy16(dst.add(off), src.add(off));
+            off += 16;
+            if off >= length {
+                break;
+            }
+        }
+    }
+}
+
+/// Upstream zstd's `ZSTD_wildcopy(..., ZSTD_overlap_src_before_dst)` for
+/// the `diff < WILDCOPY_VECLEN` (= < 16) arm: 8-byte unaligned
+/// loop. Each iter reads `src + off` (8 bytes) which may be in
+/// the just-written destination region — correct for RLE
+/// expansion once the source/dest gap is ≥ 8.
+///
+/// # Safety
+/// `length > 0`; the source precedes the destination by at least 8 bytes.
+/// The destination is writable for `length + 7` bytes, and each source read
+/// is initialized, including bytes written by earlier iterations.
+#[inline(always)]
+pub(crate) unsafe fn wildcopy_overlap_8byte_stride(dst: *mut u8, src: *const u8, length: usize) {
+    debug_assert!(length > 0);
+    unsafe {
+        let mut off = 0usize;
+        loop {
+            let v: u64 = src.add(off).cast::<u64>().read_unaligned();
+            dst.add(off).cast::<u64>().write_unaligned(v);
+            off += 8;
+            if off >= length {
+                break;
+            }
+        }
+    }
+}
+
+/// Upstream zstd's `ZSTD_overlapCopy8`
+/// (zstd_decompress_block.c:799-826). Copies 8 bytes from `src`
+/// to `dst` and, when `offset < 8`, "spreads" the source/dest
+/// distance so the following wildcopy can use the safe ≥ 8
+/// stride.
+///
+/// Returns the updated `(dst, src)` pair (caller's old pointers
+/// are no longer valid).
+///
+/// # Safety
+/// `offset >= 1`; the destination is writable for 8 bytes and the source
+/// supports the spread reads and returned pointer within its allocation.
+#[inline(always)]
+pub(crate) unsafe fn overlap_copy8(
+    dst: *mut u8,
+    src: *const u8,
+    offset: usize,
+) -> (*mut u8, *const u8) {
+    // `dec32table` / `dec64table` — upstream zstd's two precomputed lookup
+    // tables for the offset < 8 spread step.
+    const DEC32_TABLE: [u32; 8] = [0, 1, 2, 1, 4, 4, 4, 4];
+    const DEC64_TABLE: [i32; 8] = [8, 8, 8, 7, 8, 9, 10, 11];
+    unsafe {
+        if offset < 8 {
+            // Read 4 bytes, advance src by `dec32`, read 4 more bytes,
+            // then back-advance by `dec64` — see upstream zstd source.
+            let sub2 = DEC64_TABLE[offset];
+            dst.add(0).write(src.add(0).read());
+            dst.add(1).write(src.add(1).read());
+            dst.add(2).write(src.add(2).read());
+            dst.add(3).write(src.add(3).read());
+            let dec32 = DEC32_TABLE[offset] as usize;
+            let v: u32 = src.add(dec32).cast::<u32>().read_unaligned();
+            dst.add(4).cast::<u32>().write_unaligned(v);
+            // Post-call src position is `src + (dec32 - sub2 + 8)`.
+            // Computing this as
+            // `src.add(dec32).offset(-(sub2 as isize)).add(8)`
+            // (upstream zstd's literal C transcription) produces an
+            // intermediate pointer below the allocation base
+            // when `dec32 < sub2` — true for every offset ∈ 1..=7
+            // in upstream zstd's tables — which is UB under Rust's
+            // `.offset()` provenance rules even when the final
+            // pointer lands back in-bounds. Apply the net signed
+            // offset once so no intermediate underflows.
+            let net_offset = dec32 as isize - sub2 as isize + 8;
+            debug_assert!(
+                net_offset >= 0,
+                "overlap_copy8 net offset is non-negative for all offset ∈ 1..=7"
+            );
+            let src_after = src.offset(net_offset);
+            (dst.add(8), src_after)
+        } else {
+            // ZSTD_copy8 — straight 8-byte unaligned move.
+            let v: u64 = src.cast::<u64>().read_unaligned();
+            dst.cast::<u64>().write_unaligned(v);
+            (dst.add(8), src.add(8))
+        }
+    }
+}
+
 // x86_64 only: SSE2 is the architectural baseline there (every x86_64
 // CPU has SSE2 by definition). 32-bit `x86` is excluded because the
 // SSE2 intrinsics here are emitted without a `#[target_feature]`
@@ -263,6 +379,7 @@ pub(crate) use exec_sequence_sse2_inline;
 // so the legacy chain handles non-x86_64 targets.
 #[cfg(target_arch = "x86_64")]
 pub(crate) mod x86 {
+    pub(crate) use super::{overlap_copy8, wildcopy_no_overlap, wildcopy_overlap_8byte_stride};
     use core::arch::x86_64::{
         __m128i, __m256i, _mm_loadu_si128, _mm_storeu_si128, _mm256_loadu_si256,
         _mm256_storeu_si256,
@@ -322,106 +439,6 @@ pub(crate) mod x86 {
             _mm_storeu_si128(dst as *mut __m128i, v);
         }
     }
-
-    /// Upstream zstd's `ZSTD_wildcopy(..., ZSTD_no_overlap)`: 16-byte SIMD
-    /// loop until at least `length` bytes are written. May overshoot
-    /// up to 15 bytes past `dst + length`; caller's
-    /// `WILDCOPY_OVERLENGTH` slack accommodates.
-    #[inline(always)]
-    pub(crate) unsafe fn wildcopy_no_overlap(dst: *mut u8, src: *const u8, length: usize) {
-        debug_assert!(length > 0);
-        unsafe {
-            let mut off = 0usize;
-            loop {
-                copy16(dst.add(off), src.add(off));
-                off += 16;
-                if off >= length {
-                    break;
-                }
-            }
-        }
-    }
-
-    /// Upstream zstd's `ZSTD_wildcopy(..., ZSTD_overlap_src_before_dst)` for
-    /// the `diff < WILDCOPY_VECLEN` (= < 16) arm: 8-byte unaligned
-    /// loop. Each iter reads `src + off` (8 bytes) which may be in
-    /// the just-written destination region — correct for RLE
-    /// expansion once the source/dest gap is ≥ 8.
-    #[inline(always)]
-    pub(crate) unsafe fn wildcopy_overlap_8byte_stride(
-        dst: *mut u8,
-        src: *const u8,
-        length: usize,
-    ) {
-        debug_assert!(length > 0);
-        unsafe {
-            let mut off = 0usize;
-            loop {
-                let v: u64 = src.add(off).cast::<u64>().read_unaligned();
-                dst.add(off).cast::<u64>().write_unaligned(v);
-                off += 8;
-                if off >= length {
-                    break;
-                }
-            }
-        }
-    }
-
-    /// Upstream zstd's `ZSTD_overlapCopy8`
-    /// (zstd_decompress_block.c:799-826). Copies 8 bytes from `src`
-    /// to `dst` and, when `offset < 8`, "spreads" the source/dest
-    /// distance so the following wildcopy can use the safe ≥ 8
-    /// stride.
-    ///
-    /// Returns the updated `(dst, src)` pair (caller's old pointers
-    /// are no longer valid).
-    #[inline(always)]
-    pub(crate) unsafe fn overlap_copy8(
-        dst: *mut u8,
-        src: *const u8,
-        offset: usize,
-    ) -> (*mut u8, *const u8) {
-        // dec32table / dec64table — upstream zstd's two precomputed lookup
-        // tables for the offset < 8 spread step.
-        const DEC32_TABLE: [u32; 8] = [0, 1, 2, 1, 4, 4, 4, 4];
-        const DEC64_TABLE: [i32; 8] = [8, 8, 8, 7, 8, 9, 10, 11];
-        unsafe {
-            if offset < 8 {
-                // Read 4 bytes, advance src by dec32, read 4 more bytes,
-                // then back-advance by dec64 — see upstream zstd source.
-                let sub2 = DEC64_TABLE[offset];
-                dst.add(0).write(src.add(0).read());
-                dst.add(1).write(src.add(1).read());
-                dst.add(2).write(src.add(2).read());
-                dst.add(3).write(src.add(3).read());
-                let dec32 = DEC32_TABLE[offset] as usize;
-                let v: u32 = src.add(dec32).cast::<u32>().read_unaligned();
-                dst.add(4).cast::<u32>().write_unaligned(v);
-                // Post-call src position is `src + (dec32 - sub2 + 8)`.
-                // Computing this as
-                // `src.add(dec32).offset(-(sub2 as isize)).add(8)`
-                // (upstream zstd's literal C transcription) produces an
-                // intermediate pointer below the allocation base
-                // when `dec32 < sub2` — true for every offset ∈ 1..=7
-                // in upstream zstd's tables — which is UB under Rust's
-                // `.offset()` provenance rules even when the final
-                // pointer lands back in-bounds. Apply the net signed
-                // offset once so no intermediate underflows.
-                let net_offset = dec32 as isize - sub2 as isize + 8;
-                debug_assert!(
-                    net_offset >= 0,
-                    "overlap_copy8 net offset is non-negative for all offset ∈ 1..=7"
-                );
-                let src_after = src.offset(net_offset);
-                (dst.add(8), src_after)
-            } else {
-                // ZSTD_copy8 — straight 8-byte unaligned move.
-                let v: u64 = src.cast::<u64>().read_unaligned();
-                dst.cast::<u64>().write_unaligned(v);
-                (dst.add(8), src.add(8))
-            }
-        }
-    }
 }
 
 /// Portable (non-x86) wildcopy helpers: identical byte-level contract
@@ -452,6 +469,7 @@ pub(crate) mod x86 {
 /// shard.
 #[cfg(not(target_arch = "x86_64"))]
 pub(crate) mod portable {
+    pub(crate) use super::{overlap_copy8, wildcopy_no_overlap, wildcopy_overlap_8byte_stride};
     /// Upstream zstd `ZSTD_copy16`: one unaligned 16-byte move.
     ///
     /// # Safety
@@ -461,99 +479,6 @@ pub(crate) mod portable {
         unsafe {
             let v: u128 = src.cast::<u128>().read_unaligned();
             dst.cast::<u128>().write_unaligned(v);
-        }
-    }
-
-    /// Upstream zstd `ZSTD_wildcopy(..., ZSTD_no_overlap)`: 16-byte loop until at
-    /// least `length` bytes written. May overshoot up to 15 bytes past
-    /// `dst + length`; caller's `WILDCOPY_OVERLENGTH` slack accommodates.
-    ///
-    /// # Safety
-    /// `dst` writable for `length + 15`; `src` readable for `length + 15`;
-    /// no-overlap (`dst` and `src` regions disjoint, upstream zstd semantics).
-    #[inline(always)]
-    pub(crate) unsafe fn wildcopy_no_overlap(dst: *mut u8, src: *const u8, length: usize) {
-        debug_assert!(length > 0);
-        unsafe {
-            let mut off = 0usize;
-            loop {
-                copy16(dst.add(off), src.add(off));
-                off += 16;
-                if off >= length {
-                    break;
-                }
-            }
-        }
-    }
-
-    /// Upstream zstd `ZSTD_wildcopy(..., ZSTD_overlap_src_before_dst)` 8-byte arm:
-    /// each iter reads `src + off` (may lie in the just-written
-    /// destination), correct once the src/dst gap is ≥ 8.
-    ///
-    /// # Safety
-    /// `dst` writable for `length + 7`; `src` readable for `length + 7`;
-    /// the src/dst gap must be ≥ 8 (caller establishes via
-    /// [`overlap_copy8`]).
-    #[inline(always)]
-    pub(crate) unsafe fn wildcopy_overlap_8byte_stride(
-        dst: *mut u8,
-        src: *const u8,
-        length: usize,
-    ) {
-        debug_assert!(length > 0);
-        unsafe {
-            let mut off = 0usize;
-            loop {
-                let v: u64 = src.add(off).cast::<u64>().read_unaligned();
-                dst.add(off).cast::<u64>().write_unaligned(v);
-                off += 8;
-                if off >= length {
-                    break;
-                }
-            }
-        }
-    }
-
-    /// Upstream zstd `ZSTD_overlapCopy8`: copies 8 bytes and, for `offset < 8`,
-    /// spreads the src/dst distance so the following wildcopy can use the
-    /// safe ≥ 8 stride. Returns the updated `(dst, src)` pair. Byte-exact
-    /// port of [`super::x86::overlap_copy8`] (same dec32/dec64 tables and
-    /// the same net-offset computation that avoids intermediate pointer
-    /// underflow).
-    ///
-    /// # Safety
-    /// `dst` writable for 8 bytes from the returned pointer's base; `src`
-    /// readable for the spread reads; `offset >= 1`.
-    #[inline(always)]
-    pub(crate) unsafe fn overlap_copy8(
-        dst: *mut u8,
-        src: *const u8,
-        offset: usize,
-    ) -> (*mut u8, *const u8) {
-        const DEC32_TABLE: [u32; 8] = [0, 1, 2, 1, 4, 4, 4, 4];
-        const DEC64_TABLE: [i32; 8] = [8, 8, 8, 7, 8, 9, 10, 11];
-        unsafe {
-            if offset < 8 {
-                let sub2 = DEC64_TABLE[offset];
-                dst.add(0).write(src.add(0).read());
-                dst.add(1).write(src.add(1).read());
-                dst.add(2).write(src.add(2).read());
-                dst.add(3).write(src.add(3).read());
-                let dec32 = DEC32_TABLE[offset] as usize;
-                let v: u32 = src.add(dec32).cast::<u32>().read_unaligned();
-                dst.add(4).cast::<u32>().write_unaligned(v);
-                let net_offset = dec32 as isize - sub2 as isize + 8;
-                debug_assert!(
-                    net_offset >= 0,
-                    "overlap_copy8 net offset is non-negative for all offset ∈ 1..=7"
-                );
-                let src_after = src.offset(net_offset);
-                (dst.add(8), src_after)
-            } else {
-                let v: u64 = src.cast::<u64>().read_unaligned();
-                dst.cast::<u64>().write_unaligned(v);
-                (dst.add(8), src.add(8))
-            }
         }
     }
 }
