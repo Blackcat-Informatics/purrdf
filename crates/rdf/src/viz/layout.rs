@@ -1959,13 +1959,11 @@ pub(super) fn wrap_text(value: &str, max_chars: usize) -> Vec<String> {
     for word in value.split_whitespace() {
         let needed = word.chars().count() + usize::from(!current.is_empty());
         if current.chars().count() + needed > max_chars && !current.is_empty() {
-            lines.push(current);
-            current = String::new();
+            lines.push(std::mem::take(&mut current));
         }
         if word.chars().count() > max_chars {
             if !current.is_empty() {
-                lines.push(current);
-                current = String::new();
+                lines.push(std::mem::take(&mut current));
             }
             let chars = word.chars().collect::<Vec<_>>();
             for chunk in chars.chunks(max_chars) {

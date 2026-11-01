@@ -162,7 +162,7 @@ fn ungoverned(
     let env = purrdf_sparql_eval::ExtensionEnv::new(
         query_eval_parser_options(),
         purrdf_sparql_conformance::run::harness_relations().clone(),
-        aggregates.map_or_else(|| AggregateRegistry::EMPTY, Clone::clone),
+        aggregates.map_or(AggregateRegistry::EMPTY, Clone::clone),
     )
     .map_err(|e| format!("extension environment: {e}"))?;
     let options = QueryOptions::new().with_env(&env);
@@ -234,7 +234,7 @@ fn d0_governed_unbounded_is_byte_identical_to_ungoverned() {
                 purrdf_sparql_conformance::run::harness_relations().clone(),
                 case_aggregates
                     .as_ref()
-                    .map_or_else(|| AggregateRegistry::EMPTY, Clone::clone),
+                    .map_or(AggregateRegistry::EMPTY, Clone::clone),
             )
             .expect("the harness declarations read cleanly");
 

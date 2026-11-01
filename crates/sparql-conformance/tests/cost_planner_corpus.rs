@@ -79,7 +79,7 @@ fn eval_case(
         purrdf_sparql_conformance::run::harness_relations().clone(),
         aggregates
             .as_ref()
-            .map_or_else(|| AggregateRegistry::EMPTY, Clone::clone),
+            .map_or(AggregateRegistry::EMPTY, Clone::clone),
     )
     .map_err(|e| format!("extension environment: {e}"))?;
     let options = QueryOptions::new().with_env(&env);

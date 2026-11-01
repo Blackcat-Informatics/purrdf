@@ -1030,7 +1030,7 @@ impl<'a, 'o, 's, const RDFLIB: bool> Parser<'a, 'o, '_, 's, RDFLIB> {
         self.tokens
             .get(self.pos)
             .and_then(Option::as_ref)
-            .map_or_else(|| self.end, |s| s.start)
+            .map_or(self.end, |s| s.start)
     }
 
     fn bump(&mut self) -> Option<Token<'a>> {
