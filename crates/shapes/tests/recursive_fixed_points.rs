@@ -1584,6 +1584,7 @@ fn computed_conformance_targets_preserve_lazy_shape_errors() {
     for (node, shape, error) in [
         ("sh:this", "( :T )", None),
         ("sh:this", "[ sh:union ( :T :T ) ]", None),
+        ("sh:this", "[]", Some("exactly one shape IRI, got 0")),
         (
             "sh:this",
             "[ shnex:concat ( :T :T ) ]",
@@ -2580,11 +2581,6 @@ fn selected_entries_refuse_unproved_original_scopes() {
         ),
         (
             "sh:expression [ sh:union ( [ shnex:conformsToShape ( sh:this :T ) ] ) ]",
-            purrdf_shapes::model::sh::EXPRESSION,
-            false,
-        ),
-        (
-            "sh:expression [ shnex:conformsToShape ( sh:this [] ) ]",
             purrdf_shapes::model::sh::EXPRESSION,
             false,
         ),
