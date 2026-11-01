@@ -49,9 +49,11 @@ fn infer(rule_text: &str, ttl: &str) -> Result<Vec<[Term; 3]>, SrlError> {
         .expect("the same valid rule program accepts compact input");
     let expected = original.inferred_dataset().unwrap();
     let actual = triple.inferred_dataset().unwrap();
+    let materialized = purrdf_core::dataset_from_view(&actual.read().unwrap())
+        .expect("inferred triple read materializes before retaining canonical output");
     assert_eq!(
         try_canonicalize_flat_view(
-            &actual.read().unwrap(),
+            &*materialized,
             CanonHash::Sha256,
             &mut purrdf_core::CanonicalizationControl::new(
                 purrdf_core::RDFC_V2_CORPUS_POLICY,
