@@ -994,13 +994,8 @@ impl<R: Read, W: Write> FrameCompressor<R, W, MatchGeneratorDriver> {
         // targetLength override `level < 0` is that test; an override wins.
         self.state.literal_compression_disabled = self.state.strategy_tag
             == crate::encoding::strategy::StrategyTag::Fast
-            && overrides.target_length.map_or_else(
-                || {
-                    matches!(
-                        self.compression_level,
-                        CompressionLevel::Level(n) if n < 0
-                    )
-                },
+            && overrides.target_length.map_or(
+                matches!(self.compression_level, CompressionLevel::Level(n) if n < 0),
                 |tl| tl > 0,
             );
         self.state.matcher.set_param_overrides(Some(overrides));
