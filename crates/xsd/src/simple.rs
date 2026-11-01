@@ -26,6 +26,46 @@ pub fn read_xml_string(s: &str) -> Result<&str, &'static str> {
     }
 }
 
+/// Borrow an RDF `xsd:normalizedString` lexical after XML character admission.
+/// XSD 1.1 Part 2 §3.4.1 excludes CR, LF and tab from both its lexical and value
+/// spaces. Schema-validation whitespace preprocessing is not RDF term parsing.
+///
+/// # Errors
+/// Refuses non-XML characters or a lexical outside the derived string space.
+pub fn read_normalized_string(s: &str) -> Result<&str, &'static str> {
+    read_xml_string(s)?;
+    if find_first_replaced(s.as_bytes()).is_none() {
+        Ok(s)
+    } else {
+        Err("normalizedString excludes carriage return, line feed and tab")
+    }
+}
+
+/// Borrow an RDF `xsd:token` lexical without rewriting its supplied characters.
+/// XSD 1.1 Part 2 §3.4.2 additionally excludes leading, trailing and consecutive
+/// ASCII spaces. Empty text and non-ASCII whitespace remain valid.
+///
+/// # Errors
+/// Refuses non-XML characters or a lexical outside the token space.
+pub fn read_token(s: &str) -> Result<&str, &'static str> {
+    read_xml_string(s)?;
+    if is_collapsed(s.as_bytes()) {
+        Ok(s)
+    } else {
+        Err("token excludes CR, LF, tab and leading, trailing or consecutive ASCII spaces")
+    }
+}
+
+/// The one lexical admission path for the modeled string family.
+pub(crate) fn read_string(s: &str, datatype: XsdDatatype) -> Result<&str, &'static str> {
+    match datatype {
+        XsdDatatype::String => read_xml_string(s),
+        XsdDatatype::NormalizedString => read_normalized_string(s),
+        XsdDatatype::Token => read_token(s),
+        _ => Err("expected a string-family datatype"),
+    }
+}
+
 /// Validate the XSD 1.1 Part 2 §3.3.17 lexical space and borrow its collapsed
 /// value. Empty and relative references are valid; URI syntax, percent escapes,
 /// case and Unicode normalization are deliberately not rewritten.
@@ -89,29 +129,44 @@ pub fn read_string_into(s: &str, output: &mut String) -> Result<(), StringOutput
 /// The result has the same number of characters as the input.
 #[must_use]
 pub fn normalize_whitespace_replace(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    write_replaced(s, &mut out).expect("resident String formatting");
+    out
+}
+
+fn write_replaced(s: &str, out: &mut impl core::fmt::Write) -> core::fmt::Result {
     // Chunked precheck: find the first trigger byte sixteen bytes at a time. With
     // none, the value is already its own normal form and is returned unchanged —
     // the common case, and one copy with no per-byte loop.
     let Some(first) = find_first_replaced(s.as_bytes()) else {
-        return s.to_owned();
+        return out.write_str(s);
     };
     // Byte scan from the first trigger, whole clean runs copied with one
     // `push_str` each: the three trigger bytes are ASCII and every UTF-8
     // lead/continuation byte is >= 0x80, so slicing at a trigger index is always
     // a char boundary and the output is byte-identical to the per-char map (no
     // per-char push, exact-fit buffer).
-    let mut out = String::with_capacity(s.len());
-    out.push_str(&s[..first]);
+    out.write_str(&s[..first])?;
     let mut run_start = first;
     for (i, b) in s.bytes().enumerate().skip(first) {
         if matches!(b, b'\t' | b'\n' | b'\r') {
-            out.push_str(&s[run_start..i]);
-            out.push(' ');
+            out.write_str(&s[run_start..i])?;
+            out.write_str(" ")?;
             run_start = i + 1;
         }
     }
-    out.push_str(&s[run_start..]);
-    out
+    out.write_str(&s[run_start..])
+}
+
+/// Borrowed whiteSpace=replace formatting through the native normalizer, so a
+/// governed cast can admit its exact destination before copying any text.
+#[derive(Debug, Clone, Copy)]
+pub struct ReplacedWhitespace<'a>(pub &'a str);
+
+impl core::fmt::Display for ReplacedWhitespace<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write_replaced(self.0, formatter)
+    }
 }
 
 /// Apply the XSD `whiteSpace = collapse` facet (the value space of `xsd:token`).
