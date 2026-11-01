@@ -99,7 +99,7 @@ impl fmt::Display for TransportEncoding {
 /// A truncated stream, a corrupt frame, and a stream that is not the claimed
 /// encoding at all all arrive here — every one of them as an error, never as a
 /// short read.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransportError {
     /// The encoding whose decoder failed.
     pub encoding: TransportEncoding,
@@ -114,14 +114,6 @@ impl TransportError {
         self.cause.message()
     }
 }
-
-impl PartialEq for TransportError {
-    fn eq(&self, other: &Self) -> bool {
-        self.encoding == other.encoding
-            && (self.cause == other.cause || self.message() == other.message())
-    }
-}
-impl Eq for TransportError {}
 
 impl fmt::Display for TransportError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -324,8 +316,8 @@ impl<R: Read> Read for Counted<R> {
 /// Decoded bytes one decode step asks the frame decoder for.
 const ZSTD_STEP: usize = 128 * 1024;
 
-fn zstd_error(message: impl fmt::Display) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, message.to_string())
+fn zstd_error(cause: purrdf_zstd::decoding::errors::FrameDecoderError) -> io::Error {
+    purrdf_hash::error::io_error(io::ErrorKind::InvalidData, cause)
 }
 
 impl<R: Read> ZstdFrames<R> {

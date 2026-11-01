@@ -8,6 +8,12 @@ the PurRDF crates together when adopting them.
 
 ## At a glance
 
+GTS transport decoding retains original native Zstandard frame errors through
+`TransportError::cause` and the standard I/O source chain. Inspect structured
+causes for decoder fields; `message()` remains an explicit presentation accessor.
+Transport error equality follows retained cause identity for native errors and
+no longer renders messages to compare independently produced failures.
+
 Caller ordering is explicit: select `FusionProfile::with_ordering` and plan
 with `ReadBound::CallerOrdered(k)`. The law compares optional leading bytes,
 score descending, caller tie bytes and canonical term; the default law and its

@@ -338,10 +338,57 @@ fn native_transport_framing_and_decoder_fields_survive() {
         error.message(),
         "2 byte(s) after the last zstd frame do not begin another frame"
     );
+
+    // Reset refuses the declared window before allocating it. Block decoding
+    // refuses a reserved block after accepting the neighboring valid header.
+    let window = vec![0x28, 0xb5, 0x2f, 0xfd, 0, 0x90];
+    let mut block = vec![0x28, 0xb5, 0x2f, 0xfd, 0x20, 1, 9, 0, 0, b'x'];
     assert_eq!(
-        error,
-        decode_transport(&bytes, TransportEncoding::Zstd).unwrap_err()
+        decode_transport(&block, TransportEncoding::Zstd).unwrap(),
+        b"x"
     );
+    block[6] = 7;
+    for (bytes, code) in [
+        (window, "zstd-frame-decoder-window-size-too-big"),
+        (block, "zstd-frame-decoder-failed-to-read-block-header"),
+    ] {
+        let error = decode_transport(&bytes, TransportEncoding::Zstd).unwrap_err();
+        let retained = error.clone();
+        assert_eq!(retained, error);
+        assert_ne!(
+            retained,
+            decode_transport(&bytes, TransportEncoding::Zstd).unwrap_err()
+        );
+        drop((bytes, error));
+        assert_eq!(retained.cause.kind(), std::io::ErrorKind::InvalidData);
+        let fields = Capture::read(&retained)
+            .child("cause")
+            .child("cause")
+            .child("cause");
+        assert_eq!(fields.code, code);
+        if code == "zstd-frame-decoder-window-size-too-big" {
+            assert!(matches!(
+                fields.field("requested"),
+                ErrorValue::ByteCount(value) if value == 1_u128 << 28
+            ));
+        } else {
+            assert_eq!(
+                fields.child("cause").code,
+                "zstd-block-header-read-found-reserved-block"
+            );
+        }
+        let mut source = std::error::Error::source(retained.cause.original());
+        while let Some(cause) = source {
+            if cause.is::<purrdf_zstd::decoding::errors::FrameDecoderError>() {
+                break;
+            }
+            source = cause.source();
+        }
+        assert!(
+            source.is_some(),
+            "original decoder remains in the source chain"
+        );
+    }
 }
 
 fn dictionary_and_key_envelope_errors_keep_native_fields() {
