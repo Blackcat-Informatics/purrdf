@@ -6253,6 +6253,28 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
     let Some(source) = source else {
         return Ok(None);
     };
+    // F&O 3.1 §19.3.4: cross-branch casts to a derived string first cast the
+    // source VALUE to the primitive string type, then apply the target facets.
+    // Reuse the existing governed primitive cast, including numeric canonical
+    // rendering and anyURI collapse, rather than reinterpreting source spelling.
+    if matches!(target, XsdDatatype::NormalizedString | XsdDatatype::Token)
+        && match source {
+            TermValue::Iri(_) => true,
+            TermValue::Literal {
+                datatype,
+                language: None,
+                direction: None,
+                ..
+            } => !is_string_row(datatype) && XsdDatatype::from_iri(datatype).is_some(),
+            _ => false,
+        }
+    {
+        let Some(primitive) = eval_xsd_cast(ctx, XsdDatatype::String, Some(source))? else {
+            return Ok(None);
+        };
+        let primitive = owned_value_of(ctx, primitive)?;
+        return eval_xsd_cast(ctx, target, Some(&primitive));
+    }
     // The source-datatype gate: a literal whose datatype has no casting-table row
     // (a non-XSD datatype, a language-tagged string), or a pair the table marks `N`,
     // never reaches a by-value or lexical cast below.
@@ -6270,6 +6292,18 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
         }
         _ => return Ok(None),
     };
+    // A modeled derived string must have a value under its OWN datatype before
+    // XPath casting can preprocess its spelling for the target datatype.
+    let valid_source = match source_datatype {
+        Some(XsdDatatype::NormalizedString) => {
+            purrdf_xsd::simple::read_normalized_string(lexical).is_ok()
+        }
+        Some(XsdDatatype::Token) => purrdf_xsd::simple::read_token(lexical).is_ok(),
+        _ => true,
+    };
+    if !valid_source {
+        return Ok(None);
+    }
     // F&O 3.1 §19.1.1 casts the URI value, not its uncollapsed RDF spelling.
     if source_datatype == Some(XsdDatatype::AnyUri) && target == XsdDatatype::String {
         let Some(value) = crate::parsed_value::ParsedValue::parse(
@@ -6285,7 +6319,12 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
     }
     let parsed_source = match source_datatype {
         Some(datatype) if datatype.is_numeric() || datatype == XsdDatatype::Boolean => {
-            crate::parsed_value::ParsedValue::parse(lexical, datatype, false, &ctx.growth)?
+            let Some(value) =
+                crate::parsed_value::ParsedValue::parse(lexical, datatype, false, &ctx.growth)?
+            else {
+                return Ok(None);
+            };
+            Some(value)
         }
         _ => None,
     };
@@ -6368,14 +6407,21 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
         return Ok(cast);
     }
     // A string cast to any other type is first normalized by the target's
-    // `whiteSpace` facet (XPath F&O 3.1 §19.2): `collapse` for every non-string
-    // target here, so `xsd:integer(" 12 ")` is 12. A non-string source's lexical
+    // `whiteSpace` facet (XPath F&O 3.1 §19.2): replace for normalizedString,
+    // collapse for the other non-string targets, so `xsd:integer(" 12 ")` is 12.
+    // A non-string source's lexical
     // form is its own and is read as written.
     // The native anyURI parser already owns its collapse mapping.
     let collapsed = if !matches!(target, XsdDatatype::String | XsdDatatype::AnyUri)
         && is_string_row(datatype_iri)
     {
-        let view = purrdf_xsd::simple::CollapsedWhitespace(lexical);
+        let collapsed_view = purrdf_xsd::simple::CollapsedWhitespace(lexical);
+        let replaced_view = purrdf_xsd::simple::ReplacedWhitespace(lexical);
+        let view: &dyn core::fmt::Display = if target == XsdDatatype::NormalizedString {
+            &replaced_view
+        } else {
+            &collapsed_view
+        };
         let length = crate::workspace::display_len(&view)?;
         let allocation = ctx
             .growth
@@ -6393,7 +6439,12 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
     // One native parser; malformed lexical and physical refusal stay separate.
     let result =
         match crate::parsed_value::ParsedValue::parse_coded(lexical, target, true, &ctx.growth)? {
-            Ok(value) if target.is_calendar() => governed_cast_to_term(ctx, &value, target.iri()),
+            Ok(value)
+                if target.is_calendar()
+                    || matches!(target, XsdDatatype::NormalizedString | XsdDatatype::Token) =>
+            {
+                governed_cast_to_term(ctx, &value, target.iri())
+            }
             Ok(value) => governed_cast_to_term(ctx, &value, value.datatype().iri()),
             Err(code) => {
                 if target.is_numeric() {
@@ -6470,7 +6521,9 @@ enum CalendarSource {
 fn calendar_cast_source(datatype: &str, modelled: Option<XsdDatatype>) -> CalendarSource {
     match modelled {
         Some(from) if from.is_calendar() => CalendarSource::Value(from),
-        Some(XsdDatatype::String) => CalendarSource::Lexical,
+        Some(XsdDatatype::String | XsdDatatype::NormalizedString | XsdDatatype::Token) => {
+            CalendarSource::Lexical
+        }
         Some(_) => CalendarSource::Refused,
         None => match datatype.strip_prefix(purrdf_xsd::datatype::XSD_NS) {
             Some(local) if matches!(xsd_builtin_cast_row(local), Some(CastRow::Str)) => {
@@ -6631,6 +6684,12 @@ fn cast_source_admitted(source: &TermValue, target: XsdDatatype) -> bool {
     }
     let numeric_target = target.is_numeric() || target == XsdDatatype::Boolean;
     if let Some(from) = XsdDatatype::from_iri(datatype) {
+        if matches!(
+            from,
+            XsdDatatype::String | XsdDatatype::NormalizedString | XsdDatatype::Token
+        ) {
+            return true;
+        }
         if from == XsdDatatype::AnyUri {
             return target == from;
         }
@@ -7360,7 +7419,7 @@ fn eval_replace<D: DatasetView + Sync>(
     };
     // The `q` bit and XPath F&O 3.1 §5.6.2's replacement syntax both live
     // inside `replace_all`, so this call site cannot drop either. A malformed
-    // replacement is F&O [err:FORX0004], which SPARQL 1.1 §17.4.3.15 makes a
+    // replacement is F&O [`err:FORX0004`], which SPARQL 1.1 §17.4.3.15 makes a
     // type error: the expression is left unbound, never aborts the query.
     let Some(replaced) = compiled.replace_literal(s, replacement, lang, dir, &ctx.growth)? else {
         return Ok(None);
@@ -8014,7 +8073,7 @@ fn apply_unary_numeric<D: DatasetView + Sync>(
 // extraction, NOW, RAND, and UUID/STRUUID
 // ---------------------------------------------------------------------------
 
-/// The next draw of the context's SplitMix64 generator
+/// The next draw of the context's `SplitMix64` generator
 /// ([`purrdf_hash::mix::splitmix64_next`] over `rng_state` as its counter).
 const fn next_u64<D: DatasetView + Sync>(ctx: &mut EvalCtx<'_, D>) -> u64 {
     purrdf_hash::mix::splitmix64_next(&mut ctx.rng_state)
@@ -9127,7 +9186,7 @@ mod tests {
         assert_eq!(replace("ab", "(a)(b)", r"$2\$1"), Some(r"b$1".to_owned()));
     }
 
-    /// A malformed replacement is F&O §5.6.2 [err:FORX0004], and SPARQL 1.1
+    /// A malformed replacement is F&O §5.6.2 [`err:FORX0004`], and SPARQL 1.1
     /// §17.4.3.15 makes a `REPLACE` type error unbound rather than a query
     /// abort — so both of these evaluate to `None`, not to a literal
     /// substitution.
@@ -10917,7 +10976,7 @@ mod tests {
         } else {
             panic!("rand2 not a literal");
         }
-        // The two values must differ (splitmix64 is not degenerate for non-zero seeds)
+        // The two values must differ (`splitmix64` is not degenerate for non-zero seeds)
         assert_ne!(v1, v2, "rand should differ across calls");
     }
 

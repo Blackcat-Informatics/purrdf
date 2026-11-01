@@ -32,7 +32,7 @@
 //! | float | `xsd:float` | two strata: the numbers (successor `next_up`) and the single NaN |
 //! | double | `xsd:double` | as float, at double width |
 //! | boolean | `xsd:boolean` | the two-element set |
-//! | string | `xsd:string` | length-selected, length in CHARACTERS |
+//! | string | `xsd:string`, `xsd:normalizedString`, `xsd:token` | three disjoint lexical strata, length in CHARACTERS |
 //! | URI | `xsd:anyURI` | disjoint from string; collapsed character lengths |
 //! | hex / base64 | `xsd:hexBinary`, `xsd:base64Binary` | length-selected, length in OCTETS |
 //! | one space each | `dateTime` (its zoned `dateTimeStamp` subset and timezone-less remainder), `date`, `time`, the `duration` family, and the five Gregorian types | listed sets and their complements |
@@ -720,8 +720,12 @@ enum Space {
 #[cfg_attr(test, derive(Debug))]
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TextSpace {
-    /// `xsd:string` — length in characters.
+    /// Strings containing CR, LF or tab, outside `xsd:normalizedString`.
     String,
+    /// Normalized strings outside `xsd:token` (stray ASCII spaces).
+    NormalizedString,
+    /// Token character sequences, including the empty string.
+    Token,
     /// `xsd:anyURI` — collapsed length in characters, disjoint from strings.
     AnyUri,
     /// `xsd:hexBinary` — length in octets.
@@ -757,8 +761,10 @@ enum TemporalSpace {
 }
 
 /// The length-selected spaces, in [`Extent::text`] order.
-const TEXT_SPACES: [TextSpace; 4] = [
+const TEXT_SPACES: [TextSpace; 6] = [
     TextSpace::String,
+    TextSpace::NormalizedString,
+    TextSpace::Token,
     TextSpace::AnyUri,
     TextSpace::HexBinary,
     TextSpace::Base64Binary,
@@ -783,11 +789,25 @@ const TEMPORAL_SPACES: [TemporalSpace; 10] = [
 const TZ_SETTINGS: u64 = 1 + (2 * 14 * 60 + 1);
 
 impl TextSpace {
+    /// The string family is represented by disjoint strata, so derived ranges
+    /// select subsets without making complements opaque or overlapping counts.
+    fn included_in(self, datatype: XsdDatatype) -> bool {
+        match datatype {
+            XsdDatatype::String => {
+                matches!(self, Self::String | Self::NormalizedString | Self::Token)
+            }
+            XsdDatatype::NormalizedString => matches!(self, Self::NormalizedString | Self::Token),
+            XsdDatatype::Token => self == Self::Token,
+            _ => space_of_datatype(datatype) == Space::Text(self),
+        }
+    }
+
     /// Which unit this space's `length` facet counts.
     fn kind(self) -> LengthKind {
         match self {
-            Self::String => LengthKind::Characters,
-            Self::AnyUri => LengthKind::CollapsedCharacters,
+            Self::String => LengthKind::NonNormalizedCharacters,
+            Self::NormalizedString => LengthKind::NonTokenCharacters,
+            Self::Token | Self::AnyUri => LengthKind::CollapsedCharacters,
             Self::HexBinary | Self::Base64Binary => LengthKind::Octets,
         }
     }
@@ -832,6 +852,8 @@ fn space_of_datatype(dt: XsdDatatype) -> Space {
         D::Double => Space::Double,
         D::Boolean => Space::Boolean,
         D::String => Space::Text(TextSpace::String),
+        D::NormalizedString => Space::Text(TextSpace::NormalizedString),
+        D::Token => Space::Text(TextSpace::Token),
         D::AnyUri => Space::Text(TextSpace::AnyUri),
         D::HexBinary => Space::Text(TextSpace::HexBinary),
         D::Base64Binary => Space::Text(TextSpace::Base64Binary),
@@ -851,7 +873,15 @@ fn space_of_datatype(dt: XsdDatatype) -> Space {
 
 /// The value space a value belongs to.
 fn space_of_value(value: &XsdValue) -> Space {
-    if matches!(value, XsdValue::DateTime(value) if value.timezone_minutes().is_none()) {
+    if let XsdValue::String(text) = value {
+        Space::Text(if crate::simple::read_token(text).is_ok() {
+            TextSpace::Token
+        } else if crate::simple::read_normalized_string(text).is_ok() {
+            TextSpace::NormalizedString
+        } else {
+            TextSpace::String
+        })
+    } else if matches!(value, XsdValue::DateTime(value) if value.timezone_minutes().is_none()) {
         Space::Temporal(TemporalSpace::DateTimeUnzoned)
     } else {
         space_of_datatype(value.datatype())
@@ -1958,7 +1988,12 @@ impl Algebra for BoolSet {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum LengthKind {
     /// Unicode scalar values (`xsd:string`).
+    #[cfg(test)]
     Characters,
+    /// XML strings containing at least one CR, LF or tab.
+    NonNormalizedCharacters,
+    /// XML normalized strings with leading, trailing or consecutive ASCII spaces.
+    NonTokenCharacters,
     /// XML character strings after the fixed whitespace collapse facet.
     CollapsedCharacters,
     /// Octets (`xsd:hexBinary`, `xsd:base64Binary`).
@@ -2080,7 +2115,16 @@ impl LengthSet {
             self.lengths.sample_with(
                 distinct
                     .len()
-                    .checked_add(1)
+                    .checked_add(
+                        if matches!(
+                            self.kind,
+                            LengthKind::NonNormalizedCharacters | LengthKind::NonTokenCharacters
+                        ) {
+                            2
+                        } else {
+                            1
+                        },
+                    )
                     .ok_or(StorageError::Allocation)?,
                 memory,
             )
@@ -2095,16 +2139,39 @@ impl LengthSet {
                 return Ok(Cardinality::Exactly(0));
             };
             Ok(match self.kind {
-                LengthKind::Characters | LengthKind::CollapsedCharacters => {
+                LengthKind::NonNormalizedCharacters | LengthKind::NonTokenCharacters => {
+                    if maximum == 0 {
+                        Cardinality::Exactly(0)
+                    } else {
+                        let count =
+                            u64::try_from(self.count_at_length(maximum, u128::from(u64::MAX)))
+                                .expect("character count capped at u64::MAX");
+                        if maximum == 1 {
+                            Cardinality::Exactly(count)
+                        } else {
+                            Cardinality::AtLeast(count)
+                        }
+                    }
+                }
+                #[cfg(test)]
+                LengthKind::Characters => {
+                    if maximum == 0 {
+                        Cardinality::Exactly(1)
+                    } else {
+                        Cardinality::AtLeast(saturating_pow(STRING_ALPHABET_FLOOR, maximum))
+                    }
+                }
+                LengthKind::CollapsedCharacters => {
                     if maximum == 0 {
                         Cardinality::Exactly(1)
                     } else {
                         // Every string over non-whitespace XML characters is a
                         // distinct collapsed value. Ignoring strings containing
                         // internal spaces only lowers this cardinality bound.
-                        let alphabet = STRING_ALPHABET_FLOOR
-                            - u64::from(self.kind == LengthKind::CollapsedCharacters) * 4;
-                        Cardinality::AtLeast(saturating_pow(alphabet, maximum))
+                        let count =
+                            u64::try_from(self.count_at_length(maximum, u128::from(u64::MAX)))
+                                .expect("character count capped at u64::MAX");
+                        Cardinality::AtLeast(count)
                     }
                 }
                 LengthKind::Octets => {
@@ -2151,16 +2218,61 @@ impl LengthSet {
     /// queried count preserves the exact comparison without a length-sized loop.
     fn holds_more_than(&self, length: u64, n: usize) -> bool {
         let cap = n as u128 + 1;
-        let alphabet = u128::from(match self.kind {
-            LengthKind::Characters => STRING_ALPHABET_FLOOR,
-            LengthKind::CollapsedCharacters => STRING_ALPHABET_FLOOR - 4,
-            LengthKind::Octets => OCTET_ALPHABET,
-        });
+        self.count_at_length(length, cap) >= cap
+    }
+
+    /// Count one stratum's values at a length, saturating at the requested cap.
+    fn count_at_length(&self, length: u64, cap: u128) -> u128 {
+        let alphabet = match self.kind {
+            LengthKind::NonNormalizedCharacters | LengthKind::NonTokenCharacters => {
+                // Count the disjoint residual languages directly, saturating each
+                // state at the requested count. Subtracting saturated whole-string
+                // counts could falsely report an empty derived complement.
+                let alphabet = u128::from(STRING_ALPHABET_FLOOR);
+                let mut clean = 1_u128;
+                let mut trailing_space = 0_u128;
+                let mut invalid = 0_u128;
+                for position in 0..length {
+                    if self.kind == LengthKind::NonNormalizedCharacters {
+                        invalid = invalid
+                            .saturating_mul(alphabet)
+                            .saturating_add(clean.saturating_mul(3))
+                            .min(cap);
+                        clean = clean.saturating_mul(alphabet - 3).min(cap);
+                    } else {
+                        let first = u128::from(position == 0);
+                        invalid = invalid
+                            .saturating_mul(alphabet - 3)
+                            .saturating_add(trailing_space)
+                            .saturating_add(first)
+                            .min(cap);
+                        let next = if position == 0 {
+                            alphabet - 4
+                        } else {
+                            clean
+                                .saturating_add(trailing_space)
+                                .saturating_mul(alphabet - 4)
+                                .min(cap)
+                        };
+                        trailing_space = if position == 0 { 0 } else { clean };
+                        clean = next;
+                    }
+                    if invalid.saturating_add(trailing_space) >= cap {
+                        return cap;
+                    }
+                }
+                return invalid.saturating_add(trailing_space).min(cap);
+            }
+            #[cfg(test)]
+            LengthKind::Characters => u128::from(STRING_ALPHABET_FLOOR),
+            LengthKind::CollapsedCharacters => u128::from(STRING_ALPHABET_FLOOR - 4),
+            LengthKind::Octets => u128::from(OCTET_ALPHABET),
+        };
         let mut nonspace = 1_u128;
         let mut space = 0_u128;
         for position in 0..length {
             if nonspace >= cap {
-                return true;
+                return cap;
             }
             let next = nonspace
                 .saturating_add(space)
@@ -2176,7 +2288,7 @@ impl LengthSet {
             };
             nonspace = next;
         }
-        nonspace >= cap
+        nonspace.min(cap)
     }
 
     /// The greatest admitted length, or `None` when the set admits none.
@@ -2659,7 +2771,7 @@ struct Extent {
     /// The `xsd:boolean` space.
     boolean: SpaceSet<BoolSet>,
     /// The length-selected spaces, in [`TEXT_SPACES`] order.
-    text: [SpaceSet<LengthSet>; 4],
+    text: [SpaceSet<LengthSet>; 6],
     /// The temporal spaces, in [`TEMPORAL_SPACES`] order.
     temporal: [SpaceSet<ListedSet<XsdValue>>; 10],
     /// The two disjoint, infinite RDF language-string spaces.
@@ -2974,9 +3086,13 @@ fn datatype_with(datatype: XsdDatatype, memory: &mut Memory<'_>) -> Result<Exten
             extent.double = SpaceSet::Exact(FloatSet::full_with(FloatWidth::Double, memory)?);
         }
         Space::Boolean => extent.boolean = SpaceSet::Exact(BoolSet::full()),
-        Space::Text(space) => {
-            extent.text[space as usize] =
-                SpaceSet::Exact(LengthSet::full_with(space.kind(), memory)?);
+        Space::Text(_) => {
+            for space in TEXT_SPACES {
+                if space.included_in(datatype) {
+                    extent.text[space as usize] =
+                        SpaceSet::Exact(LengthSet::full_with(space.kind(), memory)?);
+                }
+            }
         }
         Space::Temporal(space) => {
             extent.temporal[space as usize] = if covers_whole_space(datatype) {
@@ -3067,8 +3183,13 @@ fn restriction_with(
                 SpaceSet::Unknown
             }
         }
-        Space::Text(space) => {
-            extent.text[space as usize] = length_restriction_with(space.kind(), facets, memory)?;
+        Space::Text(_) => {
+            for space in TEXT_SPACES {
+                if space.included_in(base) {
+                    extent.text[space as usize] =
+                        length_restriction_with(space.kind(), facets, memory)?;
+                }
+            }
         }
         Space::Temporal(space) => {
             extent.temporal[space as usize] =

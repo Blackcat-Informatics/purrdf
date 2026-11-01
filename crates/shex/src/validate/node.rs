@@ -133,6 +133,8 @@ fn is_checked_datatype(datatype: XsdDatatype) -> bool {
             | D::Double
             | D::Boolean
             | D::String
+            | D::NormalizedString
+            | D::Token
             | D::DateTime
     )
 }
