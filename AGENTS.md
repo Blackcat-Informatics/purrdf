@@ -68,7 +68,7 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
 | `purrdf-core` (`crates/rdf-core`) | Interned IR kernel, diagnostics, store traits, provenance, RDFC-1.0 |
 | `purrdf-columnar` (`crates/columnar`) | Bidirectional five-table Parquet codec for RDF 1.2 + blobs |
 | `purrdf-gts` (`crates/gts`) | GTS container engine (CBOR log through `purrdf_lex::cbor`, BLAKE3, COSE, Ed25519 through `purrdf-ed25519`) |
-| `purrdf-zstd` (`crates/zstd`) | Shared Zstandard frame codec and deterministic FastCOVER dictionary trainer over `purrdf-hash` and `twox-hash`; one fixed product with native error inspection and target-selected kernels, imported with its original Apache grant |
+| `purrdf-zstd` (`crates/zstd`) | Shared Zstandard frame codec and deterministic FastCOVER dictionary trainer over `purrdf-hash`, the `purrdf-lex` conversion macros and `twox-hash`; one fixed product with native error inspection and target-selected kernels, imported with its original Apache grant |
 | `purrdf-sparql-{algebra,eval,results}` | SPARQL 1.1/1.2 parser, evaluator, results |
 | `purrdf-shapes` (`crates/shapes`) | SHACL validation (full Core + SHACL-SPARQL + SHACL-AF) and SHACL Rules (`sh:rule` inference) |
 | `purrdf-shex` (`crates/shex`) | ShEx 2.1 schemas + validation |
@@ -513,7 +513,7 @@ black-cat family system — `#cat-head-core` is shared verbatim; only the
 
 ## 6. Releases
 
-Tag-driven trusted publishing: `rust-v*` → crates.io (35 crates, ordered),
+Tag-driven trusted publishing: `rust-v*` → crates.io (36 crates, ordered),
 `py-v*` → PyPI (`purrdf`). See [`docs/RELEASE.md`](./docs/RELEASE.md). Version
 is single-sourced in `[workspace.package]`. Twelve members never reach
 crates.io: `purrdf-capi`, `purrdf-sparql-conformance`,
