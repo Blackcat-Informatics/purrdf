@@ -868,7 +868,8 @@ fn contextual_filter_group_boundary_and_visited_graph_errors() {
                 )
             };
             let text = format!("SELECT ?x WHERE {{ VALUES ?x {{1}} {filters} }}");
-            assert!(query(&text).unwrap_err().to_string().contains("dataset"));
+            let error = query(&text).unwrap_err();
+            assert!(error.to_string().contains("dataset"), "{text}: {error:?}");
         }
     }
     for text in [
