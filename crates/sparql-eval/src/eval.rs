@@ -5321,7 +5321,7 @@ impl<'a, I: ViewTermId> OrdinaryState<'a, I> {
     }
 
     fn pop(&mut self) -> Option<OrdinaryFrame<'a, I>> {
-        self.pending.pop().or_else(|| self.first.take())
+        pop_inline_frame(&mut self.pending, &mut self.first)
     }
 
     fn schedule_exists<D: DatasetView<Id = I> + Sync>(
@@ -6065,6 +6065,57 @@ fn run_ordinary<'a, 'd, D: DatasetView + Sync>(
                             .install(runner.ctx);
                     }
                     Ok(crate::shapes::ShapeStart::Declined) => {}
+                }
+                if let GraphPattern::Join { .. } = current_pattern
+                    && runner.ctx.positive_region(current_pattern).unwrap_or(false)
+                {
+                    let plan = match crate::bgp::PositivePlan::build_admitted(
+                        runner.ctx.dataset,
+                        &runner.ctx.active_dataset,
+                        runner.ctx.active_graph,
+                        current_pattern,
+                        &runner.ctx.workspace,
+                    ) {
+                        Ok(plan) => plan,
+                        Err(error) => {
+                            break finish_ordinary_active(
+                                &mut runner.state.active,
+                                runner.ctx,
+                                current_pattern,
+                                Err(error),
+                            );
+                        }
+                    };
+                    if let Some(plan) = plan {
+                        let evaluated =
+                            eval_positive_body(current_pattern, None, &plan, true, runner.ctx)
+                                .and_then(|evaluated| {
+                                    Ok(match evaluated {
+                                        Evaluated::Complete(rows) => {
+                                            Evaluated::Complete(rows.reorder_like_admitted(
+                                                plan.root_schema(),
+                                                &runner.ctx.growth,
+                                            )?)
+                                        }
+                                        Evaluated::Truncated(truncated) => {
+                                            let (rows, certificate) = truncated.split();
+                                            Evaluated::Truncated(Truncation::new(
+                                                rows.reorder_like_admitted(
+                                                    plan.root_schema(),
+                                                    &runner.ctx.growth,
+                                                )?,
+                                                certificate,
+                                            ))
+                                        }
+                                    })
+                                });
+                        break finish_ordinary_active(
+                            &mut runner.state.active,
+                            runner.ctx,
+                            current_pattern,
+                            evaluated,
+                        );
+                    }
                 }
                 match runner.state.begin_stream(&current, runner.ctx) {
                     Ok(Some(StreamStart::Descend(next))) => {
@@ -7841,24 +7892,436 @@ pub(crate) fn eval_positive_evaluated<D: DatasetView + Sync>(
     plan: &crate::bgp::PositivePlan,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
+    eval_positive_with_forking(pattern, input, plan, true, ctx)
+}
+
+/// A parallel arm uses the same heap driver without recursively forking UNIONs.
+pub(crate) fn eval_positive_serial<D: DatasetView + Sync>(
+    pattern: &GraphPattern,
+    input: Option<PositiveInput<'_, D::Id>>,
+    plan: &crate::bgp::PositivePlan,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    eval_positive_with_forking(pattern, input, plan, false, ctx)
+}
+
+fn eval_positive_with_forking<D: DatasetView + Sync>(
+    pattern: &GraphPattern,
+    input: Option<PositiveInput<'_, D::Id>>,
+    plan: &crate::bgp::PositivePlan,
+    fork: bool,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    eval_evaluated_with(pattern, ctx, |ctx| {
+        eval_positive_body(pattern, input, plan, fork, ctx)
+    })
+}
+
+#[derive(Clone, Copy)]
+struct PositiveSlot {
+    index: usize,
+    owned: bool,
+}
+
+impl PositiveSlot {
+    fn borrowed(self) -> Self {
+        Self {
+            owned: false,
+            ..self
+        }
+    }
+}
+
+/// Stable slots let UNION lend a producer without cloning resident row vectors.
+enum PositiveEntry<'a, I: ViewTermId> {
+    Occupied(PositiveInput<'a, I>),
+    Vacant(Option<usize>),
+}
+
+struct PositiveSlots<'a, I: ViewTermId> {
+    first: PositiveEntry<'a, I>,
+    rest: crate::AdmittedVec<PositiveEntry<'a, I>>,
+    free: Option<usize>,
+}
+
+impl<'a, I: ViewTermId> PositiveSlots<'a, I> {
+    fn insert(&mut self, input: PositiveInput<'a, I>) -> Result<PositiveSlot, EvalError> {
+        let index = if let Some(index) = self.free {
+            let entry = if index == 0 {
+                &mut self.first
+            } else {
+                &mut self.rest.as_mut_slice()[index - 1]
+            };
+            // Only extraction links vacant entries into the free list.
+            let PositiveEntry::Vacant(next) = entry else {
+                unreachable!("free positive input slot is vacant")
+            };
+            self.free = *next;
+            *entry = PositiveEntry::Occupied(input);
+            index
+        } else {
+            self.rest.push(PositiveEntry::Occupied(input))?;
+            self.rest.len()
+        };
+        Ok(PositiveSlot { index, owned: true })
+    }
+
+    fn value(&mut self, slot: PositiveSlot) -> PositiveInput<'_, I> {
+        let value = if slot.index == 0 {
+            &mut self.first
+        } else {
+            &mut self.rest.as_mut_slice()[slot.index - 1]
+        };
+        if slot.owned {
+            // An owned handle is consumed once; borrowed handles never free it.
+            let PositiveEntry::Occupied(input) =
+                std::mem::replace(value, PositiveEntry::Vacant(self.free))
+            else {
+                unreachable!("owned positive input slot is occupied")
+            };
+            self.free = Some(slot.index);
+            input
+        } else {
+            let PositiveEntry::Occupied(input) = value else {
+                unreachable!("borrowed positive input slot is occupied")
+            };
+            input.borrowed()
+        }
+    }
+
+    fn release(&mut self, slot: Option<PositiveSlot>) {
+        if let Some(slot) = slot.filter(|slot| slot.owned) {
+            drop(self.value(slot));
+        }
+    }
+}
+
+enum PositiveAfter<'a, I: ViewTermId> {
+    First {
+        driven: &'a GraphPattern,
+        first: usize,
+        independent: bool,
+        lift: crate::governor::lift::DetachedLift,
+    },
+    Second {
+        first: usize,
+        driver: Option<SolutionSeq<I>>,
+        lift: crate::governor::lift::DetachedLift,
+    },
+    Union {
+        ordinal: usize,
+        input: Option<PositiveSlot>,
+        blocks: crate::AdmittedVec<SolutionSeq<I>>,
+        lift: crate::governor::lift::DetachedLift,
+    },
+}
+
+struct PositiveFrame<'a, I: ViewTermId> {
+    pattern: &'a GraphPattern,
+    boundary: Option<NodeBoundary<I>>,
+    after: PositiveAfter<'a, I>,
+}
+
+struct PositiveRunner<'a, 'i, 'ctx, 'd, D: DatasetView + Sync> {
+    first: Option<PositiveFrame<'a, D::Id>>,
+    pending: crate::AdmittedVec<PositiveFrame<'a, D::Id>>,
+    active: Option<NodeBoundary<D::Id>>,
+    inputs: PositiveSlots<'i, D::Id>,
+    ctx: &'ctx mut EvalCtx<'d, D>,
+}
+
+fn pop_inline_frame<T>(pending: &mut crate::AdmittedVec<T>, first: &mut Option<T>) -> Option<T> {
+    pending.pop().or_else(|| first.take())
+}
+
+impl<'a, D: DatasetView + Sync> PositiveRunner<'a, '_, '_, '_, D> {
+    fn push(&mut self, frame: PositiveFrame<'a, D::Id>) {
+        if self.first.is_none() {
+            self.first = Some(frame);
+        } else {
+            self.pending.push_reserved(frame);
+        }
+    }
+
+    fn pop(&mut self) -> Option<PositiveFrame<'a, D::Id>> {
+        pop_inline_frame(&mut self.pending, &mut self.first)
+    }
+
+    fn reserve(&mut self) -> Result<(), EvalError> {
+        if self.first.is_some() {
+            self.pending.reserve_next()?;
+        }
+        Ok(())
+    }
+
+    fn finish(
+        &mut self,
+        pattern: &GraphPattern,
+        result: Result<Evaluated<D::Id>, EvalError>,
+    ) -> Result<Evaluated<D::Id>, EvalError> {
+        match self.active.as_mut() {
+            Some(boundary) => {
+                let result = boundary.finish(pattern, self.ctx, result);
+                self.active = None;
+                result
+            }
+            None => result,
+        }
+    }
+}
+
+impl<D: DatasetView + Sync> Drop for PositiveRunner<'_, '_, '_, '_, D> {
+    fn drop(&mut self) {
+        if let Some(boundary) = &mut self.active {
+            boundary.abort(self.ctx);
+        }
+        while let Some(mut frame) = self.pop() {
+            if let Some(boundary) = &mut frame.boundary {
+                boundary.abort(self.ctx);
+            }
+        }
+    }
+}
+
+/// The caller owns the root boundary; every descendant boundary lives in an
+/// admitted continuation until its exact output is committed or it is aborted.
+fn eval_positive_body<D: DatasetView + Sync>(
+    pattern: &GraphPattern,
+    input: Option<PositiveInput<'_, D::Id>>,
+    plan: &crate::bgp::PositivePlan,
+    fork: bool,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
     if !plan.contains(pattern) {
         return Err(EvalError::internal(
             "a seeded relation is outside its positive plan",
         ));
     }
-    eval_evaluated_with(pattern, ctx, |ctx| match pattern {
-        GraphPattern::Bgp { patterns } => {
-            let order = input.is_none().then(|| plan.unit_order(pattern)).flatten();
-            crate::bgp::eval_bgp_seeded(patterns, input, order, ctx).map(Evaluated::Complete)
+    let workspace = ctx.growth.clone();
+    let mut runner = PositiveRunner {
+        first: None,
+        pending: crate::AdmittedVec::new(&workspace),
+        active: None,
+        inputs: PositiveSlots {
+            first: PositiveEntry::Vacant(None),
+            rest: crate::AdmittedVec::new(&workspace),
+            free: Some(0),
+        },
+        ctx,
+    };
+    let mut input = input.map(|input| runner.inputs.insert(input)).transpose()?;
+    let mut current = pattern;
+    let mut root = true;
+    'descend: loop {
+        if !root {
+            runner.active = Some(NodeBoundary::enter(current, runner.ctx)?);
         }
-        GraphPattern::Join { left, right } => {
-            crate::binop::eval_positive_join(pattern, left, right, input, plan, ctx)
+        root = false;
+        let early = match &mut runner.active {
+            Some(boundary) => boundary.start(current, runner.ctx)?,
+            None => None,
+        };
+        let result = if let Some(early) = early {
+            runner.inputs.release(input.take());
+            Ok(early)
+        } else {
+            match current {
+                GraphPattern::Bgp { patterns } => {
+                    let order = input.is_none().then(|| plan.unit_order(current)).flatten();
+                    let input = input.take().map(|slot| runner.inputs.value(slot));
+                    crate::bgp::eval_bgp_seeded(patterns, input, order, runner.ctx)
+                        .map(Evaluated::Complete)
+                }
+                GraphPattern::Join { left, right } => {
+                    runner.reserve()?;
+                    let first = usize::from(!plan.driver_left(current));
+                    let (driver, driven) = if first == 0 {
+                        (&**left, &**right)
+                    } else {
+                        (&**right, &**left)
+                    };
+                    let after = PositiveAfter::First {
+                        driven,
+                        first,
+                        independent: input.is_none() && plan.children_disjoint(current),
+                        lift: crate::governor::lift::Lift::at_admitted(current, &workspace)?
+                            .detach(),
+                    };
+                    let boundary = runner.active.take();
+                    runner.push(PositiveFrame {
+                        pattern: current,
+                        boundary,
+                        after,
+                    });
+                    current = driver;
+                    continue 'descend;
+                }
+                GraphPattern::Union { arms } => {
+                    if fork && crate::binop::positive_union_may_fork(arms, runner.ctx) {
+                        let input = input.take().map(|slot| runner.inputs.value(slot));
+                        crate::binop::eval_positive_union_parallel(
+                            current, arms, input, plan, runner.ctx,
+                        )
+                    } else if !arms.is_empty() {
+                        let arm = &arms[0];
+                        runner.reserve()?;
+                        let after = PositiveAfter::Union {
+                            ordinal: 0,
+                            input: input.take(),
+                            blocks: crate::AdmittedVec::new(&workspace),
+                            lift: crate::governor::lift::Lift::at_admitted(current, &workspace)?
+                                .detach(),
+                        };
+                        let child_input = match &after {
+                            PositiveAfter::Union { input, .. } => input.map(PositiveSlot::borrowed),
+                            _ => unreachable!(),
+                        };
+                        let boundary = runner.active.take();
+                        runner.push(PositiveFrame {
+                            pattern: current,
+                            boundary,
+                            after,
+                        });
+                        input = child_input;
+                        current = arm;
+                        continue 'descend;
+                    } else {
+                        runner.inputs.release(input.take());
+                        Ok(
+                            crate::governor::lift::Lift::at_admitted(current, &workspace)?.finish(
+                                crate::binop::concat_union(std::iter::empty(), runner.ctx)?,
+                            ),
+                        )
+                    }
+                }
+                _ => unreachable!("positive plan contains only BGP, Join and Union"),
+            }
+        };
+        let mut completed = runner.finish(current, result);
+        loop {
+            let Some(frame) = runner.pop() else {
+                return completed;
+            };
+            current = frame.pattern;
+            runner.active = frame.boundary;
+            let result = match (frame.after, completed) {
+                (_, Err(error)) => Err(error),
+                (
+                    PositiveAfter::First {
+                        driven,
+                        first,
+                        independent,
+                        lift,
+                    },
+                    Ok(child),
+                ) => {
+                    let mut lift = lift.attach(current);
+                    match lift.absorb(first, child) {
+                        None => Ok(lift.withheld()),
+                        Some(rows) if lift.is_truncated() => {
+                            Ok(lift.finish(SolutionSeq::empty(rows.schema)))
+                        }
+                        Some(rows) => {
+                            runner.reserve()?;
+                            let driver = if independent {
+                                input = None;
+                                Some(rows)
+                            } else {
+                                input = Some(runner.inputs.insert(positive_input(
+                                    plan,
+                                    if let GraphPattern::Join { left, right } = current {
+                                        if first == 0 { left } else { right }
+                                    } else {
+                                        unreachable!()
+                                    },
+                                    rows,
+                                )?)?);
+                                None
+                            };
+                            let boundary = runner.active.take();
+                            runner.push(PositiveFrame {
+                                pattern: current,
+                                boundary,
+                                after: PositiveAfter::Second {
+                                    first,
+                                    driver,
+                                    lift: lift.detach(),
+                                },
+                            });
+                            current = driven;
+                            continue 'descend;
+                        }
+                    }
+                }
+                (
+                    PositiveAfter::Second {
+                        first,
+                        driver,
+                        lift,
+                    },
+                    Ok(child),
+                ) => {
+                    let mut lift = lift.attach(current);
+                    match lift.absorb(1 - first, child) {
+                        None => Ok(lift.withheld()),
+                        Some(rows) => {
+                            let rows = match driver {
+                                None => rows,
+                                Some(driver) => {
+                                    crate::binop::hash_join(&driver, &rows, runner.ctx)?
+                                }
+                            };
+                            Ok(lift.finish(rows))
+                        }
+                    }
+                }
+                (
+                    PositiveAfter::Union {
+                        ordinal,
+                        input: producer,
+                        mut blocks,
+                        lift,
+                    },
+                    Ok(child),
+                ) => {
+                    let mut lift = lift.attach(current);
+                    match lift.absorb(ordinal, child) {
+                        None => {
+                            runner.inputs.release(producer);
+                            Ok(lift.withheld())
+                        }
+                        Some(rows) => {
+                            blocks.push(rows)?;
+                            let GraphPattern::Union { arms } = current else {
+                                unreachable!()
+                            };
+                            if lift.is_truncated() || ordinal + 1 == arms.len() {
+                                runner.inputs.release(producer);
+                                Ok(lift.finish(crate::binop::concat_union(blocks, runner.ctx)?))
+                            } else {
+                                runner.reserve()?;
+                                let boundary = runner.active.take();
+                                runner.push(PositiveFrame {
+                                    pattern: current,
+                                    boundary,
+                                    after: PositiveAfter::Union {
+                                        ordinal: ordinal + 1,
+                                        input: producer,
+                                        blocks,
+                                        lift: lift.detach(),
+                                    },
+                                });
+                                input = producer.map(PositiveSlot::borrowed);
+                                current = &arms[ordinal + 1];
+                                continue 'descend;
+                            }
+                        }
+                    }
+                }
+            };
+            completed = runner.finish(current, result);
         }
-        GraphPattern::Union { arms } => {
-            crate::binop::eval_positive_union(pattern, arms, input, plan, ctx)
-        }
-        _ => unreachable!("positive plan contains only BGP, Join and Union"),
-    })
+    }
 }
 
 /// Repeated occurrences of a BGP OPTIONAL leaf keep its immutable compilation,
