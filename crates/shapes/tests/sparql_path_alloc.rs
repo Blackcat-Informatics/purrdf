@@ -860,25 +860,29 @@ fn warm_every_worker(fixture: &Fixture, case: usize) {
 ///
 /// # Why a second `rayon::broadcast`, not the flag alone
 ///
-/// The flag is a thread-local: setting it on the calling (test) thread does nothing
-/// for the pool workers the parallel validation path actually runs on. This reuses
+/// The flag is a thread-local. Governed validation runs on the calling thread;
+/// ordinary parallel validation runs on the pool workers. The window brackets
+/// both. Setting the caller's flag alone does nothing for the workers. This reuses
 /// exactly the mechanism [`warm_every_worker`] already uses to reach every worker
 /// deterministically before a window opens — a `rayon::broadcast` call runs its
 /// closure once on every thread in the pool, so no worker is left with the oracle
 /// on (or, afterwards, left with it off) by chance of which workers a chunked pass
 /// happened to schedule onto.
 ///
-/// # Scope: exactly this window, exactly these workers
+/// # Scope: exactly this window, on the caller and pool workers
 ///
-/// The flag is restored with a second broadcast before returning, including on a
+/// The caller's flag and all worker flags are restored before returning, including on a
 /// panicking `operation` (`std::panic::catch_unwind` plus a resume), so a failing
 /// assertion inside `operation` cannot leave a later, unrelated test's oracle
-/// silently disabled. Nothing outside the broadcasts is touched: a thread that is
-/// never a worker in this pool (there is only one process-wide `rayon` pool, so
-/// that means no other thread at all) never sees the flag change.
+/// silently disabled. Threads outside the calling thread and this worker pool
+/// never see the flag change. Every call outside the measured window retains
+/// its ordinary differential verification.
 fn without_memo_verification<T>(operation: impl FnOnce() -> T) -> T {
     #[cfg(debug_assertions)]
-    rayon::broadcast(|_| purrdf_sparql_eval::set_memo_verification_enabled(false));
+    {
+        purrdf_sparql_eval::set_memo_verification_enabled(false);
+        rayon::broadcast(|_| purrdf_sparql_eval::set_memo_verification_enabled(false));
+    }
     // `AssertUnwindSafe`, not a real `UnwindSafe` bound: `operation` only reads the
     // fixture (validation takes `&self`) and this function never inspects any state
     // `operation` touched after a panic, it only resumes the payload unchanged — the
@@ -886,7 +890,10 @@ fn without_memo_verification<T>(operation: impl FnOnce() -> T) -> T {
     // half-written) does not apply to a caller that never looks.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(operation));
     #[cfg(debug_assertions)]
-    rayon::broadcast(|_| purrdf_sparql_eval::set_memo_verification_enabled(true));
+    {
+        rayon::broadcast(|_| purrdf_sparql_eval::set_memo_verification_enabled(true));
+        purrdf_sparql_eval::set_memo_verification_enabled(true);
+    }
     match result {
         Ok(value) => value,
         Err(payload) => std::panic::resume_unwind(payload),
