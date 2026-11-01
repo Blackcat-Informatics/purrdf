@@ -137,7 +137,7 @@ impl<V: AsMut<Vec<u8>>> HuffmanEncoder<'_, '_, V> {
             // dst_capacity was exhausted before close completed) and
             // truncates the output back to the segment start. Our
             // `huf_tight_compress_bound` is sized exactly per upstream zstd's
-            // spec, so this branch is unreachable under a correctly
+            // spec, so this arm is unreachable under a correctly
             // sized buffer — but if a future change ever mis-sizes
             // the bound, silently emitting a 0-length stream would
             // produce an invalid jump table that decompresses to

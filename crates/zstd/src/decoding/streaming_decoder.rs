@@ -37,7 +37,7 @@ use crate::io::{Error, Read};
 /// To recover the bytes that follow one frame WITHOUT consuming the rest of the
 /// source, recreate the decoder manually and handle
 /// [crate::decoding::errors::ReadFrameHeaderError::SkipFrame]
-/// errors by skipping forward the `length` amount of bytes, see <https://github.com/KillingSpark/zstd-rs/issues/57>
+/// errors by skipping forward the `length` amount of bytes.
 ///
 /// ```no_run
 /// // `File` is std-only; `read_to_end` itself is available under no_std too.

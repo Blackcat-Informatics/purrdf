@@ -1287,7 +1287,7 @@ impl MatchTable {
             // fills WITHOUT this hand-off reproduces the reused-CDict decay).
             // The "always followed by prime/restore" hand-off holds because
             // removing or replacing a dictionary clears `dictionary_active`
-            // (in `invalidate_primed_dictionary`): this branch is only reached
+            // (in `invalidate_primed_dictionary`): this arm is only reached
             // while a dictionary is attached and will re-prime/restore, so a
             // subsequent no-dictionary frame can never strand the deferred clear.
             self.history_abs_start = 0;

@@ -262,7 +262,7 @@ pub(crate) trait BufferBackend: Sized {
     /// AVX2 `ZSTD_execSequence` body textually at the sequence-loop call
     /// site so it fuses into the per-tier monolith — `#[target_feature]`
     /// functions cannot be `#[inline(always)]`
-    /// ([compiler restriction](https://github.com/rust-lang/rust/issues/145574)). Only valid
+    /// (compiler restriction). Only valid
     /// when [`Self::SUPPORTS_INLINE_SEQUENCE_EXEC`]; the linear backends
     /// (`UserSliceBackend`, `FlatBuf`) override, `RingBuffer` never reaches
     /// it (gated, wrap-aware fallback).
@@ -470,10 +470,7 @@ pub(crate) trait BufferBackend: Sized {
     // The fixed-capacity backend (`UserSliceBackend`) overrides each
     // method with an explicit capacity check that returns `Err` on
     // overshoot instead of panicking. The trade-off is one branch
-    // per write on the direct-decode path; the overhead is expected
-    // to be modest but has not yet been benchmarked on this branch
-    // (bench validation tracked as a follow-up before merging into
-    // the perf-critical path).
+    // per write on the direct-decode path.
 
     /// Fallible variant of [`Self::extend`].
     /// Returns `Err(BackendOverflow)` on fixed-capacity backends

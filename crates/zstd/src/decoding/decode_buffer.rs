@@ -235,7 +235,7 @@ impl<B: BufferBackend> DecodeBuffer<B> {
     /// buffer (head=0, tail=s1+s2) and the captured tail index becomes
     /// meaningless — `false` is returned and the caller surfaces a
     /// normal decode `Err` instead of restoring stale state. Reaching
-    /// this branch implies the frame is already corrupt; the partial
+    /// this arm implies the frame is already corrupt; the partial
     /// data left in the buffer is discarded by the `Err` return.
     #[inline]
     pub(crate) fn try_restore_checkpoint(&mut self, cp: DecodeBufferCheckpoint) -> bool {
