@@ -1,7 +1,7 @@
 <!--
 SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
-This PROVENANCE file is authored by the purrdf project. The vendored `test_*.py`
+This PROVENANCE file is authored by the PurRDF project. The vendored `test_*.py`
 files and `LICENSE` in this directory are rdflib's own and retain their license.
 -->
 
@@ -59,10 +59,11 @@ collection / list API, with no dependency on rdflib's private `test.utils` /
 | `test/test_sparql/test_nested_filters.py` | `test_nested_filters.py` |
 | `test/test_conjunctivegraph/test_conjunctive_graph.py` | `test_conjunctive_graph.py` |
 
-## Scoreboard (rdflib 7.6.0 vs purrdf shim, live)
+## Required scoreboard (rdflib 7.6.0 vs PurRDF shim)
 
-**81 passed / 5 xfailed** (0 xpassed, 0 failed, 0 collection errors; ledger
-1/1 applied, 0 stale).
+**79 passed / 7 xfailed** (0 xpassed, 0 failed, 0 collection errors; ledger
+7/7 applied, 0 stale). This is the expected native-value contract, qualified by
+the hosted gate; all vendor test source remains verbatim.
 
 Every one of the xfails has a concrete, self-describing reason in
 `../xfail_ledger.toml`, applied as a **strict** xfail (an XPASS or stale key
