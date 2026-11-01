@@ -515,8 +515,7 @@ pub(crate) fn row_hash_bits_for_window(max_window_size: usize) -> usize {
 /// `chain_log` from above with this so a small hinted input doesn't allocate the
 /// full level's tables.
 pub(crate) fn hc_hash_bits_for_window(max_window_size: usize) -> usize {
-    let window_log = (usize::BITS - 1 - max_window_size.leading_zeros()) as usize;
-    window_log.max(MIN_WINDOW_LOG as usize)
+    dfast_hash_bits_for_window(max_window_size)
 }
 
 /// Upstream `ZSTD_createCDict` table geometry: the `(hash_log, chain_log)` a

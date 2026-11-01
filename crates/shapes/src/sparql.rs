@@ -2184,10 +2184,10 @@ pub fn current_env() -> Result<Arc<ExtensionEnv<'static>>, String> {
                 .unwrap_or_else(ParserOptions::default),
             relations
                 .as_deref()
-                .map_or_else(|| PropertyFunctionRegistry::EMPTY, Clone::clone),
+                .map_or(PropertyFunctionRegistry::EMPTY, Clone::clone),
             aggregates
                 .as_deref()
-                .map_or_else(|| AggregateRegistry::EMPTY, Clone::clone),
+                .map_or(AggregateRegistry::EMPTY, Clone::clone),
         )
         .map_err(|e| format!("extension environment: {e}"))?,
     );

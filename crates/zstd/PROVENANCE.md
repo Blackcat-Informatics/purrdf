@@ -26,5 +26,13 @@ Compiler qualification fixes, inert statement removal and imported API lint
 annotations adapt the code to workspace gates. Imported API documentation and
 Debug omissions remain scoped to the inherited source files.
 
+Dictionary identities call the workspace's FNV implementation. Native chunk
+access preserves the original byte widths and offsets. Constructor and error
+conversion wrappers use the shared hash and lexical macros. Encoder history,
+overlap-copy loops and prefix-probe composition share one implementation per
+operation, retaining the named ISA entries, dispatch and pointer contracts.
+The lexical dependency supplies these conversion macros; no external package
+or semantic feature is added by this consolidation.
+
 The workspace version and package name identify this maintained provider;
 downstream consumers do not depend on a root-only registry patch.

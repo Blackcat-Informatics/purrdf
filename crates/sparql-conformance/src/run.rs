@@ -760,10 +760,9 @@ pub fn query_eval_env(
     purrdf_sparql_eval::ExtensionEnv::new(
         query_eval_parser_options(),
         harness_relations().clone(),
-        aggregates.as_ref().map_or_else(
-            || purrdf_sparql_eval::AggregateRegistry::EMPTY,
-            Clone::clone,
-        ),
+        aggregates
+            .as_ref()
+            .map_or(purrdf_sparql_eval::AggregateRegistry::EMPTY, Clone::clone),
     )
     .map_err(|e| format!("evaluate {}: extension environment: {e}", case.iri))
 }

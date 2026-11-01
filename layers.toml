@@ -73,7 +73,7 @@ external = []
 
 [[crate]]
 name = "purrdf-zstd"
-deps = ["purrdf-hash"]
+deps = ["purrdf-hash", "purrdf-lex"]
 external = ["twox-hash"]
 
 [[crate]]

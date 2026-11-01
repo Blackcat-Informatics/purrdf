@@ -97,14 +97,13 @@ pub(crate) fn run(
     // outlives this statement, so the environment is a named local rather than a
     // temporary: it owns the derived parse configuration the options borrow.
     let env = purrdf_sparql_eval::ExtensionEnv::over(
-        relations.as_ref().map_or_else(
-            || purrdf_sparql_eval::PropertyFunctionRegistry::EMPTY,
+        relations.as_ref().map_or(
+            purrdf_sparql_eval::PropertyFunctionRegistry::EMPTY,
             Clone::clone,
         ),
-        aggregates.as_ref().map_or_else(
-            || purrdf_sparql_eval::AggregateRegistry::EMPTY,
-            Clone::clone,
-        ),
+        aggregates
+            .as_ref()
+            .map_or(purrdf_sparql_eval::AggregateRegistry::EMPTY, Clone::clone),
     )
     .map_err(|e| CliError::Runtime(format!("extension environment: {e}")))?;
     let query_options = coordinates.apply(

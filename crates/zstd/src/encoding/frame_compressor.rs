@@ -925,7 +925,7 @@ impl<R: Read, W: Write> FrameCompressor<R, W, MatchGeneratorDriver> {
                 last_huff_table: None,
                 huff_table_spare: None,
                 fse_tables: FseTables::new(),
-                block_scratch: crate::encoding::blocks::CompressedBlockScratch::new(),
+                block_scratch: crate::encoding::blocks::CompressedBlockScratch::default(),
                 offset_hist: [1, 4, 8],
                 strategy_tag: crate::encoding::strategy::StrategyTag::for_compression_level(
                     compression_level,
@@ -994,13 +994,8 @@ impl<R: Read, W: Write> FrameCompressor<R, W, MatchGeneratorDriver> {
         // targetLength override `level < 0` is that test; an override wins.
         self.state.literal_compression_disabled = self.state.strategy_tag
             == crate::encoding::strategy::StrategyTag::Fast
-            && overrides.target_length.map_or_else(
-                || {
-                    matches!(
-                        self.compression_level,
-                        CompressionLevel::Level(n) if n < 0
-                    )
-                },
+            && overrides.target_length.map_or(
+                matches!(self.compression_level, CompressionLevel::Level(n) if n < 0),
                 |tl| tl > 0,
             );
         self.state.matcher.set_param_overrides(Some(overrides));
@@ -1315,7 +1310,7 @@ impl<R: Read, W: Write, M: Matcher> FrameCompressor<R, W, M> {
                 last_huff_table: None,
                 huff_table_spare: None,
                 fse_tables: FseTables::new(),
-                block_scratch: crate::encoding::blocks::CompressedBlockScratch::new(),
+                block_scratch: crate::encoding::blocks::CompressedBlockScratch::default(),
                 offset_hist: [1, 4, 8],
                 strategy_tag: crate::encoding::strategy::StrategyTag::for_compression_level(
                     compression_level,

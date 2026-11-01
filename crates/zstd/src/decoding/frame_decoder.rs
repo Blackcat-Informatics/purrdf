@@ -561,11 +561,7 @@ impl FrameDecoderState {
     }
 }
 
-impl Default for FrameDecoder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+purrdf_hash::default_from_new!(FrameDecoder);
 
 impl FrameDecoder {
     /// This will create a new decoder without allocating anything yet.

@@ -28,7 +28,6 @@
 
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
-use core::convert::TryInto;
 
 use super::Sequence;
 use super::blocks::encode_offset_with_history;
@@ -1375,20 +1374,15 @@ impl RowMatchGenerator {
     }
 
     pub(crate) fn get_last_space(&self) -> &[u8] {
-        if let (Some((ptr, _total)), Some((block_start, block_end))) =
-            (self.borrowed_input, self.borrowed_block)
-        {
-            // Borrowed window: the active block is the in-place input range
-            // `[block_start, block_end)`, staged before the scan so the emit
-            // pipeline's pre-scan `get_last_space().len()` reserve is correct.
-            // SAFETY: borrowed liveness contract; `block_start <= block_end <=
-            // buffer len` (validated when staged).
-            return unsafe {
-                core::slice::from_raw_parts(ptr.add(block_start), block_end - block_start)
-            };
+        // SAFETY: the caller keeps the registered input live; staging validates its range.
+        unsafe {
+            super::history::get_last_space(
+                &self.history,
+                &self.chunk_lens,
+                self.borrowed_input,
+                self.borrowed_block,
+            )
         }
-        let last = *self.chunk_lens.back().unwrap();
-        &self.history[self.history.len() - last..]
     }
 
     pub(crate) fn add_data(&mut self, data: Vec<u8>, mut reuse_space: impl FnMut(Vec<u8>)) {
@@ -1645,43 +1639,23 @@ impl RowMatchGenerator {
     }
 
     fn compact_history(&mut self) {
-        if self.history_start == 0 {
-            return;
-        }
-        // Drain the (unreachable) dead prefix once it reaches a quarter window
-        // so the buffer stays near `window + window/4` rather than growing to
-        // ~2x window before the old full-window trigger fired. Paired with the
-        // one-time `reserve_exact` in `add_data`, this keeps the Vec at a fixed
-        // ~1.25x-window capacity on long streams. The drain memmoves the live
-        // window, so a quarter-window trigger bounds the write amplification
-        // (~4x the eviction stride) while closing most of the peak gap.
-        if self.history_start >= (self.max_window_size >> 2)
-            || self.history_start * 2 >= self.history.len()
-        {
-            self.history.drain(..self.history_start);
-            self.history_start = 0;
-        }
+        super::history::compact_history(
+            &mut self.history,
+            &mut self.history_start,
+            self.max_window_size,
+        );
     }
 
     pub(crate) fn live_history(&self) -> &[u8] {
-        // Borrowed one-shot: candidate/cursor bytes live in the caller's
-        // input slice, not the owned mirror. Expose `[0, block_end)` so the
-        // scan reads every prior byte in place (no input->mirror copy). The
-        // branch is loop-invariant for a whole scan and inlines.
-        if let Some((_start, end)) = self.borrowed_block {
-            let (ptr, total) = self
-                .borrowed_input
-                .expect("borrowed_block set without a registered borrowed window");
-            debug_assert!(
-                end <= total,
-                "borrowed block end {end} exceeds window {total}"
-            );
-            // SAFETY: `ptr` is the registered borrowed window's start (live by
-            // the `set_borrowed_window` contract) and `end <= total` bytes are
-            // in bounds.
-            return unsafe { core::slice::from_raw_parts(ptr, end) };
+        // SAFETY: set_borrowed_window requires the input to stay live and unmodified.
+        unsafe {
+            super::history::live_history(
+                &self.history,
+                self.history_start,
+                self.borrowed_input,
+                self.borrowed_block,
+            )
         }
-        &self.history[self.history_start..]
     }
 
     fn history_abs_end(&self) -> usize {
@@ -1703,9 +1677,12 @@ impl RowMatchGenerator {
     /// `buffer` must stay live and unmodified until `clear_borrowed_window`
     /// or `reset` — the matcher stores a raw pointer into it.
     pub(crate) unsafe fn set_borrowed_window(&mut self, buffer: &[u8]) {
-        self.borrowed_input = Some((buffer.as_ptr(), buffer.len()));
-        self.borrowed_block = None;
-        self.history_abs_start = 0;
+        super::history::set_borrowed_window(
+            buffer,
+            &mut self.borrowed_input,
+            &mut self.borrowed_block,
+            &mut self.history_abs_start,
+        );
     }
 
     pub(crate) fn clear_borrowed_window(&mut self) {
@@ -1716,29 +1693,24 @@ impl RowMatchGenerator {
     /// Stage `[block_start, block_end)` as the active borrowed block before a
     /// scan so `live_history()` / `current_block_range()` report it.
     pub(crate) fn stage_borrowed_block(&mut self, block_start: usize, block_end: usize) {
-        let (_ptr, total) = self
-            .borrowed_input
-            .expect("stage_borrowed_block requires a registered borrowed window");
-        assert!(
-            block_start <= block_end && block_end <= total,
-            "borrowed block bounds out of range: start={block_start} end={block_end} total={total}",
+        super::history::stage_borrowed_block(
+            self.borrowed_input,
+            &mut self.borrowed_block,
+            block_start,
+            block_end,
         );
-        self.borrowed_block = Some((block_start, block_end));
     }
 
     /// `(current_abs_start, current_len)` for the active scan. Borrowed: the
     /// staged block range (absolute input offsets). Owned: derived from the
     /// last committed chunk in the live window.
     fn current_block_range(&self) -> (usize, usize) {
-        if let Some((start, end)) = self.borrowed_block {
-            (start, end - start)
-        } else {
-            let current_len = *self.chunk_lens.back().unwrap();
-            (
-                self.history_abs_start + self.window_size - current_len,
-                current_len,
-            )
-        }
+        super::history::current_block_range(
+            self.borrowed_block,
+            &self.chunk_lens,
+            self.history_abs_start,
+            self.window_size,
+        )
     }
 
     /// Row hash key at `idx`: `key_len` bytes (upstream zstd `mls`, 5-6 on the row
@@ -1758,10 +1730,10 @@ impl RowMatchGenerator {
     #[inline(always)]
     fn row_key_value(concat: &[u8], idx: usize, key_len: usize) -> u64 {
         if idx + 8 <= concat.len() {
-            let v = u64::from_le_bytes(concat[idx..idx + 8].try_into().unwrap());
+            let v = u64::from_le_bytes(*concat[idx..].first_chunk::<8>().unwrap());
             v & ((1u64 << (key_len * 8)) - 1)
         } else {
-            u32::from_le_bytes(concat[idx..idx + ROW_HASH_KEY_LEN].try_into().unwrap()) as u64
+            u32::from_le_bytes(*concat[idx..].first_chunk::<ROW_HASH_KEY_LEN>().unwrap()) as u64
         }
     }
 
@@ -2184,15 +2156,9 @@ impl RowMatchGenerator {
     /// the row backend ~11x slower than FFI on those streams. The upstream zstd
     /// caps the fill at 96 + 32 positions regardless of match length.
     fn insert_match_span<const ROW_LOG: usize>(&mut self, start: usize, end: usize) {
-        const SKIP_THRESHOLD: usize = 384;
-        const MAX_START: usize = 96;
-        const MAX_END: usize = 32;
-        if end.saturating_sub(start) > SKIP_THRESHOLD {
-            self.insert_positions::<ROW_LOG>(start, start + MAX_START);
-            self.insert_positions::<ROW_LOG>(end - MAX_END, end);
-        } else {
+        super::history::insert_match_span(start, end, |start, end| {
             self.insert_positions::<ROW_LOG>(start, end);
-        }
+        });
     }
 
     fn insert_positions_with_step<const ROW_LOG: usize>(

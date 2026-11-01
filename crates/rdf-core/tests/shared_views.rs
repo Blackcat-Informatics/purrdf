@@ -5550,13 +5550,12 @@ fn a_selection_backed_carrier_keeps_its_owners_resident_in_the_ledger() {
 }
 
 // ---------------------------------------------------------------------------
-// Flat-assertion presentation: every FallibleDatasetView wrapper agrees with its
-// materialized `RdfDataset` equivalent
+// Flat-assertion presentation: owned views and checked paged materialization agree.
 // ---------------------------------------------------------------------------
 
-/// `try_canonicalize_flat_view` over every production `FallibleDatasetView`
-/// wrapper — the composite, the delta snapshot, a single-page `PagedQueryView`,
-/// and a shared `Arc<RdfDataset>` — canonicalizes to the SAME flat bytes as
+/// `try_canonicalize_flat_view` over owned composite, delta and shared dataset
+/// views, and an explicitly materialized single-page query, produces the same
+/// flat bytes as
 /// `identity_fixture` itself, exactly as the overlay presentation already agrees
 /// across these wrapper types
 /// (`canonical_identity_is_byte_equal_over_flat_composite_and_delta_views`).
@@ -5566,7 +5565,7 @@ fn a_selection_backed_carrier_keeps_its_owners_resident_in_the_ledger() {
 /// FLAT presentation, not just base quads — the fragment assertions below prove
 /// the fixture actually contains real `rdf:reifies` rows and no overlay sentinel.
 #[test]
-fn flat_canon_agrees_across_every_fallible_dataset_view_wrapper() {
+fn flat_canon_agrees_across_owned_views_and_materialized_paged_queries() {
     let flat = identity_fixture();
     let composite = CompositeDatasetView::new(vec![flat.clone()], ViewLimits::default()).unwrap();
     let delta = delta_of(&flat);
@@ -5574,6 +5573,8 @@ fn flat_canon_agrees_across_every_fallible_dataset_view_wrapper() {
         PagedDataset::from_provider(Arc::new(InMemoryPageProvider::new(vec![flat.clone()])))
             .expect("a single retained source seals into one page");
     let paged_view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+    let paged_materialized = purrdf_core::dataset_from_view(&paged_view)
+        .expect("paged query materializes through its checked read boundary");
 
     let expected_owner = try_canonicalize_flat_view(
         &*flat,
@@ -5621,16 +5622,16 @@ fn flat_canon_agrees_across_every_fallible_dataset_view_wrapper() {
             .nquads(),
         ),
         (
-            "paged (single page)",
+            "paged query materialized",
             try_canonicalize_flat_view(
-                &paged_view,
+                &*paged_materialized,
                 CanonHash::Sha256,
                 &mut purrdf_core::CanonicalizationControl::new(
                     purrdf_core::RDFC_V2_CORPUS_POLICY,
                     None,
                 ),
             )
-            .expect("paged view is admissible and ready")
+            .expect("materialized paged query admits an owned canonical result")
             .nquads(),
         ),
         (
@@ -5705,10 +5706,9 @@ fn flat_canon_agrees_across_every_fallible_dataset_view_wrapper() {
         .nquads(),
         "delta view flat canon must equal its own materialized dataset's flat canon"
     );
-    // `PagedQueryView` offers no `materialize()` of its own: it is a fallible READ
-    // over pages that are already-frozen `RdfDataset`s, so its "materialized
-    // equivalent" is definitionally the single source page it was sealed from
-    // (`flat`) — already proven equal to `expected` above.
+    // The paged branch crosses its checked read boundary through dataset_from_view
+    // before retaining an owned canonical result; it never reuses the source page
+    // as a substitute for reading the query view.
 }
 
 /// A source over `s0..s3 p0..p1 o0..o1` in the default graph, `g0` and `g1`,

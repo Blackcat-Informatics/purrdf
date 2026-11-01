@@ -98,11 +98,7 @@ impl CompressionModes {
     }
 }
 
-impl Default for SequencesHeader {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+purrdf_hash::default_from_new!(SequencesHeader);
 
 impl SequencesHeader {
     /// Create a new [SequencesHeader].

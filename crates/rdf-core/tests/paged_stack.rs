@@ -66,8 +66,11 @@ fn page_bytes(dataset: &PagedDataset) -> Vec<Vec<u8>> {
     (0..dataset.page_count())
         .map(|i| {
             let part = dataset.with_pages(&[PageId(i)]);
-            PackBuilder::build_view_bytes(
-                &part.query_view(PagedQueryLimits::UNBOUNDED),
+            let materialized =
+                purrdf_core::dataset_from_view(&part.query_view(PagedQueryLimits::UNBOUNDED))
+                    .expect("checked page reference materializes before retaining pack output");
+            PackBuilder::build_bytes(
+                &materialized,
                 &mut purrdf_core::CanonicalizationControl::new(
                     purrdf_core::RDFC_V2_CORPUS_POLICY,
                     None,

@@ -27,7 +27,6 @@
 
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
-use core::convert::TryInto;
 
 use super::Sequence;
 use super::blocks::encode_offset_with_history;
@@ -882,17 +881,12 @@ impl DfastMatchGenerator {
     /// scan, so the emit pipeline's pre-scan `get_last_space().len()` reserve
     /// reports this block (not a stale or whole-input range).
     pub(crate) fn stage_borrowed_block(&mut self, block_start: usize, block_end: usize) {
-        let (_ptr, total) = self
-            .borrowed_input
-            .expect("stage_borrowed_block requires a registered borrowed window");
-        // Always-on (not debug_assert): the range feeds the unsafe slice
-        // builders in `scan_source` / `get_last_space`, so an out-of-range or
-        // inverted range must fault here, not deep in the kernel.
-        assert!(
-            block_start <= block_end && block_end <= total,
-            "borrowed block bounds out of range: start={block_start} end={block_end} total={total}",
+        super::history::stage_borrowed_block(
+            self.borrowed_input,
+            &mut self.borrowed_block,
+            block_start,
+            block_end,
         );
-        self.borrowed_block = Some((block_start, block_end));
     }
 
     /// Borrowed one-shot equivalent of [`Self::start_matching`]: scan
@@ -1468,18 +1462,11 @@ impl DfastMatchGenerator {
     }
 
     fn compact_history(&mut self) {
-        if self.history_start == 0 {
-            return;
-        }
-        // Drain the dead prefix at a quarter window (paired with the one-time
-        // `reserve_exact` in `add_data`) so the buffer stays near
-        // `window + window/4` instead of doubling to ~2x window on long streams.
-        if self.history_start >= (self.max_window_size >> 2)
-            || self.history_start * 2 >= self.history.len()
-        {
-            self.history.drain(..self.history_start);
-            self.history_start = 0;
-        }
+        super::history::compact_history(
+            &mut self.history,
+            &mut self.history_start,
+            self.max_window_size,
+        );
     }
 
     pub(crate) fn live_history(&self) -> &[u8] {
@@ -1710,7 +1697,7 @@ impl DfastMatchGenerator {
         debug_assert!(data.len() >= 5, "short hash needs a full 5-byte key");
         // Low 5 bytes (ZSTD_hash5 shape) shifted into bits 24..63, matching the
         // raw `v8 << 24` form used by the fast-loop probe / insert sites.
-        let lo4 = u32::from_le_bytes(data[..4].try_into().unwrap()) as u64;
+        let lo4 = u32::from_le_bytes(*data.first_chunk::<4>().unwrap()) as u64;
         let b5 = data[4] as u64;
         let value = (lo4 | (b5 << 32)) << 24;
         self.hash_index_with_bits(value, self.short_hash_bits)
@@ -1718,7 +1705,7 @@ impl DfastMatchGenerator {
 
     #[inline(always)]
     pub(crate) fn long_hash_index(&self, data: &[u8]) -> usize {
-        let value = u64::from_le_bytes(data[..8].try_into().unwrap());
+        let value = u64::from_le_bytes(*data.first_chunk::<8>().unwrap());
         self.hash_index_with_bits(value, self.long_hash_bits)
     }
 

@@ -2552,7 +2552,11 @@ mod tests {
                 ResourceDimension::ScratchBytes => {
                     QueryGovernors::UNBOUNDED.with_max_scratch_bytes(0)
                 }
-                _ => QueryGovernors::UNBOUNDED.with_max_remote_requests(0),
+                ResourceDimension::RemoteRequests => {
+                    QueryGovernors::UNBOUNDED.with_max_remote_requests(0)
+                }
+                ResourceDimension::UdfDepth => QueryGovernors::UNBOUNDED.with_max_udf_depth(0),
+                _ => panic!("unhandled caller-settable dimension: {}", dimension.label()),
             };
             let state = GovernorState::new(&governors);
             assert_eq!(
@@ -3012,7 +3016,7 @@ mod tests {
             *GOVERNOR_PROFILE_DIGEST, pinned,
             "the published digest is derived from the shipped table"
         );
-        assert_eq!(GOVERNOR_PROFILE_VERSION, 22);
+        assert_eq!(GOVERNOR_PROFILE_VERSION, 23);
         assert_eq!(CHARGE_SCHEDULE[17], ("native-function-work", 1));
         let historical = &CHARGE_SCHEDULE[..17];
         assert_eq!(

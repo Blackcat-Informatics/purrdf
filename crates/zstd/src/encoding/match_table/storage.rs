@@ -964,18 +964,11 @@ impl MatchTable {
     /// least half of the mirror. Keeps the contiguous mirror compact
     /// so reallocation costs stay amortised.
     pub(crate) fn compact_history(&mut self) {
-        if self.history_start == 0 {
-            return;
-        }
-        // Drain the dead prefix at a quarter window (paired with the eviction
-        // reserve in `add_data`) so the mirror stays near `window + window/4`
-        // rather than doubling to ~2x window on long streams.
-        if self.history_start >= (self.max_window_size >> 2)
-            || self.history_start * 2 >= self.history.len()
-        {
-            self.history.drain(..self.history_start);
-            self.history_start = 0;
-        }
+        super::super::history::compact_history(
+            &mut self.history,
+            &mut self.history_start,
+            self.max_window_size,
+        );
     }
 
     /// The live (post-`history_start`) slice of the contiguous history
@@ -983,22 +976,15 @@ impl MatchTable {
     /// `history` Vec.
     #[inline]
     pub(crate) fn live_history(&self) -> &[u8] {
-        // Borrowed one-shot: expose `[0, block_end)` of the caller's input so
-        // candidate/cursor reads land in place (the owned `history` mirror is
-        // empty under the no-copy path). Loop-invariant branch, inlines.
-        if let Some((_start, end)) = self.borrowed_block {
-            let (ptr, total) = self
-                .borrowed_input
-                .expect("borrowed_block set without a registered borrowed window");
-            debug_assert!(
-                end <= total,
-                "borrowed block end {end} exceeds window {total}"
-            );
-            // SAFETY: `ptr` is the registered window start (live by contract);
-            // `end <= total` in bounds.
-            return unsafe { core::slice::from_raw_parts(ptr, end) };
+        // SAFETY: set_borrowed_window requires the input to stay live and unmodified.
+        unsafe {
+            super::super::history::live_history(
+                &self.history,
+                self.history_start,
+                self.borrowed_input,
+                self.borrowed_block,
+            )
         }
-        &self.history[self.history_start..]
     }
 
     /// Absolute position one past the end of the live history.
@@ -1010,16 +996,15 @@ impl MatchTable {
     /// the most recent buffer in the rolling window — panics if no
     /// data has been committed yet.
     pub(crate) fn get_last_space(&self) -> &[u8] {
-        if let (Some((ptr, _total)), Some((block_start, block_end))) =
-            (self.borrowed_input, self.borrowed_block)
-        {
-            // SAFETY: borrowed liveness contract; range validated when staged.
-            return unsafe {
-                core::slice::from_raw_parts(ptr.add(block_start), block_end - block_start)
-            };
+        // SAFETY: the caller keeps the registered input live; staging validates its range.
+        unsafe {
+            super::super::history::get_last_space(
+                &self.history,
+                &self.chunk_lens,
+                self.borrowed_input,
+                self.borrowed_block,
+            )
         }
-        let last = *self.chunk_lens.back().unwrap();
-        &self.history[self.history.len() - last..]
     }
 
     /// Register the borrowed input window. Zeroes `history_abs_start` so
@@ -1033,9 +1018,12 @@ impl MatchTable {
     /// `buffer` must stay live and unmodified until `clear_borrowed_window`
     /// or `reset`.
     pub(crate) unsafe fn set_borrowed_window(&mut self, buffer: &[u8]) {
-        self.borrowed_input = Some((buffer.as_ptr(), buffer.len()));
-        self.borrowed_block = None;
-        self.history_abs_start = 0;
+        super::super::history::set_borrowed_window(
+            buffer,
+            &mut self.borrowed_input,
+            &mut self.borrowed_block,
+            &mut self.history_abs_start,
+        );
     }
 
     pub(crate) fn clear_borrowed_window(&mut self) {
@@ -1045,28 +1033,23 @@ impl MatchTable {
 
     /// Stage `[block_start, block_end)` as the active borrowed block.
     pub(crate) fn stage_borrowed_block(&mut self, block_start: usize, block_end: usize) {
-        let (_ptr, total) = self
-            .borrowed_input
-            .expect("stage_borrowed_block requires a registered borrowed window");
-        assert!(
-            block_start <= block_end && block_end <= total,
-            "borrowed block bounds out of range: start={block_start} end={block_end} total={total}",
+        super::super::history::stage_borrowed_block(
+            self.borrowed_input,
+            &mut self.borrowed_block,
+            block_start,
+            block_end,
         );
-        self.borrowed_block = Some((block_start, block_end));
     }
 
     /// `(current_abs_start, current_len)` for the active scan. Borrowed: the
     /// staged block range. Owned: the last committed chunk in the live window.
     pub(crate) fn current_block_range(&self) -> (usize, usize) {
-        if let Some((start, end)) = self.borrowed_block {
-            (start, end - start)
-        } else {
-            let current_len = *self.chunk_lens.back().unwrap();
-            (
-                self.history_abs_start + self.window_size - current_len,
-                current_len,
-            )
-        }
+        super::super::history::current_block_range(
+            self.borrowed_block,
+            &self.chunk_lens,
+            self.history_abs_start,
+            self.window_size,
+        )
     }
 
     /// Convert an absolute position into the (relative_pos + 1) form
@@ -2034,23 +2017,9 @@ impl MatchTable {
     /// 96 + 32 cap is a conservative (ratio-preserving) mirror that still keeps
     /// boundary anchors for the following search.
     pub(crate) fn insert_match_span(&mut self, start: usize, end: usize) {
-        const SKIP_THRESHOLD: usize = 384;
-        const MAX_START: usize = 96;
-        const MAX_END: usize = 32;
-        if end.saturating_sub(start) > SKIP_THRESHOLD {
-            // Raw arithmetic is correct by design here, NOT masked with
-            // `saturating_*`. `start` / `end` are absolute stream
-            // positions, and `check_stream_abs_headroom` guarantees
-            // `abs_pos + STREAM_ABS_HEADROOM (= 4112) <= usize::MAX` for
-            // every position in the frame, so `start + MAX_START` (96)
-            // cannot overflow even on a 32-bit target. In this branch
-            // `end - start > SKIP_THRESHOLD (384)`, so `end > 384 >
-            // MAX_END (32)` and `end - MAX_END` cannot underflow.
-            self.insert_positions(start, start + MAX_START);
-            self.insert_positions(end - MAX_END, end);
-        } else {
+        super::super::history::insert_match_span(start, end, |start, end| {
             self.insert_positions(start, end);
-        }
+        });
     }
 
     /// Tight hash/chain fill for `[start, end)` when the caller has already

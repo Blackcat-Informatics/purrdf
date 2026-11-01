@@ -105,14 +105,68 @@ pub(crate) unsafe fn count_match_from_indices(
     tail_limit: usize,
     seed_len: usize,
 ) -> usize {
+    // SAFETY: this entry's index bounds cover the selected scalar prefix probe.
+    unsafe {
+        count_match_with(
+            concat,
+            current_idx,
+            candidate_idx,
+            tail_limit,
+            seed_len,
+            |lhs, rhs, remaining| common_prefix_len_ptr(lhs, rhs, remaining),
+        )
+    }
+}
+
+/// Compose the leading word probe, selected vector kernel and portable tail.
+///
+/// # Safety
+/// Both pointers are readable for `max` bytes. The selected vector callback
+/// upholds its ISA contract and returns the equal prefix it consumed.
+#[inline(always)]
+pub(crate) unsafe fn common_prefix_len_with(
+    lhs: *const u8,
+    rhs: *const u8,
+    max: usize,
+    vector_prefix: impl FnOnce(*const u8, *const u8, usize) -> usize,
+) -> usize {
+    let chunk = size_of::<usize>();
+    if chunk <= max {
+        // SAFETY: the caller provides at least max initialized bytes.
+        let lhs_word = unsafe { core::ptr::read_unaligned(lhs.cast::<usize>()) };
+        let rhs_word = unsafe { core::ptr::read_unaligned(rhs.cast::<usize>()) };
+        let diff = lhs_word ^ rhs_word;
+        if diff != 0 {
+            return mismatch_byte_index(diff);
+        }
+    }
+    let off = vector_prefix(lhs, rhs, max);
+    // SAFETY: the callback consumed an equal prefix within the original range.
+    unsafe { common_prefix_len_scalar_ptr(lhs, rhs, off, max) }
+}
+
+/// Apply the common seed clamp and index geometry before a selected prefix probe.
+///
+/// # Safety
+/// Both indices plus `tail_limit` are within `concat`. The callback upholds
+/// its ISA contract and probes no more than the supplied remaining range.
+#[inline(always)]
+pub(crate) unsafe fn count_match_with(
+    concat: &[u8],
+    current_idx: usize,
+    candidate_idx: usize,
+    tail_limit: usize,
+    seed_len: usize,
+    prefix: impl FnOnce(*const u8, *const u8, usize) -> usize,
+) -> usize {
     let seed = seed_len.min(tail_limit);
     if seed == tail_limit {
         return seed;
     }
     let remaining = tail_limit - seed;
     let base = concat.as_ptr();
+    // SAFETY: the seed is at most tail_limit, covered by the caller's bounds.
     let lhs = unsafe { base.add(candidate_idx + seed) };
     let rhs = unsafe { base.add(current_idx + seed) };
-    let extra = unsafe { common_prefix_len_ptr(lhs, rhs, remaining) };
-    seed + extra
+    seed + prefix(lhs, rhs, remaining)
 }
