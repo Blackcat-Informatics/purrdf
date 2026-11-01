@@ -354,6 +354,11 @@ fn native_transport_framing_and_decoder_fields_survive() {
     ] {
         let error = decode_transport(&bytes, TransportEncoding::Zstd).unwrap_err();
         let retained = error.clone();
+        assert_eq!(retained, error);
+        assert_ne!(
+            retained,
+            decode_transport(&bytes, TransportEncoding::Zstd).unwrap_err()
+        );
         drop((bytes, error));
         assert_eq!(retained.cause.kind(), std::io::ErrorKind::InvalidData);
         let fields = Capture::read(&retained)
