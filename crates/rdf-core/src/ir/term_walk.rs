@@ -103,6 +103,7 @@ pub enum TermVisit<'a> {
 
 /// A pending step of a bottom-up fold: enter a term, or assemble a triple term from
 /// the three answers its components left.
+#[derive(Clone, Copy)]
 enum FoldStep<T> {
     Enter(T),
     Assemble(T),
@@ -618,139 +619,315 @@ pub fn try_fold_nested<N: Copy, C: ?Sized, T, E>(
     })
 }
 
-/// Fold the same nested structure with fallible working-buffer growth.
-///
-/// # Errors
-/// Returns the first visitor or working-buffer allocation failure.
-/// The original term-fold kernel's concrete scratch operations. Payload
-/// factories receive the same storage object, so native payload and work-list
-/// admission cannot borrow two independent accounts for one live allocation.
-trait FoldBuffers<N, T, E> {
+/// The original term-fold kernel's concrete scratch operations.
+trait FoldBuffers<N, T> {
+    type Error;
+
     fn push_step(
         &mut self,
         steps: &mut WorkList<FoldStep<N>, 32>,
         step: FoldStep<N>,
-    ) -> Result<(), E>;
-    fn reserve_answers(&mut self, answers: &mut Vec<T>, required: usize) -> Result<(), E>;
-    fn push_answer(&mut self, answers: &mut Vec<T>, answer: T) -> Result<(), E>;
-    fn finish(&mut self, steps: WorkList<FoldStep<N>, 32>, answers: Vec<T>) -> Result<(), E>;
+    ) -> Result<(), Self::Error>;
+    fn reserve_answers(&mut self, answers: &mut Vec<T>, required: usize)
+    -> Result<(), Self::Error>;
+    fn push_answer(&mut self, answers: &mut Vec<T>, answer: T) -> Result<(), (Self::Error, T)>;
+    fn answer_growth(&self, answers: &Vec<T>) -> Result<Option<(usize, usize)>, Self::Error>;
+    fn checkpoint(&mut self, units: u64) -> Result<(), Self::Error>;
+    fn release_answer_bytes(&mut self, bytes: usize) -> Result<(), Self::Error>;
+    fn finish(
+        &mut self,
+        steps: WorkList<FoldStep<N>, 32>,
+        answers: Vec<T>,
+    ) -> Result<(), Self::Error>;
 }
 
-struct ResidentFold<F>(F);
+struct ResidentFold;
 
-impl<N, T, E, F: FnMut(std::collections::TryReserveError) -> E> FoldBuffers<N, T, E>
-    for ResidentFold<F>
-{
+impl<N, T> FoldBuffers<N, T> for ResidentFold {
+    type Error = std::collections::TryReserveError;
+
     fn push_step(
         &mut self,
         steps: &mut WorkList<FoldStep<N>, 32>,
         step: FoldStep<N>,
-    ) -> Result<(), E> {
-        steps.try_push(step).map_err(&mut self.0)
+    ) -> Result<(), Self::Error> {
+        steps.try_push(step)
     }
-    fn reserve_answers(&mut self, answers: &mut Vec<T>, required: usize) -> Result<(), E> {
-        answers.try_reserve_exact(required).map_err(&mut self.0)
+    fn reserve_answers(
+        &mut self,
+        answers: &mut Vec<T>,
+        required: usize,
+    ) -> Result<(), Self::Error> {
+        answers.try_reserve_exact(required)
     }
-    fn push_answer(&mut self, answers: &mut Vec<T>, answer: T) -> Result<(), E> {
-        answers.try_reserve(1).map_err(&mut self.0)?;
+    fn push_answer(&mut self, answers: &mut Vec<T>, answer: T) -> Result<(), (Self::Error, T)> {
+        if let Err(error) = answers.try_reserve(1) {
+            return Err((error, answer));
+        }
         answers.push(answer);
         Ok(())
     }
-    fn finish(&mut self, steps: WorkList<FoldStep<N>, 32>, answers: Vec<T>) -> Result<(), E> {
+    fn answer_growth(&self, _answers: &Vec<T>) -> Result<Option<(usize, usize)>, Self::Error> {
+        Ok(None)
+    }
+    fn checkpoint(&mut self, _units: u64) -> Result<(), Self::Error> {
+        Ok(())
+    }
+    fn release_answer_bytes(&mut self, _bytes: usize) -> Result<(), Self::Error> {
+        Ok(())
+    }
+    fn finish(
+        &mut self,
+        steps: WorkList<FoldStep<N>, 32>,
+        answers: Vec<T>,
+    ) -> Result<(), Self::Error> {
         drop(steps);
         drop(answers);
         Ok(())
     }
 }
 
-struct NativeFold<'memory, 'storage, S: purrdf_lex::allocation::Admission + ?Sized, F> {
+struct NativeFold<'memory, 'storage, S: purrdf_lex::allocation::Admission + ?Sized> {
     memory: &'memory mut purrdf_lex::allocation::Memory<'storage, S>,
-    storage_error: F,
 }
 
-impl<N, T, E, S, F> FoldBuffers<N, T, E> for NativeFold<'_, '_, S, F>
-where
-    S: purrdf_lex::allocation::Admission + ?Sized,
-    F: FnMut(purrdf_lex::allocation::StorageError, &mut purrdf_lex::allocation::Memory<'_, S>) -> E,
+impl<N: Copy, T, S: purrdf_lex::allocation::Admission + ?Sized> FoldBuffers<N, T>
+    for NativeFold<'_, '_, S>
 {
+    type Error = purrdf_lex::allocation::StorageError;
+
     fn push_step(
         &mut self,
         steps: &mut WorkList<FoldStep<N>, 32>,
         step: FoldStep<N>,
-    ) -> Result<(), E> {
-        steps
-            .try_push_admitted(step, self.memory)
-            .map_err(|error| (self.storage_error)(error, self.memory))
+    ) -> Result<(), Self::Error> {
+        if !self.memory.admission().progress_enabled() {
+            return steps.try_push_admitted(step, self.memory);
+        }
+        self.memory.admission_mut().checkpoint(0)?;
+        if steps.insertion_layout()?.is_none() {
+            self.memory.admission_mut().checkpoint(1)?;
+            steps.push(step);
+            return Ok(());
+        }
+        // A full spill uses the original native capacity law. Reserve only an
+        // empty replacement, so allocation never hides a bulk relocation.
+        let required = steps
+            .heap_capacity()
+            .checked_add(1)
+            .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?;
+        let capacity = purrdf_lex::allocation::growth_capacity::<FoldStep<N>>(
+            steps.heap_capacity(),
+            required,
+        )?;
+        let mut replacement = WorkList::new();
+        let result = (|| {
+            replacement.try_reserve_heap_admitted(capacity, self.memory)?;
+            for &pending in steps.iter() {
+                self.memory.admission_mut().checkpoint(1)?;
+                replacement.push(pending);
+            }
+            self.memory.admission_mut().checkpoint(1)?;
+            replacement.push(step);
+            Ok(())
+        })();
+        if let Err(cause) = result {
+            let _ = replacement.release_admitted(self.memory);
+            return Err(cause);
+        }
+        let original = core::mem::replace(steps, replacement);
+        original.release_admitted(self.memory)
     }
-    fn reserve_answers(&mut self, answers: &mut Vec<T>, required: usize) -> Result<(), E> {
-        self.memory
-            .reserve(answers, required)
-            .map_err(|error| (self.storage_error)(error, self.memory))
+    fn reserve_answers(
+        &mut self,
+        answers: &mut Vec<T>,
+        required: usize,
+    ) -> Result<(), Self::Error> {
+        self.memory.reserve(answers, required)
     }
-    fn push_answer(&mut self, answers: &mut Vec<T>, answer: T) -> Result<(), E> {
-        self.memory
-            .push(answers, answer)
-            .map_err(|error| (self.storage_error)(error, self.memory))
+    fn push_answer(&mut self, answers: &mut Vec<T>, answer: T) -> Result<(), (Self::Error, T)> {
+        if let Err(error) = self.memory.reserve_for_push(answers) {
+            return Err((error, answer));
+        }
+        answers.push(answer);
+        Ok(())
     }
-    fn finish(&mut self, steps: WorkList<FoldStep<N>, 32>, answers: Vec<T>) -> Result<(), E> {
-        steps
-            .release_admitted(self.memory)
-            .map_err(|error| (self.storage_error)(error, self.memory))?;
-        self.memory
-            .release_vec(answers)
-            .map_err(|error| (self.storage_error)(error, self.memory))
+    fn answer_growth(&self, answers: &Vec<T>) -> Result<Option<(usize, usize)>, Self::Error> {
+        if !self.memory.admission().progress_enabled() {
+            return Ok(None);
+        }
+        let required = answers
+            .len()
+            .checked_add(1)
+            .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?;
+        if required <= answers.capacity() {
+            return Ok(None);
+        }
+        let capacity = purrdf_lex::allocation::growth_capacity::<T>(answers.capacity(), required)?;
+        let previous = core::alloc::Layout::array::<T>(answers.capacity())
+            .map_err(|_| purrdf_lex::allocation::StorageError::SizeOverflow)?
+            .size();
+        Ok(Some((capacity, previous)))
+    }
+    fn checkpoint(&mut self, units: u64) -> Result<(), Self::Error> {
+        if self.memory.admission().progress_enabled() {
+            self.memory.admission_mut().checkpoint(units)?;
+        }
+        Ok(())
+    }
+    fn release_answer_bytes(&mut self, bytes: usize) -> Result<(), Self::Error> {
+        self.memory.release_bytes(bytes)
+    }
+    fn finish(
+        &mut self,
+        steps: WorkList<FoldStep<N>, 32>,
+        answers: Vec<T>,
+    ) -> Result<(), Self::Error> {
+        let steps = steps.release_admitted(self.memory);
+        let answers = self.memory.release_vec(answers);
+        steps.and(answers)
     }
 }
 
-/// The sole original bottom-up traversal, shared by resident fallible and native
-/// admitted folds. The callbacks own returned payloads; scratch is destroyed
-/// before its original native grant is refunded.
-fn try_fold_nested_buffered<N: Copy, C: ?Sized, T, E, B: FoldBuffers<N, T, E>>(
+enum FoldFailure<E, S> {
+    Callback(E),
+    Scratch(S),
+}
+
+/// Grow only this fold's private answer scratch. Aborting the fold permits
+/// destruction of both partitions instead of rollback or replay. The old array
+/// layout is recorded before ownership moves; callbacks retain their own grants.
+fn push_buffered_answer<N, C: ?Sized, T, B: FoldBuffers<N, T>>(
+    ctx: &mut C,
+    answers: &mut Vec<T>,
+    answer: T,
+    buffers: &mut B,
+    discard_answer: &mut impl FnMut(&mut C, T, &mut B),
+) -> Result<(), (B::Error, T)> {
+    let growth = match buffers.answer_growth(answers) {
+        Ok(growth) => growth,
+        Err(cause) => return Err((cause, answer)),
+    };
+    if let Some((capacity, previous_bytes)) = growth {
+        let mut replacement = Vec::new();
+        if let Err(cause) = buffers.reserve_answers(&mut replacement, capacity) {
+            let _ = buffers.finish(WorkList::new(), replacement);
+            return Err((cause, answer));
+        }
+        let original = core::mem::take(answers);
+        let mut remaining = original.into_iter();
+        let transfer = (|| {
+            while !remaining.as_slice().is_empty() {
+                buffers.checkpoint(1)?;
+                replacement.push(
+                    remaining
+                        .next()
+                        .expect("a remaining original answer exists"),
+                );
+            }
+            Ok(())
+        })();
+        // A refusal starts no more work. Dispose only values still owned by
+        // the old iterator; moved answers remain in the replacement for the
+        // original kernel's unconditional finalizer.
+        for abandoned in remaining.by_ref() {
+            discard_answer(ctx, abandoned, buffers);
+        }
+        drop(remaining);
+        *answers = replacement;
+        let refund = buffers.release_answer_bytes(previous_bytes);
+        if let Err(cause) = transfer.and(refund) {
+            return Err((cause, answer));
+        }
+    }
+    if let Err(cause) = buffers.checkpoint(1) {
+        return Err((cause, answer));
+    }
+    buffers.push_answer(answers, answer)
+}
+
+/// The sole bottom-up traversal. Scratch owners survive every early exit so
+/// finalization can release their exact layouts without guessing callback ownership.
+fn try_fold_nested_buffered<N: Copy, C: ?Sized, T, E, B: FoldBuffers<N, T>>(
     root: N,
     ctx: &mut C,
     mut enter: impl FnMut(&mut C, N, &mut B) -> Result<Nested<N, T>, E>,
     mut triple: impl FnMut(&mut C, N, T, T, T, &mut B) -> Result<T, E>,
+    mut discard_answer: impl FnMut(&mut C, T, &mut B),
     buffers: &mut B,
-) -> Result<T, E> {
-    let (s, p, o) = match enter(ctx, root, buffers)? {
-        Nested::Leaf(answer) => return Ok(answer),
-        Nested::Triple(s, p, o) => (s, p, o),
-    };
-    let mut steps = WorkList::with(FoldStep::Assemble(root));
-    for step in [FoldStep::Enter(o), FoldStep::Enter(p), FoldStep::Enter(s)] {
-        buffers.push_step(&mut steps, step)?;
-    }
+) -> Result<T, FoldFailure<E, B::Error>> {
+    let mut steps = WorkList::new();
     let mut answers = Vec::new();
-    buffers.reserve_answers(&mut answers, 3)?;
-    while let Some(step) = steps.pop() {
-        match step {
-            FoldStep::Enter(node) => match enter(ctx, node, buffers)? {
-                Nested::Leaf(answer) => buffers.push_answer(&mut answers, answer)?,
-                Nested::Triple(s, p, o) => {
-                    for step in [
-                        FoldStep::Assemble(node),
-                        FoldStep::Enter(o),
-                        FoldStep::Enter(p),
-                        FoldStep::Enter(s),
-                    ] {
-                        buffers.push_step(&mut steps, step)?;
+    let result = (|| {
+        let (s, p, o) = match enter(ctx, root, buffers).map_err(FoldFailure::Callback)? {
+            Nested::Leaf(answer) => return Ok(answer),
+            Nested::Triple(s, p, o) => (s, p, o),
+        };
+        steps = WorkList::with(FoldStep::Assemble(root));
+        for step in [FoldStep::Enter(o), FoldStep::Enter(p), FoldStep::Enter(s)] {
+            buffers
+                .push_step(&mut steps, step)
+                .map_err(FoldFailure::Scratch)?;
+        }
+        buffers
+            .reserve_answers(&mut answers, 3)
+            .map_err(FoldFailure::Scratch)?;
+        while let Some(step) = steps.pop() {
+            let answer = match step {
+                FoldStep::Enter(node) => {
+                    match enter(ctx, node, buffers).map_err(FoldFailure::Callback)? {
+                        Nested::Leaf(answer) => answer,
+                        Nested::Triple(s, p, o) => {
+                            for step in [
+                                FoldStep::Assemble(node),
+                                FoldStep::Enter(o),
+                                FoldStep::Enter(p),
+                                FoldStep::Enter(s),
+                            ] {
+                                buffers
+                                    .push_step(&mut steps, step)
+                                    .map_err(FoldFailure::Scratch)?;
+                            }
+                            continue;
+                        }
                     }
                 }
-            },
-            FoldStep::Assemble(node) => {
-                let o = answers.pop().expect("a triple's object is folded");
-                let p = answers.pop().expect("a triple's predicate is folded");
-                let s = answers.pop().expect("a triple's subject is folded");
-                let answer = triple(ctx, node, s, p, o, buffers)?;
-                buffers.push_answer(&mut answers, answer)?;
+                FoldStep::Assemble(node) => {
+                    let o = answers.pop().expect("a triple's object is folded");
+                    let p = answers.pop().expect("a triple's predicate is folded");
+                    let s = answers.pop().expect("a triple's subject is folded");
+                    triple(ctx, node, s, p, o, buffers).map_err(FoldFailure::Callback)?
+                }
+            };
+            if let Err((error, answer)) = push_buffered_answer::<N, C, T, B>(
+                ctx,
+                &mut answers,
+                answer,
+                buffers,
+                &mut discard_answer,
+            ) {
+                discard_answer(ctx, answer, buffers);
+                return Err(FoldFailure::Scratch(error));
             }
         }
+        Ok(answers
+            .pop()
+            .expect("the root's answer is the last one assembled"))
+    })();
+    // Retain the original backing allocation for exact scratch release.
+    #[allow(clippy::iter_with_drain)]
+    for answer in answers.drain(..) {
+        discard_answer(ctx, answer, buffers);
     }
-    let answer = answers
-        .pop()
-        .expect("the root's answer is the last one assembled");
-    buffers.finish(steps, answers)?;
-    Ok(answer)
+    let cleanup = buffers.finish(steps, answers);
+    match (result, cleanup) {
+        (Err(error), _) => Err(error),
+        (Ok(answer), Err(error)) => {
+            discard_answer(ctx, answer, buffers);
+            Err(FoldFailure::Scratch(error))
+        }
+        (Ok(answer), Ok(())) => Ok(answer),
+    }
 }
 
 fn try_fold_nested_with_storage<N: Copy, C: ?Sized, T, E>(
@@ -758,26 +935,38 @@ fn try_fold_nested_with_storage<N: Copy, C: ?Sized, T, E>(
     ctx: &mut C,
     mut enter: impl FnMut(&mut C, N) -> Result<Nested<N, T>, E>,
     mut triple: impl FnMut(&mut C, N, T, T, T) -> Result<T, E>,
-    storage_error: impl FnMut(std::collections::TryReserveError) -> E,
+    mut storage_error: impl FnMut(std::collections::TryReserveError) -> E,
 ) -> Result<T, E> {
     try_fold_nested_buffered(
         root,
         ctx,
         |ctx, node, _| enter(ctx, node),
         |ctx, node, s, p, o, _| triple(ctx, node, s, p, o),
-        &mut ResidentFold(storage_error),
+        |_, answer, _| drop(answer),
+        &mut ResidentFold,
     )
+    .map_err(|error| match error {
+        FoldFailure::Callback(error) => error,
+        FoldFailure::Scratch(error) => storage_error(error),
+    })
 }
 
-/// Fold the same original nested structure under actual native live-capacity admission.
+/// Fold the original nested structure with exact native scratch admission.
 ///
-/// Payload callbacks receive this memory to admit their actual strings and
-/// boxes before construction. The work list and answer array use it too. A
-/// failed fold destroys every partial answer before refunding its original delta;
-/// the first typed read, callback or physical error remains authoritative.
+/// Callbacks share this memory account with the work list and answer array.
+/// Only those two scratch layouts are refunded automatically. Persistent callback
+/// state and returned errors keep their grants. `discard_answer` owns each
+/// completed answer abandoned on failure and must destroy it before refunding any
+/// payload it owns. It must not poll work or replace the original error. A failing
+/// `enter` owns its partial locals; a failing `triple` owns its three moved inputs.
+/// The storage error factory runs once, after scratch cleanup, so its admitted
+/// error payload survives. A successful root stays owned until cleanup succeeds.
 ///
 /// # Errors
-/// Returns the first original visitor or physical allocation failure.
+/// Returns the first callback or physical failure. A cleanup refusal is returned
+/// only if traversal succeeded. Native progress controls check each scratch
+/// relocation before moving or copying its next element. Callback payload work
+/// remains the responsibility of the original factories.
 pub fn try_fold_nested_with_memory<
     N: Copy,
     C: ?Sized,
@@ -800,34 +989,32 @@ pub fn try_fold_nested_with_memory<
         T,
         &mut purrdf_lex::allocation::Memory<'_, S>,
     ) -> Result<T, E>,
-    storage_error: impl FnMut(
+    mut discard_answer: impl FnMut(&mut C, T, &mut purrdf_lex::allocation::Memory<'_, S>),
+    mut storage_error: impl FnMut(
         purrdf_lex::allocation::StorageError,
         &mut purrdf_lex::allocation::Memory<'_, S>,
     ) -> E,
     memory: &mut purrdf_lex::allocation::Memory<'_, S>,
 ) -> Result<T, E> {
-    let baseline = memory.admitted_bytes();
-    let result = try_fold_nested_buffered(
+    try_fold_nested_buffered(
         root,
         ctx,
-        |ctx, node, buffers: &mut NativeFold<'_, '_, S, _>| enter(ctx, node, buffers.memory),
+        |ctx, node, buffers: &mut NativeFold<'_, '_, S>| enter(ctx, node, buffers.memory),
         |ctx, node, s, p, o, buffers| triple(ctx, node, s, p, o, buffers.memory),
-        &mut NativeFold {
-            memory,
-            storage_error,
-        },
-    );
-    if result.is_err()
-        && let Some(released) = memory.admitted_bytes().checked_sub(baseline)
-    {
-        // The kernel's owned locals have died. A refund refusal cannot replace
-        // the original error or release any still-live enclosing payload.
-        let _ = memory.release_bytes(released);
-    }
-    result
+        |ctx, answer, buffers| discard_answer(ctx, answer, buffers.memory),
+        &mut NativeFold { memory },
+    )
+    .map_err(|error| match error {
+        FoldFailure::Callback(error) => error,
+        FoldFailure::Scratch(error) => storage_error(error, memory),
+    })
 }
 
-/// Fold a DatasetView's original typed term under native payload and work admission.
+/// Fold a DatasetView's original typed term under native scratch admission.
+///
+/// Answer disposal and callback payload ownership follow
+/// [`try_fold_nested_with_memory`]. The read-error callback retains its original
+/// typed result; scratch cleanup never refunds its payload.
 ///
 /// # Errors
 /// Returns the first backing read, callback or physical failure; no whole-view
@@ -847,6 +1034,7 @@ pub fn try_fold_term_with_memory<
     ) -> Result<T, E>,
     triple: impl FnMut(D::Id, T, T, T, &mut purrdf_lex::allocation::Memory<'_, S>) -> Result<T, E>,
     read_error: impl FnMut(D::ReadError) -> E,
+    discard_answer: impl FnMut(T, &mut purrdf_lex::allocation::Memory<'_, S>),
     storage_error: impl FnMut(
         purrdf_lex::allocation::StorageError,
         &mut purrdf_lex::allocation::Memory<'_, S>,
@@ -859,6 +1047,7 @@ pub fn try_fold_term_with_memory<
         leaf,
         triple,
         read_error,
+        discard_answer,
         storage_error,
         memory,
     )
@@ -879,6 +1068,7 @@ pub(crate) fn try_fold_term_with_memory_inner<
     ) -> Result<T, E>,
     mut triple: impl FnMut(D::Id, T, T, T, &mut purrdf_lex::allocation::Memory<'_, S>) -> Result<T, E>,
     mut read_error: impl FnMut(D::ReadError) -> E,
+    discard_answer: impl FnMut(T, &mut purrdf_lex::allocation::Memory<'_, S>),
     storage_error: impl FnMut(
         purrdf_lex::allocation::StorageError,
         &mut purrdf_lex::allocation::Memory<'_, S>,
@@ -887,6 +1077,7 @@ pub(crate) fn try_fold_term_with_memory_inner<
 ) -> Result<T, E> {
     let (view, check_ready) = source;
     let storage_error = core::cell::RefCell::new(storage_error);
+    let discard_answer = core::cell::RefCell::new(discard_answer);
     try_fold_nested_with_memory(
         id,
         &mut (),
@@ -912,11 +1103,15 @@ pub(crate) fn try_fold_term_with_memory_inner<
                 && result.is_ok()
                 && let Some(cause) = view.read_error()
             {
+                if let Ok(Nested::Leaf(answer)) = result {
+                    (discard_answer.borrow_mut())(answer, memory);
+                }
                 return Err(read_error(cause));
             }
             result
         },
         |(), id, s, p, o, memory| triple(id, s, p, o, memory),
+        |(), answer, memory| (discard_answer.borrow_mut())(answer, memory),
         |cause, memory| (storage_error.borrow_mut())(cause, memory),
         memory,
     )
@@ -1008,13 +1203,14 @@ impl TermValue {
     ///
     /// # Errors
     /// Returns the first original visitor, allocation or accounting refusal. Partial
-    /// terms die before the shared traversal refunds their original charge.
+    /// terms die before this closed copier refunds their original payload charge.
     pub fn try_clone_with_memory<E, S: purrdf_lex::allocation::Admission + ?Sized>(
         &self,
         memory: &mut purrdf_lex::allocation::Memory<'_, S>,
         mut before: impl FnMut(&Self) -> Result<(), E>,
     ) -> Result<Self, OwnedTermFoldError<E>> {
-        try_fold_nested_with_memory(
+        let baseline = memory.admitted_bytes();
+        let result = try_fold_nested_with_memory(
             self,
             &mut before,
             |before, term, memory| {
@@ -1037,9 +1233,18 @@ impl TermValue {
                     o: memory.boxed(o).map_err(OwnedTermFoldError::Storage)?.into(),
                 })
             },
+            |_, answer, _| drop(answer),
             |error, _| OwnedTermFoldError::Storage(error),
             memory,
-        )
+        );
+        if result.is_err() {
+            // Only this closed copier admits payload here. Its partial values and
+            // exact scratch owners have died; visitor errors never receive Memory.
+            if let Some(bytes) = memory.admitted_bytes().checked_sub(baseline) {
+                let _ = memory.release_bytes(bytes);
+            }
+        }
+        result
     }
 
     /// Destroy a term produced under this Memory before refunding its original
@@ -1049,11 +1254,12 @@ impl TermValue {
     ///
     /// # Errors
     /// Preserves checked layout, traversal or original refund refusal. Failed
-    /// traversal destroys this value while its enclosing original grant is live.
+    /// census returns `(Some(self), cause)`, retaining the original payload and its
+    /// grant. A refund refusal after destruction returns `(None, cause)`.
     pub fn release_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
         self,
         memory: &mut purrdf_lex::allocation::Memory<'_, S>,
-    ) -> Result<(), purrdf_lex::allocation::StorageError> {
+    ) -> Result<(), (Option<Self>, purrdf_lex::allocation::StorageError)> {
         use purrdf_lex::allocation::StorageError;
         let bytes = try_fold_nested_with_memory(
             &self,
@@ -1084,11 +1290,16 @@ impl TermValue {
                     .and_then(|bytes| bytes.checked_add(size_of::<Self>().checked_mul(3)?))
                     .ok_or(StorageError::SizeOverflow)
             },
+            |(), _, _| {},
             |error, _| error,
             memory,
-        )?;
+        );
+        let bytes = match bytes {
+            Ok(bytes) => bytes,
+            Err(error) => return Err((Some(self), error)),
+        };
         drop(self);
-        memory.release_bytes(bytes)
+        memory.release_bytes(bytes).map_err(|error| (None, error))
     }
 }
 
@@ -1667,7 +1878,22 @@ mod tests {
 
     #[test]
     fn admitted_clone_preserves_nested_terms_and_releases_only_its_original_layouts() {
-        use purrdf_lex::allocation::{Memory, Resident};
+        use purrdf_lex::allocation::{Admission, Memory, StorageError};
+        use std::cell::Cell;
+
+        struct Grant<'a> {
+            live: usize,
+            refuse_growth: &'a Cell<bool>,
+        }
+        impl Admission for Grant<'_> {
+            fn resize(&mut self, next: usize) -> Result<(), StorageError> {
+                if next > self.live && self.refuse_growth.replace(false) {
+                    return Err(StorageError::AdmissionFailed);
+                }
+                self.live = next;
+                Ok(())
+            }
+        }
 
         let mut term = TermValue::Triple {
             s: TermBox::new(TermValue::Blank {
@@ -1690,7 +1916,11 @@ mod tests {
             };
         }
         let resident_copy = term.try_clone().unwrap();
-        let mut admission = Resident;
+        let refuse_growth = Cell::new(false);
+        let mut admission = Grant {
+            live: 0,
+            refuse_growth: &refuse_growth,
+        };
         let mut memory = Memory::new(&mut admission);
         let parent = memory.string("original parent").unwrap();
         let baseline = memory.admitted_bytes();
@@ -1705,6 +1935,12 @@ mod tests {
         assert_eq!(copied, term);
         assert_eq!(copied, resident_copy);
         drop((term, resident_copy));
+        let owned_baseline = memory.admitted_bytes();
+        refuse_growth.set(true);
+        let (copied, cause) = copied.release_with_memory(&mut memory).unwrap_err();
+        assert_eq!(cause, StorageError::AdmissionFailed);
+        let copied = copied.expect("failed census returns the original admitted owner");
+        assert_eq!(memory.admitted_bytes(), owned_baseline);
         copied.release_with_memory(&mut memory).unwrap();
         assert_eq!(memory.admitted_bytes(), baseline);
         memory.release_string(parent).unwrap();
@@ -1840,6 +2076,457 @@ mod tests {
         ));
         assert_eq!(visited, 80);
         assert_eq!(memory.admitted_bytes(), baseline);
+        memory.release_string(parent).unwrap();
+        assert_eq!(memory.admitted_bytes(), 0);
+
+        // Refuse after a copied child box and at the answer array's first spill.
+        // Both cuts must destroy all unpublished strings/children before refund.
+        struct RefuseLayout {
+            live: usize,
+            layout: usize,
+            occurrence: usize,
+            seen: usize,
+        }
+        impl purrdf_lex::allocation::Admission for RefuseLayout {
+            fn resize(&mut self, next: usize) -> Result<(), StorageError> {
+                if next > self.live && next - self.live == self.layout {
+                    self.seen += 1;
+                    if self.seen == self.occurrence {
+                        return Err(StorageError::AdmissionFailed);
+                    }
+                }
+                self.live = next;
+                Ok(())
+            }
+        }
+        let mut right_nested = TermValue::typed_literal("lexical", "datatype");
+        for _ in 0..16 {
+            right_nested = TermValue::Triple {
+                s: TermBox::new(TermValue::iri("subject")),
+                p: TermBox::new(TermValue::iri("predicate")),
+                o: TermBox::new(right_nested),
+            };
+        }
+        for (layout, occurrence) in [(size_of::<TermValue>(), 2), (6 * size_of::<TermValue>(), 1)] {
+            let mut admission = RefuseLayout {
+                live: 0,
+                layout,
+                occurrence,
+                seen: 0,
+            };
+            let mut memory = Memory::new(&mut admission);
+            let parent = memory.string("parent").unwrap();
+            let baseline = memory.admitted_bytes();
+            assert!(matches!(
+                right_nested.try_clone_with_memory(&mut memory, |_| Ok::<_, Infallible>(())),
+                Err(super::OwnedTermFoldError::Storage(
+                    StorageError::AdmissionFailed
+                ))
+            ));
+            assert_eq!(memory.admitted_bytes(), baseline);
+            memory.release_string(parent).unwrap();
+        }
+    }
+
+    /// Persistent callback state and error payloads survive scratch refusal,
+    /// including a rejected answer and a completed root refused during cleanup.
+    #[test]
+    fn native_fold_refunds_only_scratch_and_preserves_owned_callback_errors() {
+        use purrdf_lex::allocation::{Admission, Memory, StorageError};
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        #[derive(Default)]
+        struct Grants {
+            live: Cell<usize>,
+            refuse_growth: Cell<bool>,
+            refuse_shrink: Cell<bool>,
+            refused_refund: Cell<usize>,
+            shrink_attempts: Cell<usize>,
+        }
+        struct Grant(Rc<Grants>);
+        impl Admission for Grant {
+            fn resize(&mut self, next: usize) -> Result<(), StorageError> {
+                let old = self.0.live.get();
+                if next > old && self.0.refuse_growth.replace(false) {
+                    return Err(StorageError::AdmissionFailed);
+                }
+                if next < old {
+                    self.0.shrink_attempts.set(self.0.shrink_attempts.get() + 1);
+                    if self.0.refuse_shrink.replace(false) {
+                        self.0.refused_refund.set(old - next);
+                        return Err(StorageError::AdmissionFailed);
+                    }
+                }
+                self.0.live.set(next);
+                Ok(())
+            }
+        }
+        struct Answer(Rc<Cell<usize>>);
+        impl Drop for Answer {
+            fn drop(&mut self) {
+                self.0.set(self.0.get() + 1);
+            }
+        }
+        #[derive(Debug)]
+        struct Failure {
+            original: &'static str,
+            text: String,
+        }
+        #[derive(Default)]
+        struct Context {
+            retained: Option<String>,
+            visited: usize,
+            assembled: usize,
+            discarded: usize,
+        }
+        for mode in ["visitor", "push", "cleanup"] {
+            let grants = Rc::new(Grants::default());
+            let mut grant = Grant(Rc::clone(&grants));
+            let mut memory = Memory::new(&mut grant);
+            let parent = memory.string("parent-owned").unwrap();
+            let baseline = memory.admitted_bytes();
+            let mut ctx = Context::default();
+            let drops = Rc::new(Cell::new(0));
+            let factories = Cell::new(0);
+            let cleanup_start = Cell::new(0);
+            let result = super::try_fold_nested_with_memory(
+                14_u8,
+                &mut ctx,
+                |ctx, depth, memory| {
+                    ctx.visited += 1;
+                    if ctx.retained.is_none() {
+                        ctx.retained = Some(memory.string("callback-owned").unwrap());
+                    }
+                    if mode == "visitor" && ctx.visited == 20 {
+                        grants.refuse_shrink.set(true);
+                        cleanup_start.set(grants.shrink_attempts.get());
+                        return Err(Failure {
+                            original: "visitor",
+                            text: memory.string("visitor-error-owned").unwrap(),
+                        });
+                    }
+                    if depth == 0 {
+                        if mode == "push" && ctx.visited == 6 {
+                            grants.refuse_growth.set(true);
+                        }
+                        Ok(super::Nested::Leaf(Answer(Rc::clone(&drops))))
+                    } else if mode == "push" {
+                        Ok(super::Nested::Triple(0, 0, depth - 1))
+                    } else {
+                        Ok(super::Nested::Triple(depth - 1, 0, 0))
+                    }
+                },
+                |ctx, depth, s, p, o, _| {
+                    ctx.assembled += 1;
+                    drop((s, p, o));
+                    if mode == "cleanup" && depth == 14 {
+                        cleanup_start.set(grants.shrink_attempts.get());
+                        grants.refuse_shrink.set(true);
+                    }
+                    Ok(Answer(Rc::clone(&drops)))
+                },
+                |ctx, answer, _| {
+                    ctx.discarded += 1;
+                    drop(answer);
+                },
+                |error, memory| {
+                    assert_eq!(error, StorageError::AdmissionFailed);
+                    factories.set(factories.get() + 1);
+                    assert!(drops.get() > 0, "answers die before error construction");
+                    Failure {
+                        original: "storage",
+                        text: memory.string("storage-error-owned").unwrap(),
+                    }
+                },
+                &mut memory,
+            );
+            let error = result.err().expect("the selected original refusal");
+            assert_eq!(
+                error.original,
+                if mode == "visitor" {
+                    "visitor"
+                } else {
+                    "storage"
+                }
+            );
+            assert_eq!(factories.get(), usize::from(mode != "visitor"));
+            assert_eq!(
+                ctx.visited,
+                match mode {
+                    "visitor" => 20,
+                    "push" => 6,
+                    _ => 43,
+                }
+            );
+            if mode == "push" {
+                assert_eq!(ctx.assembled, 0);
+                assert_eq!(
+                    ctx.discarded, 4,
+                    "rejected and pending answers are disposed"
+                );
+            } else {
+                assert_eq!(
+                    grants.shrink_attempts.get() - cleanup_start.get(),
+                    2,
+                    "both scratch releases are attempted"
+                );
+                if mode == "cleanup" {
+                    assert_eq!(ctx.assembled, 14);
+                    assert_eq!(ctx.discarded, 1, "the unpublished root is disposed");
+                }
+            }
+            let retained = ctx.retained.take().unwrap();
+            assert_eq!(
+                memory.admitted_bytes(),
+                baseline
+                    + retained.capacity()
+                    + error.text.capacity()
+                    + grants.refused_refund.get()
+            );
+            memory.release_string(retained).unwrap();
+            memory.release_string(error.text).unwrap();
+            // The original failed shrink deliberately retained this dead scratch grant.
+            memory.release_bytes(grants.refused_refund.get()).unwrap();
+            assert_eq!(memory.admitted_bytes(), baseline);
+            memory.release_string(parent).unwrap();
+            assert_eq!(memory.admitted_bytes(), 0);
+        }
+
+        struct TransferGrant {
+            live: usize,
+            peak: usize,
+            target: Option<usize>,
+            cut: Option<usize>,
+            remaining: Option<usize>,
+            failed: bool,
+            late_checks: usize,
+            grew: bool,
+            retained: usize,
+        }
+        impl Admission for TransferGrant {
+            fn progress_enabled(&self) -> bool {
+                true
+            }
+            fn checkpoint(&mut self, units: u64) -> Result<(), StorageError> {
+                if self.failed {
+                    self.late_checks += 1;
+                    return Err(StorageError::AdmissionFailed);
+                }
+                if units != 0
+                    && let Some(remaining) = &mut self.remaining
+                {
+                    *remaining -= 1;
+                    if *remaining == 0 {
+                        self.failed = true;
+                        return Err(StorageError::AdmissionFailed);
+                    }
+                }
+                Ok(())
+            }
+            fn resize(&mut self, next: usize) -> Result<(), StorageError> {
+                if next > self.live && self.target == Some(next - self.live) {
+                    self.target = None;
+                    self.remaining = self.cut;
+                    self.grew = true;
+                }
+                self.live = next;
+                self.peak = self.peak.max(next);
+                Ok(())
+            }
+        }
+        impl TransferGrant {
+            fn new(target: Option<usize>, cut: Option<usize>) -> Self {
+                Self {
+                    live: 0,
+                    peak: 0,
+                    target,
+                    cut,
+                    remaining: None,
+                    failed: false,
+                    late_checks: 0,
+                    grew: false,
+                    retained: 0,
+                }
+            }
+        }
+        // This answer deliberately owns a native string and has no Copy/Clone.
+        struct MovingAnswer {
+            bytes: String,
+            order: [u8; 5],
+            len: usize,
+            id: usize,
+            drops: Rc<Cell<usize>>,
+        }
+        impl Drop for MovingAnswer {
+            fn drop(&mut self) {
+                self.drops.set(self.drops.get() + 1);
+            }
+        }
+        #[derive(Default)]
+        struct MovingContext {
+            retained: Option<String>,
+            created: usize,
+            leaves: u8,
+            entered: usize,
+            assembled: usize,
+            disposed: Vec<usize>,
+        }
+        fn discard_moving(
+            ctx: &mut MovingContext,
+            mut answer: MovingAnswer,
+            memory: &mut Memory<'_, TransferGrant>,
+        ) {
+            ctx.disposed.push(answer.id);
+            let bytes = core::mem::take(&mut answer.bytes);
+            drop(answer);
+            memory.release_string(bytes).unwrap();
+        }
+        // Refuse before the first move, after one move, and after all old
+        // answers moved but before publishing the pending answer. An accepting
+        // neighbor also checks native subject/predicate/object assembly order.
+        for cut in [Some(1), Some(2), Some(4), None] {
+            let mut grant = TransferGrant::new(Some(6 * size_of::<MovingAnswer>()), cut);
+            let mut memory = Memory::new(&mut grant);
+            let parent = memory.string("parent-owned").unwrap();
+            let baseline = memory.admitted_bytes();
+            let drops = Rc::new(Cell::new(0));
+            let factories = Cell::new(0);
+            let mut ctx = MovingContext::default();
+            let result = super::try_fold_nested_with_memory(
+                2_u8,
+                &mut ctx,
+                |ctx, depth, memory| {
+                    ctx.entered += 1;
+                    if ctx.retained.is_none() {
+                        ctx.retained = Some(memory.string("callback-owned").unwrap());
+                        memory.admission_mut().retained =
+                            baseline + ctx.retained.as_ref().unwrap().capacity();
+                    }
+                    if depth != 0 {
+                        return Ok(super::Nested::Triple(0, 0, depth - 1));
+                    }
+                    let mut order = [0; 5];
+                    order[0] = ctx.leaves;
+                    ctx.leaves += 1;
+                    let answer = MovingAnswer {
+                        bytes: memory.string("owned-answer")?,
+                        order,
+                        len: 1,
+                        id: ctx.created,
+                        drops: Rc::clone(&drops),
+                    };
+                    ctx.created += 1;
+                    Ok(super::Nested::Leaf(answer))
+                },
+                |ctx, _, s, p, o, memory| {
+                    let mut order = [0; 5];
+                    let mut len = 0;
+                    for answer in [&s, &p, &o] {
+                        order[len..len + answer.len].copy_from_slice(&answer.order[..answer.len]);
+                        len += answer.len;
+                    }
+                    for answer in [s, p, o] {
+                        discard_moving(ctx, answer, memory);
+                    }
+                    ctx.assembled += 1;
+                    let answer = MovingAnswer {
+                        bytes: memory.string("owned-answer")?,
+                        order,
+                        len,
+                        id: ctx.created,
+                        drops: Rc::clone(&drops),
+                    };
+                    ctx.created += 1;
+                    Ok(answer)
+                },
+                discard_moving,
+                |cause, memory| {
+                    factories.set(factories.get() + 1);
+                    assert_eq!(
+                        drops.get(),
+                        4,
+                        "all abandoned opaque answers died before error construction"
+                    );
+                    assert_eq!(memory.admitted_bytes(), memory.admission().retained);
+                    cause
+                },
+                &mut memory,
+            );
+            match (cut, result) {
+                (None, Ok(answer)) => {
+                    assert_eq!(&answer.order[..answer.len], &[0, 1, 2, 3, 4]);
+                    assert_eq!(ctx.entered, 7);
+                    assert_eq!(ctx.assembled, 2);
+                    discard_moving(&mut ctx, answer, &mut memory);
+                }
+                (Some(_), Err(cause)) => {
+                    assert_eq!(cause, StorageError::AdmissionFailed);
+                    assert_eq!(ctx.entered, 6);
+                    assert_eq!(ctx.assembled, 0);
+                }
+                _ => panic!("the selected transfer boundary determines the result"),
+            }
+            let expected = if cut.is_some() { 4 } else { 7 };
+            ctx.disposed.sort_unstable();
+            assert_eq!(ctx.disposed, (0..expected).collect::<Vec<_>>());
+            assert_eq!(drops.get(), expected);
+            assert_eq!(factories.get(), usize::from(cut.is_some()));
+            assert!(memory.admission().grew);
+            assert_eq!(memory.admission().late_checks, 0);
+            let retained = ctx.retained.take().unwrap();
+            assert!(
+                memory.admission().peak
+                    >= baseline
+                        + retained.capacity()
+                        + 9 * size_of::<MovingAnswer>()
+                        + 4 * "owned-answer".len(),
+                "complete old and replacement arrays overlap with every original payload"
+            );
+            assert_eq!(memory.admitted_bytes(), baseline + retained.capacity());
+            memory.release_string(retained).unwrap();
+            memory.release_string(parent).unwrap();
+            assert_eq!(memory.admitted_bytes(), 0);
+        }
+
+        // Interrupted step copying leaves the original spill and its order intact.
+        let mut grant = TransferGrant::new(None, Some(2));
+        let mut memory = Memory::new(&mut grant);
+        let parent = memory.string("parent-owned").unwrap();
+        let mut steps = purrdf_lex::walk::WorkList::<super::FoldStep<usize>, 32>::new();
+        let mut count = 0;
+        loop {
+            steps
+                .try_push_admitted(super::FoldStep::Enter(count), &mut memory)
+                .unwrap();
+            count += 1;
+            if steps.heap_capacity() != 0 && steps.len() == 32 + steps.heap_capacity() {
+                break;
+            }
+        }
+        let next = steps.insertion_layout().unwrap().unwrap().0;
+        let baseline = memory.admitted_bytes();
+        memory.admission_mut().target = Some(next);
+        let result = super::FoldBuffers::<usize, ()>::push_step(
+            &mut super::NativeFold {
+                memory: &mut memory,
+            },
+            &mut steps,
+            super::FoldStep::Enter(count),
+        );
+        assert_eq!(result, Err(StorageError::AdmissionFailed));
+        let original = steps
+            .iter()
+            .map(|step| match step {
+                super::FoldStep::Enter(value) => *value,
+                super::FoldStep::Assemble(_) => panic!("only original enter steps were supplied"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(original, (0..count).collect::<Vec<_>>());
+        assert_eq!(memory.admitted_bytes(), baseline);
+        assert!(memory.admission().peak >= baseline + next);
+        assert_eq!(memory.admission().late_checks, 0);
+        steps.release_admitted(&mut memory).unwrap();
         memory.release_string(parent).unwrap();
         assert_eq!(memory.admitted_bytes(), 0);
     }

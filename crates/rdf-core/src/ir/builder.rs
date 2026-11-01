@@ -47,46 +47,67 @@ mod triple;
 pub use triple::TripleDatasetBuilder;
 
 fn hash_lookup_value(lookup: &TermLookup<'_>) -> u64 {
+    crate::hash::resident_hash(|memory| hash_lookup_value_with_memory(lookup, memory))
+}
+
+fn hash_lookup_value_with_memory<S: Admission + ?Sized>(
+    lookup: &TermLookup<'_>,
+    memory: &mut Memory<'_, S>,
+) -> Result<u64, StorageError> {
     match lookup {
-        TermLookup::Iri(iri) => crate::hash::hash_iri_for_interner(iri),
-        TermLookup::Blank { label, scope } => crate::hash::hash_blank_for_interner(label, scope.0),
+        TermLookup::Iri(iri) => crate::hash::hash_iri_for_interner_with_memory(iri, memory),
+        TermLookup::Blank { label, scope } => {
+            crate::hash::hash_blank_for_interner_with_memory(label, scope.0, memory)
+        }
         TermLookup::Literal {
             lexical,
             datatype,
             language,
             direction,
-        } => crate::hash::hash_literal_for_interner(
+        } => crate::hash::hash_literal_for_interner_with_memory(
             lexical,
             datatype.index() as u64,
             *language,
             *direction,
+            memory,
         ),
-        TermLookup::Triple { s, p, o } => crate::hash::hash_triple_for_interner(
+        TermLookup::Triple { s, p, o } => crate::hash::hash_triple_for_interner_with_memory(
             s.index() as u64,
             p.index() as u64,
             o.index() as u64,
+            memory,
         ),
     }
 }
 
 fn hash_stored_value(arena: &[u8], term: &InternedTerm) -> u64 {
-    match term {
-        InternedTerm::Iri(r) => crate::hash::hash_iri_for_interner(arena_str(arena, *r)),
-        InternedTerm::Blank { label, scope } => {
-            crate::hash::hash_blank_for_interner(arena_str(arena, *label), scope.0)
-        }
-        InternedTerm::Literal(lit) => crate::hash::hash_literal_for_interner(
-            arena_str(arena, lit.lexical_form),
-            lit.datatype.index() as u64,
-            lit.language.map(|r| arena_str(arena, r)),
-            lit.direction,
-        ),
-        InternedTerm::Triple { s, p, o } => crate::hash::hash_triple_for_interner(
-            s.index() as u64,
-            p.index() as u64,
-            o.index() as u64,
-        ),
-    }
+    crate::hash::resident_hash(|memory| hash_stored_value_with_memory(arena, term, memory))
+}
+
+fn hash_stored_value_with_memory<S: Admission + ?Sized>(
+    arena: &[u8],
+    term: &InternedTerm,
+    memory: &mut Memory<'_, S>,
+) -> Result<u64, StorageError> {
+    let lookup = match term {
+        InternedTerm::Iri(range) => TermLookup::Iri(arena_str(arena, *range)),
+        InternedTerm::Blank { label, scope } => TermLookup::Blank {
+            label: arena_str(arena, *label),
+            scope: *scope,
+        },
+        InternedTerm::Literal(literal) => TermLookup::Literal {
+            lexical: arena_str(arena, literal.lexical_form),
+            datatype: literal.datatype,
+            language: literal.language.map(|range| arena_str(arena, range)),
+            direction: literal.direction,
+        },
+        InternedTerm::Triple { s, p, o } => TermLookup::Triple {
+            s: *s,
+            p: *p,
+            o: *o,
+        },
+    };
+    hash_lookup_value_with_memory(&lookup, memory)
 }
 
 /// Production is zero-sized; reduced limits exercise the same public ingress
@@ -194,23 +215,45 @@ fn store_once_with_dependency<T: Hash + Eq, S: Admission + ?Sized>(
     memory: &mut Memory<'_, S>,
     dependency: impl FnOnce(&mut Memory<'_, S>) -> Result<(), StorageError>,
 ) -> Result<u32, StorageError> {
+    memory.admission_mut().checkpoint(1)?;
     let hash = hash_of(&value);
-    if let Some(&i) = table.find(hash, |&i| vec[i as usize] == value) {
+    if let Some(&i) = table.find_with_control(
+        hash,
+        |&i, memory| {
+            memory.admission_mut().checkpoint(1)?;
+            Ok(vec[i as usize] == value)
+        },
+        memory,
+    )? {
         return Ok(i);
     }
     let required = capacity.required(space, vec.len(), 1)?;
     let i = u32::try_from(vec.len()).map_err(|_| StorageError::SizeOverflow)?;
     let capacity = purrdf_lex::allocation::growth_capacity::<T>(vec.capacity(), required)?;
     memory.reserve(vec, capacity)?;
-    crate::hash::reserve_table_with_memory(
+    crate::hash::try_reserve_table_with_memory(
         table,
         vec.len().checked_add(1).ok_or(StorageError::SizeOverflow)?,
-        |&i| hash_of(&vec[i as usize]),
+        |&i, memory| {
+            memory.admission_mut().checkpoint(1)?;
+            Ok(hash_of(&vec[i as usize]))
+        },
         memory,
     )?;
     dependency(memory)?;
     vec.push(value);
-    table.insert_unique(hash, i, |&i| hash_of(&vec[i as usize]));
+    if let Err(refusal) = table.try_insert_unique_with_control(
+        hash,
+        i,
+        |&i, memory| {
+            memory.admission_mut().checkpoint(1)?;
+            Ok(hash_of(&vec[i as usize]))
+        },
+        memory,
+    ) {
+        vec.pop();
+        return Err(crate::hash::table_storage_error(refusal.cause));
+    }
     Ok(i)
 }
 
@@ -241,6 +284,23 @@ fn reserve_store_once<T: Hash>(
         |&i| hash_of(&vec[i as usize]),
         &mut memory,
     )
+}
+
+/// Sort fixed native rows, admitting each comparison before the native swap.
+fn sort_rows_with_memory<T, S: Admission + ?Sized>(
+    rows: &mut [T],
+    mut compare: impl FnMut(&T, &T) -> core::cmp::Ordering,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), StorageError> {
+    if memory.admission().progress_enabled() {
+        purrdf_lex::walk::try_sort_unstable_by(rows, |left, right| {
+            memory.admission_mut().checkpoint(1)?;
+            Ok::<_, StorageError>(compare(left, right))
+        })
+    } else {
+        rows.sort_unstable_by(compare);
+        Ok(())
+    }
 }
 
 /// A borrowed term lookup key (P3b): carries the string components by reference
@@ -279,15 +339,35 @@ enum OwnedStep<'t> {
 
 /// Whether a stored term equals a lookup, resolving the stored ranges through `arena`.
 fn term_eq(arena: &[u8], term: &InternedTerm, lookup: &TermLookup<'_>) -> bool {
-    match (term, lookup) {
-        (InternedTerm::Iri(r), TermLookup::Iri(s)) => arena_str(arena, *r) == *s,
+    // Resident accepts checkpoints; this borrowed comparison allocates nothing.
+    term_eq_with_memory(arena, term, lookup, &mut Memory::new(&mut Resident))
+        .expect("resident term equality has no refusing operation")
+}
+
+fn term_eq_with_memory<S: Admission + ?Sized>(
+    arena: &[u8],
+    term: &InternedTerm,
+    lookup: &TermLookup<'_>,
+    memory: &mut Memory<'_, S>,
+) -> Result<bool, StorageError> {
+    let mut equal = |left: &str, right: &str| {
+        if !memory.admission().progress_enabled() {
+            return Ok(left == right);
+        }
+        purrdf_lex::control::compare_bytes(left.as_bytes(), right.as_bytes(), &mut |units| {
+            memory.admission_mut().checkpoint(units)
+        })
+        .map(|order| order.is_eq())
+    };
+    Ok(match (term, lookup) {
+        (InternedTerm::Iri(r), TermLookup::Iri(s)) => equal(arena_str(arena, *r), s)?,
         (
             InternedTerm::Blank { label, scope },
             TermLookup::Blank {
                 label: ls,
                 scope: ss,
             },
-        ) => arena_str(arena, *label) == *ls && scope == ss,
+        ) => scope == ss && equal(arena_str(arena, *label), ls)?,
         (
             InternedTerm::Literal(lit),
             TermLookup::Literal {
@@ -297,10 +377,14 @@ fn term_eq(arena: &[u8], term: &InternedTerm, lookup: &TermLookup<'_>) -> bool {
                 direction,
             },
         ) => {
-            arena_str(arena, lit.lexical_form) == *lexical
-                && lit.datatype == *datatype
+            lit.datatype == *datatype
                 && lit.direction == *direction
-                && lit.language.map(|r| arena_str(arena, r)) == *language
+                && equal(arena_str(arena, lit.lexical_form), lexical)?
+                && match (lit.language, language) {
+                    (Some(range), Some(language)) => equal(arena_str(arena, range), language)?,
+                    (None, None) => true,
+                    _ => false,
+                }
         }
         (
             InternedTerm::Triple { s, p, o },
@@ -311,7 +395,7 @@ fn term_eq(arena: &[u8], term: &InternedTerm, lookup: &TermLookup<'_>) -> bool {
             },
         ) => s == ls && p == lp && o == lo,
         _ => false,
-    }
+    })
 }
 
 /// Term storage + value-interning dedup + the C0 identity policy, in one cohesive
@@ -463,10 +547,12 @@ impl Interner {
         lookup: TermLookup<'_>,
         memory: &mut Memory<'_, S>,
     ) -> Result<TermId, StorageError> {
-        let hash = hash_lookup_value(&lookup);
-        if let Some(id) = self.lookup_hashed(hash, &lookup) {
+        let hash = hash_lookup_value_with_memory(&lookup, memory)?;
+        if let Some(id) = self.lookup_hashed_with_memory(hash, &lookup, memory)? {
             return Ok(id);
         }
+        let arena_start = self.arena.len();
+        let had_relative = self.relative_iri.is_some();
         use purrdf_lex::allocation::CapacitySpace;
         let required_terms =
             self.capacity
@@ -496,10 +582,10 @@ impl Interner {
         )?;
         memory.reserve(&mut self.terms, capacity)?;
         let (arena, terms) = (&self.arena, &self.terms);
-        crate::hash::reserve_table_with_memory(
+        crate::hash::try_reserve_table_with_memory(
             &mut self.index,
             required_terms,
-            |&i| hash_stored_value(arena, &terms[i as usize]),
+            |&i, memory| hash_stored_value_with_memory(arena, &terms[i as usize], memory),
             memory,
         )?;
         // Content-id recognition and its side table are part of the same miss.
@@ -535,9 +621,18 @@ impl Interner {
         // only slow down the walk to the error.
         if let TermLookup::Iri(iri) = lookup
             && self.relative_iri.is_none()
-            && let Err(err) = super::absolute::check_absolute(iri)
         {
-            self.relative_iri = Some((memory.string(iri)?, err));
+            let invalid =
+                memory.scope(|memory| {
+                    match super::absolute::check_absolute_with_memory(iri, memory) {
+                        Ok(()) => Ok(None),
+                        Err(purrdf_iri::IriReadError::Storage(cause)) => Err(cause),
+                        Err(purrdf_iri::IriReadError::Lexical(cause)) => {
+                            Ok(Some((memory.string_with_progress(iri)?, cause)))
+                        }
+                    }
+                })?;
+            self.relative_iri = invalid;
         }
         // Miss: now (and only now) push the strings to the arena and build the term.
         let term = match lookup {
@@ -570,14 +665,29 @@ impl Interner {
             self.content_ids.insert(id, content_id);
         }
         let (arena, terms) = (&self.arena, &self.terms);
-        crate::hash::reserve_table_with_memory(
-            &mut self.index,
-            terms.len(),
-            |&i| hash_stored_value(arena, &terms[i as usize]),
-            memory,
-        )?;
-        self.index
-            .insert_unique(hash, i, |&i| hash_stored_value(arena, &terms[i as usize]));
+        let inserted = self
+            .index
+            .try_insert_unique_with_control(
+                hash,
+                i,
+                |&i, memory| hash_stored_value_with_memory(arena, &terms[i as usize], memory),
+                memory,
+            )
+            .map(|_| ())
+            .map_err(|refusal| crate::hash::table_storage_error(refusal.cause));
+        if let Err(cause) = inserted {
+            self.terms.pop();
+            self.arena.truncate(arena_start);
+            self.content_ids.remove(&id);
+            if !had_relative && let Some((iri, error)) = self.relative_iri.take() {
+                let bytes = iri.capacity().checked_add(error.owned_text_bytes());
+                drop((iri, error));
+                if let Some(bytes) = bytes {
+                    let _ = memory.release_bytes(bytes);
+                }
+            }
+            return Err(cause);
+        }
         Ok(id)
     }
 
@@ -608,6 +718,25 @@ impl Interner {
             .find(hash, |&i| term_eq(arena, &terms[i as usize], lookup))
             .copied()
             .map(|index| TermId::from_index(index).expect("stored term index is representable"))
+    }
+
+    fn lookup_hashed_with_memory<S: Admission + ?Sized>(
+        &self,
+        hash: u64,
+        lookup: &TermLookup<'_>,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Option<TermId>, StorageError> {
+        let found = self
+            .index
+            .find_with_control(
+                hash,
+                |&index, memory| {
+                    term_eq_with_memory(&self.arena, &self.terms[index as usize], lookup, memory)
+                },
+                memory,
+            )?
+            .copied();
+        Ok(found.map(TermId::from_index).transpose()?)
     }
 
     fn term(&self, id: TermId) -> &InternedTerm {
@@ -1095,11 +1224,7 @@ impl RdfDatasetBuilder {
         direction: Option<RdfTextDirection>,
         memory: &mut Memory<'_, S>,
     ) -> Result<TermId, StorageError> {
-        let datatype_iri = match (language, datatype) {
-            (Some(_), _) => RdfLiteral::language_datatype_iri(direction),
-            (None, Some(explicit)) => explicit,
-            (None, None) => super::term::XSD_STRING,
-        };
+        let datatype_iri = RdfLiteral::datatype_iri_from_parts(datatype, language, direction);
         let invalid_literal = self
             .interner
             .invalid_literal
@@ -1114,9 +1239,10 @@ impl RdfDatasetBuilder {
             language: language.as_deref(),
             direction,
         };
+        let hash = hash_lookup_value_with_memory(&lookup, memory)?;
         if let Some(id) = self
             .interner
-            .lookup_hashed(hash_lookup_value(&lookup), &lookup)
+            .lookup_hashed_with_memory(hash, &lookup, memory)?
         {
             if let Some(std::borrow::Cow::Owned(language)) = language {
                 memory.release_string(language)?;
@@ -1550,36 +1676,62 @@ impl RdfDatasetBuilder {
         binding: crate::cdt_blank::BlankBinding,
         memory: &mut Memory<'_, S>,
     ) -> Result<TermId, crate::cdt_blank::CdtBlankError> {
+        self.intern_literal_parts_bound_with_memory(
+            &lit.lexical_form,
+            lit.datatype.as_deref(),
+            lit.language.as_deref(),
+            lit.direction,
+            binding,
+            memory,
+        )
+    }
+
+    /// Bind and intern original borrowed literal fields without allocating an
+    /// intermediate owned literal. The original account owns every destination.
+    ///
+    /// # Errors
+    /// Preserves original composite grammar, capacity and physical refusals.
+    pub fn intern_literal_parts_bound_with_memory<S: Admission + ?Sized>(
+        &mut self,
+        lexical: &str,
+        datatype: Option<&str>,
+        language: Option<&str>,
+        direction: Option<RdfTextDirection>,
+        binding: crate::cdt_blank::BlankBinding,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<TermId, crate::cdt_blank::CdtBlankError> {
         self.transaction_try_with_memory(
             memory,
-            |builder, memory| builder.intern_literal_bound_admitted(lit, binding, memory),
+            |builder, memory| {
+                builder.intern_literal_parts_bound_admitted(
+                    lexical, datatype, language, direction, binding, memory,
+                )
+            },
             crate::cdt_blank::CdtBlankError::owned_bytes,
         )
     }
 
-    fn intern_literal_bound_admitted<S: Admission + ?Sized>(
+    fn intern_literal_parts_bound_admitted<S: Admission + ?Sized>(
         &mut self,
-        lit: &RdfLiteral,
+        lexical: &str,
+        datatype: Option<&str>,
+        language: Option<&str>,
+        direction: Option<RdfTextDirection>,
         binding: crate::cdt_blank::BlankBinding,
         memory: &mut Memory<'_, S>,
     ) -> Result<TermId, crate::cdt_blank::CdtBlankError> {
         // The C0.1 datatype the literal will actually carry: a language tag wins
         // over any explicit datatype, and a language-tagged literal is never
         // composite.
-        let datatype_iri = lit.datatype_iri();
+        let datatype_iri = RdfLiteral::datatype_iri_from_parts(datatype, language, direction);
         let bound = crate::cdt_blank::bind_cdt_blank_labels_with_memory(
-            &lit.lexical_form,
+            lexical,
             datatype_iri,
             binding,
             memory,
         )?;
-        let id = self.intern_literal_parts_with_memory(
-            &bound,
-            lit.datatype.as_deref(),
-            lit.language.as_deref(),
-            lit.direction,
-            memory,
-        )?;
+        let id =
+            self.intern_literal_parts_with_memory(&bound, datatype, language, direction, memory)?;
         if let std::borrow::Cow::Owned(bound) = bound {
             memory.release_string(bound)?;
         }
@@ -1829,7 +1981,14 @@ impl RdfDatasetBuilder {
             memory,
             |builder, memory| {
                 builder.intern_owned_term_walk(term, scope, memory, |builder, literal, memory| {
-                    builder.intern_literal_bound_admitted(literal, owned_binding(scope), memory)
+                    builder.intern_literal_parts_bound_admitted(
+                        &literal.lexical_form,
+                        literal.datatype.as_deref(),
+                        literal.language.as_deref(),
+                        literal.direction,
+                        owned_binding(scope),
+                        memory,
+                    )
                 })
             },
             crate::cdt_blank::CdtBlankError::owned_bytes,
@@ -2825,7 +2984,7 @@ impl RdfDatasetBuilder {
         let buffers = self.native_buffer_bytes()?;
         if let Err(error) = super::validate::validate_with_memory(&self, memory) {
             drop(self);
-            memory.release_bytes(buffers)?;
+            let _ = memory.release_bytes(buffers);
             return Err(error);
         }
         self.materialize_with_memory(memory)
@@ -3032,7 +3191,7 @@ impl RdfDatasetBuilder {
         // location, an LSP break for any consumer reading through the compat bridge.
         let (quads, mut locations) = if locations.is_empty() {
             let mut quads = quads;
-            quads.sort_unstable();
+            sort_rows_with_memory(&mut quads, Ord::cmp, memory)?;
             (quads, locations)
         } else {
             let old_quad_bytes = std::alloc::Layout::array::<QuadRow>(quads.capacity())
@@ -3045,7 +3204,11 @@ impl RdfDatasetBuilder {
                     .map(|(push, row)| (row, push as u32)),
             )?;
             memory.release_bytes(old_quad_bytes)?;
-            indexed.sort_unstable_by_key(|(row, _)| *row);
+            sort_rows_with_memory(
+                &mut indexed,
+                |(left, _), (right, _)| left.cmp(right),
+                memory,
+            )?;
 
             // Push ordinals are dense, so a dense remap is both smaller and faster
             // than hashing each ordinal. This allocation exists only for datasets
@@ -3077,9 +3240,13 @@ impl RdfDatasetBuilder {
             memory.release_vec(push_to_frozen)?;
             (quads, locations)
         };
-        reifiers.sort_unstable();
-        annotations.sort_unstable();
-        locations.sort_unstable_by_key(|(handle, _)| *handle);
+        sort_rows_with_memory(&mut reifiers, Ord::cmp, memory)?;
+        sort_rows_with_memory(&mut annotations, Ord::cmp, memory)?;
+        sort_rows_with_memory(
+            &mut locations,
+            |(left, _), (right, _)| left.cmp(right),
+            memory,
+        )?;
 
         // The frozen `GRAPH ?g` enumeration set: every graph term that owns a quad,
         // UNION every graph the caller explicitly declared (possibly empty).
@@ -3093,35 +3260,56 @@ impl RdfDatasetBuilder {
         // default-graph-only dataset and then frees every byte of it again at
         // `into_boxed_slice`. The scan allocates nothing and reads the same slices the
         // extends are about to.
-        if quads.iter().any(|q| q.g.is_some())
-            || reifiers.iter().any(|(_, _, g)| g.is_some())
-            || annotations.iter().any(|(_, _, _, g)| g.is_some())
-        {
-            let additional = quads
-                .len()
-                .checked_add(reifiers.len())
-                .and_then(|count| count.checked_add(annotations.len()))
-                .ok_or(StorageError::SizeOverflow)?;
-            let required = named_graphs
-                .len()
-                .checked_add(additional)
-                .ok_or(StorageError::SizeOverflow)?;
-            memory.reserve(&mut named_graphs, required)?;
+        if memory.admission().progress_enabled() {
+            for graph in quads
+                .iter()
+                .map(|row| row.g)
+                .chain(reifiers.iter().map(|row| row.2))
+                .chain(annotations.iter().map(|row| row.3))
+            {
+                memory.admission_mut().checkpoint(1)?;
+                if let Some(graph) = graph {
+                    memory.push_copy_with_progress(&mut named_graphs, graph)?;
+                }
+            }
+        } else {
+            if quads.iter().any(|q| q.g.is_some())
+                || reifiers.iter().any(|(_, _, g)| g.is_some())
+                || annotations.iter().any(|(_, _, _, g)| g.is_some())
+            {
+                let additional = quads
+                    .len()
+                    .checked_add(reifiers.len())
+                    .and_then(|count| count.checked_add(annotations.len()))
+                    .ok_or(StorageError::SizeOverflow)?;
+                let required = named_graphs
+                    .len()
+                    .checked_add(additional)
+                    .ok_or(StorageError::SizeOverflow)?;
+                memory.reserve(&mut named_graphs, required)?;
+            }
+            memory.extend(&mut named_graphs, quads.iter().filter_map(|q| q.g))?;
+            // A reifier / annotation declared inside a `GRAPH g { … }` block owns no base
+            // quad in g (the `<< … >>` folds entirely into the side-tables), so g would be
+            // invisible to `GRAPH ?g` enumeration unless its overlay rows are counted too.
+            memory.extend(
+                &mut named_graphs,
+                reifiers.iter().filter_map(|(_, _, g)| *g),
+            )?;
+            memory.extend(
+                &mut named_graphs,
+                annotations.iter().filter_map(|(_, _, _, g)| *g),
+            )?;
         }
-        memory.extend(&mut named_graphs, quads.iter().filter_map(|q| q.g))?;
-        // A reifier / annotation declared inside a `GRAPH g { … }` block owns no base
-        // quad in g (the `<< … >>` folds entirely into the side-tables), so g would be
-        // invisible to `GRAPH ?g` enumeration unless its overlay rows are counted too.
-        memory.extend(
-            &mut named_graphs,
-            reifiers.iter().filter_map(|(_, _, g)| *g),
-        )?;
-        memory.extend(
-            &mut named_graphs,
-            annotations.iter().filter_map(|(_, _, _, g)| *g),
-        )?;
-        named_graphs.sort_unstable();
-        named_graphs.dedup();
+        sort_rows_with_memory(&mut named_graphs, Ord::cmp, memory)?;
+        if memory.admission().progress_enabled() {
+            purrdf_lex::walk::try_dedup_by(&mut named_graphs, |left, right| {
+                memory.admission_mut().checkpoint(1)?;
+                Ok::<_, StorageError>(left == right)
+            })?;
+        } else {
+            named_graphs.dedup();
+        }
 
         let caps = compute_capabilities(
             &interner.terms,
@@ -3129,7 +3317,8 @@ impl RdfDatasetBuilder {
             &reifiers,
             &annotations,
             !locations.is_empty(),
-        );
+            memory,
+        )?;
 
         RdfDataset::from_parts(
             interner.freeze_with_memory(derivation_predicate, memory)?,
@@ -3163,18 +3352,25 @@ fn owned_binding(scope: BlankScope) -> crate::cdt_blank::BlankBinding {
 }
 
 /// Compute the dataset's capability flags ONCE at freeze, from the frozen tables.
-fn compute_capabilities<R, A>(
+fn compute_capabilities<R, A, S: Admission + ?Sized>(
     terms: &[InternedTerm],
     named_graphs: bool,
     reifiers: &[R],
     annotations: &[A],
     source_locations: bool,
-) -> RdfStoreCapabilities {
-    RdfStoreCapabilities {
+    memory: &mut Memory<'_, S>,
+) -> Result<RdfStoreCapabilities, StorageError> {
+    let mut quoted_triples = false;
+    for term in terms {
+        memory.admission_mut().checkpoint(1)?;
+        if matches!(term, InternedTerm::Triple { .. }) {
+            quoted_triples = true;
+            break;
+        }
+    }
+    Ok(RdfStoreCapabilities {
         named_graphs,
-        quoted_triples: terms
-            .iter()
-            .any(|t| matches!(t, InternedTerm::Triple { .. })),
+        quoted_triples,
         reifiers: !reifiers.is_empty(),
         annotations: !annotations.is_empty(),
         source_locations,
@@ -3182,7 +3378,7 @@ fn compute_capabilities<R, A>(
         // records, lookaside) live elsewhere (C0.6).
         loss_records: false,
         lookaside: false,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -5303,6 +5499,161 @@ mod native_graph_birth_tests {
             }
         }
         assert!(completed && failures > 5);
+        // The same construction stops before every relation-aggregation step,
+        // with original rows unread and persistent metadata unpublished on failure.
+        use std::cell::Cell;
+        use std::rc::Rc;
+        struct StopGrant {
+            live: usize,
+            calls: usize,
+            remaining: usize,
+            stopped: Rc<Cell<bool>>,
+        }
+        impl Admission for StopGrant {
+            fn progress_enabled(&self) -> bool {
+                true
+            }
+            fn checkpoint(&mut self, _: u64) -> Result<(), StorageError> {
+                assert!(!self.stopped.get(), "no later progress after refusal");
+                self.calls += 1;
+                if self.remaining == 0 {
+                    self.stopped.set(true);
+                    return Err(StorageError::AdmissionFailed);
+                }
+                self.remaining -= 1;
+                Ok(())
+            }
+            fn resize(&mut self, next: usize) -> Result<(), StorageError> {
+                assert!(
+                    !self.stopped.get() || next <= self.live,
+                    "no growth after refusal"
+                );
+                self.live = next;
+                Ok(())
+            }
+        }
+        memory.admission_mut().remaining = usize::MAX;
+        let mut fixture = RdfDatasetBuilder::new();
+        let subject = fixture.intern_iri("urn:statistics:subject").unwrap();
+        let predicate = fixture.intern_iri("urn:statistics:predicate").unwrap();
+        let class = fixture.intern_iri(purrdf_iri::vocab::rdf::TYPE).unwrap();
+        let graph = fixture.intern_iri("urn:statistics:graph").unwrap();
+        let string = fixture.intern_literal(RdfLiteral::simple("value")).unwrap();
+        let integer = fixture
+            .intern_literal(RdfLiteral::typed("7", purrdf_xsd::datatype::XSD_INTEGER))
+            .unwrap();
+        // The fixture dictionary keeps its resident ownership independently of
+        // the account used to construct each new statistics result.
+        let mut resident = purrdf_lex::allocation::Resident;
+        let fixture_bytes = fixture.interner.buffer_bytes().unwrap();
+        let mut fixture_memory = Memory::resume(&mut resident, fixture_bytes);
+        let dictionary_fixture = fixture
+            .interner
+            .freeze_with_memory(None, &mut fixture_memory)
+            .unwrap();
+        let rows = [
+            QuadIds {
+                s: subject,
+                p: predicate,
+                o: string,
+                g: Some(graph),
+            },
+            QuadIds {
+                s: graph,
+                p: predicate,
+                o: integer,
+                g: None,
+            },
+            QuadIds {
+                s: subject,
+                p: predicate,
+                o: integer,
+                g: Some(graph),
+            },
+            QuadIds {
+                s: subject,
+                p: class,
+                o: graph,
+                g: None,
+            },
+            QuadIds {
+                s: graph,
+                p: class,
+                o: graph,
+                g: Some(graph),
+            },
+            QuadIds {
+                s: graph,
+                p: predicate,
+                o: subject,
+                g: None,
+            },
+        ];
+        let expected = crate::ir::statistics::LocalStatistics::build(
+            &dictionary_fixture,
+            (rows.len(), |index| rows[index]),
+            &(0, |_| (subject, subject, None)),
+            (1, |_| rows[0]),
+            &mut memory,
+        )
+        .unwrap();
+        let expected_bytes = expected.retained_bytes().unwrap();
+        let mut complete = false;
+        for remaining in 0..4096 {
+            let stopped = Rc::new(Cell::new(false));
+            let reads = Cell::new(0);
+            let read_row = |index| {
+                assert!(!stopped.get(), "no original row reads after refusal");
+                reads.set(reads.get() + 1);
+                rows[index]
+            };
+            let mut grant = StopGrant {
+                live: 0,
+                calls: 0,
+                remaining,
+                stopped: Rc::clone(&stopped),
+            };
+            let mut controlled = Memory::new(&mut grant);
+            let result = crate::ir::statistics::LocalStatistics::build(
+                &dictionary_fixture,
+                (rows.len(), read_row),
+                &(0, |_| (subject, subject, None)),
+                (1, |_| read_row(0)),
+                &mut controlled,
+            );
+            let calls = controlled.admission().calls;
+            let row_reads = reads.get();
+            match result {
+                Err(error) => {
+                    assert_eq!(error, StorageError::AdmissionFailed);
+                    assert_eq!(calls, remaining + 1);
+                }
+                Ok(statistics) => {
+                    assert!(
+                        statistics == expected,
+                        "controlled encodings and original ordinals agree"
+                    );
+                    let retained = statistics.retained_bytes().unwrap();
+                    assert_eq!(controlled.admitted_bytes(), retained);
+                    drop(statistics);
+                    controlled.release_bytes(retained).unwrap();
+                    complete = true;
+                }
+            }
+            assert_eq!(controlled.admitted_bytes(), 0);
+            assert_eq!(controlled.admission().calls, calls);
+            assert_eq!(reads.get(), row_reads);
+            if complete {
+                break;
+            }
+        }
+        assert!(complete);
+        drop(expected);
+        memory.release_bytes(expected_bytes).unwrap();
+        let fixture_bytes = fixture_memory.admitted_bytes();
+        drop(dictionary_fixture);
+        fixture_memory.release_bytes(fixture_bytes).unwrap();
+        assert_eq!(fixture_memory.admitted_bytes(), 0);
         drop(dictionary);
         memory.release_bytes(baseline).unwrap();
         assert_eq!(memory.admitted_bytes(), 0);

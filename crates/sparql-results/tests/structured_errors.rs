@@ -23,20 +23,19 @@ fn one_literal(text: &str) -> SparqlResult {
     }
 }
 
-fn native_syntax_causes_survive_input_disposal_and_clone() {
+fn native_syntax_causes_survive_input_disposal() {
     let input = String::from("{");
     let error = from_json(input.as_bytes()).unwrap_err();
     drop(input);
-    let copy = error.clone();
-    drop(error);
-    let fields = Capture::read(&copy);
+    let retained = error;
+    let fields = Capture::read(&retained);
     assert_eq!(fields.code, "sparql-results-json");
     assert!(matches!(
         fields.child("cause").field("offset"),
         ErrorValue::ByteCount(1)
     ));
     assert!(
-        std::error::Error::source(&copy)
+        std::error::Error::source(&retained)
             .unwrap()
             .downcast_ref::<purrdf_lex::json::Error>()
             .is_some()
@@ -243,7 +242,7 @@ fn utf8_and_xml_scalars_keep_exact_native_positions() {
 }
 
 purrdf_testkit::harness_main!(
-    native_syntax_causes_survive_input_disposal_and_clone,
+    native_syntax_causes_survive_input_disposal,
     semantic_tokens_and_language_tags_keep_original_values,
     namespace_refusals_keep_spelling_and_original_iri_causes,
     egress_refusals_preserve_requested_form_and_full_width_counts,

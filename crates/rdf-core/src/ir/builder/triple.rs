@@ -297,7 +297,8 @@ impl TripleDatasetBuilder {
             &self.reifiers.rows,
             &self.annotations.rows,
             false,
-        );
+            memory,
+        )?;
         let RdfDatasetBuilder {
             interner,
             used_scopes,

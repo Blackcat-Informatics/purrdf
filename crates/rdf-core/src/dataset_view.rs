@@ -133,7 +133,14 @@ pub(crate) fn term_value_with_memory_inner<
     ) -> E,
     check_ready: bool,
 ) -> Result<TermValue, E> {
-    crate::ir::try_fold_term_with_memory_inner(
+    // Public factories run only after the closed copier destroys partial
+    // payloads and the shared fold releases its exact traversal scratch.
+    enum CopyError<R> {
+        Lookup(TermLookupError<R>),
+        Storage(purrdf_lex::allocation::StorageError),
+    }
+    let baseline = memory.admitted_bytes();
+    let result = crate::ir::try_fold_term_with_memory_inner(
         (view, check_ready),
         id,
         |_, term, memory| {
@@ -144,9 +151,9 @@ pub(crate) fn term_value_with_memory_inner<
                 |memory, source| {
                     memory
                         .string_with_progress(source)
-                        .map_err(|error| storage_error(error, memory))
+                        .map_err(CopyError::Storage)
                 },
-                &lookup_error,
+                CopyError::Lookup,
                 check_ready,
             )
         },
@@ -155,13 +162,26 @@ pub(crate) fn term_value_with_memory_inner<
                 memory
                     .boxed(value)
                     .map(Into::into)
-                    .map_err(|error| storage_error(error, memory))
+                    .map_err(CopyError::Storage)
             })
         },
-        |error| lookup_error(TermLookupError::Read(error)),
-        &storage_error,
+        |error| CopyError::Lookup(TermLookupError::Read(error)),
+        |answer, _| drop(answer),
+        |error, _| CopyError::Storage(error),
         memory,
-    )
+    );
+    if result.is_err() {
+        // This closed operation admits only copied strings and boxes. Source
+        // read errors retain their own carriers; public error factories have
+        // not run and cannot own any of this local allocation delta.
+        if let Some(bytes) = memory.admitted_bytes().checked_sub(baseline) {
+            let _ = memory.release_bytes(bytes);
+        }
+    }
+    result.map_err(|error| match error {
+        CopyError::Lookup(error) => lookup_error(error),
+        CopyError::Storage(error) => storage_error(error, memory),
+    })
 }
 
 mod sealed {
@@ -2984,6 +3004,53 @@ mod term_value_tests {
         );
         // A term with no literal in it still resolves through the same view.
         assert_eq!(view.term_value(blank), Ok(TermValue::blank("b")));
+        use purrdf_lex::allocation::{Memory, Resident, StorageError};
+        let mut admission = Resident;
+        let mut memory = Memory::new(&mut admission);
+        let parent = memory.string("parent").unwrap();
+        let baseline = memory.admitted_bytes();
+        assert!(matches!(
+            view.term_value_with_memory(
+                quoted,
+                &mut memory,
+                |cause| cause,
+                |_, _| { panic!("the original foreign datatype is the first error") }
+            ),
+            Err(TermLookupError::ForeignId)
+        ));
+        assert_eq!(
+            memory.admitted_bytes(),
+            baseline,
+            "partial subject/predicate copies were refunded"
+        );
+        memory.release_string(parent).unwrap();
+
+        // The public storage factory receives the account after private copy cleanup.
+        // Its admitted error string remains live and independently releasable.
+        let baseline = usize::MAX - (3 * size_of::<TermValue>() + format!("{EX}s").len() + 1);
+        memory.add_bytes(baseline).unwrap();
+        let calls = std::cell::Cell::new(0);
+        let error = view
+            .term_value_with_memory(
+                quoted,
+                &mut memory,
+                |_| panic!("the subject/predicate copy fails before datatype resolution"),
+                |cause, memory| {
+                    assert_eq!(cause, StorageError::SizeOverflow);
+                    assert_eq!(
+                        memory.admitted_bytes(),
+                        baseline,
+                        "partial copies and scratch died before the factory"
+                    );
+                    calls.set(calls.get() + 1);
+                    memory.string("owned-error").unwrap()
+                },
+            )
+            .unwrap_err();
+        assert_eq!(calls.get(), 1);
+        assert_eq!(memory.admitted_bytes(), baseline + error.capacity());
+        memory.release_string(error).unwrap();
+        memory.release_bytes(baseline).unwrap();
     }
 
     #[test]

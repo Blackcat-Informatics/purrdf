@@ -339,6 +339,20 @@ impl<T: HttpTransport> HttpRemoteQuerySource<T> {
                 ));
             }
             Err(purrdf_sparql_results::ReadError::Lexical(error)) => {
+                if let purrdf_sparql_results::Error::JsonRelease { cause, .. }
+                | purrdf_sparql_results::Error::TermRelease { cause, .. }
+                | purrdf_sparql_results::Error::Storage(cause) = &error
+                {
+                    let cause = *cause;
+                    // Destroy every original decoder payload before its frame
+                    // can release the grant. Physical refusal never formats a
+                    // replacement invocation diagnostic or requests more storage.
+                    drop(error);
+                    return Err(ServiceResolutionError::Operational(
+                        frame.storage_error(cause, "SERVICE results JSON"),
+                    ));
+                }
+
                 let live = frame.admitted_bytes();
                 let text = Memory::resume(&mut frame, live)
                     .format(&format_args!(

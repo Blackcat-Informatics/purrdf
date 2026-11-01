@@ -7,7 +7,7 @@ use purrdf_hash::multiset::Multiset256;
 use purrdf_lex::allocation::{Admission, Memory, StorageError};
 
 use super::{FrozenTerms, QuadIds, Relation, TermId, TermRef};
-use crate::source::{SourceRowHasher, SourceSummary, record_hash};
+use crate::source::{SourceRowHasher, SourceSummary, record_hash, source_visit_error};
 
 impl SourceSummary {
     pub(super) fn words(self) -> [u64; 13] {
@@ -65,30 +65,44 @@ impl SourceSummary {
         pending: &mut Vec<TermId>,
         memory: &mut Memory<'_, S>,
     ) -> Result<([u8; 32], [u8; 32]), StorageError> {
-        let mut row = SourceRowHasher::new(quad.g.is_some());
+        let mut row = SourceRowHasher::new(quad.g.is_some(), memory)?;
         if let Some(graph) = quad.g {
-            dictionary.visit_canonical_bytes(graph, pending, memory, |bytes| row.graph(bytes))?;
+            dictionary
+                .try_visit_canonical_bytes(graph, pending, memory, |bytes, memory| {
+                    row.graph(bytes, memory)
+                })
+                .map_err(source_visit_error)?;
         }
         for term in [quad.s, quad.p, quad.o] {
-            dictionary.visit_canonical_bytes(term, pending, memory, |bytes| row.term(bytes))?;
+            dictionary
+                .try_visit_canonical_bytes(term, pending, memory, |bytes, memory| {
+                    row.term(bytes, memory)
+                })
+                .map_err(source_visit_error)?;
         }
-        let hashes = row.finish();
+        let hashes = row.finish(memory)?;
+        // Each record hash is one bounded fixed-size operation, including its
+        // finalizer. Finish every identity before changing any population.
+        memory.admission_mut().checkpoint(128)?;
+        let identity = record_hash(relation, hashes[0]);
+        let union = if relation == Relation::Annotations {
+            memory.admission_mut().checkpoint(128)?;
+            record_hash(Relation::Asserted, hashes[0])
+        } else {
+            identity
+        };
+        let mut next = *self;
         if matches!(dictionary.resolve(quad.o), TermRef::Literal { .. }) {
-            for (summary, hash) in self.literals.iter_mut().zip(hashes) {
+            for (summary, hash) in next.literals.iter_mut().zip(hashes) {
                 summary
                     .insert(hash)
                     .map_err(|_| StorageError::SizeOverflow)?;
             }
         }
-        let identity = record_hash(relation, hashes[0]);
-        let union = if relation == Relation::Annotations {
-            record_hash(Relation::Asserted, hashes[0])
-        } else {
-            identity
-        };
-        self.records
+        next.records
             .insert(identity)
             .map_err(|_| StorageError::SizeOverflow)?;
+        *self = next;
         Ok((identity, union))
     }
 

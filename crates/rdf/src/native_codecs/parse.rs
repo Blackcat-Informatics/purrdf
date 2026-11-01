@@ -22,15 +22,22 @@ use std::borrow::Cow;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 
+use super::acquisition::{NativeParseError, RunContext, SourceFailure, TextError, resident_error};
 use super::media_type::{NativeRdfFormat, classify};
+use super::retained::{ParseRefusal, RetainedFailure, RetainedOutcome, RetainedParse};
 use super::ser_model::{SerGraph, SerTermKind};
+use super::source_occurrence::{NativeSourceRow, SourceOccurrences, SourceStatementKind};
 use super::span::{NoSpans, ParseOptions, SpanCollector, SpanTable};
 use super::text_parse::LineParseMode;
-use crate::{BlankScope, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, TermId};
+use crate::{BlankScope, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, TermId};
+use purrdf_core::Nested;
 use purrdf_core::blank_label::LabelAlphabet;
 use purrdf_core::cdt_blank::BlankBinding;
-use purrdf_core::{Nested, try_fold_nested};
+use purrdf_core::ir::try_fold_nested_with_memory;
 use purrdf_iri::{BaseIri, BaseOrigin, BaseScope, ScopedBase};
+use purrdf_lex::allocation::{Admission, Memory, OrderedTable, Resident, StorageError};
+use purrdf_lex::control::{ControlledError, Progress, Unmetered};
+use std::cell::RefCell;
 
 /// The `rdf:reifies` predicate IRI: a triple-term object under this predicate is the
 /// RDF 1.2 reifier binding the statement layer folds out of the base quad table.
@@ -84,44 +91,191 @@ pub(crate) fn fold_statement_layer<I>(
 ) -> Result<(), RdfDiagnostic>
 where
     I: IntoIterator<Item = FoldRow>,
+    I::IntoIter: ExactSizeIterator,
 {
-    // Pass 1: bind reifiers; collect the rest as pending base/annotation rows.
-    let mut reifier_ids: crate::FastSet<(Option<TermId>, TermId)> = crate::FastSet::default();
-    let mut pending: Vec<(TermId, TermId, TermId, Option<TermId>)> = Vec::new();
-    for row in rows {
-        let FoldRow {
-            subject,
-            is_reifies,
-            predicate,
-            object,
-            graph,
-        } = row;
-        if is_reifies && let FoldNode::Triple { s, p, o } = object {
-            let triple_term = builder.intern_triple(s, p, o)?;
-            // Capture the reifier declaration's OWN graph (TriG `GRAPH g { … }`),
-            // so `GRAPH ?g { << … >> … }` binds `?g` to it. Turtle / the default
-            // graph carry `graph == None`, byte-identical to the old fold.
-            builder.push_reifier_in_graph(subject, triple_term, graph)?;
-            reifier_ids.insert((graph, subject));
-            continue;
-        }
-        let object_id = match object {
-            FoldNode::Term(id) => id,
-            FoldNode::Triple { s, p, o } => builder.intern_triple(s, p, o)?,
-        };
-        pending.push((subject, predicate, object_id, graph));
-    }
+    // Other codecs retain their explicit resident wrapper around the same two
+    // passes. Their input arrays belong to those resident callers.
+    let mut resident = Resident;
+    let mut memory = Memory::new(&mut resident);
+    let memory = RefCell::new(&mut memory);
+    fold_statement_layer_observed(
+        builder,
+        rows.into_iter().map(|row| (row, ())),
+        &memory,
+        |_, _, _| Ok(()),
+    )
+    .map_err(|cause| resident_error(ControlledError::Native(cause)))
+}
 
-    // Pass 2: the other triples of a reifier declared in THIS graph are its
-    // annotations (carrying that graph); the rest base quads.
-    for (subject, predicate, object, graph) in pending {
-        if reifier_ids.contains(&(graph, subject)) {
-            builder.push_annotation_in_graph(subject, predicate, object, graph)?;
-        } else {
-            builder.push_quad(subject, predicate, object, graph)?;
+/// The same two native passes, retaining an opaque caller association until the
+/// original row's object has been materialized and its statement layer decided.
+/// Membership, pending rows and builder insertions share the original account.
+fn fold_statement_layer_observed<I, A, S: Admission + ?Sized>(
+    builder: &mut RdfDatasetBuilder,
+    rows: I,
+    memory: &RefCell<&mut Memory<'_, S>>,
+    mut observe: impl FnMut(A, SourceStatementKind, [Option<TermId>; 4]) -> Result<(), NativeParseError>,
+) -> Result<(), NativeParseError>
+where
+    I: IntoIterator<Item = (FoldRow, A)>,
+    I::IntoIter: ExactSizeIterator,
+{
+    let rows = rows.into_iter();
+    let maximum_pending = rows.len();
+    let mut reifier_ids = purrdf_core::hash::table::HashTable::new();
+    let mut pending = Vec::new();
+    let result: Result<(), NativeParseError> = (|| {
+        // Pass 1: bind reifiers; collect the rest as pending base/annotation rows.
+        for (row, association) in rows {
+            memory.borrow_mut().admission_mut().checkpoint(1)?;
+            let FoldRow {
+                subject,
+                is_reifies,
+                predicate,
+                object,
+                graph,
+            } = row;
+            if is_reifies && let FoldNode::Triple { s, p, o } = object {
+                let triple_term =
+                    builder.intern_triple_with_memory(s, p, o, &mut memory.borrow_mut())?;
+                builder.push_reifier_in_graph_with_memory(
+                    subject,
+                    triple_term,
+                    graph,
+                    &mut memory.borrow_mut(),
+                )?;
+                {
+                    let mut account = memory.borrow_mut();
+                    let account = &mut **account;
+                    let key = (graph, subject);
+                    account.admission_mut().checkpoint(1)?;
+                    let hash = purrdf_hash::fixed::hash_one(&key);
+                    if reifier_ids
+                        .find_with_control(
+                            hash,
+                            |stored, account| {
+                                account.admission_mut().checkpoint(1)?;
+                                Ok(*stored == key)
+                            },
+                            account,
+                        )?
+                        .is_none()
+                    {
+                        let required = reifier_ids
+                            .len()
+                            .checked_add(1)
+                            .ok_or(StorageError::SizeOverflow)?;
+                        purrdf_core::hash::try_reserve_table_with_memory(
+                            &mut reifier_ids,
+                            required,
+                            |key, account| {
+                                account.admission_mut().checkpoint(1)?;
+                                Ok(purrdf_hash::fixed::hash_one(key))
+                            },
+                            account,
+                        )?;
+                        reifier_ids
+                            .try_insert_unique_with_control(
+                                hash,
+                                key,
+                                |key, account| {
+                                    account.admission_mut().checkpoint(1)?;
+                                    Ok(purrdf_hash::fixed::hash_one(key))
+                                },
+                                account,
+                            )
+                            .map_err(|refusal| {
+                                purrdf_core::hash::table_storage_error(refusal.cause)
+                            })?;
+                    }
+                }
+                observe(
+                    association,
+                    SourceStatementKind::Reifier,
+                    [Some(subject), Some(predicate), Some(triple_term), graph],
+                )?;
+                continue;
+            }
+            let object_id = match object {
+                FoldNode::Term(id) => id,
+                FoldNode::Triple { s, p, o } => {
+                    builder.intern_triple_with_memory(s, p, o, &mut memory.borrow_mut())?
+                }
+            };
+            // The native staged input has an exact length. Reserve its bound
+            // once, only when a pending row exists, so opaque associations move
+            // once without an unbounded relocation or a second classification.
+            if pending.capacity() == 0 {
+                memory.borrow_mut().reserve(&mut pending, maximum_pending)?;
+            }
+            memory.borrow_mut().push(
+                &mut pending,
+                (subject, predicate, object_id, graph, association),
+            )?;
         }
-    }
-    Ok(())
+
+        // Pass 2: graph-local annotations and ordinary quads keep their original
+        // pending order. Drain retains the backing owner through every refusal.
+        for (subject, predicate, object, graph, association) in pending.drain(..) {
+            memory.borrow_mut().admission_mut().checkpoint(1)?;
+            let is_annotation = {
+                let mut account = memory.borrow_mut();
+                let account = &mut **account;
+                let key = (graph, subject);
+                account.admission_mut().checkpoint(1)?;
+                let hash = purrdf_hash::fixed::hash_one(&key);
+                reifier_ids
+                    .find_with_control(
+                        hash,
+                        |stored, account| {
+                            account.admission_mut().checkpoint(1)?;
+                            Ok(*stored == key)
+                        },
+                        account,
+                    )?
+                    .is_some()
+            };
+            let kind = if is_annotation {
+                builder.push_annotation_in_graph_with_memory(
+                    subject,
+                    predicate,
+                    object,
+                    graph,
+                    &mut memory.borrow_mut(),
+                )?;
+                SourceStatementKind::Annotation
+            } else {
+                builder.push_quad_with_memory(
+                    subject,
+                    predicate,
+                    object,
+                    graph,
+                    &mut memory.borrow_mut(),
+                )?;
+                SourceStatementKind::Quad
+            };
+            observe(
+                association,
+                kind,
+                [Some(subject), Some(predicate), Some(object), graph],
+            )?;
+        }
+        Ok(())
+    })();
+    // The input/drain and partial pending elements have died before refund.
+    // Never refund a whole operation delta: observers may retain source data.
+    let cleanup = memory
+        .borrow_mut()
+        .release_vec(pending)
+        .map_err(NativeParseError::Storage);
+    let reifier_bytes = purrdf_core::hash::hash_table_retained_bound(&reifier_ids)
+        .ok_or(StorageError::SizeOverflow)?;
+    drop(reifier_ids);
+    let membership_cleanup = memory
+        .borrow_mut()
+        .release_bytes(reifier_bytes)
+        .map_err(NativeParseError::Storage);
+    result.and(cleanup).and(membership_cleanup)
 }
 
 /// Parse RDF text bytes of `media_type` into a frozen [`RdfDataset`].
@@ -291,53 +445,11 @@ pub fn parse_dataset_reporting_failure(
         // this is the one leg that also reads back the document's prefix map, which the
         // codec seam (shared with formats that have no `@prefix`) does not carry. UTF-8
         // is only required by the text tokenizer, so it is validated here.
-        let text = std::str::from_utf8(bytes).map_err(|e| {
-            ParseFailure::before_parsing(super::stream::utf8_error(&e, 0), base_iri)
-        })?;
-        let mut base =
-            base_scope_for(base_iri).map_err(|e| ParseFailure::before_parsing(e, None))?;
-        let mut document_prefixes = Vec::new();
-        let parsed = if options.track_source_spans {
-            // Force sequential so subject spans are captured (the parallel path is
-            // `NoSpans`-only). This is a distinct `SpanTable` monomorphization of
-            // `text_parse_without_panicking`, so the hot `NoSpans` path stays zero-cost.
-            let mut table = SpanTable::default();
-            text_parse_without_panicking(
-                format,
-                text,
-                &mut base,
-                LineParseMode::ForceSequential,
-                &mut table,
-                &mut document_prefixes,
-            )
-            .map(|graph| (graph, Some(table)))
-        } else {
-            text_parse_without_panicking(
-                format,
-                text,
-                &mut base,
-                LineParseMode::Auto,
-                &mut NoSpans,
-                &mut document_prefixes,
-            )
-            .map(|graph| (graph, None))
-        };
-        let folded = parsed.and_then(|(graph, spans)| {
-            dataset_from_text_ser_graph(&graph).map(|dataset| (dataset, spans))
-        });
-        match folded {
-            Ok((dataset, spans)) => Ok(ParseOutcome {
-                dataset,
-                spans,
-                document_base: base.current().cloned(),
-                document_prefixes,
-            }),
-            Err(diagnostic) => Err(Box::new(ParseFailure {
-                diagnostic,
-                document_base: base.current().cloned(),
-                document_prefixes,
-            })),
-        }
+        parse_text_retained(bytes, format, base_iri, options)
+            .map_err(|failure| {
+                ParseFailure::before_parsing(failure.into_resident_error(), base_iri)
+            })?
+            .into_legacy()
     } else if format == NativeRdfFormat::RdfXml {
         // RDF/XML: no span-carrying tokenizer (an empty table under tracking), and its
         // prefix map is the document's `xmlns` declarations, read back from the XML
@@ -387,6 +499,220 @@ pub fn parse_dataset_forced_sequential(
 ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     parse_dataset_mode(bytes, media_type, base_iri, LineParseMode::ForceSequential)
         .map(|(dataset, _base)| dataset)
+}
+
+/// Retain the actual resident byte-parser result and source under its one
+/// context. This helper is private and makes no governed-lowering claim.
+fn parse_text_retained<'a>(
+    bytes: &'a [u8],
+    format: NativeRdfFormat,
+    base_iri: Option<&str>,
+    options: &ParseOptions,
+) -> Result<RetainedParse<'a, Resident, Unmetered>, SourceFailure<'a, Resident, Unmetered>> {
+    if matches!(format, NativeRdfFormat::Turtle | NativeRdfFormat::TriG) {
+        return parse_turtle_retained(
+            bytes,
+            format,
+            base_iri,
+            options,
+            RunContext::new(Resident, Unmetered),
+        );
+    }
+    let mut source = RunContext::new(Resident, Unmetered).source(bytes)?;
+    let mut base = match base_scope_for(base_iri) {
+        Ok(base) => base,
+        Err(cause) => {
+            return Ok(RetainedParse::new(
+                source,
+                Err(RetainedFailure::new(
+                    NativeParseError::Diagnostic(cause).into(),
+                    BaseScope::empty(),
+                    OrderedTable::default(),
+                )),
+            ));
+        }
+    };
+    let mut document_prefixes = Vec::new();
+    let parsed = source.with_text(|text, context| {
+        if options.track_source_spans {
+            // Force sequential so subject spans are captured (the parallel path is
+            // `NoSpans`-only). This is a distinct `SpanTable` monomorphization of
+            // `text_parse_without_panicking`, so the hot `NoSpans` path stays zero-cost.
+            let mut table = SpanTable::default();
+            text_parse_without_panicking(
+                format,
+                text,
+                &mut base,
+                LineParseMode::ForceSequential,
+                &mut table,
+                &mut document_prefixes,
+                context,
+            )
+            .map(|graph| (graph, Some(table)))
+        } else {
+            text_parse_without_panicking(
+                format,
+                text,
+                &mut base,
+                LineParseMode::Auto,
+                &mut NoSpans,
+                &mut document_prefixes,
+                context,
+            )
+            .map(|graph| (graph, None))
+        }
+    });
+    let folded = source.with_text(|_, context| {
+        parsed.and_then(|(graph, mut spans)| {
+            let associations = spans.as_mut().map(SpanTable::source_occurrences_mut);
+            let dataset = dataset_from_text_ser_graph_in_context(&graph, associations, context)
+                .map_err(resident_error);
+            // Builder/fold governance remains unfinished. Its original temporary
+            // lowered rows nevertheless die before their same admission is refunded.
+            let cleanup = context
+                .release(|memory| super::text_parse::release_lowered_graph_rows(graph, memory))
+                .map_err(resident_error);
+            dataset.and_then(|dataset| cleanup.map(|()| (dataset, spans)))
+        })
+    });
+    let output = match folded {
+        Ok((dataset, spans)) => Ok(RetainedOutcome {
+            dataset,
+            spans,
+            document_base: base,
+            document_prefixes: OrderedTable::default(),
+        }),
+        Err(diagnostic) => Err(RetainedFailure::new(
+            NativeParseError::Diagnostic(diagnostic).into(),
+            base,
+            OrderedTable::default(),
+        )),
+    };
+    Ok(RetainedParse::new(source, output))
+}
+
+/// Parse Turtle 1.2 or TriG with caller-owned storage, work and stop authority.
+///
+/// Exact ordered source occurrences are always retained. The returned owner
+/// exposes borrowed source, directives and dataset views; no concrete dataset
+/// or acquisition account can be detached or cloned. Query workspace admission
+/// requires a separately owned query session.
+///
+/// # Errors
+/// Every unsupported format, native parse failure, physical storage refusal or
+/// caller progress failure returns a [`ParseRefusal`] with the full original
+/// input and unchanged typed cause. Refusal exposes no partial dataset.
+pub fn parse_dataset_controlled<'a, A: Admission, C: Progress>(
+    bytes: &'a [u8],
+    format: NativeRdfFormat,
+    base_iri: Option<&str>,
+    admission: A,
+    progress: C,
+) -> Result<RetainedParse<'a, A, C>, ParseRefusal<'a, A, C>> {
+    let owner = parse_turtle_retained(
+        bytes,
+        format,
+        base_iri,
+        &ParseOptions {
+            track_source_spans: true,
+        },
+        RunContext::new(admission, progress),
+    )
+    .map_err(ParseRefusal::from_source)?;
+    ParseRefusal::classify(owner)
+}
+
+/// Retain the native Turtle/TriG pipeline under its original source account.
+fn parse_turtle_retained<'a, A: Admission, C: Progress>(
+    bytes: &'a [u8],
+    format: NativeRdfFormat,
+    base_iri: Option<&str>,
+    options: &ParseOptions,
+    context: RunContext<A, C>,
+) -> Result<RetainedParse<'a, A, C>, SourceFailure<'a, A, C>> {
+    let mut source = context.source(bytes)?;
+    let mut base = BaseScope::empty();
+    let mut document_prefixes = OrderedTable::default();
+    let mut spans = options.track_source_spans.then(SpanTable::default);
+    let parsed = source.with_text(|text, context| -> Result<SerGraph, TextError<C::Error>> {
+        context.charge(0)?;
+        if !matches!(format, NativeRdfFormat::Turtle | NativeRdfFormat::TriG) {
+            return Err(NativeParseError::UnsupportedFormat(format).into());
+        }
+        if let Some(iri) = base_iri {
+            context.native(|memory| {
+                base.rebind_with_memory(iri, BaseOrigin::Caller, memory)
+                    .map_err(|cause| match cause {
+                        purrdf_iri::IriReadError::Storage(cause) => {
+                            NativeParseError::Storage(cause)
+                        }
+                        purrdf_iri::IriReadError::Lexical(cause) => {
+                            NativeParseError::Base { cause }
+                        }
+                    })
+            })?;
+        }
+        let parsed = catch_unwind(AssertUnwindSafe(|| {
+            if let Some(table) = spans.as_mut() {
+                super::text_parse::document_graph_in_context(
+                    text,
+                    &mut base,
+                    format == NativeRdfFormat::TriG,
+                    table,
+                    &mut document_prefixes,
+                    context,
+                )
+            } else {
+                super::text_parse::document_graph_in_context(
+                    text,
+                    &mut base,
+                    format == NativeRdfFormat::TriG,
+                    &mut NoSpans,
+                    &mut document_prefixes,
+                    context,
+                )
+            }
+        }));
+        match parsed {
+            Ok(parsed) => parsed,
+            Err(payload) => {
+                let detail = payload
+                    .downcast_ref::<&str>()
+                    .copied()
+                    .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+                    .unwrap_or("non-string panic payload");
+                Err(context.diagnostic(|memory| {
+                    RdfDiagnostic::try_error_with_memory(
+                        "native-codec-panic",
+                        &format_args!(
+                            "native RDF text parser panicked while parsing {}: {detail}",
+                            format.media_type()
+                        ),
+                        memory,
+                    )
+                }))
+            }
+        }
+    });
+    let folded = source.with_text(|_, context| {
+        parsed.and_then(|graph| {
+            let associations = spans.as_mut().map(SpanTable::source_occurrences_mut);
+            let dataset = dataset_from_text_ser_graph_in_context(&graph, associations, context);
+            let cleanup = context
+                .release(|memory| super::text_parse::release_lowered_graph_rows(graph, memory));
+            dataset.and_then(|dataset| cleanup.and_then(|()| context.charge(0).map(|()| dataset)))
+        })
+    });
+    let output = match folded {
+        Ok(dataset) => Ok(RetainedOutcome {
+            dataset,
+            spans,
+            document_base: base,
+            document_prefixes,
+        }),
+        Err(cause) => Err(RetainedFailure::new(cause, base, document_prefixes)),
+    };
+    Ok(RetainedParse::new(source, output))
 }
 
 /// Build the in-scope base stack for a caller-supplied base string.
@@ -467,9 +793,12 @@ pub(super) fn text_parse_without_panicking<S: SpanCollector>(
     mode: LineParseMode,
     collector: &mut S,
     prefixes: &mut Vec<(String, String)>,
+    context: &mut RunContext<Resident, Unmetered>,
 ) -> Result<SerGraph, RdfDiagnostic> {
     let outcome = catch_unwind(AssertUnwindSafe(|| {
-        super::text_parse::parse_to_gts_graph_mode(format, text, base, mode, collector, prefixes)
+        super::text_parse::parse_to_gts_graph_mode(
+            format, text, base, mode, collector, prefixes, context,
+        )
     }));
     match outcome {
         Ok(result) => result,
@@ -529,7 +858,7 @@ pub(super) fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> Str
 /// interning is shared across all rows, so identical terms collapse to one id exactly as
 /// on the flat-quad path.
 pub(crate) fn dataset_from_ser_graph(graph: &SerGraph) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
-    dataset_from_ser_graph_impl(graph, false, BlankIngress::Opaque)
+    dataset_from_ser_graph_impl(graph, false, BlankIngress::Opaque, None)
 }
 
 /// [`dataset_from_ser_graph`] for a graph a TEXT codec just parsed: every blank
@@ -553,6 +882,21 @@ pub(crate) fn dataset_from_text_ser_graph(
         graph,
         false,
         BlankIngress::TextDecoded(LabelAlphabet::BlankNodeLabel),
+        None,
+    )
+}
+
+pub(super) fn dataset_from_text_ser_graph_in_context<A: Admission, C: Progress>(
+    graph: &SerGraph,
+    source: Option<&mut SourceOccurrences>,
+    context: &mut RunContext<A, C>,
+) -> Result<RdfDataset, TextError<C::Error>> {
+    dataset_from_ser_graph_in_context(
+        graph,
+        false,
+        BlankIngress::TextDecoded(LabelAlphabet::BlankNodeLabel),
+        source,
+        context,
     )
 }
 
@@ -566,7 +910,7 @@ pub(crate) fn dataset_from_text_ser_graph(
 pub(crate) fn flattened_dataset_from_ser_graph(
     graph: &SerGraph,
 ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
-    dataset_from_ser_graph_impl(graph, true, BlankIngress::Opaque)
+    dataset_from_ser_graph_impl(graph, true, BlankIngress::Opaque, None)
 }
 
 /// How a [`SerGraph`]'s blank-node labels reached this fold, and therefore whether
@@ -602,102 +946,225 @@ fn dataset_from_ser_graph_impl(
     graph: &SerGraph,
     flatten_to_default_graph: bool,
     blanks: BlankIngress,
+    source: Option<&mut SourceOccurrences>,
 ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+    // Carrier and other codec callers keep their explicit resident adapter.
+    let mut resident = Resident;
+    let mut memory = Memory::new(&mut resident);
+    dataset_from_ser_graph_with_memory(graph, flatten_to_default_graph, blanks, source, &mut memory)
+        .map(Arc::new)
+        .map_err(|cause| resident_error(ControlledError::Native(cause)))
+}
+
+/// Stage native fold results outside the child callback, so a final refusal
+/// drops the unpublished resident result while the original account still lives.
+/// Only row staging/pending storage and source associations use that account;
+/// builder, membership and freeze governance remain unfinished.
+fn dataset_from_ser_graph_in_context<A: Admission, C: Progress>(
+    graph: &SerGraph,
+    flatten_to_default_graph: bool,
+    blanks: BlankIngress,
+    source: Option<&mut SourceOccurrences>,
+    context: &mut RunContext<A, C>,
+) -> Result<RdfDataset, TextError<C::Error>> {
+    let mut staged = None;
+    let result = context.native(|memory| {
+        staged = Some(dataset_from_ser_graph_with_memory(
+            graph,
+            flatten_to_default_graph,
+            blanks,
+            source,
+            memory,
+        )?);
+        Ok(())
+    });
+    match result {
+        Ok(()) => Ok(staged.expect("successful native fold staged its result")),
+        Err(cause) => {
+            drop(staged);
+            Err(cause)
+        }
+    }
+}
+
+fn dataset_from_ser_graph_with_memory<S: Admission + ?Sized>(
+    graph: &SerGraph,
+    flatten_to_default_graph: bool,
+    blanks: BlankIngress,
+    source: Option<&mut SourceOccurrences>,
+    memory: &mut Memory<'_, S>,
+) -> Result<RdfDataset, NativeParseError> {
     let mut builder = RdfDatasetBuilder::new();
-    let interner = SerInterner { graph, blanks };
-    if !flatten_to_default_graph {
-        for &name in &graph.named_graphs {
-            let id = interner.intern(&mut builder, name)?;
-            builder.declare_named_graph(id)?;
+    let mapping_memory = RefCell::new(memory);
+    let interner = SerInterner {
+        graph,
+        blanks,
+        source: RefCell::new(source.filter(|source| source.is_active())),
+        memory: &mapping_memory,
+    };
+    let mut rows = Vec::new();
+    let result: Result<(), NativeParseError> = (|| {
+        if !flatten_to_default_graph {
+            for &name in &graph.named_graphs {
+                mapping_memory.borrow_mut().admission_mut().checkpoint(1)?;
+                let id = interner.intern(&mut builder, name)?;
+                builder.declare_named_graph_with_memory(id, &mut mapping_memory.borrow_mut())?;
+            }
         }
-    }
 
-    let mut rows: Vec<FoldRow> =
-        Vec::with_capacity(graph.quads.len() + graph.reifiers.len() + graph.annotations.len());
+        let capacity = graph
+            .quads
+            .len()
+            .checked_add(graph.reifiers.len())
+            .and_then(|rows| rows.checked_add(graph.annotations.len()))
+            .ok_or(StorageError::SizeOverflow)?;
+        mapping_memory.borrow_mut().reserve(&mut rows, capacity)?;
 
-    // Synthetic `rdf:reifies` rows reconstructed from the GTS reifier table, so the
-    // shared fold re-binds them identically to the flat-quad path (pass 1). A
-    // self-reifier sentinel — a `Triple` term whose `reifier` is its OWN id — is the
-    // binding of an inline quoted-triple term used as a quad object, NOT a statement-
-    // layer reifier; it carries no `<reifier> rdf:reifies <<…>>` row (the N-Quads
-    // serializer skips it identically) and is resolved when its parent quad interns the
-    // object. Emitting a synthetic row for it would make a quoted triple the subject of
-    // `rdf:reifies`, which the IR rejects.
-    for &(reifier_id, (s, p, o), reifier_graph) in &graph.reifiers {
-        if graph.terms.get(reifier_id).is_some_and(|term| {
-            term.kind == SerTermKind::Triple && term.reifier == Some(reifier_id)
-        }) {
-            continue;
+        // Synthetic `rdf:reifies` rows reconstructed from the GTS reifier table, so the
+        // shared fold re-binds them identically to the flat-quad path (pass 1). A
+        // self-reifier sentinel — a `Triple` term whose `reifier` is its OWN id — is the
+        // binding of an inline quoted-triple term used as a quad object, NOT a statement-
+        // layer reifier; it carries no `<reifier> rdf:reifies <<…>>` row (the N-Quads
+        // serializer skips it identically) and is resolved when its parent quad interns the
+        // object. Emitting a synthetic row for it would make a quoted triple the subject of
+        // `rdf:reifies`, which the IR rejects.
+        for (native_row, &(reifier_id, (s, p, o), reifier_graph)) in
+            graph.reifiers.iter().enumerate()
+        {
+            mapping_memory.borrow_mut().admission_mut().checkpoint(1)?;
+            if graph.terms.get(reifier_id).is_some_and(|term| {
+                term.kind == SerTermKind::Triple && term.reifier == Some(reifier_id)
+            }) {
+                continue;
+            }
+            let subject = interner.intern(&mut builder, reifier_id)?;
+            let predicate =
+                builder.intern_iri_with_memory(RDF_REIFIES, &mut mapping_memory.borrow_mut())?;
+            let s = interner.intern(&mut builder, s)?;
+            let p = interner.intern(&mut builder, p)?;
+            let o = interner.intern(&mut builder, o)?;
+            // Preserve the reifier declaration's named graph (`None` = default) through the
+            // GTS/round-trip path, unless this pass is flattening every graph to default.
+            let graph = match reifier_graph {
+                Some(_) if flatten_to_default_graph => None,
+                Some(g) => Some(interner.intern(&mut builder, g)?),
+                None => None,
+            };
+            mapping_memory.borrow_mut().admission_mut().checkpoint(1)?;
+            mapping_memory.borrow_mut().push(
+                &mut rows,
+                (
+                    FoldRow {
+                        subject,
+                        is_reifies: true,
+                        predicate,
+                        object: FoldNode::Triple { s, p, o },
+                        graph,
+                    },
+                    Some((NativeSourceRow::Reifier(native_row), None)),
+                ),
+            )?;
         }
-        let subject = interner.intern(&mut builder, reifier_id)?;
-        let predicate = builder.intern_iri(RDF_REIFIES)?;
-        let s = interner.intern(&mut builder, s)?;
-        let p = interner.intern(&mut builder, p)?;
-        let o = interner.intern(&mut builder, o)?;
-        // Preserve the reifier declaration's named graph (`None` = default) through the
-        // GTS/round-trip path, unless this pass is flattening every graph to default.
-        let graph = match reifier_graph {
-            Some(_) if flatten_to_default_graph => None,
-            Some(g) => Some(interner.intern(&mut builder, g)?),
-            None => None,
-        };
-        rows.push(FoldRow {
-            subject,
-            is_reifies: true,
-            predicate,
-            object: FoldNode::Triple { s, p, o },
-            graph,
-        });
-    }
 
-    // Base quad rows.
-    for &(s, p, o, g) in &graph.quads {
-        let subject = interner.intern(&mut builder, s)?;
-        let is_reifies = interner.is_iri(p, RDF_REIFIES)?;
-        let predicate = interner.intern(&mut builder, p)?;
-        let object = interner.intern_node(&mut builder, o)?;
-        let graph = match g {
-            Some(_) if flatten_to_default_graph => None,
-            Some(g) => Some(interner.intern(&mut builder, g)?),
-            None => None,
-        };
-        rows.push(FoldRow {
-            subject,
-            is_reifies,
-            predicate,
-            object,
-            graph,
-        });
-    }
+        // Base quad rows.
+        for (native_row, &(s, p, o, g)) in graph.quads.iter().enumerate() {
+            mapping_memory.borrow_mut().admission_mut().checkpoint(1)?;
+            let subject = interner.intern(&mut builder, s)?;
+            let is_reifies = interner.is_iri(p, RDF_REIFIES)?;
+            let predicate = interner.intern(&mut builder, p)?;
+            let object = interner.intern_node(&mut builder, o)?;
+            let graph = match g {
+                Some(_) if flatten_to_default_graph => None,
+                Some(g) => Some(interner.intern(&mut builder, g)?),
+                None => None,
+            };
+            mapping_memory.borrow_mut().admission_mut().checkpoint(1)?;
+            mapping_memory.borrow_mut().push(
+                &mut rows,
+                (
+                    FoldRow {
+                        subject,
+                        is_reifies,
+                        predicate,
+                        object,
+                        graph,
+                    },
+                    Some((NativeSourceRow::Quad(native_row), Some(o))),
+                ),
+            )?;
+        }
 
-    // Annotation rows the codec already classified into the GTS `annotations` table.
-    // Re-materialized as `<reifier> <predicate> <value>` rows so the shared fold's pass 2
-    // classifies them as annotations (the reifier subject is bound above). This is the
-    // GENERAL RDF-1.2 parser, so it must accept arbitrary input including the W3C suite's
-    // graph-scoped (TriG) reification — the optional graph slot is THREADED through (so a
-    // reifier/annotation inside `GRAPH g { … }` is matchable under `GRAPH ?g`), unless
-    // this pass is flattening every named graph to the default graph.
-    for &(reifier_id, predicate_id, value_id, annotation_graph) in &graph.annotations {
-        let subject = interner.intern(&mut builder, reifier_id)?;
-        let is_reifies = interner.is_iri(predicate_id, RDF_REIFIES)?;
-        let predicate = interner.intern(&mut builder, predicate_id)?;
-        let object = interner.intern_node(&mut builder, value_id)?;
-        let graph = match annotation_graph {
-            Some(_) if flatten_to_default_graph => None,
-            Some(g) => Some(interner.intern(&mut builder, g)?),
-            None => None,
-        };
-        rows.push(FoldRow {
-            subject,
-            is_reifies,
-            predicate,
-            object,
-            graph,
-        });
-    }
+        // Annotation rows the codec already classified into the GTS `annotations` table.
+        // Re-materialized as `<reifier> <predicate> <value>` rows so the shared fold's pass 2
+        // classifies them as annotations (the reifier subject is bound above). This is the
+        // GENERAL RDF-1.2 parser, so it must accept arbitrary input including the W3C suite's
+        // graph-scoped (TriG) reification — the optional graph slot is THREADED through (so a
+        // reifier/annotation inside `GRAPH g { … }` is matchable under `GRAPH ?g`), unless
+        // this pass is flattening every named graph to the default graph.
+        for &(reifier_id, predicate_id, value_id, annotation_graph) in &graph.annotations {
+            mapping_memory.borrow_mut().admission_mut().checkpoint(1)?;
+            let subject = interner.intern(&mut builder, reifier_id)?;
+            let is_reifies = interner.is_iri(predicate_id, RDF_REIFIES)?;
+            let predicate = interner.intern(&mut builder, predicate_id)?;
+            let object = interner.intern_node(&mut builder, value_id)?;
+            let graph = match annotation_graph {
+                Some(_) if flatten_to_default_graph => None,
+                Some(g) => Some(interner.intern(&mut builder, g)?),
+                None => None,
+            };
+            mapping_memory.borrow_mut().admission_mut().checkpoint(1)?;
+            mapping_memory.borrow_mut().push(
+                &mut rows,
+                (
+                    FoldRow {
+                        subject,
+                        is_reifies,
+                        predicate,
+                        object,
+                        graph,
+                    },
+                    None,
+                ),
+            )?;
+        }
 
-    fold_statement_layer(&mut builder, rows)?;
-    builder.freeze()
+        fold_statement_layer_observed(
+            &mut builder,
+            rows.drain(..),
+            &mapping_memory,
+            |association, kind, terms| {
+                if let Some((row, native_object)) = association {
+                    if let Some(source) = interner.source.borrow_mut().as_deref_mut() {
+                        if let (Some(native), Some(term)) = (native_object, terms[2]) {
+                            source.bind_final_native(
+                                native,
+                                term,
+                                &mut mapping_memory.borrow_mut(),
+                            )?;
+                        }
+                        source.bind_row(row, kind, terms, &mut mapping_memory.borrow_mut())?;
+                    }
+                }
+                Ok(())
+            },
+        )?;
+        Ok(())
+    })();
+    // The original input drain has ended before its backing owner is released;
+    // pending storage was released by the same two-pass body. Persistent source
+    // associations retain their own original grants, including on failure.
+    let cleanup = mapping_memory
+        .borrow_mut()
+        .release_vec(rows)
+        .map_err(NativeParseError::Storage);
+    if let Err(cause) = result.and(cleanup) {
+        // Disposal never replaces the first parse/fold failure.
+        let _ = builder.discard_with_memory(&mut mapping_memory.borrow_mut());
+        return Err(cause);
+    }
+    builder
+        .freeze_with_memory(&mut mapping_memory.borrow_mut())
+        .map_err(NativeParseError::from)
 }
 
 /// Intern [`SerGraph`] terms into a builder, resolving quoted-triple terms through their
@@ -709,18 +1176,43 @@ fn dataset_from_ser_graph_impl(
 /// identical to `import_gts_graph`), while a [`TextDecoded`](BlankIngress::TextDecoded)
 /// document's token is decoded back to the `(label, scope)` pair the serializer wrote it
 /// from.
-struct SerInterner<'a> {
+struct SerInterner<'a, 'm, 'b, 's, S: Admission + ?Sized> {
     graph: &'a SerGraph,
     /// Whether the graph's blank labels carry the text serializers' egress
     /// transform and must be decoded on the way in.
     blanks: BlankIngress,
+    source: RefCell<Option<&'a mut SourceOccurrences>>,
+    memory: &'m RefCell<&'b mut Memory<'s, S>>,
 }
 
-impl SerInterner<'_> {
+fn native_diagnostic<S: Admission + ?Sized>(
+    code: &str,
+    detail: &(impl core::fmt::Display + ?Sized),
+    memory: &mut Memory<'_, S>,
+) -> NativeParseError {
+    match RdfDiagnostic::try_error_with_memory(code, detail, memory) {
+        Ok(diagnostic) => NativeParseError::Diagnostic(diagnostic),
+        Err(cause) => NativeParseError::Storage(cause),
+    }
+}
+
+impl<S: Admission + ?Sized> SerInterner<'_, '_, '_, '_, S> {
+    fn record_native(
+        &self,
+        native: usize,
+        term: TermId,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), NativeParseError> {
+        if let Some(source) = self.source.borrow_mut().as_deref_mut() {
+            source.bind_final_native(native, term, memory)?;
+        }
+        Ok(())
+    }
+
     /// Intern a term id into the builder, returning its [`TermId`]. A quoted-triple
     /// term resolves its `(s, p, o)` through the reifier table and interns as a triple.
     ///
-    /// A quoted triple is interned over [`try_fold_nested`]'s work list: its subject,
+    /// A quoted triple is interned over [`try_fold_nested_with_memory`]'s work list: its subject,
     /// predicate and object, each fully before the next, then the triple itself, and
     /// the first refusal ends the walk.
     ///
@@ -736,12 +1228,20 @@ impl SerInterner<'_> {
         &self,
         builder: &mut RdfDatasetBuilder,
         gts_id: usize,
-    ) -> Result<TermId, RdfDiagnostic> {
-        try_fold_nested(
+    ) -> Result<TermId, NativeParseError> {
+        try_fold_nested_with_memory(
             gts_id,
             builder,
-            |builder, gts_id| self.resolve_node(builder, gts_id),
-            |builder, _, s, p, o| Ok(builder.intern_triple(s, p, o)?),
+            |builder, gts_id, memory| self.resolve_node_with_memory(builder, gts_id, memory),
+            |builder, native, s, p, o, memory| {
+                let id = builder.intern_triple_with_memory(s, p, o, memory)?;
+                self.record_native(native, id, memory)?;
+                Ok(id)
+            },
+            // Scalar handles own no payload; interner/source allocations persist.
+            |_, _, _| {},
+            |error, _| NativeParseError::Storage(error),
+            &mut self.memory.borrow_mut(),
         )
     }
 
@@ -752,7 +1252,7 @@ impl SerInterner<'_> {
         &self,
         builder: &mut RdfDatasetBuilder,
         gts_id: usize,
-    ) -> Result<FoldNode, RdfDiagnostic> {
+    ) -> Result<FoldNode, NativeParseError> {
         match self.resolve_node(builder, gts_id)? {
             Nested::Leaf(id) => Ok(FoldNode::Term(id)),
             Nested::Triple(s, p, o) => {
@@ -770,112 +1270,148 @@ impl SerInterner<'_> {
         &self,
         builder: &mut RdfDatasetBuilder,
         gts_id: usize,
-    ) -> Result<Nested<usize, TermId>, RdfDiagnostic> {
+    ) -> Result<Nested<usize, TermId>, NativeParseError> {
+        self.resolve_node_with_memory(builder, gts_id, &mut self.memory.borrow_mut())
+    }
+
+    fn resolve_node_with_memory(
+        &self,
+        builder: &mut RdfDatasetBuilder,
+        gts_id: usize,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Nested<usize, TermId>, NativeParseError> {
         let term = self.graph.terms.get(gts_id).ok_or_else(|| {
-            RdfDiagnostic::error(
+            native_diagnostic(
                 "native-codec-term-out-of-range",
-                format!("GTS term id {gts_id} is out of range"),
+                &format_args!("GTS term id {gts_id} is out of range"),
+                memory,
             )
         })?;
-        match term.kind {
+        let resolved: Result<Nested<usize, TermId>, NativeParseError> = match term.kind {
             SerTermKind::Iri => {
                 let iri = term
                     .value
                     .as_deref()
                     .filter(|v| !v.is_empty())
                     .ok_or_else(|| {
-                        RdfDiagnostic::error(
+                        native_diagnostic(
                             "native-codec-iri-missing-value",
-                            "GTS IRI term requires a non-empty value",
+                            &"GTS IRI term requires a non-empty value",
+                            memory,
                         )
                     })?;
-                Ok(Nested::Leaf(builder.intern_iri(iri)?))
+                Ok(Nested::Leaf(builder.intern_iri_with_memory(iri, memory)?))
             }
             SerTermKind::Bnode => {
                 // The label is only ever read through `&label`: borrow the table's
                 // string and build a fresh one solely for the missing-value fallback.
-                let label: Cow<'_, str> = term
-                    .value
-                    .as_deref()
-                    .map_or_else(|| Cow::Owned(format!("gts_bnode_{gts_id}")), Cow::Borrowed);
-                Ok(Nested::Leaf(match self.blanks {
-                    BlankIngress::Opaque => builder.intern_blank(&label, BlankScope::DEFAULT)?,
-                    BlankIngress::TextDecoded(alphabet) => {
-                        builder.intern_text_blank(&label, alphabet)?
-                    }
-                }))
+                let label: Cow<'_, str> = match term.value.as_deref() {
+                    Some(label) => Cow::Borrowed(label),
+                    None => Cow::Owned(
+                        memory.format_with_progress(&format_args!("gts_bnode_{gts_id}"))?,
+                    ),
+                };
+                let result = (|| -> Result<TermId, StorageError> {
+                    Ok(match self.blanks {
+                        BlankIngress::Opaque => {
+                            builder.intern_blank_with_memory(&label, BlankScope::DEFAULT, memory)?
+                        }
+                        BlankIngress::TextDecoded(alphabet) => {
+                            let (decoded, scope) =
+                                purrdf_core::blank_label::decode_blank_label_with_memory(
+                                    &label, alphabet, memory,
+                                )?;
+                            let result = builder.intern_blank_with_memory(&decoded, scope, memory);
+                            if let Cow::Owned(decoded) = decoded {
+                                let cleanup = memory.release_string(decoded);
+                                if result.is_ok() {
+                                    cleanup?;
+                                }
+                            }
+                            result?
+                        }
+                    })
+                })();
+                let cleanup = match label {
+                    Cow::Owned(label) => memory.release_string(label),
+                    Cow::Borrowed(_) => Ok(()),
+                };
+                Ok(Nested::Leaf(result.and_then(|id| cleanup.map(|()| id))?))
             }
             SerTermKind::Literal => {
                 let datatype = match term.datatype {
-                    Some(dt_id) => Some(self.iri_string(dt_id)?),
+                    Some(dt_id) => Some(self.iri_value(dt_id, memory)?),
                     None => None,
                 };
-                let direction = crate::gts_resolve::parse_gts_direction(
+                let direction = crate::gts_resolve::parse_gts_direction_with_memory(
                     term.direction.as_deref(),
                     term.lang.as_deref(),
+                    memory,
                 )?;
                 // A composite literal's embedded blank labels bind through the
                 // SAME rule the bare `_:` tokens above use — that agreement is
                 // what makes `_:b` written as a subject and `_:b` written inside
                 // a `cdt:List` the same node.
-                Ok(Nested::Leaf(builder.intern_literal_bound(
-                    RdfLiteral {
-                        lexical_form: term.value.clone().unwrap_or_default(),
-                        datatype,
-                        language: term.lang.clone(),
-                        direction,
-                    },
-                    self.blanks.binding(),
-                )?))
+                Ok(Nested::Leaf(
+                    builder
+                        .intern_literal_parts_bound_with_memory(
+                            term.value.as_deref().unwrap_or_default(),
+                            datatype,
+                            term.lang.as_deref(),
+                            direction,
+                            self.blanks.binding(),
+                            memory,
+                        )
+                        .map_err(|cause| match cause {
+                            purrdf_core::cdt_blank::CdtBlankError::Storage(cause) => {
+                                NativeParseError::Storage(cause)
+                            }
+                            cause => NativeParseError::Composite(cause),
+                        })?,
+                ))
             }
             SerTermKind::Triple => {
                 let reifier_id = term.reifier.ok_or_else(|| {
-                    RdfDiagnostic::error(
+                    native_diagnostic(
                         "native-codec-unbound-triple-term",
-                        "GTS triple term has no reifier binding",
+                        &"GTS triple term has no reifier binding",
+                        memory,
                     )
                 })?;
-                let (s, p, o) = self.graph.reifier(reifier_id).ok_or_else(|| {
-                    RdfDiagnostic::error(
-                        "native-codec-missing-reifier-binding",
-                        format!("GTS triple term references missing reifier {reifier_id}"),
-                    )
-                })?;
+                let (s, p, o) = self
+                    .graph
+                    .reifier_with_control(reifier_id, memory)?
+                    .ok_or_else(|| {
+                        native_diagnostic(
+                            "native-codec-missing-reifier-binding",
+                            &format_args!(
+                                "GTS triple term references missing reifier {reifier_id}"
+                            ),
+                            memory,
+                        )
+                    })?;
                 Ok(Nested::Triple(s, p, o))
             }
+        };
+        let resolved = resolved?;
+        if let Nested::Leaf(id) = resolved {
+            self.record_native(gts_id, id, memory)?;
         }
+        Ok(resolved)
     }
 
     /// Intern a GTS term id known to occupy an IRI position (predicate / datatype),
     /// returning its IRI string for the `rdf:reifies` check and literal datatype.
-    fn iri_string(&self, gts_id: usize) -> Result<String, RdfDiagnostic> {
+    fn iri_value(
+        &self,
+        gts_id: usize,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<&str, NativeParseError> {
         let term = self.graph.terms.get(gts_id).ok_or_else(|| {
-            RdfDiagnostic::error(
+            native_diagnostic(
                 "native-codec-term-out-of-range",
-                format!("GTS term id {gts_id} is out of range"),
-            )
-        })?;
-        match term.kind {
-            SerTermKind::Iri => term.value.clone().filter(|v| !v.is_empty()).ok_or_else(|| {
-                RdfDiagnostic::error(
-                    "native-codec-iri-missing-value",
-                    "GTS IRI term requires a non-empty value",
-                )
-            }),
-            other => Err(RdfDiagnostic::error(
-                "native-codec-predicate-not-iri",
-                format!("GTS term in an IRI position must be an IRI, got {other:?}"),
-            )),
-        }
-    }
-
-    /// Return whether a GTS term id is a specific IRI, failing if the term is not valid
-    /// in an IRI position.
-    fn is_iri(&self, gts_id: usize, expected: &str) -> Result<bool, RdfDiagnostic> {
-        let term = self.graph.terms.get(gts_id).ok_or_else(|| {
-            RdfDiagnostic::error(
-                "native-codec-term-out-of-range",
-                format!("GTS term id {gts_id} is out of range"),
+                &format_args!("GTS term id {gts_id} is out of range"),
+                memory,
             )
         })?;
         match term.kind {
@@ -883,18 +1419,31 @@ impl SerInterner<'_> {
                 .value
                 .as_deref()
                 .filter(|v| !v.is_empty())
-                .map(|value| value == expected)
                 .ok_or_else(|| {
-                    RdfDiagnostic::error(
+                    native_diagnostic(
                         "native-codec-iri-missing-value",
-                        "GTS IRI term requires a non-empty value",
+                        &"GTS IRI term requires a non-empty value",
+                        memory,
                     )
                 }),
-            other => Err(RdfDiagnostic::error(
+            other => Err(native_diagnostic(
                 "native-codec-predicate-not-iri",
-                format!("GTS term in an IRI position must be an IRI, got {other:?}"),
+                &format_args!("GTS term in an IRI position must be an IRI, got {other:?}"),
+                memory,
             )),
         }
+    }
+
+    /// Return whether a GTS term id is a specific IRI, failing if the term is not valid
+    /// in an IRI position.
+    fn is_iri(&self, gts_id: usize, expected: &str) -> Result<bool, NativeParseError> {
+        let mut memory = self.memory.borrow_mut();
+        let value = self.iri_value(gts_id, &mut memory)?;
+        purrdf_lex::control::compare_bytes(value.as_bytes(), expected.as_bytes(), &mut |units| {
+            memory.admission_mut().checkpoint(units)
+        })
+        .map(|order| order.is_eq())
+        .map_err(NativeParseError::Storage)
     }
 }
 
@@ -994,9 +1543,161 @@ mod tests {
 
     #[test]
     fn invalid_utf8_hard_fails() {
-        let err =
-            parse_dataset(&[0xff, 0xfe], "text/turtle", None).expect_err("invalid utf-8 must fail");
-        assert_eq!(err.code, "native-codec-utf8");
+        use super::super::acquisition::NativeParseError;
+        use purrdf_lex::{
+            allocation::{Admission, StorageError},
+            control::ControlledError,
+        };
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        struct Grant {
+            live: Arc<AtomicUsize>,
+            limit: usize,
+        }
+        impl Admission for Grant {
+            fn resize(&mut self, bytes: usize) -> Result<(), StorageError> {
+                if bytes > self.limit {
+                    return Err(StorageError::AdmissionFailed);
+                }
+                self.live.store(bytes, Ordering::SeqCst);
+                Ok(())
+            }
+        }
+        let verify = |input: &[u8]| {
+            let live = Arc::new(AtomicUsize::new(0));
+            let context = RunContext::new(
+                Grant {
+                    live: Arc::clone(&live),
+                    limit: usize::MAX,
+                },
+                |units| {
+                    assert!(units <= 256, "bounded native validation and copy extents");
+                    Ok::<_, core::convert::Infallible>(())
+                },
+            );
+            match (std::str::from_utf8(input), context.source(input)) {
+                (Ok(expected), Ok(mut source)) => {
+                    source.with_text(|text, context| {
+                        assert_eq!(text.as_bytes(), input);
+                        assert_eq!(text, expected);
+                        assert!(context.live >= text.len());
+                    });
+                    drop(source);
+                }
+                (Err(expected), Err(failure)) => {
+                    assert!(
+                        core::ptr::eq(failure.input(), input),
+                        "full borrowed original survives"
+                    );
+                    assert_eq!(
+                        failure.admitted_bytes(),
+                        0,
+                        "partial source copy refunded before reporting"
+                    );
+                    assert_eq!(live.load(Ordering::SeqCst), 0);
+                    let ControlledError::Native(NativeParseError::Utf8 { cause, offset }) =
+                        failure.cause()
+                    else {
+                        panic!("native UTF-8 evidence");
+                    };
+                    let observed = super::super::stream::utf8_error(cause, *offset);
+                    let expected = super::super::stream::utf8_error(&expected, 0);
+                    assert_eq!(observed.code, expected.code);
+                    assert_eq!(observed.message, expected.message);
+                    assert_eq!(
+                        observed.presentation().unwrap().to_json(),
+                        expected.presentation().unwrap().to_json()
+                    );
+                    drop(failure);
+                }
+                _ => panic!("bounded acquisition must preserve native UTF-8 verdict"),
+            }
+            assert_eq!(live.load(Ordering::SeqCst), 0);
+        };
+        verify(b"");
+        for offset in [0, 253, 254, 255, 256, 257, 509, 510, 511] {
+            for scalar in ["é", "€", "🦀"] {
+                let input = format!("{}{scalar}tail", "a".repeat(offset));
+                verify(input.as_bytes());
+            }
+            for suffix in [
+                b"\xff\xfe".as_slice(),
+                b"\xe2(\xa1",
+                b"\xf0\x9f\x92",
+                b"\xed\xa0\x80",
+                b"\xc0\xaf",
+            ] {
+                let mut input = vec![b'a'; offset];
+                input.extend_from_slice(suffix);
+                verify(&input);
+                let error = parse_dataset(&input, "text/turtle", None).expect_err("invalid UTF-8");
+                assert_eq!(error.code, "native-codec-utf8");
+            }
+        }
+        // Every original callback, including the first and final zero poll, can
+        // refuse without a later poll, admitted partial copy or lost input.
+        struct Stop(usize);
+        let input = format!("{}🦀{}", "a".repeat(255), "b".repeat(300));
+        let mut calls = 0;
+        let source = RunContext::new(Resident, |_| {
+            calls += 1;
+            Ok::<_, Stop>(())
+        })
+        .source(input.as_bytes())
+        .unwrap_or_else(|_| panic!("accepting source"));
+        drop(source);
+        let total = calls;
+        for fail_at in 0..total {
+            let live = Arc::new(AtomicUsize::new(0));
+            let mut calls = 0;
+            let result = RunContext::new(
+                Grant {
+                    live: Arc::clone(&live),
+                    limit: usize::MAX,
+                },
+                |_| {
+                    let at = calls;
+                    calls += 1;
+                    if at == fail_at { Err(Stop(at)) } else { Ok(()) }
+                },
+            )
+            .source(input.as_bytes());
+            let failure = match result {
+                Err(failure) => failure,
+                Ok(_) => panic!("selected callback must refuse"),
+            };
+            assert!(core::ptr::eq(failure.input(), input.as_bytes()));
+            assert!(
+                matches!(failure.cause(), ControlledError::Control(Stop(at)) if *at == fail_at)
+            );
+            assert_eq!(failure.admitted_bytes(), 0);
+            assert_eq!(live.load(Ordering::SeqCst), 0);
+            drop(failure);
+            assert_eq!(calls, fail_at + 1, "no callback after the first refusal");
+        }
+        let live = Arc::new(AtomicUsize::new(0));
+        let failure = match RunContext::new(
+            Grant {
+                live: Arc::clone(&live),
+                limit: 256,
+            },
+            |_| Ok::<_, Stop>(()),
+        )
+        .source(input.as_bytes())
+        {
+            Err(failure) => failure,
+            Ok(_) => panic!("source admission must be refused"),
+        };
+        assert!(core::ptr::eq(failure.input(), input.as_bytes()));
+        assert!(matches!(
+            failure.cause(),
+            ControlledError::Native(NativeParseError::Storage(StorageError::AdmissionFailed))
+        ));
+        assert_eq!(failure.admitted_bytes(), 0);
+        assert_eq!(live.load(Ordering::SeqCst), 0);
+        drop(failure);
     }
 
     #[test]
@@ -1203,22 +1904,214 @@ mod tests {
 
     #[test]
     fn dataset_is_identical_with_tracking() {
-        // The dataset from a tracking parse has the same triples as `parse_dataset`.
+        use super::super::source_occurrence::{SourceRole, SourceSemanticReference};
         let nt = concat!(
             "<http://example.org/s> <http://example.org/p> <http://example.org/o> .\n",
             "<http://example.org/s> <http://example.org/p2> \"lit\" .\n",
         );
-        let options = ParseOptions {
-            track_source_spans: true,
-        };
-        let tracked = parse_dataset_with(nt.as_bytes(), "application/n-triples", None, &options)
-            .expect("tracked parse")
-            .dataset;
-        let plain = parse_dataset(nt.as_bytes(), "application/n-triples", None).expect("plain");
-        assert_eq!(tracked.quad_count(), plain.quad_count());
+        let trig = concat!(
+            "@prefix ex: <https://example.org/> .\n",
+            "ex:s ex:p ex:o . ex:s ex:p ex:o .\n",
+            "ex:r rdf:reifies <<( ex:s ex:p ex:o )>> .\n",
+            "ex:r rdf:reifies <<( ex:s ex:p ex:o )>> .\n",
+            "ex:r ex:confidence \"0.9\" .\n",
+            "ex:g1 { ex:r rdf:reifies <<( ex:s ex:p ex:o )>> .\n",
+            "ex:r ex:confidence \"0.8\" . }\n",
+            "ex:g2 { ex:r ex:confidence \"0.1\" . }\n",
+            "ex:g1 { ex:s ex:nested <<( ex:s ex:p <<( ex:s ex:p ex:o )>> )>> . }\n",
+            "ex:empty {}\n",
+        );
+        use purrdf_core::DatasetView;
+        for (text, media) in [(nt, "application/n-triples"), (trig, "application/trig")] {
+            let retained = parse_text_retained(
+                text.as_bytes(),
+                classify(media).expect("native media"),
+                None,
+                &ParseOptions {
+                    track_source_spans: true,
+                },
+            )
+            .unwrap_or_else(|_| panic!("tracked source acquisition"));
+            let plain = parse_dataset(text.as_bytes(), media, None).expect("plain");
+            {
+                let view = retained.dataset().expect("retained dataset");
+                // These are the actual query-admission boundaries: a view
+                // with no workspace provider must reject even zero-byte
+                // preflight rather than authorize resident execution.
+                for bytes in [0, 64] {
+                    assert!(matches!(
+                        view.reserve_workspace(bytes),
+                        Err(super::super::retained::BorrowedReadError::WorkspaceUnavailable)
+                    ));
+                    assert!(view.reserve_owned_workspace(bytes).is_none());
+                }
+                assert_eq!(view.term_count(), plain.term_count() as u64);
+                assert!(
+                    view.quads().eq(plain.quads()),
+                    "identical native term IDs and quads"
+                );
+                let plan = view.probe_plan(false, false, false, purrdf_core::GraphMatch::Any);
+                let plain_plan = DatasetView::probe_plan(
+                    plain.as_ref(),
+                    false,
+                    false,
+                    false,
+                    purrdf_core::GraphMatch::Any,
+                );
+                assert!(
+                    view.quads_for_pattern_with_plan(
+                        &plan,
+                        None,
+                        None,
+                        None,
+                        purrdf_core::GraphMatch::Any
+                    )
+                    .eq(DatasetView::quads_for_pattern_with_plan(
+                        plain.as_ref(),
+                        &plain_plan,
+                        None,
+                        None,
+                        None,
+                        purrdf_core::GraphMatch::Any
+                    ))
+                );
+                assert!(view.reifier_quads().eq(plain.reifier_quads()));
+                assert!(view.annotation_quads().eq(plain.annotation_quads()));
+                assert!(
+                    view.named_graphs().eq(plain.named_graphs()),
+                    "empty graphs survive the facade"
+                );
+                assert_eq!(view.stats_fingerprint(), plain.stats_fingerprint());
+                assert_eq!(
+                    view.snapshot_identity().unwrap(),
+                    DatasetView::snapshot_identity(plain.as_ref()).unwrap()
+                );
+                assert_eq!(
+                    view.source_statement_count().unwrap(),
+                    DatasetView::source_statement_count(plain.as_ref()).unwrap()
+                );
+                let sources = retained.source();
+                assert_eq!(sources.bytes(), text.as_bytes());
+                if media == "application/n-triples" {
+                    assert_eq!(
+                        sources.occurrences().count(),
+                        0,
+                        "native source associations are Turtle/TriG only"
+                    );
+                } else {
+                    let kinds = (0..9)
+                        .map(|statement| sources.statement_kind(statement))
+                        .collect::<Vec<_>>();
+                    use SourceStatementKind::{Annotation, Quad, Reifier};
+                    assert_eq!(
+                        kinds,
+                        [
+                            Quad, Quad, Reifier, Reifier, Annotation, Reifier, Annotation, Quad,
+                            Quad
+                        ]
+                        .map(Some)
+                    );
+                    assert_eq!(sources.statement_kind(9), None);
+                    let subjects = sources
+                        .occurrences()
+                        .filter(|occurrence| occurrence.role() == SourceRole::Subject)
+                        .count();
+                    assert_eq!(
+                        subjects, 9,
+                        "duplicate assertions and diverted reifier roots survive"
+                    );
+                    let declarations = sources
+                        .occurrences()
+                        .filter(|occurrence| occurrence.role() == SourceRole::GraphDeclaration)
+                        .count();
+                    assert_eq!(
+                        declarations, 4,
+                        "repeated and empty graph declarations survive"
+                    );
+                    for occurrence in sources.occurrences() {
+                        let origin = sources.origin(occurrence.origin()).expect("source origin");
+                        let Some(SourceSemanticReference::Term(id)) = origin.semantic() else {
+                            panic!(
+                                "each emitted root or declaration was actually interned: {origin:?}"
+                            );
+                        };
+                        assert_eq!(
+                            view.term_value(id).expect("retained term"),
+                            plain.term_value(id).expect("resident source term"),
+                            "source association preserves native ID meaning"
+                        );
+                        if let Some(components) = origin.components() {
+                            for component in components {
+                                assert!(matches!(
+                                    sources
+                                        .origin(component)
+                                        .expect("component origin")
+                                        .semantic(),
+                                    Some(SourceSemanticReference::Term(_))
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+            if media == "application/trig" {
+                let controlled = parse_dataset_controlled(
+                    text.as_bytes(),
+                    NativeRdfFormat::TriG,
+                    None,
+                    Resident,
+                    |_| Ok::<_, ()>(()),
+                )
+                .expect("public controlled TriG");
+                assert!(controlled.dataset().unwrap().quads().eq(plain.quads()));
+                let actual = controlled.source();
+                let expected = retained.source();
+                assert!(actual.occurrences().eq(expected.occurrences()));
+                for occurrence in actual.occurrences() {
+                    assert_eq!(
+                        actual.origin(occurrence.origin()),
+                        expected.origin(occurrence.origin())
+                    );
+                }
+            }
+            // The legacy resident adapter keeps its original owned return
+            // contract after the private retained facade has been released.
+            let tracked = retained.into_legacy().expect("resident outcome");
+            let serialize = |dataset: &RdfDataset| {
+                crate::native_codecs::serialize_dataset(
+                    dataset,
+                    "application/n-quads",
+                    crate::SerializeGraph::Dataset,
+                )
+                .expect("serialize")
+            };
+            assert_eq!(serialize(&tracked.dataset), serialize(&plain));
+        }
+        let text = "<urn:s> <urn:p> ( <urn:o> ) .";
+        let controlled = parse_dataset_controlled(
+            text.as_bytes(),
+            NativeRdfFormat::Turtle,
+            None,
+            Resident,
+            |_| Ok::<_, ()>(()),
+        )
+        .expect("public collection expansion");
+        let source = controlled.source();
+        let mut generated_cell = false;
+        for occurrence in source.occurrences() {
+            let mut origin = source.origin(occurrence.origin()).unwrap();
+            while let super::super::SourceOriginKind::Inherited { from } = origin.kind() {
+                origin = source.origin(*from).unwrap();
+            }
+            if let super::super::SourceOriginKind::Generated { rule, anchor, .. } = origin.kind() {
+                assert!(!text[anchor.clone()].is_empty());
+                generated_cell |=
+                    matches!(rule, super::super::SourceRule::CollectionCell { index: 0 });
+            }
+        }
         assert!(
-            tracked.quads().collect::<Vec<_>>() == plain.quads().collect::<Vec<_>>(),
-            "tracked dataset has identical quads"
+            generated_cell,
+            "collection cells retain a generation rule instead of an invented spelling"
         );
     }
 
@@ -1294,6 +2187,30 @@ mod tests {
             "a:s a:p .\n",
             "@prefix c: <https://example.org/c#> .\n",
         );
+        let retained = parse_dataset_controlled(
+            ttl.as_bytes(),
+            NativeRdfFormat::Turtle,
+            None,
+            Resident,
+            Unmetered,
+        )
+        .expect_err("the fifth line has no object");
+        assert!(matches!(
+            retained.cause(),
+            ControlledError::Native(NativeParseError::Diagnostic(_))
+        ));
+        assert_eq!(retained.input(), ttl.as_bytes());
+        assert_eq!(
+            retained.document_prefixes().collect::<Vec<_>>(),
+            [
+                ("a", "https://example.org/a#"),
+                ("b", "https://example.org/doc/rel#"),
+            ]
+        );
+        assert_eq!(
+            retained.document_base_iri(),
+            Some("https://example.org/doc/")
+        );
         let failure = parse_dataset_reporting_failure(
             ttl.as_bytes(),
             "text/turtle",
@@ -1320,6 +2237,140 @@ mod tests {
         )
         .expect_err("the same failure");
         assert_eq!(plain.to_string(), failure.diagnostic.to_string());
+
+        // An original caller refusal after source acquisition remains owned
+        // beside that source, and dies before the same account is refunded.
+        use purrdf_lex::{
+            allocation::{Admission, StorageError},
+            control::ControlledError,
+        };
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+        };
+        struct Grant {
+            live: Arc<AtomicUsize>,
+            refuse: Arc<AtomicBool>,
+            source_len: usize,
+        }
+        impl Admission for Grant {
+            fn resize(&mut self, bytes: usize) -> Result<(), StorageError> {
+                self.live.store(bytes, Ordering::SeqCst);
+                if bytes > self.source_len {
+                    self.refuse.store(true, Ordering::SeqCst);
+                }
+                Ok(())
+            }
+        }
+        struct Stop {
+            marker: Box<u8>,
+            live: Arc<AtomicUsize>,
+        }
+        impl Drop for Stop {
+            fn drop(&mut self) {
+                assert!(
+                    self.live.load(Ordering::SeqCst) > 0,
+                    "original failure dies before original source grant"
+                );
+            }
+        }
+        let live = Arc::new(AtomicUsize::new(0));
+        let refuse = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&refuse);
+        let marker = Box::new(7);
+        let identity = core::ptr::from_ref(marker.as_ref());
+        let mut marker = Some(marker);
+        let error_live = Arc::clone(&live);
+        let retained = parse_dataset_controlled(
+            ttl.as_bytes(),
+            NativeRdfFormat::Turtle,
+            None,
+            Grant {
+                live: Arc::clone(&live),
+                refuse: Arc::clone(&refuse),
+                source_len: ttl.len(),
+            },
+            move |_| {
+                if flag.load(Ordering::SeqCst) {
+                    Err(Stop {
+                        marker: marker.take().expect("first original refusal"),
+                        live: Arc::clone(&error_live),
+                    })
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .expect_err("original caller refused after source acquisition");
+        assert_eq!(retained.input(), ttl.as_bytes());
+        let ControlledError::Control(stop) = retained.cause() else {
+            panic!("unchanged caller cause");
+        };
+        assert_eq!(core::ptr::from_ref(stop.marker.as_ref()), identity);
+        assert!(live.load(Ordering::SeqCst) >= ttl.len());
+        drop(retained);
+        assert_eq!(live.load(Ordering::SeqCst), 0);
+
+        let valid = ttl.replace("a:s a:p .", "a:s a:p a:o .");
+        let stopped = parse_dataset_controlled(
+            valid.as_bytes(),
+            NativeRdfFormat::Turtle,
+            None,
+            Resident,
+            |_| Err("pre-tripped cancellation"),
+        )
+        .expect_err("pre-tripped caller");
+        assert!(matches!(
+            stopped.cause(),
+            ControlledError::Control("pre-tripped cancellation")
+        ));
+        struct LimitedGrant {
+            live: Arc<AtomicUsize>,
+            limit: usize,
+        }
+        impl Admission for LimitedGrant {
+            fn resize(&mut self, bytes: usize) -> Result<(), StorageError> {
+                if bytes > self.limit {
+                    return Err(StorageError::AdmissionFailed);
+                }
+                self.live.store(bytes, Ordering::SeqCst);
+                Ok(())
+            }
+        }
+        let refused = parse_dataset_controlled(
+            valid.as_bytes(),
+            NativeRdfFormat::Turtle,
+            None,
+            LimitedGrant {
+                live: Arc::clone(&live),
+                limit: valid.len(),
+            },
+            |_| Ok::<_, ()>(()),
+        )
+        .expect_err("source fits but native parser storage does not");
+        assert!(matches!(
+            refused.cause(),
+            ControlledError::Native(NativeParseError::Storage(StorageError::AdmissionFailed))
+        ));
+        drop(refused);
+        assert_eq!(live.load(Ordering::SeqCst), 0);
+
+        let retained = parse_dataset_controlled(
+            valid.as_bytes(),
+            NativeRdfFormat::Turtle,
+            None,
+            Grant {
+                live: Arc::clone(&live),
+                refuse: Arc::new(AtomicBool::new(false)),
+                source_len: usize::MAX,
+            },
+            |_| Ok::<_, Stop>(()),
+        )
+        .expect("neighboring valid source under the original account");
+        assert!(retained.dataset().is_some());
+        assert!(live.load(Ordering::SeqCst) > 0);
+        drop(retained);
+        assert_eq!(live.load(Ordering::SeqCst), 0);
     }
 
     /// RDF/XML reports its `xmlns` declarations as the XML parser scoped them. The
@@ -1390,14 +2441,16 @@ mod term_walk_tests {
 
     use super::super::ser_model::SerGraph;
     use super::super::ser_model::term_walk_tests::lower;
-    use super::{BlankIngress, RdfDiagnostic, SerInterner};
+    use super::{BlankIngress, NativeParseError, SerInterner};
+    use purrdf_lex::allocation::{Memory, Resident};
+    use std::cell::RefCell;
 
     /// The recursive reference of [`SerInterner::intern`].
     fn reference_intern(
-        interner: &SerInterner<'_>,
+        interner: &SerInterner<'_, '_, '_, '_, Resident>,
         builder: &mut RdfDatasetBuilder,
         id: usize,
-    ) -> Result<TermId, RdfDiagnostic> {
+    ) -> Result<TermId, NativeParseError> {
         match interner.resolve_node(builder, id)? {
             Nested::Leaf(id) => Ok(id),
             Nested::Triple(s, p, o) => {
@@ -1426,7 +2479,12 @@ mod term_walk_tests {
             nested += usize::from(budget < 7);
             let mut graph = SerGraph::default();
             let root = lower(&mut graph, &value);
+            let mut mapping_storage = Resident;
+            let mut memory = Memory::new(&mut mapping_storage);
+            let mapping_memory = RefCell::new(&mut memory);
             let interner = SerInterner {
+                source: RefCell::new(None),
+                memory: &mapping_memory,
                 graph: &graph,
                 blanks: BlankIngress::Opaque,
             };
@@ -1457,7 +2515,12 @@ mod term_walk_tests {
             let mut graph = SerGraph::default();
             let root = lower(&mut graph, &value);
             drop(value);
+            let mut mapping_storage = Resident;
+            let mut memory = Memory::new(&mut mapping_storage);
+            let mapping_memory = RefCell::new(&mut memory);
             let interner = SerInterner {
+                source: RefCell::new(None),
+                memory: &mapping_memory,
                 graph: &graph,
                 blanks: BlankIngress::Opaque,
             };

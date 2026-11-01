@@ -637,7 +637,16 @@ impl<'a, S: Admission + ?Sized> Memory<'a, S> {
             let _ = self.release_bytes(next);
             return Err(StorageError::SizeOverflow);
         }
-        replacement.append(values);
+        if self.storage.progress_enabled() {
+            if let Err(cause) = boxed::relocate(values, &mut replacement, |units| {
+                self.storage.checkpoint(units)
+            }) {
+                let _ = self.release_vec(replacement);
+                return Err(cause);
+            }
+        } else {
+            replacement.append(values);
+        }
         drop(core::mem::replace(values, replacement));
         self.remove(old)
     }
@@ -648,45 +657,89 @@ impl<'a, S: Admission + ?Sized> Memory<'a, S> {
     /// # Errors
     /// Returns original admission, layout or allocator refusal.
     pub fn boxed<T>(&mut self, value: T) -> Result<Box<T>, StorageError> {
+        self.boxed_retaining(value).map_err(|(_, cause)| cause)
+    }
+
+    /// Admit one exact box, returning its original payload on refusal.
+    ///
+    /// ```
+    /// use purrdf_lex::allocation::{Memory, Resident};
+    /// let mut resident = Resident;
+    /// let mut memory = Memory::new(&mut resident);
+    /// let value = memory.boxed_retaining(7_u32).unwrap();
+    /// assert_eq!(*value, 7);
+    /// drop(value);
+    /// memory.release_bytes(size_of::<u32>()).unwrap();
+    /// ```
+    ///
+    /// # Errors
+    /// Returns the original payload with the admission or allocator cause.
+    /// A refused refund keeps its conservative grant without replacing that cause.
+    pub fn boxed_retaining<T>(&mut self, value: T) -> Result<Box<T>, (T, StorageError)> {
         let bytes = Layout::new::<T>().size();
-        self.add_bytes(bytes)?;
-        match try_boxed(value) {
+        if let Err(cause) = self.add_bytes(bytes) {
+            return Err((value, cause));
+        }
+        match boxed::try_boxed_retaining(value) {
             Ok(value) => Ok(value),
-            Err(_) => {
-                // The allocator refused first. A subsequent refund refusal
-                // must not replace that original physical failure.
+            Err((value, _)) => {
                 let _ = self.release_bytes(bytes);
-                Err(StorageError::AllocationFailed)
+                Err((value, StorageError::AllocationFailed))
             }
         }
     }
 
     /// Freeze an originally admitted array without an infallible shrinking
     /// reallocation. If the array has spare capacity, its exact replacement is
-    /// admitted while the original remains alive.
+    /// admitted while the original remains alive. An account with progress
+    /// enabled admits each owning move before removing that element from the
+    /// original array. Exact-capacity and zero-sized arrays need no relocation.
     ///
     /// # Errors
-    /// Returns checked layout overflow, admission or allocator refusal.
+    /// Returns the first progress, layout, admission, allocator or refund refusal.
+    /// On failure, both arrays are destroyed and their backing-layout refunds
+    /// are attempted independently. A refused refund retains its conservative
+    /// grant without replacing the original failure. Independently admitted
+    /// element payloads keep their own release responsibilities.
     pub fn boxed_slice<T>(&mut self, mut values: Vec<T>) -> Result<Box<[T]>, StorageError> {
-        if size_of::<T>() != 0 && values.capacity() != values.len() {
-            let old = Layout::array::<T>(values.capacity())
-                .map_err(|_| StorageError::SizeOverflow)?
-                .size();
-            let next = Layout::array::<T>(values.len())
-                .map_err(|_| StorageError::SizeOverflow)?
-                .size();
-            self.add(next)?;
-            let mut replacement = Vec::new();
-            replacement
-                .try_reserve_exact(values.len())
-                .map_err(|_| StorageError::AllocationFailed)?;
-            if replacement.capacity() != values.len() {
-                return Err(StorageError::SizeOverflow);
+        let progress = self.storage.progress_enabled();
+        let prepared = (|| {
+            if progress {
+                self.storage.checkpoint(0)?;
             }
-            replacement.append(&mut values);
-            drop(values);
-            self.remove(old)?;
-            values = replacement;
+            if size_of::<T>() != 0 && values.capacity() != values.len() {
+                let mut replacement = Vec::new();
+                let moved = (|| {
+                    self.reserve(&mut replacement, values.len())?;
+                    if progress {
+                        let count = values.len();
+                        let mut pending = values.drain(..);
+                        for _ in 0..count {
+                            self.storage.checkpoint(1)?;
+                            // The drain spans exactly the recorded original
+                            // length; each iteration consumes one element.
+                            replacement.push(pending.next().expect("recorded drain length"));
+                        }
+                    } else {
+                        replacement.append(&mut values);
+                    }
+                    Ok::<_, StorageError>(())
+                })();
+                if let Err(cause) = moved {
+                    let _ = self.release_vec(replacement);
+                    return Err(cause);
+                }
+                let original = core::mem::replace(&mut values, replacement);
+                self.release_vec(original)?;
+            }
+            if progress {
+                self.storage.checkpoint(0)?;
+            }
+            Ok::<_, StorageError>(())
+        })();
+        if let Err(cause) = prepared {
+            let _ = self.release_vec(values);
+            return Err(cause);
         }
         // Exact capacity equals length, so this conversion reallocates nothing.
         Ok(values.into_boxed_slice())
@@ -698,8 +751,66 @@ impl<'a, S: Admission + ?Sized> Memory<'a, S> {
     /// Returns checked layout overflow, admission refusal or allocator refusal.
     pub fn push<T>(&mut self, values: &mut Vec<T>, value: T) -> Result<(), StorageError> {
         self.reserve_for_push(values)?;
+        if self.storage.progress_enabled() {
+            self.storage.checkpoint(1)?;
+        }
         values.push(value);
         Ok(())
+    }
+
+    /// Append a copyable value with bounded relocation through this account.
+    /// The original buffer survives a refused replacement copy unchanged.
+    ///
+    /// # Errors
+    /// Returns the first progress, layout, allocation, admission or refund refusal.
+    /// A refund refusal after replacement leaves the appended value in the new
+    /// buffer and may retain a conservative grant for the destroyed old buffer.
+    ///
+    /// ```
+    /// use purrdf_lex::allocation::{Memory, Resident, StorageError};
+    /// let mut storage = Resident;
+    /// let mut memory = Memory::new(&mut storage);
+    /// let mut ids = Vec::new();
+    /// memory.push_copy_with_progress(&mut ids, 7_u32)?;
+    /// assert_eq!(ids, [7]);
+    /// memory.release_vec(ids)?;
+    /// # Ok::<(), StorageError>(())
+    /// ```
+    pub fn push_copy_with_progress<T: Copy>(
+        &mut self,
+        values: &mut Vec<T>,
+        value: T,
+    ) -> Result<(), StorageError> {
+        if !self.storage.progress_enabled() {
+            return self.push(values, value);
+        }
+        self.storage.checkpoint(0)?;
+        if values.len() < values.capacity() {
+            self.storage.checkpoint(1)?;
+            values.push(value);
+            return Ok(());
+        }
+        let required = values
+            .len()
+            .checked_add(1)
+            .ok_or(StorageError::SizeOverflow)?;
+        let capacity = growth_capacity::<T>(values.capacity(), required)?;
+        let mut replacement = Vec::new();
+        let copied = (|| {
+            self.reserve(&mut replacement, capacity)?;
+            for &pending in values.iter() {
+                self.storage.checkpoint(1)?;
+                replacement.push(pending);
+            }
+            self.storage.checkpoint(1)?;
+            replacement.push(value);
+            Ok(())
+        })();
+        if let Err(error) = copied {
+            let _ = self.release_vec(replacement);
+            return Err(error);
+        }
+        self.release_vec(core::mem::replace(values, replacement))
     }
 
     /// Grow a native binary heap through the same admitted vector home.
@@ -905,13 +1016,37 @@ impl<'a, S: Admission + ?Sized> Memory<'a, S> {
         let old = text.capacity();
         self.add(next)?;
         let mut replacement = String::new();
-        replacement
-            .try_reserve_exact(required)
-            .map_err(|_| StorageError::AllocationFailed)?;
+        if replacement.try_reserve_exact(required).is_err() {
+            drop(replacement);
+            let _ = self.release_bytes(next);
+            return Err(StorageError::AllocationFailed);
+        }
         if replacement.capacity() != required {
+            drop(replacement);
+            let _ = self.release_bytes(next);
             return Err(StorageError::SizeOverflow);
         }
-        replacement.push_str(text);
+        if self.storage.progress_enabled() {
+            let copied = (|| {
+                let mut start = 0;
+                while start < text.len() {
+                    let mut end = start.saturating_add(256).min(text.len());
+                    while !text.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    self.storage.checkpoint((end - start) as u64)?;
+                    replacement.push_str(&text[start..end]);
+                    start = end;
+                }
+                Ok::<_, StorageError>(())
+            })();
+            if let Err(cause) = copied {
+                let _ = self.release_string(replacement);
+                return Err(cause);
+            }
+        } else {
+            replacement.push_str(text);
+        }
         drop(core::mem::replace(text, replacement));
         self.remove(old)
     }
@@ -931,7 +1066,20 @@ impl<'a, S: Admission + ?Sized> Memory<'a, S> {
             let capacity = growth_capacity::<u8>(text.capacity(), required)?;
             self.reserve_string(text, capacity)?;
         }
-        text.push_str(suffix);
+        if self.storage.progress_enabled() {
+            let mut start = 0;
+            while start < suffix.len() {
+                let mut end = start.saturating_add(256).min(suffix.len());
+                while !suffix.is_char_boundary(end) {
+                    end -= 1;
+                }
+                self.storage.checkpoint((end - start) as u64)?;
+                text.push_str(&suffix[start..end]);
+                start = end;
+            }
+        } else {
+            text.push_str(suffix);
+        }
         Ok(())
     }
 
@@ -944,21 +1092,7 @@ impl<'a, S: Admission + ?Sized> Memory<'a, S> {
         text: &mut String,
         suffix: &str,
     ) -> Result<(), StorageError> {
-        if !self.storage.progress_enabled() {
-            return self.push_str(text, suffix);
-        }
-        self.storage.checkpoint(0)?;
-        let mut at = 0;
-        while at < suffix.len() {
-            let mut end = at.saturating_add(256).min(suffix.len());
-            while !suffix.is_char_boundary(end) {
-                end -= 1;
-            }
-            self.storage.checkpoint((end - at) as u64)?;
-            self.push_str(text, &suffix[at..end])?;
-            at = end;
-        }
-        Ok(())
+        self.push_str(text, suffix)
     }
 
     /// Append one scalar after admitting any physical UTF-8 buffer growth.
@@ -1295,6 +1429,23 @@ mod original_scope_regressions {
         let parent = memory.string("original parent payload").unwrap();
         let parent_bytes = memory.admitted_bytes();
         memory.admission_mut().scope_floor = parent_bytes;
+        let overflow_padding = usize::MAX - parent_bytes;
+        memory.add_bytes(overflow_padding).unwrap();
+        let (original, cause) = match memory.boxed_retaining(DropWitness(&destroyed)) {
+            Err(failure) => failure,
+            Ok(_) => panic!("the checked box layout must overflow"),
+        };
+        assert_eq!(cause, StorageError::SizeOverflow);
+        assert!(
+            !destroyed.get(),
+            "refused box returns its original live payload"
+        );
+        drop(original);
+        assert!(destroyed.get());
+        memory.release_bytes(overflow_padding).unwrap();
+        assert_eq!(memory.admitted_bytes(), parent_bytes);
+        destroyed.set(false);
+
         let result: Result<(), StorageError> = memory.scope(|memory| {
             let _child = memory.boxed(DropWitness(&destroyed))?;
             let _text = memory.string("temporary original child string")?;

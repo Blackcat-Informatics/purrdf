@@ -257,6 +257,19 @@ impl std::error::Error for CdtBlankError {
     }
 }
 
+impl purrdf_hash::error::StructuredError for CdtBlankError {
+    purrdf_hash::error_visit! {
+        Storage(cause) => "cdt-blank-storage" { "cause" => Cause(cause) },
+        Malformed { datatype, source } => "cdt-blank-malformed" {
+            "datatype" => Iri(datatype), "source" => Cause(source),
+        },
+        ScannerDisagreement { scanned, parsed } => "cdt-blank-scanner-disagreement" {
+            "scanned" => List(scanned.iter().map(|label| purrdf_hash::error::ErrorValue::Text(label))),
+            "parsed" => List(parsed.iter().map(|label| purrdf_hash::error::ErrorValue::Text(label))),
+        },
+    }
+}
+
 purrdf_lex::variant_from!(CdtBlankError { Storage(StorageError) });
 
 impl CdtBlankError {

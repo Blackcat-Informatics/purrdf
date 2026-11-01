@@ -66,7 +66,17 @@ impl ProjectionWork<'_, '_> {
         self.memory(|memory| memory.release_bytes(bytes).map_err(GeoError::Storage))
     }
     pub(super) fn release_term(&mut self, value: TermValue) -> Result<(), GeoError> {
-        self.memory(|memory| value.release_with_memory(memory).map_err(GeoError::Storage))
+        self.memory(|memory| {
+            value
+                .release_with_memory(memory)
+                .map_err(|(retained, cause)| {
+                    // Projection has finished with this temporary term. A refused
+                    // census still destroys it, leaving its grant conservative;
+                    // preserve the original refusal without a second traversal.
+                    drop(retained);
+                    GeoError::Storage(cause)
+                })
+        })
     }
     pub(super) fn release_keyed(&mut self, keyed: Keyed) -> Result<(), GeoError> {
         self.release_string(keyed.key)?;

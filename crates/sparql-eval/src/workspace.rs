@@ -5106,7 +5106,10 @@ pub(crate) mod owned_row_regressions {
         use crate::remote_http::{
             AdmittedHttpBody, HttpRemoteQuerySource, HttpRequest, HttpTransport,
         };
-        struct Native;
+        use std::sync::atomic::AtomicBool;
+        struct Native {
+            decoder_ready: Option<Arc<AtomicBool>>,
+        }
         impl HttpTransport for Native {
             fn post(&self, _: HttpRequest<'_>) -> Result<Vec<u8>, crate::remote::RemoteError> {
                 panic!("bounded production must use the native transport body")
@@ -5116,9 +5119,13 @@ pub(crate) mod owned_row_regressions {
                 _: HttpRequest<'_>,
                 workspace: super::WorkspaceCapability,
             ) -> Result<AdmittedHttpBody, crate::remote::ServiceResolutionError> {
-                AdmittedHttpBody::try_build(&workspace, |memory| {
+                let body = AdmittedHttpBody::try_build(&workspace, |memory| {
                     memory.collect(br#"{"head":{"vars":["x"]},"results":{"bindings":[{"x":{"type":"literal","value":"same"}},{"x":{"type":"literal","value":"same"}}]}}"#.iter().copied()).map_err(Into::into)
-                })
+                })?;
+                if let Some(ready) = &self.decoder_ready {
+                    ready.store(true, Ordering::Relaxed);
+                }
+                Ok(body)
             }
         }
         let (workspace, ledger, base) = account(4_194_304);
@@ -5140,16 +5147,93 @@ pub(crate) mod owned_row_regressions {
         assert!(ledger.live.load(Ordering::Relaxed) > base);
         drop(local);
         assert_eq!(ledger.live.load(Ordering::Relaxed), base);
-        let http = HttpRemoteQuerySource::new(Native)
-            .resolve_admitted(
-                ServiceRequest::new("http://example.org/service", "SELECT ?x {}"),
-                capability,
-            )
-            .expect("native transport and decoder");
+        let http = HttpRemoteQuerySource::new(Native {
+            decoder_ready: None,
+        })
+        .resolve_admitted(
+            ServiceRequest::new("http://example.org/service", "SELECT ?x {}"),
+            capability,
+        )
+        .expect("native transport and decoder");
         assert_eq!(http.bindings().rows.len(), 2);
         assert_eq!(http.bindings().rows[0], http.bindings().rows[1]);
         drop(http);
         assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+
+        // Refuse the decoder's vector growth after an original header string
+        // exists. This is an owned JSON refusal, beyond initial plain Storage.
+        struct LateReservation {
+            ledger: Arc<Ledger>,
+            ready: Arc<AtomicBool>,
+            decoder_growths: Arc<AtomicUsize>,
+        }
+        impl purrdf_core::WorkspaceReservation for LateReservation {
+            type Error = Refusal;
+            fn resize(&mut self, bytes: u64) -> Result<(), Refusal> {
+                let old = self.ledger.live.load(Ordering::Relaxed);
+                if self.ready.load(Ordering::Relaxed)
+                    && bytes > old
+                    && self.decoder_growths.fetch_add(1, Ordering::Relaxed) == 2
+                {
+                    return Err(Refusal {
+                        identity: 7,
+                        clones: Arc::clone(&self.ledger.clones),
+                    });
+                }
+                self.ledger.live.store(bytes, Ordering::Relaxed);
+                Ok(())
+            }
+        }
+        impl Drop for LateReservation {
+            fn drop(&mut self) {
+                self.ledger.live.store(0, Ordering::Relaxed);
+            }
+        }
+        let ready = Arc::new(AtomicBool::new(false));
+        let growths = Arc::new(AtomicUsize::new(0));
+        let failed_ledger = Arc::new(Ledger {
+            live: AtomicU64::new(base),
+            clones: Arc::new(AtomicUsize::new(0)),
+            limit: 4_194_304,
+        });
+        let failed: QueryWorkspace<Refusal> = QueryWorkspace::owned(
+            Box::new(LateReservation {
+                ledger: Arc::clone(&failed_ledger),
+                ready: Arc::clone(&ready),
+                decoder_growths: Arc::clone(&growths),
+            }),
+            0,
+        )
+        .unwrap();
+        let error = HttpRemoteQuerySource::new(Native {
+            decoder_ready: Some(ready),
+        })
+        .resolve_admitted(
+            ServiceRequest::new("http://example.org/service", "SELECT ?x {}"),
+            failed.capability(),
+        )
+        .expect_err("the original decoder growth refuses after retaining text");
+        assert!(matches!(
+            error,
+            crate::remote::ServiceResolutionError::Operational(EvalError::WorkspaceStopped)
+        ));
+        assert_eq!(growths.load(Ordering::Relaxed), 3);
+        assert_eq!(failed.take_failure().unwrap().identity, 7);
+        assert_eq!(failed_ledger.clones.load(Ordering::Relaxed), 0);
+        assert_eq!(failed_ledger.live.load(Ordering::Relaxed), base);
+        let neighbor = HttpRemoteQuerySource::new(Native {
+            decoder_ready: None,
+        })
+        .resolve_admitted(
+            ServiceRequest::new("http://example.org/service", "SELECT ?x {}"),
+            workspace.capability(),
+        )
+        .expect("a healthy original account still decodes its duplicate bag");
+        assert_eq!(neighbor.bindings().rows.len(), 2);
+        drop(neighbor);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+        drop(failed);
+        assert_eq!(failed_ledger.live.load(Ordering::Relaxed), 0);
     }
 
     #[test]

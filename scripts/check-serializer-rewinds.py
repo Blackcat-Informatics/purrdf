@@ -77,22 +77,16 @@ CHAR_LITERAL = re.compile(r"'(?:\\.|[^\\'])'")
 # Keyed by receiver rather than by line number so the table survives edits above
 # it: a reasoned exemption should not need renewing every time the file moves.
 ALLOWLIST: dict[tuple[str, str], str] = {
+    ("crates/rdf/src/native_codecs/text_parse.rs", "terms"): "The native parser rolls back its just-appended unpublished atom when indexing refuses. This is an in-memory term table, never an emitted byte stream.",
+    ("crates/rdf/src/native_codecs/text_parse.rs", "reifiers"): "The native statement fold removes its unindexed trailing reifier row on refusal before any source association or dataset publication. These are semantic rows, not emitted bytes.",
+    ("crates/sparql-results/src/json_read.rs", "items"): "The native decoder cleanup consumes original input-owned payloads and restores a refused payload into its vacant admitted slot. The array is cleanup ownership, never serialized output.",
     ("crates/sparql-results/src/json_read.rs", "scratch.open"): "Native decoder cleanup destroys unfinished binding/triple frames before refunding their original allocation. No emitted bytes are held or changed.",
     ("crates/sparql-results/src/json_read.rs", "solutions.rows"): "The native decoder ownership regression destroys decoded rows before releasing their original array allocation; these are input values, never emitted bytes.",
     ("crates/sparql-results/src/json_read.rs", "row"): "The native decoder ownership regression destroys decoded term cells before releasing the row's original array allocation; no output stream is touched.",
     ("crates/sparql-results/src/json_read.rs", "solutions.variables"): "The native decoder ownership regression releases decoded variable strings before their original array allocation; no serialized document is involved.",
-    (
-        "crates/rdf/src/native_codecs/ser_model.rs",
-        "held",
-    ): "A work stack of pieces still to be written: a nested triple term is emitted front to back by holding its later pieces and popping the next one. Nothing popped has been written yet; no emitted byte is touched.",
-    (
-        "crates/sparql-results/src/json.rs",
-        "held",
-    ): "A work stack of pieces still to be written: a nested triple term is emitted front to back by holding its later pieces and popping the next one. Nothing popped has been written yet; no emitted byte is touched.",
-    (
-        "crates/sparql-results/src/json_read.rs",
-        "open",
-    ): "The SPARQL-JSON READER's stacks of containers and triple terms still open while a document is parsed or a binding decoded; popping one closes it. The reader emits nothing.",
+    ("crates/rdf/src/native_codecs/ser_model.rs", "held"): "A work stack of pieces still to be written: a nested triple term is emitted front to back by holding its later pieces and popping the next one. Nothing popped has been written yet; no emitted byte is touched.",
+    ("crates/sparql-results/src/json.rs", "held"): "A work stack of pieces still to be written: a nested triple term is emitted front to back by holding its later pieces and popping the next one. Nothing popped has been written yet; no emitted byte is touched.",
+    ("crates/sparql-results/src/json_read.rs", "open"): "The SPARQL-JSON READER's stacks of containers and triple terms still open while a document is parsed or a binding decoded; popping one closes it. The reader emits nothing.",
     (
         "crates/sparql-results/src/json_read.rs",
         "scratch.bound",

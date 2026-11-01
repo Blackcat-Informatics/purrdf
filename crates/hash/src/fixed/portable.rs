@@ -74,10 +74,14 @@ fn block_words(block: &[u8; 32]) -> [u64; 4] {
 /// 32 bytes, overlapping its predecessor when the length is not a multiple
 /// of 32. The caller mixes in the length, which overlap leaves ambiguous.
 #[inline]
-pub(crate) fn compress_long(bytes: &[u8]) -> (u64, u64) {
+pub(crate) fn try_compress_long<E>(
+    bytes: &[u8],
+    progress: &mut (impl FnMut(u64) -> Result<(), E> + ?Sized),
+) -> Result<(u64, u64), E> {
     let len = bytes.len();
     debug_assert!(len > 16);
     if len <= 32 {
+        progress(32)?;
         // The common IRI length class has four possibly overlapping words.
         // Two independent folded products mix the first sixteen bytes; the
         // last sixteen enter separate words before the caller's final pair
@@ -86,14 +90,16 @@ pub(crate) fn compress_long(bytes: &[u8]) -> (u64, u64) {
             ^ (LANE_INIT[2] ^ read64(bytes, len - 16)).rotate_left(17);
         let second = fold(LANE_INIT[1] ^ read64(bytes, 8), LANE_KEY[1])
             ^ (LANE_INIT[3] ^ read64(bytes, len - 8)).rotate_left(43);
-        return (first, second);
+        return Ok((first, second));
     }
     let mut lanes = LANE_INIT;
     let (blocks, _) = bytes[..len - 1].as_chunks::<32>();
     for block in blocks {
+        progress(32)?;
         step(&mut lanes, block_words(block));
     }
+    progress(32)?;
     let last = bytes.last_chunk::<32>().expect("more than 32 bytes");
     step(&mut lanes, block_words(last));
-    (lanes[0] ^ lanes[2], lanes[1] ^ lanes[3])
+    Ok((lanes[0] ^ lanes[2], lanes[1] ^ lanes[3]))
 }

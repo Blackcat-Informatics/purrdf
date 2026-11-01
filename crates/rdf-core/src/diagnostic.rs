@@ -546,22 +546,63 @@ impl RdfDiagnostic {
 
     /// Attach validated presentation data and render its compatibility English.
     #[must_use]
-    pub fn with_presentation(mut self, presentation: DiagnosticPresentation) -> Self {
-        presentation.english().clone_into(&mut self.message);
-        self.detail = presentation
+    pub fn with_presentation(self, presentation: DiagnosticPresentation) -> Self {
+        let bytes = self
+            .retained_bytes()
+            .and_then(|bytes| {
+                presentation
+                    .retained_bytes()
+                    .and_then(|presentation| bytes.checked_add(presentation))
+            })
+            .expect("resident diagnostic payload layout");
+        self.with_presentation_with_memory(
+            presentation,
+            &mut purrdf_lex::allocation::Memory::resume(
+                &mut purrdf_lex::allocation::Resident,
+                bytes,
+            ),
+        )
+        .expect("resident diagnostic presentation allocation failed")
+    }
+
+    /// Attach an already admitted presentation through its original account.
+    /// Compatibility English and detail are copied through governed native text
+    /// writers; both old and replacement storage stay covered until destruction.
+    /// # Errors
+    /// Returns physical or progress refusal before publishing the replacement.
+    pub fn with_presentation_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        mut self,
+        presentation: DiagnosticPresentation,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<Self, purrdf_lex::allocation::StorageError> {
+        let message = memory.string_with_progress(presentation.english())?;
+        let detail = presentation
             .detail()
-            .map(|detail| detail.english().to_owned());
-        match &mut self.attachments {
-            Some(attachments) => attachments.presentation = Some(presentation),
+            .map(|detail| memory.string_with_progress(detail.english()))
+            .transpose()?;
+        let old_presentation = match &mut self.attachments {
+            Some(attachments) => attachments.presentation.replace(presentation),
             None => {
-                self.attachments = Some(Box::new(DiagnosticAttachments {
+                self.attachments = Some(memory.boxed(DiagnosticAttachments {
                     presentation: Some(presentation),
                     storage: None,
                     cause: None,
-                }));
+                })?);
+                None
             }
+        };
+        memory.release_string(core::mem::replace(&mut self.message, message))?;
+        if let Some(detail) = core::mem::replace(&mut self.detail, detail) {
+            memory.release_string(detail)?;
         }
-        self
+        if let Some(old) = old_presentation {
+            let bytes = old
+                .retained_bytes()
+                .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?;
+            drop(old);
+            memory.release_bytes(bytes)?;
+        }
+        Ok(self)
     }
 
     /// The stable presentation identity and typed arguments, when supplied.

@@ -1084,14 +1084,18 @@ impl RdfDataset {
             let mut graphs = purrdf_hash::multiset::Multiset256::default();
             let mut pending = Vec::new();
             for &graph in &named_graphs {
+                memory.admission_mut().checkpoint(1)?;
                 let mut hash = purrdf_hash::blake3::RecordHasher::new();
-                dictionary.visit_canonical_bytes(graph, &mut pending, memory, |bytes| {
-                    hash.update(bytes);
-                })?;
+                dictionary
+                    .try_visit_canonical_bytes(graph, &mut pending, memory, |bytes, memory| {
+                        crate::source::source_hash_update(&mut hash, bytes, memory)
+                    })
+                    .map_err(crate::source::source_visit_error)?;
                 graphs
-                    .insert(*hash.finalize().as_bytes())
+                    .insert(crate::source::source_hash_finalize(&hash, memory)?)
                     .map_err(|_| purrdf_lex::allocation::StorageError::SizeOverflow)?;
             }
+            memory.release_vec(pending)?;
             Ok::<_, purrdf_lex::allocation::StorageError>(graphs)
         })?;
         let snapshot_identity = crate::source::resident_snapshot(

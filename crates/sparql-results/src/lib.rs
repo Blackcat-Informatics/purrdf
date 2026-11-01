@@ -72,7 +72,8 @@ mod xml_read;
 
 pub use csv::to_csv;
 pub use error::{
-    Error, MalformedResult, NamespaceRefusal, ReadReason, ReadRefusal, ReadShape, ReadToken,
+    Error, JsonRelease, MalformedResult, NamespaceRefusal, ReadReason, ReadRefusal, ReadShape,
+    ReadToken,
 };
 pub use json::to_json;
 pub use json_read::{

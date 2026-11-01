@@ -111,10 +111,25 @@ impl SerGraph {
     /// per call, and rendering every triple term through it is quadratic in the
     /// statement layer.
     pub(crate) fn reifier(&self, rid: usize) -> Option<SerTriple3> {
-        self.reifiers
-            .iter()
-            .find(|(r, _, _)| *r == rid)
-            .map(|(_, spo, _)| *spo)
+        match self.reifier_with_control(rid, &mut purrdf_lex::control::Unmetered) {
+            Ok(binding) => binding,
+            Err(never) => match never {},
+        }
+    }
+
+    /// Admit each original binding visit before comparing its identifier.
+    pub(crate) fn reifier_with_control<C: purrdf_lex::control::Progress + ?Sized>(
+        &self,
+        rid: usize,
+        progress: &mut C,
+    ) -> Result<Option<SerTriple3>, C::Error> {
+        for &(reifier, triple, _) in &self.reifiers {
+            progress.charge(1)?;
+            if reifier == rid {
+                return Ok(Some(triple));
+            }
+        }
+        Ok(None)
     }
 
     /// An O(1) snapshot of [`reifier`](Self::reifier) over the CURRENT `reifiers`
@@ -269,18 +284,32 @@ impl ReifierIndex {
 /// `counter < 2^80`, so this is [`purrdf_lex::crockford::write_u128`] of
 /// `counter as u128`.
 pub(crate) fn deterministic_blank_label_with_prefix(prefix: &str, counter: usize) -> String {
-    let mut label = String::with_capacity(prefix.len() + purrdf_lex::crockford::U128_DIGITS);
-    label.push_str(prefix);
-    // Writing into a `String` cannot fail.
-    let _ = purrdf_lex::crockford::write_u128(counter as u128, &mut label);
-    label
+    deterministic_blank_label_with_memory(
+        prefix,
+        counter,
+        &mut purrdf_lex::allocation::Memory::new(&mut purrdf_lex::allocation::Resident),
+    )
+    .expect("resident deterministic label allocation failed")
 }
 
-/// A deterministic blank-node label, byte-identical to the prior purrdf-gts
-/// `deterministic_label("gts_", counter)`. See
-/// [`deterministic_blank_label_with_prefix`].
-pub(crate) fn deterministic_blank_label(counter: usize) -> String {
-    deterministic_blank_label_with_prefix("gts_", counter)
+/// Write the native counter spelling only after its exact destination admission.
+pub(crate) fn deterministic_blank_label_with_memory<
+    S: purrdf_lex::allocation::Admission + ?Sized,
+>(
+    prefix: &str,
+    counter: usize,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+) -> Result<String, purrdf_lex::allocation::StorageError> {
+    let bytes = prefix
+        .len()
+        .checked_add(purrdf_lex::crockford::U128_DIGITS)
+        .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?;
+    let mut label = String::new();
+    memory.reserve_string(&mut label, bytes)?;
+    memory.push_str_with_progress(&mut label, prefix)?;
+    // Fixed-width counter writing fits the already admitted native destination.
+    let _ = purrdf_lex::crockford::write_u128(counter as u128, &mut label);
+    Ok(label)
 }
 
 use purrdf_iri::vocab::rdf::NS as RDF_NS;
@@ -1237,26 +1266,20 @@ mod tests {
         // comparison relabels blanks and will NOT catch a label-shape regression, so
         // these exact strings are checked directly. Each is the 26-digit Crockford
         // Base32 rendering of the zero-timestamp ULID built from the counter.
-        assert_eq!(
-            deterministic_blank_label(0),
-            "gts_00000000000000000000000000"
-        );
-        assert_eq!(
-            deterministic_blank_label(1),
-            "gts_00000000000000000000000001"
-        );
-        assert_eq!(
-            deterministic_blank_label(31),
-            "gts_0000000000000000000000000Z"
-        );
-        assert_eq!(
-            deterministic_blank_label(32),
-            "gts_00000000000000000000000010"
-        );
-        assert_eq!(
-            deterministic_blank_label(1000),
-            "gts_000000000000000000000000Z8"
-        );
+        let mut resident = purrdf_lex::allocation::Resident;
+        let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
+        for (counter, expected) in [
+            (0, "gts_00000000000000000000000000"),
+            (1, "gts_00000000000000000000000001"),
+            (31, "gts_0000000000000000000000000Z"),
+            (32, "gts_00000000000000000000000010"),
+            (1000, "gts_000000000000000000000000Z8"),
+        ] {
+            let label =
+                deterministic_blank_label_with_memory("gts_", counter, &mut memory).unwrap();
+            assert_eq!(label, expected);
+            memory.release_string(label).unwrap();
+        }
     }
 
     /// A single-quad graph `<s> <p> "<lit>"` over default-graph terms.

@@ -22,6 +22,9 @@
 /// Shared native table engine and its original allocation refusals.
 pub mod table;
 
+use purrdf_hash::fixed::FixedHasher;
+use purrdf_lex::allocation::{Admission, Memory, Resident, StorageError};
+
 /// The workspace's fixed-key hasher builder,
 /// [`FixedState`](purrdf_hash::fixed::FixedState). Non-cryptographic, no
 /// runtime RNG seeding — see the [module docs](self) for the determinism policy.
@@ -110,6 +113,69 @@ pub(crate) fn stats_fingerprint(quads: u64, terms: u64) -> u64 {
     FastHasher::new().hash_one((quads, terms))
 }
 
+/// The direct interner protocols below never use an infallible `Hash` adapter.
+/// Every variable byte field enters the original native body once, with its
+/// original write boundary; metadata keeps its specialized integer writes.
+struct KeyHash<'m, 's, S: Admission + ?Sized> {
+    hash: FixedHasher,
+    memory: &'m mut Memory<'s, S>,
+}
+
+impl<'m, 's, S: Admission + ?Sized> KeyHash<'m, 's, S> {
+    #[inline]
+    fn new(memory: &'m mut Memory<'s, S>) -> Result<Self, StorageError> {
+        memory.admission_mut().checkpoint(0)?;
+        Ok(Self {
+            hash: FixedHasher::default(),
+            memory,
+        })
+    }
+
+    #[inline]
+    fn read(&mut self, bytes: usize) -> Result<(), StorageError> {
+        self.memory.admission_mut().checkpoint(bytes as u64)
+    }
+
+    #[inline]
+    fn word(&mut self, word: u64) -> Result<(), StorageError> {
+        use core::hash::Hasher;
+        self.read(8)?;
+        self.hash.write_u64(word);
+        Ok(())
+    }
+
+    #[inline]
+    fn wide(&mut self, word: u128) -> Result<(), StorageError> {
+        use core::hash::Hasher;
+        self.read(16)?;
+        self.hash.write_u128(word);
+        Ok(())
+    }
+
+    #[inline]
+    fn bytes(&mut self, bytes: &[u8]) -> Result<(), StorageError> {
+        self.hash.try_write(bytes, &mut |units| {
+            self.memory.admission_mut().checkpoint(units)
+        })
+    }
+
+    #[inline]
+    fn finish(self) -> Result<u64, StorageError> {
+        use core::hash::Hasher;
+        self.memory.admission_mut().checkpoint(0)?;
+        Ok(self.hash.finish())
+    }
+}
+
+#[inline]
+pub(crate) fn resident_hash(
+    body: impl FnOnce(&mut Memory<'_, Resident>) -> Result<u64, StorageError>,
+) -> u64 {
+    let mut resident = Resident;
+    body(&mut Memory::new(&mut resident))
+        .expect("resident table hashing has no fallible storage or progress operation")
+}
+
 /// Hash an IRI for the primary term index, including its variant tag.
 ///
 /// The builder, global dictionary and frozen dataset must use this exact
@@ -117,7 +183,19 @@ pub(crate) fn stats_fingerprint(quads: u64, terms: u64) -> u64 {
 /// so the native hasher can compress its bytes and length in one operation.
 #[inline]
 pub(crate) fn hash_iri_for_interner(iri: &str) -> u64 {
-    purrdf_hash::fixed::FixedHasher::hash_terminal(0, iri.as_bytes())
+    resident_hash(|memory| hash_iri_for_interner_with_memory(iri, memory))
+}
+
+/// The same terminal-key hash through the original caller's work authority.
+/// Refusal returns before any hash can be published or index updated.
+#[inline]
+pub(crate) fn hash_iri_for_interner_with_memory<S: Admission + ?Sized>(
+    iri: &str,
+    memory: &mut Memory<'_, S>,
+) -> Result<u64, StorageError> {
+    FixedHasher::try_hash_terminal(0, iri.as_bytes(), &mut |units| {
+        memory.admission_mut().checkpoint(units)
+    })
 }
 
 /// Pack up to sixteen bytes without allocation; callers encode both field
@@ -133,27 +211,40 @@ fn packed_text(first: &[u8], second: &[u8]) -> u128 {
 }
 
 /// Short labels share integer blocks with scope, variant and length.
-/// Longer labels use a byte write that already incorporates its length.
+/// Longer labels retain their original individually framed byte blocks.
 #[inline]
 pub(crate) fn hash_blank_for_interner(label: &str, scope: u32) -> u64 {
+    resident_hash(|memory| hash_blank_for_interner_with_memory(label, scope, memory))
+}
+
+#[inline]
+pub(crate) fn hash_blank_for_interner_with_memory<S: Admission + ?Sized>(
+    label: &str,
+    scope: u32,
+    memory: &mut Memory<'_, S>,
+) -> Result<u64, StorageError> {
     if label.len() <= 16 {
-        hash_short_blank(label.as_bytes(), scope)
+        hash_short_blank(label.as_bytes(), scope, memory)
     } else {
-        hash_blank_bytes_for_interner(label.len(), label.bytes(), scope)
+        hash_blank_bytes_for_interner_with_memory(label.len(), label.bytes(), scope, memory)
     }
 }
 
 #[inline]
-fn hash_short_blank(bytes: &[u8], scope: u32) -> u64 {
-    use core::hash::Hasher;
-    let mut hash = purrdf_hash::fixed::FixedHasher::default();
+fn hash_short_blank<S: Admission + ?Sized>(
+    bytes: &[u8],
+    scope: u32,
+    memory: &mut Memory<'_, S>,
+) -> Result<u64, StorageError> {
+    let mut hash = KeyHash::new(memory)?;
     let metadata = u64::from(scope) | (1 << 32) | ((bytes.len() as u64) << 40);
+    hash.read(bytes.len())?;
     let text = packed_text(bytes, &[]);
     if bytes.len() <= 8 {
-        hash.write_u128(text | (u128::from(metadata) << 64));
+        hash.wide(text | (u128::from(metadata) << 64))?;
     } else {
-        hash.write_u64(metadata);
-        hash.write_u128(text);
+        hash.word(metadata)?;
+        hash.wide(text)?;
     }
     hash.finish()
 }
@@ -163,29 +254,41 @@ fn hash_short_blank(bytes: &[u8], scope: u32) -> u64 {
 #[inline]
 pub(crate) fn hash_blank_bytes_for_interner(
     len: usize,
-    mut bytes: impl Iterator<Item = u8>,
+    bytes: impl Iterator<Item = u8>,
     scope: u32,
 ) -> u64 {
-    use core::hash::Hasher;
-    let mut hash = purrdf_hash::fixed::FixedHasher::default();
+    resident_hash(|memory| hash_blank_bytes_for_interner_with_memory(len, bytes, scope, memory))
+}
+
+#[inline]
+pub(crate) fn hash_blank_bytes_for_interner_with_memory<S: Admission + ?Sized>(
+    len: usize,
+    mut bytes: impl Iterator<Item = u8>,
+    scope: u32,
+    memory: &mut Memory<'_, S>,
+) -> Result<u64, StorageError> {
+    memory.admission_mut().checkpoint(0)?;
     let mut block = [0_u8; 32];
     if len <= 16 {
+        memory.admission_mut().checkpoint(len as u64)?;
         for slot in &mut block[..len] {
             *slot = bytes.next().expect("declared blank label byte length");
         }
-        return hash_short_blank(&block[..len], scope);
+        return hash_short_blank(&block[..len], scope, memory);
     }
-    hash.write_u64(u64::from(scope) | (1 << 32));
+    let mut hash = KeyHash::new(memory)?;
+    hash.word(u64::from(scope) | (1 << 32))?;
     // Framing each fixed-size block through the existing hasher preserves
     // length distinctions, including a short final block. This is an internal
     // index protocol, never a persisted hash or an ordering key.
     let mut remaining = len;
     while remaining != 0 {
         let count = remaining.min(block.len());
+        hash.read(count)?;
         for slot in &mut block[..count] {
             *slot = bytes.next().expect("declared blank label byte length");
         }
-        hash.write(&block[..count]);
+        hash.bytes(&block[..count])?;
         remaining -= count;
     }
     hash.finish()
@@ -203,31 +306,44 @@ pub(crate) fn hash_literal_for_interner(
     language: Option<&str>,
     direction: Option<crate::RdfTextDirection>,
 ) -> u64 {
-    use core::hash::Hasher;
+    resident_hash(|memory| {
+        hash_literal_for_interner_with_memory(lexical, datatype, language, direction, memory)
+    })
+}
+
+#[inline]
+pub(crate) fn hash_literal_for_interner_with_memory<S: Admission + ?Sized>(
+    lexical: &str,
+    datatype: u64,
+    language: Option<&str>,
+    direction: Option<crate::RdfTextDirection>,
+    memory: &mut Memory<'_, S>,
+) -> Result<u64, StorageError> {
+    let mut hash = KeyHash::new(memory)?;
     let direction = match direction {
         None => 0u128,
         Some(crate::RdfTextDirection::Ltr) => 1,
         Some(crate::RdfTextDirection::Rtl) => 2,
     };
     let metadata = 2 | (u128::from(language.is_some()) << 2) | (direction << 3);
-    let mut hash = purrdf_hash::fixed::FixedHasher::default();
     let language_bytes = language.unwrap_or("").as_bytes();
     if lexical.len() <= 16 && language_bytes.len() <= 16 - lexical.len() {
+        hash.read(lexical.len() + language_bytes.len())?;
         let text = packed_text(lexical.as_bytes(), language_bytes);
         let lengths = ((lexical.len() as u128) << 8) | ((language_bytes.len() as u128) << 13);
         if lexical.len() + language_bytes.len() <= 8 && u32::try_from(datatype).is_ok() {
             let high = u128::from(datatype) | ((metadata | lengths) << 32);
-            hash.write_u128(text | (high << 64));
+            hash.wide(text | (high << 64))?;
         } else {
-            hash.write_u128(u128::from(datatype) | ((metadata | lengths) << 64));
-            hash.write_u128(text);
+            hash.wide(u128::from(datatype) | ((metadata | lengths) << 64))?;
+            hash.wide(text)?;
         }
         return hash.finish();
     }
-    hash.write_u128(u128::from(datatype) | (metadata << 64));
-    hash.write(lexical.as_bytes());
+    hash.wide(u128::from(datatype) | (metadata << 64))?;
+    hash.bytes(lexical.as_bytes())?;
     if let Some(language) = language {
-        hash.write(language.as_bytes());
+        hash.bytes(language.as_bytes())?;
     }
     hash.finish()
 }
@@ -236,13 +352,22 @@ pub(crate) fn hash_literal_for_interner(
 /// two blocks. Every bit is preserved, including the high half of global ids.
 #[inline]
 pub(crate) fn hash_triple_for_interner(s: u64, p: u64, o: u64) -> u64 {
-    use core::hash::Hasher;
-    let mut hash = purrdf_hash::fixed::FixedHasher::default();
+    resident_hash(|memory| hash_triple_for_interner_with_memory(s, p, o, memory))
+}
+
+#[inline]
+pub(crate) fn hash_triple_for_interner_with_memory<S: Admission + ?Sized>(
+    s: u64,
+    p: u64,
+    o: u64,
+    memory: &mut Memory<'_, S>,
+) -> Result<u64, StorageError> {
+    let mut hash = KeyHash::new(memory)?;
     if u32::try_from(s | p | o).is_ok() {
-        hash.write_u128(u128::from(s) | (u128::from(p) << 32) | (u128::from(o) << 64) | (3 << 96));
+        hash.wide(u128::from(s) | (u128::from(p) << 32) | (u128::from(o) << 64) | (3 << 96))?;
     } else {
-        hash.write_u128(u128::from(s) | (u128::from(p) << 64));
-        hash.write_u128(u128::from(o) | (3 << 64));
+        hash.wide(u128::from(s) | (u128::from(p) << 64))?;
+        hash.wide(u128::from(o) | (3 << 64))?;
     }
     hash.finish()
 }
@@ -252,13 +377,29 @@ pub(crate) fn hash_triple_for_interner(s: u64, p: u64, o: u64) -> u64 {
 ///
 /// # Errors
 /// Returns layout overflow, original admission refusal or allocator refusal.
-pub fn reserve_table_with_memory<T, S: purrdf_lex::allocation::Admission + ?Sized>(
+/// A refund refusal after a successful native swap leaves the replacement live
+/// and its capacity changed; its original grant remains retained.
+pub fn reserve_table_with_memory<T, S: Admission + ?Sized>(
     table: &mut table::HashTable<T>,
     required: usize,
     hash: impl Fn(&T) -> u64,
-    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
-) -> Result<(), purrdf_lex::allocation::StorageError> {
-    use purrdf_lex::allocation::StorageError;
+    memory: &mut Memory<'_, S>,
+) -> Result<(), StorageError> {
+    try_reserve_table_with_memory(table, required, |value, _| Ok(hash(value)), memory)
+}
+
+/// The native table growth home with fallible hashing through the same original
+/// account. Callback state retains its own grants on every outcome; only the
+/// replacement layout is refunded after native transactional failure.
+///
+/// # Errors
+/// Returns the original work/admission refusal or native allocation failure.
+pub fn try_reserve_table_with_memory<T, S: Admission + ?Sized>(
+    table: &mut table::HashTable<T>,
+    required: usize,
+    mut hash: impl FnMut(&T, &mut Memory<'_, S>) -> Result<u64, StorageError>,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), StorageError> {
     if required <= table.capacity() {
         return Ok(());
     }
@@ -276,26 +417,33 @@ pub fn reserve_table_with_memory<T, S: purrdf_lex::allocation::Admission + ?Size
         .map_err(|_| StorageError::SizeOverflow)?
         .expect("required insertion headroom exceeds current table capacity");
     let next = hash_table_allocation_bound::<T>(capacity).ok_or(StorageError::SizeOverflow)?;
-    memory.scope(|memory| {
-        // Both layouts stay admitted while transactional native rehash borrows
-        // original entries. On refusal the replacement dies before scope refund.
-        memory.add_bytes(next)?;
-        table
-            .try_reserve_with_control(additional, |value, _| Ok(hash(value)), &mut |units| {
-                memory.admission_mut().checkpoint(units)
-            })
-            .map_err(|cause| match cause {
-                purrdf_lex::control::ControlledError::Control(cause) => cause,
-                purrdf_lex::control::ControlledError::Native(
-                    table::TryReserveError::CapacityOverflow,
-                ) => StorageError::SizeOverflow,
-                purrdf_lex::control::ControlledError::Native(
-                    table::TryReserveError::AllocError { .. },
-                ) => StorageError::AllocationFailed,
-            })
-    })?;
+    memory.add_bytes(next)?;
+    let reserved = table
+        .try_reserve_with_control(additional, &mut hash, memory)
+        .map_err(table_storage_error);
+    if let Err(cause) = reserved {
+        // The native failed replacement has died. Hash callbacks may retain
+        // additional original-account state, so refund only this exact layout.
+        let _ = memory.release_bytes(next);
+        return Err(cause);
+    }
     // The successful native swap already destroyed the original allocation.
     memory.release_bytes(old)
+}
+
+/// Preserve a native table's physical or original admission refusal.
+pub fn table_storage_error(
+    cause: purrdf_lex::control::ControlledError<table::TryReserveError, StorageError>,
+) -> StorageError {
+    match cause {
+        purrdf_lex::control::ControlledError::Control(cause) => cause,
+        purrdf_lex::control::ControlledError::Native(table::TryReserveError::CapacityOverflow) => {
+            StorageError::SizeOverflow
+        }
+        purrdf_lex::control::ControlledError::Native(table::TryReserveError::AllocError {
+            ..
+        }) => StorageError::AllocationFailed,
+    }
 }
 
 /// Grow a fixed-key map at the same physical table home as native hash tables.
@@ -306,16 +454,11 @@ pub fn reserve_table_with_memory<T, S: purrdf_lex::allocation::Admission + ?Size
     clippy::implicit_hasher,
     reason = "physical growth preserves the workspace's required fixed-key native map"
 )]
-pub fn reserve_map_with_memory<
-    K: Eq + core::hash::Hash,
-    V,
-    S: purrdf_lex::allocation::Admission + ?Sized,
->(
+pub fn reserve_map_with_memory<K: Eq + core::hash::Hash, V, S: Admission + ?Sized>(
     map: &mut FastMap<K, V>,
     required: usize,
-    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
-) -> Result<(), purrdf_lex::allocation::StorageError> {
-    use purrdf_lex::allocation::StorageError;
+    memory: &mut Memory<'_, S>,
+) -> Result<(), StorageError> {
     let mut retained =
         hash_table_allocation_bound::<(K, V)>(map.capacity()).ok_or(StorageError::SizeOverflow)?;
     reserve_map_with_retained_memory(map, &mut retained, required, memory)
@@ -333,17 +476,12 @@ pub fn reserve_map_with_memory<
     clippy::implicit_hasher,
     reason = "preserves the workspace fixed-key map"
 )]
-pub fn reserve_map_with_retained_memory<
-    K: Eq + core::hash::Hash,
-    V,
-    S: purrdf_lex::allocation::Admission + ?Sized,
->(
+pub fn reserve_map_with_retained_memory<K: Eq + core::hash::Hash, V, S: Admission + ?Sized>(
     map: &mut FastMap<K, V>,
     retained: &mut usize,
     required: usize,
-    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
-) -> Result<(), purrdf_lex::allocation::StorageError> {
-    use purrdf_lex::allocation::StorageError;
+    memory: &mut Memory<'_, S>,
+) -> Result<(), StorageError> {
     if required <= map.capacity() {
         return Ok(());
     }
@@ -366,12 +504,74 @@ pub fn reserve_map_with_retained_memory<
 #[cfg(test)]
 mod tests {
     use super::{
-        FastSet, hash_blank_for_interner, hash_literal_for_interner, hash_triple_for_interner,
+        FastSet, hash_blank_bytes_for_interner_with_memory, hash_blank_for_interner,
+        hash_blank_for_interner_with_memory, hash_iri_for_interner,
+        hash_iri_for_interner_with_memory, hash_literal_for_interner,
+        hash_literal_for_interner_with_memory, hash_triple_for_interner,
+        hash_triple_for_interner_with_memory,
     };
     use crate::RdfTextDirection::{Ltr, Rtl};
+    use purrdf_lex::allocation::{Admission, Memory, StorageError};
 
     #[test]
     fn packed_fields_preserve_boundaries_presence_and_high_id_bits() {
+        struct Work {
+            calls: usize,
+            refuse: Option<usize>,
+        }
+        impl Admission for Work {
+            fn resize(&mut self, bytes: usize) -> Result<(), StorageError> {
+                assert_eq!(bytes, 0, "direct hashing does not allocate");
+                Ok(())
+            }
+            fn progress_enabled(&self) -> bool {
+                true
+            }
+            fn checkpoint(&mut self, units: u64) -> Result<(), StorageError> {
+                assert!(units <= 64, "original native block or fixed metadata");
+                let at = self.calls;
+                self.calls += 1;
+                if self.refuse == Some(at) {
+                    Err(StorageError::AdmissionFailed)
+                } else {
+                    Ok(())
+                }
+            }
+        }
+        fn checked(
+            expected: u64,
+            sweep: bool,
+            mut hash: impl FnMut(&mut Memory<'_, Work>) -> Result<u64, StorageError>,
+        ) {
+            let mut work = Work {
+                calls: 0,
+                refuse: None,
+            };
+            let mut memory = Memory::new(&mut work);
+            assert_eq!(
+                hash(&mut memory),
+                Ok(expected),
+                "accepting native hash parity"
+            );
+            assert_eq!(memory.admitted_bytes(), 0);
+            let calls = work.calls;
+            if sweep {
+                for at in 0..calls {
+                    let mut work = Work {
+                        calls: 0,
+                        refuse: Some(at),
+                    };
+                    let mut memory = Memory::new(&mut work);
+                    assert_eq!(
+                        hash(&mut memory),
+                        Err(StorageError::AdmissionFailed),
+                        "no partial hash on refusal"
+                    );
+                    assert_eq!(memory.admitted_bytes(), 0);
+                    assert_eq!(work.calls, at + 1, "no callback after refusal");
+                }
+            }
+        }
         let mut seen = FastSet::default();
         for lexical in [
             "",
@@ -396,18 +596,27 @@ mod tests {
                     Some("12345678901234567"),
                 ] {
                     for direction in [None, Some(Ltr), Some(Rtl)] {
+                        let expected =
+                            hash_literal_for_interner(lexical, datatype, language, direction);
+                        checked(expected, false, |memory| {
+                            hash_literal_for_interner_with_memory(
+                                lexical, datatype, language, direction, memory,
+                            )
+                        });
                         assert!(
-                            seen.insert(hash_literal_for_interner(
-                                lexical, datatype, language, direction
-                            )),
+                            seen.insert(expected),
                             "distinct literal fields collided: {lexical:?}/{datatype}/{language:?}/{direction:?}"
                         );
                     }
                 }
             }
             for scope in [0, 1, 1 << 31, u32::MAX] {
+                let expected = hash_blank_for_interner(lexical, scope);
+                checked(expected, false, |memory| {
+                    hash_blank_for_interner_with_memory(lexical, scope, memory)
+                });
                 assert!(
-                    seen.insert(hash_blank_for_interner(lexical, scope)),
+                    seen.insert(expected),
                     "blank scope, label and variant must participate"
                 );
             }
@@ -416,13 +625,76 @@ mod tests {
         for s in [0, 1, u64::from(u32::MAX), 1 << 32, 1 << 63, u64::MAX] {
             for p in [0, 1, u64::from(u32::MAX), 1 << 32, 1 << 63, u64::MAX] {
                 for o in [0, 1, u64::from(u32::MAX), 1 << 32, 1 << 63, u64::MAX] {
-                    assert!(
-                        seen.insert(hash_triple_for_interner(s, p, o)),
-                        "triple fields collided: {s}/{p}/{o}"
-                    );
+                    let expected = hash_triple_for_interner(s, p, o);
+                    checked(expected, false, |memory| {
+                        hash_triple_for_interner_with_memory(s, p, o, memory)
+                    });
+                    assert!(seen.insert(expected), "triple fields collided: {s}/{p}/{o}");
                 }
             }
         }
         assert_eq!(seen.len(), 1516);
+        let long = "π_雪.x".repeat(513);
+        for text in ["", "short", "123456789", "1234567890123456", long.as_str()] {
+            checked(hash_iri_for_interner(text), true, |memory| {
+                hash_iri_for_interner_with_memory(text, memory)
+            });
+            checked(hash_blank_for_interner(text, u32::MAX), true, |memory| {
+                hash_blank_for_interner_with_memory(text, u32::MAX, memory)
+            });
+            checked(hash_blank_for_interner(text, u32::MAX), true, |memory| {
+                hash_blank_bytes_for_interner_with_memory(
+                    text.len(),
+                    text.bytes(),
+                    u32::MAX,
+                    memory,
+                )
+            });
+            checked(
+                hash_literal_for_interner(text, u64::MAX, Some("en"), Some(Rtl)),
+                true,
+                |memory| {
+                    hash_literal_for_interner_with_memory(
+                        text,
+                        u64::MAX,
+                        Some("en"),
+                        Some(Rtl),
+                        memory,
+                    )
+                },
+            );
+        }
+        checked(hash_triple_for_interner(u64::MAX, 1, 2), true, |memory| {
+            hash_triple_for_interner_with_memory(u64::MAX, 1, 2, memory)
+        });
+
+        // The Core storage marker must restore the unchanged caller error at
+        // its original enclosing boundary, without a later publication poll.
+        struct Stop(Box<u8>);
+        let marker = Box::new(7);
+        let identity = core::ptr::from_ref(marker.as_ref());
+        let mut marker = Some(marker);
+        let mut calls = 0;
+        let mut resident = purrdf_lex::allocation::Resident;
+        let mut memory = Memory::new(&mut resident);
+        let result = purrdf_lex::control::with_memory_control(
+            &mut memory,
+            &mut |_| {
+                calls += 1;
+                if calls == 4 {
+                    Err(Stop(marker.take().expect("one original failure")))
+                } else {
+                    Ok(())
+                }
+            },
+            |memory| hash_iri_for_interner_with_memory(&long, memory),
+        );
+        match result {
+            Err(purrdf_lex::control::ControlledError::Control(Stop(marker))) => {
+                assert_eq!(core::ptr::from_ref(marker.as_ref()), identity)
+            }
+            _ => panic!("original caller error must survive native hashing"),
+        }
+        assert_eq!(calls, 4);
     }
 }

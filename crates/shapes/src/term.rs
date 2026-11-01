@@ -909,7 +909,7 @@ impl Term {
         use purrdf_lex::allocation::{Memory, Resident, StorageError};
         let mut resident = Resident;
         let mut memory = Memory::new(&mut resident);
-        purrdf_core::ir::try_fold_nested_with_memory(
+        let result = purrdf_core::ir::try_fold_nested_with_memory(
             TermNode::Term(self),
             &mut (),
             |(), node, memory| match node {
@@ -949,9 +949,16 @@ impl Term {
                     })
                     .map(Self::Triple)
             },
+            |(), answer, _| drop(answer),
             |error: StorageError, _| error,
             &mut memory,
-        )
+        );
+        if result.is_err() {
+            // This local account owns only this copier's destroyed partial payloads.
+            let bytes = memory.admitted_bytes();
+            let _ = memory.release_bytes(bytes);
+        }
+        result
     }
     /// The blank-node label, if this term is a blank node.
     #[inline]
@@ -1291,20 +1298,24 @@ fn fold_native_term<'a, E>(
     }
     let mut resident = Resident;
     let mut memory = Memory::new(&mut resident);
-    purrdf_core::ir::try_fold_nested_with_memory(
+    enum CopyError<E> {
+        Read(E),
+        Storage(purrdf_lex::allocation::StorageError),
+    }
+    let result = purrdf_core::ir::try_fold_nested_with_memory(
         Original::Resolved(term),
         &mut (),
         |(), original, memory| {
             let term = match original {
                 Original::Resolved(term) => term,
-                Original::Id(id) => resolve(id)?,
+                Original::Id(id) => resolve(id).map_err(CopyError::Read)?,
             };
             Ok(match term {
                 TermRef::Triple { s, p, o } => {
                     Nested::Triple(Original::Id(s), Original::Id(p), Original::Id(o))
                 }
                 TermRef::Iri(iri) => Nested::Leaf(Term::NamedNode(NamedNode(
-                    memory.string(iri).map_err(storage)?,
+                    memory.string(iri).map_err(CopyError::Storage)?,
                 ))),
                 TermRef::Blank { label, scope } => {
                     let text = ::purrdf_rdf::blank_label::encode_blank_label_with_memory(
@@ -1313,9 +1324,11 @@ fn fold_native_term<'a, E>(
                         ::purrdf_rdf::blank_label::LabelAlphabet::Unconstrained,
                         memory,
                     )
-                    .map_err(storage)?;
+                    .map_err(CopyError::Storage)?;
                     let text = match text {
-                        std::borrow::Cow::Borrowed(text) => memory.string(text).map_err(storage)?,
+                        std::borrow::Cow::Borrowed(text) => {
+                            memory.string(text).map_err(CopyError::Storage)?
+                        }
                         std::borrow::Cow::Owned(text) => text,
                     };
                     Nested::Leaf(Term::BlankNode(text))
@@ -1326,14 +1339,14 @@ fn fold_native_term<'a, E>(
                     language,
                     direction,
                 } => {
-                    let TermRef::Iri(datatype) = resolve(datatype)? else {
+                    let TermRef::Iri(datatype) = resolve(datatype).map_err(CopyError::Read)? else {
                         unreachable!("a literal datatype remains an IRI")
                     };
                     Nested::Leaf(Term::Literal(Literal {
-                        lexical: memory.string(lexical).map_err(storage)?,
-                        datatype: memory.string(datatype).map_err(storage)?,
+                        lexical: memory.string(lexical).map_err(CopyError::Storage)?,
+                        datatype: memory.string(datatype).map_err(CopyError::Storage)?,
                         language: language
-                            .map(|text| memory.string(text).map_err(storage))
+                            .map(|text| memory.string(text).map_err(CopyError::Storage))
                             .transpose()?,
                         direction,
                     }))
@@ -1351,11 +1364,21 @@ fn fold_native_term<'a, E>(
                     object,
                 })
                 .map(Term::Triple)
-                .map_err(storage)
+                .map_err(CopyError::Storage)
         },
-        |error, _| storage(error),
+        |(), answer, _| drop(answer),
+        |error, _| CopyError::Storage(error),
         &mut memory,
-    )
+    );
+    if result.is_err() {
+        // Public error construction is deferred beyond this closed payload scope.
+        let bytes = memory.admitted_bytes();
+        let _ = memory.release_bytes(bytes);
+    }
+    result.map_err(|error| match error {
+        CopyError::Read(error) => error,
+        CopyError::Storage(error) => storage(error),
+    })
 }
 
 /// Materialize an original retained report focus through the same term producer.
