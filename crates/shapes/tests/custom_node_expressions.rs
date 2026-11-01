@@ -744,8 +744,8 @@ fn an_unresolvable_shape_in_a_body_is_a_sparql_error() {
 /// is a `ShapesError::Processor`, not a message.
 ///
 /// `ex:pingpong` calls itself through `BIND` in its own `sh:select` body, so each level is
-/// a SPARQL call; the evaluator's own function-depth bound (32) trips first and arrives as the
-/// propagated query-engine failure (`ProcessorFailure::Query`), which every enclosing level
+/// a SPARQL call. The function-depth bound or host stack floor may trip first;
+/// either arrives as a query-engine failure (`ProcessorFailure::Query`), which every enclosing level
 /// must pass on. Were that failure read as an evaluation failure, every level would turn it into an unbound value
 /// and the validation would complete with a report. Unlike a governor trip, nothing is
 /// latched on a shared state, so this test observes the classification alone.
@@ -773,12 +773,13 @@ fn a_processor_failure_inside_a_sparql_called_body_fails_validation_with_a_typed
         purrdf_sparql_eval::EvalError::FUNCTION_OPERATIONAL_CODE
     );
     assert!(
-        message.contains("recursion exceeded the depth bound of 32"),
+        message.contains("recursion exceeded the depth bound of 32")
+            || message.contains(purrdf_sparql_eval::EvalError::STACK_EXHAUSTED_CODE),
         "{message}"
     );
 
     // Neighbour: the same shape of call that terminates is answered, so the failure above
-    // is the depth bound and not the harness.
+    // is the recursive execution and not the harness.
     let ok = sparql_column(
         INCOME_DATA,
         INCOME_TOTAL_FN,
@@ -1215,10 +1216,53 @@ fn a_cycle_through_sparql_query_text_is_bounded_too() {
           sh:targetNode ex:alice ;
           sh:expression [ ex:pingpong ( sh:this ) ] .
     "#;
-    let err = validate(INCOME_DATA, shapes).expect_err("the cycle must be refused");
+    let parsed = parse_shapes(&format!("{PREFIXES}{shapes}"), None).expect("shapes parse");
+    let err =
+        validate_with(&store_of(INCOME_DATA), &parsed).expect_err("the cycle must be refused");
+    assert_eq!(err.failure_class(), FailureClass::Processor, "{err}");
+    let Some(ProcessorFailure::Query { code, message }) = err.as_processor() else {
+        panic!("expected the query engine's propagated refusal, got {err:?}");
+    };
+    assert_eq!(
+        code,
+        purrdf_sparql_eval::EvalError::FUNCTION_OPERATIONAL_CODE
+    );
     assert!(
-        err.contains("depth bound"),
-        "the cycle must be refused by a depth bound: {err}"
+        message.contains("recursion exceeded the depth bound of 32")
+            || message.contains(purrdf_sparql_eval::EvalError::STACK_EXHAUSTED_CODE),
+        "the cycle must retain its logical or host-stack refusal: {err}"
+    );
+
+    // Start just below the actual query default: one body crosses SELECT and
+    // re-enters the registered function, proving depth propagation without
+    // requiring enough native stack to execute the entire recursion ceiling.
+    let ceiling = QueryOptions::new().max_udf_depth.expect("a finite default");
+    assert_eq!(ceiling, 32);
+    let data = data_of(INCOME_DATA);
+    let functions = purrdf_shapes::sparql::bind_in_current_env(&parsed, None).unwrap();
+    let error = NativeSparqlEngine::new()
+        .query_with_options_view(
+            &data,
+            SparqlRequest {
+                query: "PREFIX ex: <http://example.org/ns#> SELECT ?v WHERE { BIND (ex:pingpong(ex:alice) AS ?v) }",
+                base_iri: None,
+                substitutions: &[],
+            },
+            &QueryOptions::new()
+                .with_functions(&functions)
+                .with_focus_graph(Some(&data))
+                .with_call_depth(u32::try_from(ceiling - 1).unwrap()),
+        )
+        .expect_err("the nested SELECT must preserve the near-limit call depth");
+    assert_eq!(
+        error.code,
+        purrdf_sparql_eval::EvalError::FUNCTION_OPERATIONAL_CODE
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("recursion exceeded the depth bound of 32"),
+        "{error}"
     );
 }
 
