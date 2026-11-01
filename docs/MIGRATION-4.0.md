@@ -404,6 +404,14 @@ inspection; no downstream registry patch or formatted cause is needed.
 restoring a thread-local generator never affected dictionary bytes. The unused
 legacy COVER and reservoir APIs are omitted from the local codec provider.
 
+`purrdf_gts::codec::CodecFailure` now owns native Zstandard causes instead of
+rendered strings. Dictionary refusals distinguish `ZstdDecodeDictionary` from
+`ZstdEncodeDictionary`; `ZstdAllocation` carries the original `TryReserveError`
+as `cause` alongside its requested `capacity`. `ZstdDecode`, `ZstdHeader` and
+`ZstdTruncated` retain their original provider error types. Inspect their
+borrowed `cause` fields or standard error sources; human prefixes and the
+frame extent's Debug presentation are preserved.
+
 
 Freeze failures previously returned as `ColumnarError::Storage` now also return
 `Reconstruction(RdfDiagnostic)`. Update `Storage` matches for freeze failures to
