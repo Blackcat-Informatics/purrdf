@@ -368,7 +368,7 @@ impl RingBuffer {
         // free_slice_parts wrap-dispatch are skipped — we hit the
         // hottest decoder shape (decodecorpus-z000033 c_stream
         // L=-7 profile: `RingBuffer::extend` was 15% self-time, of
-        // which the redundant `reserve` call before this branch was
+        // which the redundant `reserve` call before this arm was
         // a measurable share).
         //
         // The strict `<` on `cap - tail` is intentional: it guarantees

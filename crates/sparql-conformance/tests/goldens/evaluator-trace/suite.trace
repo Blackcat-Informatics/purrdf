@@ -27643,17 +27643,16 @@ fuel 0 tripped fuel-exhausted consumed=1 certain prefix=true rows=0 digest=0e23d
 fuel 1 tripped fuel-exhausted consumed=2 certain prefix=true rows=0 digest=0e23d6acbeb8935b | fuel=2
 fuel 2 tripped fuel-exhausted consumed=3 certain prefix=false rows=0 digest=0e23d6acbeb8935b | fuel=3
 fuel 3 tripped fuel-exhausted consumed=4 certain prefix=false rows=0 digest=0e23d6acbeb8935b | fuel=4
-fuel 4 tripped fuel-exhausted consumed=5 certain prefix=false rows=0 digest=0e23d6acbeb8935b | fuel=5
-fuel 5 tripped fuel-exhausted consumed=6 certain prefix=false rows=0 digest=0e23d6acbeb8935b | fuel=6
+fuel 4..=5 x2 tripped fuel-exhausted consumed=6 certain prefix=false rows=0 digest=0e23d6acbeb8935b | fuel=6
 fuel 6 tripped fuel-exhausted consumed=7 certain prefix=false rows=0 digest=0e23d6acbeb8935b | fuel=7
 fuel 7 tripped fuel-exhausted consumed=8 certain prefix=false rows=0 digest=0e23d6acbeb8935b | fuel=8
 fuel 8 tripped fuel-exhausted consumed=9 certain prefix=false rows=0 digest=0e23d6acbeb8935b | fuel=9
 fuel 9 tripped fuel-exhausted consumed=10 certain prefix=false rows=0 digest=0e23d6acbeb8935b | fuel=10
 fuel 10 tripped fuel-exhausted consumed=11 certain prefix=false rows=0 digest=0e23d6acbeb8935b | fuel=11
-fuel 11 tripped fuel-exhausted consumed=12 certain prefix=false rows=0 digest=0e23d6acbeb8935b | fuel=12
-fuel 12 tripped fuel-exhausted consumed=13 certain prefix=false rows=0 digest=0e23d6acbeb8935b | fuel=13
-fuel 13 tripped fuel-exhausted consumed=14 certain prefix=false rows=0 digest=0e23d6acbeb8935b | fuel=14
-fuel 14 tripped fuel-exhausted consumed=15 certain prefix=false rows=1 digest=691232422a5c1ea7 | fuel=15
+fuel 11 tripped fuel-exhausted consumed=12 certain prefix=false rows=1 digest=691232422a5c1ea7 | fuel=12
+fuel 12 tripped fuel-exhausted consumed=13 certain prefix=false rows=1 digest=691232422a5c1ea7 | fuel=13
+fuel 13 tripped fuel-exhausted consumed=14 certain prefix=false rows=1 digest=691232422a5c1ea7 | fuel=14
+fuel 14 tripped fuel-exhausted consumed=15 certain prefix=false rows=2 digest=df4c46e7cd04b4bd | fuel=15
 fuel 15 tripped fuel-exhausted consumed=16 certain prefix=false rows=2 digest=df4c46e7cd04b4bd | fuel=16
 fuel 16 tripped fuel-exhausted consumed=17 certain prefix=false rows=2 digest=df4c46e7cd04b4bd | fuel=17
 fuel 17 tripped fuel-exhausted consumed=18 certain prefix=false rows=2 digest=df4c46e7cd04b4bd | fuel=18

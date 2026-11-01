@@ -257,7 +257,7 @@ impl MatchGeneratorDriver {
             // cross-mode restore would install mismatched table geometry and the
             // encoder could search past the frame window (undecodable). The two
             // HC modes share identical window geometry: `max_window_size` and the
-            // dictionary limit are both set ABOVE this branch (the same value in
+            // dictionary limit are both set ABOVE this arm (the same value in
             // either mode), and the live chain table dimensions come from the
             // resolved `params` the key already pins. The modes differ only in
             // WHERE the committed dict lives — a single-link `dms` (attach) vs

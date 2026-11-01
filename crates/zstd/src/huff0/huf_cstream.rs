@@ -136,7 +136,7 @@ fn huf_encode_use_bmi2() -> bool {
 /// `add_bits`; `$fast` (a `const`-valued bool) const-folds. Module-level so the
 /// burst-loop body macro can expand it inside both the scalar and the
 /// `#[target_feature]` kernel without an `#[inline(always)]` + `target_feature`
-/// clash ([compiler restriction](https://github.com/rust-lang/rust/issues/145574)).
+/// clash (compiler restriction).
 macro_rules! huf_add {
     ($bc:ident, $bp:ident, $elt:expr, $fast:expr) => {{
         let elt = $elt;

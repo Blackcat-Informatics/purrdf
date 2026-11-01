@@ -83,7 +83,7 @@ pub(crate) unsafe fn exec_sequence_bounded_copy(
 /// Textual expansion of the AVX2 `ZSTD_execSequence` body at the call
 /// site, fusing the match-copy into a per-tier sequence monolith. A
 /// `#[target_feature(avx2)]` function cannot be `#[inline(always)]`
-/// ([compiler restriction](https://github.com/rust-lang/rust/issues/145574)),
+/// (compiler restriction),
 /// so the [`BufferBackend::exec_sequence_inline_avx2`]
 /// trait method stays a real CALL on the hot path; expanding the body via
 /// a macro removes that boundary (the reference `decompressSequences_bmi2`

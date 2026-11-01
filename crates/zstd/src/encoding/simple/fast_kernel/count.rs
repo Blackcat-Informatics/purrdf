@@ -124,7 +124,7 @@ pub(crate) unsafe fn count_forward(ip: *const u8, match_ptr: *const u8, iend: *c
     // 4-byte tail. On 32-bit targets the chunk loop above already
     // operates in 4-byte strides, so the chunk's bounds invariant
     // (`+ CHUNK_SIZE <= iend` failed → at most 3 bytes left) makes
-    // this branch's `+ 4 <= iend` always false — guarding the block
+    // this arm's `+ 4 <= iend` always false — guarding the block
     // with `cfg(target_pointer_width = "64")` mirrors upstream zstd's
     // `MEM_64bits()` gate and lets the optimiser drop the dead check
     // on 32-bit builds.

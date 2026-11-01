@@ -697,7 +697,7 @@ macro_rules! dispatch_row_log {
 /// expanded at the call site inside each per-kernel `#[target_feature]` probe so
 /// the vector compare + movemask inline straight-line — `#[inline(always)]` +
 /// `#[target_feature]` on a function is forbidden
-/// ([compiler restriction](https://github.com/rust-lang/rust/issues/145574)), so a
+/// (compiler restriction), so a
 /// function call would otherwise cross the feature ABI boundary on every probe.
 /// Each expands to a `u64` bitmask: bit `j` set iff `tags[j] == tag`. The
 /// `row_tag_match_mask_*` wrapper fns below reuse these macros so the

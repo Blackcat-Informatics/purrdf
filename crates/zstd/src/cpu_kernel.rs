@@ -25,11 +25,7 @@
 //! Current wiring: the only active dispatch site
 //! is `decoding::literals_section_decoder::decompress_literals`,
 //! which `match`es `detect_cpu_kernel()` and routes into per-K
-//! `decompress_literals_*` `#[target_feature]` wrappers. The full
-//! pipeline-wide propagation envisioned in the issue (FrameDecoder /
-//! FrameCompressor entry, sequence executor, match copy) is
-//! incremental; subsequent tiers extend the dispatch surface without
-//! changing this trait or the kernel ZSTs.
+//! `decompress_literals_*` `#[target_feature]` wrappers.
 //!
 //! Structure code (block loop, FCS check, offset history, repeat
 //! semantics) stays single-impl and only carries `K` as a phantom on

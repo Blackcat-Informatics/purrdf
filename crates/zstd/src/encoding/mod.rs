@@ -203,10 +203,7 @@ pub(crate) mod util;
 // const-generic [`strategy::Strategy`] trait + per-level [`strategy::
 // StrategyTag`] dispatcher, and the Dfast / Row / Simple matchers
 // respectively. `match_table::helpers` hosts the shared match-finder
-// primitives. The rewrite plan is tracked in
-// <https://github.com/structured-world/structured-zstd/issues/111>;
-// per-phase boundaries are `perf/post-pr-110-baseline` (start),
-// `perf/post-pr-121-baseline` (post-Phase-2).
+// primitives.
 pub(crate) mod bt;
 pub(crate) mod cost_model;
 pub(crate) mod dfast;
