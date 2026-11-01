@@ -286,9 +286,11 @@ fn owned_transfer_preserves_lexical_owner_and_flat_statement_identity() {
         DatasetView::annotations_of_with_graph(&read, reifier).count(),
         annotation_count
     );
+    let materialized = purrdf_core::dataset_from_view(&read)
+        .expect("scoped triple read materializes before retaining canonical output");
     assert_eq!(
         try_canonicalize_flat_view(
-            &read,
+            &*materialized,
             CanonHash::Sha256,
             &mut purrdf_core::CanonicalizationControl::new(
                 purrdf_core::RDFC_V2_CORPUS_POLICY,
@@ -301,7 +303,7 @@ fn owned_transfer_preserves_lexical_owner_and_flat_statement_identity() {
     );
     assert_eq!(
         try_flat_digest_view(
-            &read,
+            &*materialized,
             CanonHash::Sha256,
             &mut purrdf_core::CanonicalizationControl::new(
                 purrdf_core::RDFC_V2_CORPUS_POLICY,
