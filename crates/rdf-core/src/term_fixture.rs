@@ -478,6 +478,14 @@ impl DatasetView for BudgetedView {
         self.budget.read_error()
     }
 
+    fn reserve_owned_workspace(
+        &self,
+        _: u64,
+    ) -> Option<Result<crate::OwnedWorkspaceReservation<Self::ReadError>, Self::ReadError>> {
+        // The source is resident; this fixture's row quota does not limit allocation.
+        Some(Ok(crate::NoopReservation::owned()))
+    }
+
     fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
         self.budget.take(self.inner.quads())
     }

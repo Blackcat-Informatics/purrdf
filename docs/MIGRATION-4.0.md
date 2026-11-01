@@ -492,6 +492,13 @@ mapping and instance selection. Every child is checked, including untaken
 branches and ordering keys. Its zero/single/multiple-result behavior matches
 ordinary conformance expressions; reports retain the original judged focus,
 value and path. The book lists the complete admitted constructor family.
+Computed shape operands also participate when constants, lists, empty
+expressions, unions, concatenations and conditionals prove every possible
+output, with pure native conditions and the original index. Each possible
+original shape contributes a positive dependency. The actual selection retains
+ordinary lazy evaluation, singleton requirements and missing-shape failures;
+an empty focus skips the shape operand entirely. Path-derived shape operands
+and other computations without a complete output proof remain unqualified.
 Original function bodies, conformance-dependent focus expressions and general
 expression callbacks remain outside this proved surface.
 `PreparationRefusal::UnqualifiedRecursion` retains the original definition,

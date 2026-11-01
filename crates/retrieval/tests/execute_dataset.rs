@@ -1465,8 +1465,8 @@ fn a_relation_whose_index_moved_mid_run_refuses_the_whole_run() {
     );
 }
 
-/// **T4.6 — the one ceiling the unbounded lane keeps has no charge site a unit
-/// can reach.**
+/// **T4.6 — the unbounded lane engages no resource ceiling, and an unknown
+/// function fails only its own stratum.**
 ///
 /// `execute` runs every unit under [`QueryGovernors::UNBOUNDED`] for the
 /// receipt's sake, and then handles `GovernedOutcome::BudgetExhausted` by
@@ -1478,25 +1478,19 @@ fn a_relation_whose_index_moved_mid_run_refuses_the_whole_run() {
 ///
 /// It rests on two facts, one measured here directly and one demonstrated:
 ///
-/// * `UNBOUNDED` engages no caller-settable ceiling and carries no stop signal.
-///   Exactly one dimension keeps a ceiling — the evaluator's own recursion guard
-///   on user-defined function depth, which is a build constant no caller can
-///   raise or lower.
-/// * A compiled unit cannot charge that dimension, because reaching it means
-///   entering a user-defined function, and `execute` injects no user-function
-///   registry: the call resolves to nothing and the unit fails as its own
-///   stratum, which is the per-stratum report a malformed unit has always had.
+/// * `UNBOUNDED` engages no resource ceiling, including logical user-function
+///   depth, and carries no stop signal.
+/// * `execute` injects no user-function registry: an unknown call resolves to
+///   nothing and the unit fails as its own stratum, while sibling strata answer.
 #[test]
-fn the_unbounded_lane_keeps_one_ceiling_and_a_unit_cannot_charge_it() {
+fn the_unbounded_lane_has_no_ceiling_and_unknown_functions_fail_their_stratum() {
     let engaged: Vec<ResourceDimension> = ResourceDimension::ALL
         .into_iter()
         .filter(|dimension| QueryGovernors::UNBOUNDED.is_engaged_in(*dimension))
         .collect();
-    assert_eq!(
-        engaged,
-        vec![ResourceDimension::UdfDepth],
-        "one dimension keeps a ceiling under the unbounded lane, and it is the \
-         recursion guard"
+    assert!(
+        engaged.is_empty(),
+        "no resource dimension keeps a ceiling under the unbounded lane: {engaged:?}"
     );
     assert!(
         !QueryGovernors::UNBOUNDED.is_engaged(),

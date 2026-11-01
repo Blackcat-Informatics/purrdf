@@ -173,7 +173,7 @@ fn the_corpus_matches_its_pinned_expectations() {
                     purrdf_hash::hex::Lower(&Sha256::digest(nquads.as_bytes()))
                 );
                 if regenerating("PURRDF_UPDATE_CANON_CORPUS") {
-                    std::fs::write(&canonical, &nquads).expect("write golden");
+                    std::fs::write(&canonical, nquads).expect("write golden");
                     std::fs::write(&digest, format!("{hex}\n")).expect("write digest");
                     continue;
                 }

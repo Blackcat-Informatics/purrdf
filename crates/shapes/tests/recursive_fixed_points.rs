@@ -1089,6 +1089,14 @@ fn named_conformance_keeps_original_reports_through_product_restore() {
     for (source, reads_p) in [
         (NAMED_CONFORMANCE_SELF, false),
         (
+            ":S a sh:NodeShape ; sh:expression [ shnex:conformsToShape ( sh:this [ shnex:if true ; shnex:then :S ; shnex:else :Missing ] ) ] .",
+            false,
+        ),
+        (
+            ":S a sh:NodeShape ; sh:expression [ shnex:conformsToShape ( [ shnex:pathValues :p ] [ shnex:if true ; shnex:then :T ; shnex:else :Missing ] ) ] . :T a sh:NodeShape ; sh:node :T ; sh:hasValue :b ; sh:property [ sh:path :p ; sh:minCount 1 ] .",
+            true,
+        ),
+        (
             ":S a sh:NodeShape ; sh:expression [ shnex:conformsToShape ( [ shnex:pathValues :p ] _:t ) ] . _:t sh:expression [ shnex:conformsToShape ( sh:this _:t ) ] ; sh:hasValue :b ; sh:property [ sh:path :p ; sh:minCount 1 ] .",
             true,
         ),
@@ -1105,8 +1113,17 @@ fn named_conformance_keeps_original_reports_through_product_restore() {
             true,
         ),
     ] {
+        let unselected = parse_shapes_with_options(
+            &format!("{PREFIXES} {source}"),
+            None,
+            None,
+            None,
+            &ShapesImports::new(),
+            &ValidationOptions::default(),
+        );
         assert!(
-            matches!(parse_shapes_with_options(&format!("{PREFIXES} {source}"), None, None, None, &ShapesImports::new(), &ValidationOptions::default()), Err(CompleteValidationError::Shapes(ShapesError::Recursion(refusal))) if refusal.reason == RecursionRefusalReason::MissingSelection)
+            matches!(&unselected, Err(CompleteValidationError::Shapes(ShapesError::Recursion(refusal))) if refusal.reason == RecursionRefusalReason::MissingSelection),
+            "{source}: {unselected:?}"
         );
         for semantics in [RecursionSemantics::Lfp, RecursionSemantics::Gfp] {
             let request = options(semantics);
@@ -1557,6 +1574,69 @@ fn pure_conformance_focus_keeps_property_results_and_cardinality() {
                 .contains("node argument must yield at most one node, got 2"),
             "{error}"
         );
+    }
+}
+
+/// The selected computed operand keeps ordinary lazy evaluation and failures;
+/// it never starts a fresh recursive validation or invents an unresolved shape.
+#[test]
+fn computed_conformance_targets_preserve_lazy_shape_errors() {
+    for (node, shape, error) in [
+        ("sh:this", "( :T )", None),
+        ("sh:this", "[ sh:union ( :T :T ) ]", None),
+        (
+            "sh:this",
+            "[ shnex:concat ( :T :T ) ]",
+            Some("exactly one shape IRI, got 2"),
+        ),
+        (
+            "sh:this",
+            "[ shnex:if false ]",
+            Some("exactly one shape IRI, got 0"),
+        ),
+        (
+            "sh:this",
+            "[ shnex:if true ; shnex:then :Missing ; shnex:else :T ]",
+            Some("is not a shape of this shapes graph"),
+        ),
+        (
+            "sh:this",
+            "[ shnex:if true ; shnex:then 1 ; shnex:else :T ]",
+            Some("is not a shape of this shapes graph"),
+        ),
+        (
+            "[ shnex:if false ]",
+            "[ shnex:concat ( :Missing :Missing ) ]",
+            None,
+        ),
+    ] {
+        let source = format!(
+            "{PREFIXES} :S a sh:NodeShape ; sh:targetNode :a ; sh:expression [ shnex:conformsToShape ( {node} {shape} ) ] . :T a sh:NodeShape ; sh:node :T ."
+        );
+        for semantics in [RecursionSemantics::Lfp, RecursionSemantics::Gfp] {
+            let shapes = parse_shapes_with_options(
+                &source,
+                None,
+                None,
+                None,
+                &ShapesImports::new(),
+                &options(semantics),
+            )
+            .unwrap();
+            let dataset = parse_turtle_to_dataset(&format!("{PREFIXES} :a :p :a ."), None).unwrap();
+            let data = ShaclData::new(Arc::clone(&dataset), dataset, None);
+            let actual = validate_with(&data, &shapes);
+            if let Some(expected) = error {
+                let actual = actual.unwrap_err().to_string();
+                assert!(actual.contains(expected), "{shape}: {actual}");
+            } else {
+                assert_eq!(
+                    actual.unwrap().conforms,
+                    node == "sh:this" && semantics == RecursionSemantics::Gfp,
+                    "{shape}"
+                );
+            }
+        }
     }
 }
 

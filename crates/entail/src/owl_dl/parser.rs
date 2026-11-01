@@ -1058,17 +1058,12 @@ impl<'a> CeExtractor<'a> {
                 .ok_or_else(|| OwlSyntaxError::MissingProperty {
                     node: self.interner.value(node).clone(),
                 })?;
-        // A restriction over a BUILT-IN role (`owl:topObjectProperty`,
-        // `owl:bottomObjectProperty`, …) reads it as an ordinary named role, which is
-        // exactly what the built-in-role boundary is about. It is raised HERE as well as at
-        // the role-assertion site, because a built-in role reaches the knowledge base
-        // through either position.
-        if let TermValue::Iri(iri) = self.interner.value(r)
-            && let Some(Support::Bounded(construct)) = support_of(iri)
-        {
-            self.boundaries.insert(construct);
-        }
+        // Restrictions and assertions share the vocabulary support contract.
+        // Unsupported roles raise their boundary before an ordinary role encoding
+        // could make the resulting certificate appear exact.
         let role = self.role_of(r)?;
+        let (Role::Named(property) | Role::Inv(property)) = role;
+        record_role_support(self.interner, &mut self.boundaries, [property]);
         self.property(r, LOGICAL);
         if self
             .index
@@ -1656,6 +1651,22 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
         Ok(kb)
     })
     .map_err(EntailError::source_read)?
+}
+
+/// Record unsupported role operands through the same vocabulary contract whether
+/// they occur in the source, a native axiom question or a query pattern.
+pub(crate) fn record_role_support(
+    interner: &Interner,
+    boundaries: &mut BTreeSet<Construct>,
+    roles: impl IntoIterator<Item = u32>,
+) {
+    for role in roles {
+        if let TermValue::Iri(iri) = interner.value(role)
+            && let Some(Support::Bounded(construct)) = support_of(iri)
+        {
+            boundaries.insert(construct);
+        }
+    }
 }
 
 /// Install the fixed empty extension of each mentioned bottom role through

@@ -1908,6 +1908,17 @@ fn collect_components<D: DatasetView, E>(
     f: &mut impl FnMut(Component<D::Id>) -> Result<(), CanonError<E>>,
 ) -> Result<(), CanonError<E>> {
     check_stop(stop).map_err(CanonError::with_read_error)?;
+    collect_components_after_stop(ds, scope, presentation, stop, f)
+}
+
+/// The caller has performed the initial stop checkpoint.
+fn collect_components_after_stop<D: DatasetView, E>(
+    ds: &D,
+    scope: CanonScope<D::Id>,
+    presentation: CanonPresentation,
+    stop: Option<&dyn crate::StopSignal>,
+    f: &mut impl FnMut(Component<D::Id>) -> Result<(), CanonError<E>>,
+) -> Result<(), CanonError<E>> {
     let sentinels = Sentinels::of(ds);
     match scope {
         CanonScope::Dataset => {
@@ -2485,34 +2496,43 @@ impl<E, Ev> From<DrainFailure<E, Ev>> for ViewCanonError<E, Ev> {
 /// object held back until the subject's whole nesting is done. The first reserved
 /// IRI met ends the walk. A term that is not a triple term pushes nothing, so the
 /// common case allocates nothing.
-fn reserved_in_term<D: DatasetView>(
+fn reserved_in_term<D: DatasetView, R: crate::WorkspaceReservation<Error = D::ReadError>>(
     ds: &D,
     id: D::Id,
     stop: Option<&dyn crate::StopSignal>,
+    memory: &mut Memory<'_, rendering::ScratchGrant<R>>,
     found: &mut impl FnMut(&str) -> Result<(), CanonError<D::ReadError>>,
 ) -> Result<(), CanonError<D::ReadError>> {
-    let mut held: Vec<D::Id> = Vec::new();
-    let mut next = Some(id);
-    while let Some(id) = next.take().or_else(|| held.pop()) {
-        check_stop(stop).map_err(CanonError::with_read_error)?;
-        let Some(guard) = ds.resolve_if_ready(id) else {
-            return Ok(());
-        };
-        match guard.term() {
-            TermRef::Iri(iri) => {
-                if iri.starts_with(RESERVED_NAMESPACE) {
-                    return found(iri);
+    let mut held: WorkList<D::Id, 8> = WorkList::new();
+    let result = (|| {
+        let mut next = Some(id);
+        while let Some(id) = next.take().or_else(|| held.pop()) {
+            check_stop(stop).map_err(CanonError::with_read_error)?;
+            let Some(guard) = ds.resolve_if_ready(id) else {
+                return Ok(());
+            };
+            match guard.term() {
+                TermRef::Iri(iri) => {
+                    if iri.starts_with(RESERVED_NAMESPACE) {
+                        return found(iri);
+                    }
                 }
+                TermRef::Literal { datatype, .. } => next = Some(datatype),
+                TermRef::Triple { s, p, o } => {
+                    held.try_push_admitted(o, memory)?;
+                    held.try_push_admitted(p, memory)?;
+                    next = Some(s);
+                }
+                TermRef::Blank { .. } => {}
             }
-            TermRef::Literal { datatype, .. } => next = Some(datatype),
-            TermRef::Triple { s, p, o } => {
-                held.extend([o, p]);
-                next = Some(s);
-            }
-            TermRef::Blank { .. } => {}
         }
-    }
-    Ok(())
+        Ok(())
+    })();
+    let result = result.map_err(|error| memory.admission_mut().restore(error));
+    let released = held
+        .release_admitted(memory)
+        .map_err(|cause| memory.admission_mut().restore(CanonError::Storage(cause)));
+    result.and(released)
 }
 
 /// The view's reserved-namespace violation within `scope`, or `None` if it is
@@ -2539,35 +2559,46 @@ fn reserved_vocabulary_with_stop<D: DatasetView>(
     presentation: CanonPresentation,
     stop: Option<&dyn crate::StopSignal>,
 ) -> Result<Option<ReservedVocabulary>, CanonError<D::ReadError>> {
-    let mut worst: Option<refusal::RefusalBuilder<D::ReadError>> = None;
-    collect_components::<_, D::ReadError>(ds, scope, presentation, stop, &mut |comp| {
-        let (s, p, o, g) = comp.slots();
-        for (slot, position) in [
-            (Some(s), TermPosition::Subject),
-            (Some(p), TermPosition::Predicate),
-            (Some(o), TermPosition::Object),
-            (g, TermPosition::Graph),
-        ] {
-            // `Slot::Sentinel` is the overlay's OWN lowering — of a row this view
-            // holds natively, or of one a base quad spelled and `collect_components`
-            // folded back — and `AnnotationGraph(None)` carries no term at all;
-            // neither is a violation. Every OTHER slot of a folded row still arrives
-            // here as `Slot::Term`, so the fold cannot smuggle a reserved IRI past
-            // this sweep by hiding it in a triple term or an annotation predicate.
-            let Some(Slot::Term(id) | Slot::AnnotationGraph(Some(id))) = slot else {
-                continue;
-            };
-            reserved_in_term(ds, id, stop, &mut |iri| match &mut worst {
-                Some(builder) => builder.consider(iri, position),
-                None => {
-                    worst = Some(refusal::RefusalBuilder::new(ds, iri, position)?);
-                    Ok(())
+    // Preserve the scan's initial stop checkpoint before source reservation.
+    check_stop(stop).map_err(CanonError::with_read_error)?;
+    let reservation = ds.reserve_workspace(0).map_err(CanonError::Read)?;
+    rendering::ScratchGrant::new(reservation).run(|memory| {
+        let mut worst: Option<refusal::RefusalBuilder<D::ReadError>> = None;
+        collect_components_after_stop::<_, D::ReadError>(
+            ds,
+            scope,
+            presentation,
+            stop,
+            &mut |comp| {
+                let (s, p, o, g) = comp.slots();
+                for (slot, position) in [
+                    (Some(s), TermPosition::Subject),
+                    (Some(p), TermPosition::Predicate),
+                    (Some(o), TermPosition::Object),
+                    (g, TermPosition::Graph),
+                ] {
+                    // `Slot::Sentinel` is the overlay's OWN lowering — of a row this view
+                    // holds natively, or of one a base quad spelled and `collect_components`
+                    // folded back — and `AnnotationGraph(None)` carries no term at all;
+                    // neither is a violation. Every OTHER slot of a folded row still arrives
+                    // here as `Slot::Term`, so the fold cannot smuggle a reserved IRI past
+                    // this sweep by hiding it in a triple term or an annotation predicate.
+                    let Some(Slot::Term(id) | Slot::AnnotationGraph(Some(id))) = slot else {
+                        continue;
+                    };
+                    reserved_in_term(ds, id, stop, memory, &mut |iri| match &mut worst {
+                        Some(builder) => builder.consider(iri, position),
+                        None => {
+                            worst = Some(refusal::RefusalBuilder::new(ds, iri, position)?);
+                            Ok(())
+                        }
+                    })?;
                 }
-            })?;
-        }
-        Ok(())
-    })?;
-    worst.map(refusal::RefusalBuilder::finish).transpose()
+                Ok(())
+            },
+        )?;
+        worst.map(refusal::RefusalBuilder::finish).transpose()
+    })
 }
 
 impl<'a, D: DatasetView> CanonState<'a, D> {

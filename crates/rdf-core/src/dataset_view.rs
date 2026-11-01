@@ -791,16 +791,40 @@ pub trait DatasetView {
     /// work on failure. A missing guard is an operational stop, never an RDF term.
     /// This adapter preserves the internal iterator/visitor shape; public lookup
     /// boundaries use [`Self::resolve`] to retain the typed cause immediately.
+    ///
+    /// # Panics
+    /// Panics if a failed resolution is not retained by [`Self::read_error`].
     #[doc(hidden)]
     fn resolve_if_ready(&self, id: Self::Id) -> Option<Self::TermGuard<'_>> {
-        self.resolve(id).ok()
+        match self.resolve(id) {
+            Ok(guard) => Some(guard),
+            Err(_) => {
+                assert!(
+                    self.read_error().is_some(),
+                    "DatasetView read_error must retain a failed resolution"
+                );
+                None
+            }
+        }
     }
 
     /// Reverse lookup inside a checked drain. Operational failure is sticky and
     /// the drain may publish no result unless its final checkpoint succeeds.
+    ///
+    /// # Panics
+    /// Panics if a failed reverse lookup is not retained by [`Self::read_error`].
     #[doc(hidden)]
     fn term_id_if_ready(&self, value: &TermValue) -> Option<Self::Id> {
-        self.term_id_by_value(value).ok().flatten()
+        match self.term_id_by_value(value) {
+            Ok(id) => id,
+            Err(_) => {
+                assert!(
+                    self.read_error().is_some(),
+                    "DatasetView read_error must retain a failed reverse lookup"
+                );
+                None
+            }
+        }
     }
 
     /// The opaque, loop-invariant probe plan a pattern query precomputes once (from

@@ -4176,19 +4176,20 @@ fn eval_constraint<'a, S: ResultSink>(
                     // The fixed execution proved this immutable original plan
                     // before evaluation. Do not repeat its structural proof for
                     // every focus and fixed-point round.
-                    let crate::expression::NodeExpr::ConformsToShape {
-                        node,
-                        shape: crate::expression::ShapeArg::Named(target),
-                    } = expr
-                    else {
+                    let crate::expression::NodeExpr::ConformsToShape { node, shape } = expr else {
                         return Err(crate::error::ShapesError::internal(
-                            "closed expression lost its original static target proof",
+                            "closed expression lost its original target proof",
                         ));
                     };
                     let node = node.as_ref();
                     Ok::<_, crate::error::ShapesError>((
                         node,
-                        lowered.shape(context.plan, 0, target)?,
+                        match shape {
+                            crate::expression::ShapeArg::Named(target) => {
+                                Some(lowered.shape(context.plan, 0, target)?)
+                            }
+                            crate::expression::ShapeArg::Computed { .. } => None,
+                        },
                     ))
                 })
                 .transpose()?;
@@ -4201,7 +4202,7 @@ fn eval_constraint<'a, S: ResultSink>(
             // loop-invariant — reusing it only avoids re-allocating the set.
             let mut guard = crate::expression::RecursionGuard::with_depth(depth);
             for value_node in value_nodes {
-                let conforms = if let Some((crate::expression::NodeExpr::This, target)) =
+                let conforms = if let Some((crate::expression::NodeExpr::This, Some(target))) =
                     recursive_target
                 {
                     // This plan borrows the original expression's lowering and
@@ -4233,6 +4234,31 @@ fn eval_constraint<'a, S: ResultSink>(
                         )
                         .and_then(|focus| {
                             focus.map_or(Ok(false), |focus| {
+                                let target = match target {
+                                    Some(target) => target,
+                                    None => {
+                                        let crate::expression::NodeExpr::ConformsToShape {
+                                            shape: crate::expression::ShapeArg::Computed { expr, .. },
+                                            ..
+                                        } = expr else {
+                                            return Err(crate::error::ShapesError::internal(
+                                                "computed conformance target lost its original operand",
+                                            ));
+                                        };
+                                        let produced = crate::expression::eval_planned_conformance_operand(
+                                            store,
+                                            &value_node,
+                                            expr,
+                                            lowered.operand(1)?,
+                                            context.plan,
+                                            &mut guard,
+                                            crate::expression::Scope::bound(&binding),
+                                        )?;
+                                        crate::expression::conformance_target(
+                                            &produced, context.plan, lowered.index()?,
+                                        )?
+                                    }
+                                };
                                 conforms_memoized(context, target, &FocusNode::resolve(ds, &focus))
                             })
                         })

@@ -15,19 +15,31 @@ pub(crate) fn visit<'a, E: From<StorageError>>(
     expression: &'a NodeExpr,
     mut named: impl FnMut(&'a Term) -> Result<(), E>,
 ) -> Result<bool, E> {
+    visit_terms(expression, |term| {
+        if matches!(term, Term::NamedNode(_)) {
+            named(term)?;
+        }
+        Ok(())
+    })
+}
+
+/// Visit every statically enumerated output, preserving original term identity.
+/// False means some output still depends on an unenumerated execution path.
+pub(crate) fn visit_terms<'a, E: From<StorageError>>(
+    expression: &'a NodeExpr,
+    mut output: impl FnMut(&'a Term) -> Result<(), E>,
+) -> Result<bool, E> {
     let mut pending = WorkList::<_, 8>::with(expression);
     let mut resident = Resident;
     let mut memory = Memory::new(&mut resident);
     let mut complete = true;
     while let Some(expression) = pending.pop() {
         match expression {
-            NodeExpr::Constant(term @ Term::NamedNode(_)) => named(term)?,
-            NodeExpr::Constant(_) | NodeExpr::Empty => {}
+            NodeExpr::Constant(term) => output(term)?,
+            NodeExpr::Empty => {}
             NodeExpr::List(members) => {
                 for member in members {
-                    if matches!(member, Term::NamedNode(_)) {
-                        named(member)?;
-                    }
+                    output(member)?;
                 }
             }
             NodeExpr::Union(operands) | NodeExpr::Concat(operands) => {
