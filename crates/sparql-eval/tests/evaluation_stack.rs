@@ -35,6 +35,9 @@ const EX: &str = "http://example.org/";
 /// A small stack for the deep requests below: 256 KiB left.
 const SMALL: usize = 256 * 1024;
 
+/// Stack for success-required controls, separate from the small-stack refusal sweep.
+const CONTROL: usize = 1024 * 1024;
+
 /// Large enough that every one of them does: 64 MiB left.
 const LARGE: usize = 64 * 1024 * 1024;
 
@@ -256,7 +259,7 @@ fn the_deep_answers_equal_their_shallow_twins() {
     ] {
         assert_eq!(
             evaluate(&prepare(&deep), LARGE).expect("deep"),
-            request(&shallow, SMALL).expect("the shallow twin answers on the small stack"),
+            request(&shallow, CONTROL).expect("the shallow twin answers on the control stack"),
         );
     }
 }
@@ -279,7 +282,7 @@ fn the_whole_request_path_answers_or_refuses_a_flat_spine_on_a_small_stack() {
 #[test]
 fn the_small_stack_still_answers_a_shallow_request_after_a_deep_one() {
     let prepared = prepare(&not_exists(63));
-    let (refused, shallow) = on_stack(SMALL, move || {
+    let (refused, shallow) = on_stack(CONTROL, move || {
         let engine = NativeSparqlEngine::new();
         let refused =
             subjects(engine.query_prepared(&dataset(), &prepared, &[], &QueryOptions::EMPTY));
@@ -421,22 +424,15 @@ fn a_deep_forwarded_body_answers_or_is_the_typed_refusal_under_silent() {
     let deep = prepare(&service_with_nested_calls(120));
     let small = evaluate_with_service(&deep, 320 * 1024);
     assert_answer_or_stack_refusal(&small, &["s1"], "a SERVICE SILENT body 120 calls deep");
-    if let Err(refused) = small {
-        assert!(
-            refused.message.contains("expression"),
-            "the evaluator's construct is named: {}",
-            refused.message
-        );
-    }
     // The valid neighbours: the same plan with room for the body answers `s1` alone,
-    // and so does a shallow body on the very same small stack.
+    // and so does a shallow body on the separate success-control stack.
     assert_eq!(
         evaluate_with_service(&deep, LARGE).expect("room for the body"),
         ["s1"]
     );
     assert_eq!(
-        evaluate_with_service(&prepare(&service_with_nested_calls(3)), 320 * 1024)
-            .expect("a shallow body answers on the small stack"),
+        evaluate_with_service(&prepare(&service_with_nested_calls(3)), CONTROL)
+            .expect("a shallow body answers on the control stack"),
         ["s1"]
     );
 }

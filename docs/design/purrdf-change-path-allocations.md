@@ -60,10 +60,10 @@ cargo test -p purrdf-shapes --test sparql_path_alloc -- --nocapture
 
 | surface | allocations per focus node |
 |---|---:|
-| `sh:sparql` constraint | 42 |
-| custom `sh:ask` component | 97 |
-| custom `sh:select` component | 54 |
-| `sh:expression` function call | 95 |
+| `sh:sparql` constraint | 43 |
+| custom `sh:ask` component | 99 |
+| custom `sh:select` component | 55 |
+| `sh:expression` function call | 97 |
 
 That table is the UNGOVERNED lane. The same file now also pins the GOVERNED one —
 the lane an incremental host with a budget runs, reached through
@@ -74,10 +74,10 @@ delta-backed view whose pattern probe is type-erased:
 
 | surface | allocations per focus node, governed |
 |---|---:|
-| `sh:sparql` constraint, governed | 58 |
-| custom `sh:ask` component, governed | 117 |
-| custom `sh:select` component, governed | 70 |
-| `sh:expression` function call, governed | 119 |
+| `sh:sparql` constraint, governed | 46 |
+| custom `sh:ask` component, governed | 101 |
+| custom `sh:select` component, governed | 58 |
+| `sh:expression` function call, governed | 101 |
 
 Native ownership retains an unchanged immutable schema through a union or
 projection instead of copying its columns and publishing another outer control.
@@ -100,11 +100,22 @@ The marginal additions are 2 for the SELECT constraint's current shape,
 20 for the ASK component's two runs (current shape 2, boolean parameter 4 and
 literal value 4 per run), 6 for the SELECT component's current shape and boolean,
 and 16 for the expression's two runs with two literals each. Both lanes pay
-these same increments. The current governed expression form is
+these same increments. At that revision the governed expression form was
 `37 + 119 N + 3 log2(N / 1280)`; entry and doubling terms remain unchanged.
 The duplicate-name ASK fallback adds 20 to its prior 198, reaching 218: each
 of two runs grounds a focus IRI, a literal value and both current-shape IRI
 bindings. Receipt identity preserves both bindings even though their names match.
+
+The heap driver retains nested operator continuations in an admitted spill
+buffer. A symbolized allocation trace over 512 warmed SELECT calls identifies
+one spill allocation per query. The expression reentry classifier now keeps its
+first 32 pending parts inline, removing its two avoidable allocations on these
+fixtures. Ungoverned costs are therefore 43/99/55/97: one additional allocation
+per query, including the two calls made by ASK and expression. The fallback ASK
+cost is 220. Restored seeded positive execution brings governed costs to
+46/101/58/101. The current governed expression form is
+`37 + 101 N + 3 log2(N / 1280)`, with unchanged entry, doubling and exact-equality
+assertions.
 
 Historically, short BIND loops moved to the sequential evaluator path rather than constructing
 a worker context and converting its output. On the expression fixture this

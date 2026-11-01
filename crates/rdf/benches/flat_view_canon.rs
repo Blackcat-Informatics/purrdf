@@ -17,7 +17,8 @@
 //!   into an owned `Vec<RdfQuad>`, [`flat_dataset_from_quads`] re-freezes that
 //!   vector into a SECOND `RdfDataset`, and [`try_canonicalize_with`] runs over the
 //!   frozen result.
-//! * `borrowed` — [`try_canonicalize_flat_view`] over the SAME view directly. Its
+//! * `borrowed` — [`try_canonicalize_flat_view`] over a view with owned workspace
+//!   admission directly. Its
 //!   own RDFC-1.0 n-degree search runs as usual, and the
 //!   [`checkpointed_drain`](purrdf_core::checkpointed_drain) completeness law
 //!   drains a [`FallibleDatasetView`] more than once internally, but no second
@@ -47,9 +48,12 @@
 //!   `InMemoryPageProvider`, read through a fresh `PagedQueryView` per call (a
 //!   paged query view is an operation-scoped read, so reusing one across calls
 //!   would let a later call ride an earlier call's page cache). Same extra `owned`
-//!   freeze as `composite` and `delta`, plus the multi-page drain itself.
+//!   freeze as `composite` and `delta`, plus the multi-page drain itself. Its
+//!   scoped read cannot publish owned canonical output directly, so the
+//!   `materialized` comparison explicitly pays for a dataset freeze before the
+//!   borrowed canonicalizer, including that materialization in the timed call.
 //!
-//! Every shape's `owned` and `borrowed` bytes are asserted equal exactly once,
+//! Every shape's compared output bytes are asserted equal exactly once,
 //! before anything is timed — a correctness check on the fixtures, not a
 //! benchmark result.
 
@@ -295,11 +299,13 @@ fn benches(c: &mut Bench) {
     let paged_probe = paged_dataset.query_view(PagedQueryLimits::UNBOUNDED);
     let paged_owned_owner = owned_route_over_view(&paged_probe, hash);
     let paged_owned = paged_owned_owner.nquads();
-    let paged_borrowed_owner = borrowed_route(&paged_probe, hash);
-    let paged_borrowed = paged_borrowed_owner.nquads();
+    let paged_materialized =
+        dataset_from_view(&paged_probe).expect("checked paged materialization");
+    let paged_materialized_owner = borrowed_route(&*paged_materialized, hash);
+    let paged_materialized_bytes = paged_materialized_owner.nquads();
     assert_eq!(
-        paged_owned, paged_borrowed,
-        "paged: owned and borrowed routes must agree"
+        paged_owned, paged_materialized_bytes,
+        "paged: owned and materialized routes must agree"
     );
     assert_eq!(
         paged_owned, statements_owned,
@@ -350,10 +356,11 @@ fn benches(c: &mut Bench) {
             black_box(owned_route_over_view(&view, hash))
         });
     });
-    group.bench_function(BenchmarkId::new("borrowed", "paged"), |b| {
+    group.bench_function(BenchmarkId::new("materialized", "paged"), |b| {
         b.iter(|| {
             let view = paged_dataset.query_view(PagedQueryLimits::UNBOUNDED);
-            black_box(borrowed_route(&view, hash))
+            let materialized = dataset_from_view(&view).expect("checked paged materialization");
+            black_box(borrowed_route(&*materialized, hash))
         });
     });
 

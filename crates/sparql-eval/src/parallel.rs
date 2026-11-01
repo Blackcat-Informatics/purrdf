@@ -469,7 +469,8 @@ pub(crate) fn is_parallel_safe_with(
 /// meets; an expression of any depth is classified without a machine-stack frame per
 /// level.
 pub(crate) fn expression_re_enters_evaluation(expr: &Expression) -> bool {
-    let mut pending = vec![ExpressionPart::Sub(expr)];
+    let mut pending =
+        purrdf_lex::walk::WorkList::<ExpressionPart<'_>, 32>::with(ExpressionPart::Sub(expr));
     while let Some(part) = pending.pop() {
         match part {
             ExpressionPart::Sub(expr) => push_expression_parts(expr, &mut pending),
@@ -483,14 +484,17 @@ pub(crate) fn expression_re_enters_evaluation(expr: &Expression) -> bool {
 /// Push every part of `expr` onto `pending` so that they pop in the order
 /// [`visit_expression_parts`] yields them: a call's function before its arguments, an
 /// operator's operands left to right.
-fn push_expression_parts<'a>(expr: &'a Expression, pending: &mut Vec<ExpressionPart<'a>>) {
+fn push_expression_parts<'a>(
+    expr: &'a Expression,
+    pending: &mut purrdf_lex::walk::WorkList<ExpressionPart<'a>, 32>,
+) {
     let first = pending.len();
     visit_expression_parts(expr, &mut |part| {
         pending.push(part);
         // `false` keeps the visit going; every part is collected.
         false
     });
-    pending[first..].reverse();
+    pending.reverse_top(pending.len() - first);
 }
 
 /// Whether `pattern` (recursively) is safe to evaluate under the fork-join
