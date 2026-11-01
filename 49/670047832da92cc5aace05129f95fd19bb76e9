@@ -1,0 +1,18 @@
+ghprsq source head backlink metadata
+
+parent_hashes: 49670047832da92cc5aace05129f95fd19bb76e9
+
+GhpRsq-Schema: 1
+GhpRsq-Merge-Style: structured-squash-head-backlink
+GhpRsq-GitHub-Repo: Blackcat-Informatics/purrdf
+GhpRsq-GitHub-Pull-Request: 938
+GhpRsq-GitHub-PR-URL: https://github.com/Blackcat-Informatics/purrdf/pull/938
+GhpRsq-Base-Ref: main
+GhpRsq-Base-OID: 3218ec628c6e74adac6165b5e5f1599d227171df
+GhpRsq-Head-Ref: paudley/489-make-the-rdfc-call-limit-and-sparql-udf
+GhpRsq-Head-OID: 49670047832da92cc5aace05129f95fd19bb76e9
+GhpRsq-Result-Tree: b4cde249053ba4f8c32bec1b1cdc696addad8823
+GhpRsq-Result-Commit: e027c75681946a327f2b71d91a56837ee0fd1c4d
+GhpRsq-Parent-Hashes: 49670047832da92cc5aace05129f95fd19bb76e9
+GhpRsq-Squash-Notes-SHA256: 0b851e2e7102cca2bf8cb2b66f5823f8a159cbc86f04d23e74d15c6ceeb0e19e
+GhpRsq-Stage-Evidence: none
