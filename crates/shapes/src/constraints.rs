@@ -35,8 +35,9 @@ pub(crate) mod fixed_point;
 use purrdf_xsd::datatype::{
     XSD_BOOLEAN, XSD_BYTE, XSD_DATE, XSD_DATE_TIME, XSD_DATE_TIME_STAMP, XSD_DECIMAL, XSD_DOUBLE,
     XSD_FLOAT, XSD_INT, XSD_INTEGER, XSD_LONG, XSD_NEGATIVE_INTEGER, XSD_NON_NEGATIVE_INTEGER,
-    XSD_NON_POSITIVE_INTEGER, XSD_POSITIVE_INTEGER, XSD_SHORT, XSD_STRING, XSD_TIME,
-    XSD_UNSIGNED_BYTE, XSD_UNSIGNED_INT, XSD_UNSIGNED_LONG, XSD_UNSIGNED_SHORT,
+    XSD_NON_POSITIVE_INTEGER, XSD_NORMALIZED_STRING, XSD_POSITIVE_INTEGER, XSD_SHORT, XSD_STRING,
+    XSD_TIME, XSD_TOKEN, XSD_UNSIGNED_BYTE, XSD_UNSIGNED_INT, XSD_UNSIGNED_LONG,
+    XSD_UNSIGNED_SHORT,
 };
 
 /// Internal value-node currency for the constraint layer.
@@ -4650,9 +4651,15 @@ fn is_derived_integer_type(dt: &str) -> bool {
 /// is ill-formed: a lexical form that is well-formed but past this crate's
 /// representable range (a year beyond `i64`, more fractional seconds than the
 /// decimal holds) is in the lexical space and conforms. A datatype outside that
-/// model (a custom IRI, `rdf:HTML`, `xsd:anyURI`, ...) has no lexical check.
+/// model (a custom IRI, `rdf:HTML`, ...) has no lexical check. The string family
+/// uses its supplied lexical form unchanged: schema-validation whitespace
+/// preprocessing must not hide an ill-typed RDF literal.
 fn xsd_lexical_valid(dt: &str, lex: &str) -> bool {
     match dt {
+        // RDF supplies the lexical form itself, without schema-validation
+        // whiteSpace preprocessing. Trimming here would hide malformed tokens.
+        XSD_STRING | XSD_NORMALIZED_STRING | XSD_TOKEN => XsdDatatype::from_iri(dt)
+            .is_some_and(|datatype| purrdf_xsd::parse_xsd10(lex, datatype).is_ok()),
         XSD_INTEGER => is_xsd_integer_lexical(lex),
         XSD_DECIMAL => is_xsd_decimal_lexical(lex),
         // `xsd:double` / `xsd:float` / `xsd:boolean` each fix
@@ -6603,7 +6610,7 @@ mod tests {
                 compiled: Arc::new(OnceLock::new()),
             }],
         );
-        // "abc123": 'a' is a valid XML NameStartChar, and 'b','c','1','2','3'
+        // `"abc123"`: 'a' is a valid XML NameStartChar, and 'b','c','1','2','3'
         // are all valid XML NameChars.
         assert!(validate_shape(&store, &ex("a"), &shape).is_empty());
 
