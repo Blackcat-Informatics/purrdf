@@ -8,6 +8,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Fresh OWL refutation witnesses:** generated symbols are checked against the
+  current term interner, including caller terms introduced after preparation.
+  Repeated role-inclusion queries preserve distinct witness identities.
+
 - **Native table allocation errors (breaking Rust API):**
   `QueryIndexAllocationError::StatementHistogram` now carries
   `purrdf_core::hash::table::TryReserveError` instead of
