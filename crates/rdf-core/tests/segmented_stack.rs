@@ -404,16 +404,25 @@ fn generated_chronological_publications_match_eager_typed_seals() {
                     ),
                 )
                 .unwrap();
-            let sparse_bytes = PackBuilder::build_view_bytes(
+            // Cross the owned reference boundary explicitly: checked query reads
+            // materialize resident datasets before pack results retain allocations.
+            let sparse_reference = purrdf_core::dataset_from_view(
                 &sparse_fold.query_view(PagedQueryLimits::UNBOUNDED),
+            )
+            .unwrap();
+            let eager_reference =
+                purrdf_core::dataset_from_view(&eager_fold.query_view(PagedQueryLimits::UNBOUNDED))
+                    .unwrap();
+            let sparse_bytes = PackBuilder::build_bytes(
+                &sparse_reference,
                 &mut purrdf_core::CanonicalizationControl::new(
                     purrdf_core::RDFC_V2_CORPUS_POLICY,
                     None,
                 ),
             )
             .unwrap();
-            let eager_bytes = PackBuilder::build_view_bytes(
-                &eager_fold.query_view(PagedQueryLimits::UNBOUNDED),
+            let eager_bytes = PackBuilder::build_bytes(
+                &eager_reference,
                 &mut purrdf_core::CanonicalizationControl::new(
                     purrdf_core::RDFC_V2_CORPUS_POLICY,
                     None,
