@@ -6798,12 +6798,14 @@ fn run_ordinary<'a, 'd, D: DatasetView + Sync>(
                 };
                 let result: Result<Option<Evaluated<D::Id>>, EvalError> = (|| {
                     let state = pending.child.as_mut().expect("armed streamed parent");
+                    // Failed delivery aborts without acknowledging a block. Keep
+                    // its original refusal before checking successful completion.
+                    let child = completed?;
                     if state.busy {
                         return Err(EvalError::internal(
                             "stream producer ended before acknowledgement",
                         ));
                     }
-                    let child = completed?;
                     let mut lift = state.lift.take().expect("stream lift").attach(node);
                     let ordinal = match state.kind {
                         StreamKind::Union { ordinal } => ordinal,
