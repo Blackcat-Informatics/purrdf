@@ -8,6 +8,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Native Zstandard transport failures:** frame reset and block decoding retain
+  original structured decoder causes through standard I/O and buffered transport
+  errors. Native failure equality uses retained cause identity without formatting.
+
 - **Native table allocation errors (breaking Rust API):**
   `QueryIndexAllocationError::StatementHistogram` now carries
   `purrdf_core::hash::table::TryReserveError` instead of
