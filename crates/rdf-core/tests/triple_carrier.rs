@@ -350,9 +350,11 @@ fn owned_transfer_preserves_lexical_owner_and_flat_statement_identity() {
     );
     let relabeled = TripleDataset::try_from(relabeled).unwrap();
     let relabeled_read = relabeled.read().unwrap();
+    let relabeled_materialized = purrdf_core::dataset_from_view(&relabeled_read)
+        .expect("relabeled triple read materializes before retaining canonical output");
     assert_eq!(
         try_canonicalize_flat_view(
-            &relabeled_read,
+            &*relabeled_materialized,
             CanonHash::Sha256,
             &mut purrdf_core::CanonicalizationControl::new(
                 purrdf_core::RDFC_V2_CORPUS_POLICY,
@@ -365,7 +367,7 @@ fn owned_transfer_preserves_lexical_owner_and_flat_statement_identity() {
     );
     assert_eq!(
         try_flat_digest_view(
-            &relabeled_read,
+            &*relabeled_materialized,
             CanonHash::Sha256,
             &mut purrdf_core::CanonicalizationControl::new(
                 purrdf_core::RDFC_V2_CORPUS_POLICY,
