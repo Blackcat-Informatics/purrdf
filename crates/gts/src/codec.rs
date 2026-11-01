@@ -110,17 +110,14 @@ fn decode_one<'a>(
             if let Some(dict) = codec.dct.as_deref() {
                 decoder
                     .add_dict_from_bytes(dict)
-                    .map_err(|e| CodecError::Failed(CodecFailure::ZstdDictionary(e.to_string())))?;
+                    .map_err(|e| CodecError::Failed(CodecFailure::ZstdDecodeDictionary(e)))?;
             }
             // Start with a generous expansion factor and grow until the frame fits.
             let mut capacity = data.len().saturating_mul(4).max(4096).min(limit);
             loop {
                 let mut out = Vec::new();
                 out.try_reserve_exact(capacity).map_err(|e| {
-                    CodecError::Failed(CodecFailure::ZstdAllocation {
-                        capacity,
-                        message: e.to_string(),
-                    })
+                    CodecError::Failed(CodecFailure::ZstdAllocation { capacity, cause: e })
                 })?;
                 match decoder.decode_all_to_vec(data, &mut out) {
                     Ok(()) => return Ok(Cow::Owned(out)),
@@ -131,7 +128,7 @@ fn decode_one<'a>(
                         capacity = capacity.saturating_mul(2).max(1).min(limit);
                     }
                     Err(e) => {
-                        return Err(CodecError::Failed(CodecFailure::ZstdDecode(e.to_string())));
+                        return Err(CodecError::Failed(CodecFailure::ZstdDecode(e)));
                     }
                 }
             }
@@ -154,7 +151,7 @@ fn encode_zstd(data: &[u8], level: Option<i32>) -> Vec<u8> {
 fn dict_compressor(level: Option<i32>, dict: &[u8]) -> Result<DictCompressor, CodecError> {
     let mut cctx: DictCompressor = FrameCompressor::new(zstd_level(level));
     cctx.set_dictionary_from_bytes(dict)
-        .map_err(|e| CodecError::Failed(CodecFailure::ZstdDictionary(e.to_string())))?;
+        .map_err(|e| CodecError::Failed(CodecFailure::ZstdEncodeDictionary(e)))?;
     Ok(cctx)
 }
 
@@ -303,9 +300,9 @@ pub fn zstd_block_layout(payload: &[u8]) -> Result<Vec<ZstdBlockInfo>, CodecErro
     let mut rest = payload;
     while !rest.is_empty() {
         let header = read_frame_header_info(rest, false)
-            .map_err(|e| CodecError::Failed(CodecFailure::ZstdHeader(e.to_string())))?;
+            .map_err(|e| CodecError::Failed(CodecFailure::ZstdHeader(e)))?;
         let compressed_len = find_frame_compressed_size(rest)
-            .map_err(|e| CodecError::Failed(CodecFailure::ZstdTruncated(format!("{e:?}"))))?;
+            .map_err(|e| CodecError::Failed(CodecFailure::ZstdTruncated(e)))?;
         if compressed_len == 0 || compressed_len > rest.len() {
             return Err(CodecError::Failed(CodecFailure::CompressedLength {
                 compressed_len,

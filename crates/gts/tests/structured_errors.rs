@@ -1790,6 +1790,41 @@ fn codec_native_corruption_and_budget_remain_distinct() {
             .unwrap()
             .is::<purrdf_deflate::Error>()
     );
+
+    let encoded = encode_chain(&["zstd".into()], raw).unwrap();
+    let codec = Codec::new("zstd", "compress");
+    assert_eq!(
+        decode_chain_bounded(std::slice::from_ref(&codec), &encoded, raw.len()).unwrap(),
+        raw
+    );
+    assert!(matches!(
+        decode_chain_bounded(std::slice::from_ref(&codec), &encoded, 3),
+        Err(purrdf_gts::codec::CodecError::Limit { limit: 3 })
+    ));
+    let error = {
+        let damaged = b"bad!".to_vec();
+        decode_chain(&[codec], &damaged).unwrap_err()
+    };
+    let fields = Capture::read(&error).child("detail");
+    assert_eq!(fields.code, "gts-codec-zstd-decode");
+    let header = fields.child("cause").child("cause");
+    assert_eq!(header.code, "zstd-read-frame-header-bad-magic-number");
+    assert!(matches!(
+        header.field("magic_number"),
+        ErrorValue::Unsigned(value) if value == u128::from(u32::from_le_bytes(*b"bad!"))
+    ));
+    assert_eq!(
+        error.to_string(),
+        "zstd decode failed: BadMagicNumber(560226658)"
+    );
+    let failure = std::error::Error::source(&error).unwrap();
+    let decoder = std::error::Error::source(failure).unwrap();
+    assert!(decoder.is::<purrdf_zstd::decoding::errors::FrameDecoderError>());
+    assert!(
+        std::error::Error::source(decoder)
+            .unwrap()
+            .is::<purrdf_zstd::decoding::errors::ReadFrameHeaderError>()
+    );
 }
 
 fn ulid_native_counts_and_decoder_causes_are_exact() {

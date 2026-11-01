@@ -1,9 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Native transform refusals and opaque external decoder messages.
+//! Native transform refusals and their original codec causes.
 
 use core::fmt;
+use purrdf_zstd::decoding::{
+    FrameSizeError,
+    errors::{DictionaryDecodeError, FrameDecoderError, ReadFrameHeaderError},
+};
 
 /// Why a transform chain could not be applied.
 #[derive(Debug)]
@@ -114,27 +118,29 @@ impl purrdf_hash::error::StructuredError for CodecUnavailable {
     }
 }
 
-/// A native transform failure, retaining external explanations as messages.
+/// A native transform failure, retaining original codec owners.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum CodecFailure {
     /// Original native gzip refusal.
     Gzip(purrdf_deflate::Error),
-    /// External zstd dictionary loader explanation.
-    ZstdDictionary(String),
+    /// Original dictionary refusal from the decoder.
+    ZstdDecodeDictionary(FrameDecoderError),
+    /// Original dictionary refusal from the encoder.
+    ZstdEncodeDictionary(DictionaryDecodeError),
     /// The output reservation failed before decoding.
     ZstdAllocation {
         /// Requested output-buffer capacity.
         capacity: usize,
-        /// Opaque standard allocator explanation.
-        message: String,
+        /// Original standard allocator refusal.
+        cause: std::collections::TryReserveError,
     },
-    /// External zstd decoder explanation.
-    ZstdDecode(String),
-    /// External zstd header decoder explanation.
-    ZstdHeader(String),
-    /// External zstd frame-size decoder explanation.
-    ZstdTruncated(String),
+    /// Original frame decoder refusal.
+    ZstdDecode(FrameDecoderError),
+    /// Original frame header refusal.
+    ZstdHeader(ReadFrameHeaderError),
+    /// Original compressed frame extent refusal.
+    ZstdTruncated(FrameSizeError),
     /// A decoder reported a compressed size outside its input range.
     CompressedLength {
         /// Reported compressed byte count.
@@ -160,13 +166,14 @@ impl fmt::Display for CodecFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Gzip(cause) => write!(f, "gzip decode failed: {cause}"),
-            Self::ZstdDictionary(message) => write!(f, "zstd dictionary load failed: {message}"),
-            Self::ZstdAllocation { message, .. } => {
-                write!(f, "zstd decode failed: output allocation failed: {message}")
+            Self::ZstdDecodeDictionary(cause) => write!(f, "zstd dictionary load failed: {cause}"),
+            Self::ZstdEncodeDictionary(cause) => write!(f, "zstd dictionary load failed: {cause}"),
+            Self::ZstdAllocation { cause, .. } => {
+                write!(f, "zstd decode failed: output allocation failed: {cause}")
             }
-            Self::ZstdDecode(message) => write!(f, "zstd decode failed: {message}"),
-            Self::ZstdHeader(message) => write!(f, "zstd frame header is unreadable: {message}"),
-            Self::ZstdTruncated(message) => write!(f, "zstd frame is truncated: {message}"),
+            Self::ZstdDecode(cause) => write!(f, "zstd decode failed: {cause}"),
+            Self::ZstdHeader(cause) => write!(f, "zstd frame header is unreadable: {cause}"),
+            Self::ZstdTruncated(cause) => write!(f, "zstd frame is truncated: {cause:?}"),
             Self::CompressedLength {
                 compressed_len,
                 remaining,
@@ -187,18 +194,27 @@ impl fmt::Display for CodecFailure {
     }
 }
 
-purrdf_lex::error_source!(CodecFailure { Gzip });
+purrdf_lex::error_source!(CodecFailure => {
+    Self::Gzip(cause) => cause,
+    Self::ZstdDecodeDictionary(cause) => cause,
+    Self::ZstdEncodeDictionary(cause) => cause,
+    Self::ZstdAllocation { cause, .. } => cause,
+    Self::ZstdDecode(cause) => cause,
+    Self::ZstdHeader(cause) => cause,
+    Self::ZstdTruncated(cause) => cause,
+});
 
 impl purrdf_hash::error::StructuredError for CodecFailure {
     purrdf_hash::error_visit! {
         Gzip(cause) => "gts-codec-gzip" { "cause" => Cause(cause) },
-        ZstdDictionary(message) => "gts-codec-zstd-dictionary" { "message" => Message(message) },
-        ZstdAllocation { capacity, message } => "gts-codec-zstd-allocation" {
-            "capacity" => ByteCount(*capacity as u128), "message" => Message(message),
+        ZstdDecodeDictionary(cause) => "gts-codec-zstd-decode-dictionary" { "cause" => Cause(cause) },
+        ZstdEncodeDictionary(cause) => "gts-codec-zstd-encode-dictionary" { "cause" => Cause(cause) },
+        ZstdAllocation { capacity, cause } => "gts-codec-zstd-allocation" {
+            "capacity" => ByteCount(*capacity as u128), "cause" => Cause(cause),
         },
-        ZstdDecode(message) => "gts-codec-zstd-decode" { "message" => Message(message) },
-        ZstdHeader(message) => "gts-codec-zstd-header" { "message" => Message(message) },
-        ZstdTruncated(message) => "gts-codec-zstd-truncated" { "message" => Message(message) },
+        ZstdDecode(cause) => "gts-codec-zstd-decode" { "cause" => Cause(cause) },
+        ZstdHeader(cause) => "gts-codec-zstd-header" { "cause" => Cause(cause) },
+        ZstdTruncated(cause) => "gts-codec-zstd-truncated" { "cause" => Cause(cause) },
         CompressedLength { compressed_len, remaining } => "gts-codec-compressed-length" {
             "compressed_len" => ByteCount(*compressed_len as u128), "remaining" => ByteCount(*remaining as u128),
         },
