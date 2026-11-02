@@ -148,6 +148,20 @@ impl purrdf_hash::error::StructuredError for MembershipInput {
 /// Original operands for a geometry-domain refusal.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum GeometryDomainError {
+    /// An exact scalar division in polynomial contact solving has a zero divisor.
+    PolynomialScalarQuotient {
+        /// Original numerator, without rounding or decimal rendering.
+        numerator: crate::context::Retained<crate::Rat>,
+        /// Original zero denominator.
+        denominator: crate::context::Retained<crate::Rat>,
+    },
+    /// Euclidean polynomial division has an identically zero divisor.
+    PolynomialDivision {
+        /// Original dividend coefficients, in ascending power order.
+        dividend: crate::PreparedValues<crate::Rat>,
+        /// Original canonical divisor coefficients; an empty sequence is zero.
+        divisor: crate::PreparedValues<crate::Rat>,
+    },
     /// A still-unresolved oriented integral has no retained refinement panel.
     EmptyOrientedIntegral {
         /// Original selected line count.
@@ -355,6 +369,13 @@ pub enum GeometryDomainError {
 
 impl purrdf_hash::error::StructuredError for GeometryDomainError {
     purrdf_hash::error_visit! {
+        PolynomialScalarQuotient { numerator, denominator } => "geometry-polynomial-scalar-quotient" {
+            "numerator" => Record(&**numerator), "denominator" => Record(&**denominator)
+        },
+        PolynomialDivision { dividend, divisor } => "geometry-polynomial-division" {
+            "dividend" => List(dividend.iter().map(|value| purrdf_hash::error::ErrorValue::Record(value))),
+            "divisor" => List(divisor.iter().map(|value| purrdf_hash::error::ErrorValue::Record(value)))
+        },
         EmptyOrientedIntegral { line_count, iterations, max_depth, enclosures } => "geometry-empty-oriented-integral" {
             "line_count" => Unsigned(*line_count as u128), "iterations" => Unsigned(u128::from(*iterations)), "max_depth" => Unsigned(u128::from(*max_depth)),
             "query" => List(enclosures[..3].iter().map(|value| purrdf_hash::error::ErrorValue::Record(value))),
@@ -438,6 +459,29 @@ impl purrdf_hash::error::StructuredError for GeometryDomainError {
 }
 
 impl GeometryDomainError {
+    pub(crate) fn polynomial_scalar_quotient(
+        numerator: &crate::Rat,
+        denominator: &crate::Rat,
+        progress: &mut crate::context::WorkProgress<'_>,
+    ) -> super::GeoError {
+        let captured: Result<Self, super::GeoError> = (|| {
+            Ok(Self::PolynomialScalarQuotient {
+                numerator: super::GeoError::diagnostic_number(numerator, progress)?,
+                denominator: super::GeoError::diagnostic_number(denominator, progress)?,
+            })
+        })();
+        captured.map_or_else(
+            |error| error,
+            |cause| {
+                super::GeoError::retained_failure_with_progress(
+                    cause,
+                    super::GeoError::GeometryDomain,
+                    progress,
+                )
+            },
+        )
+    }
+
     pub(crate) fn empty_oriented_integral(
         query: &[purrdf_xsd::math::FixedInterval; 3],
         parameter: &purrdf_xsd::math::FixedInterval,
@@ -868,6 +912,9 @@ impl GeometryDomainError {
 impl core::fmt::Display for GeometryDomainError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::PolynomialScalarQuotient { .. } | Self::PolynomialDivision { .. } => {
+                f.write_str("polynomial contact division by zero")
+            }
             Self::EmptyOrientedIntegral { .. } => f.write_str("empty oriented integral"),
             Self::NonDecimalParameter { .. } => {
                 f.write_str("custom profile parameter has no exact decimal representation")
