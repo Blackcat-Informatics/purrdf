@@ -556,6 +556,23 @@ drop use the native term home. Rejection order, graph filtering, successful
 projection/export behavior and the nominal IRI-kind check are unchanged;
 this boundary does not add IRI grammar parsing or normalization.
 
+## Visualization focus and identity evidence
+
+`VizError::AmbiguousFocus` now owns a `VizFocusAmbiguity`: the original selector
+and separate sorted/deduplicated term and statement identity lists. The existing
+candidate vectors move into the reason. `VizError::IdCollision` now owns a
+`VizIdentityCollision` with the computed identity, original prefix, existing raw
+registry key and incoming raw key. These keys are comparison data; inspection
+does not parse them or reconstruct them from the identity.
+
+Standard sources and the shared borrowed visitor expose these native reasons,
+including named lists with their original order and explicit empty boundaries.
+Unknown-focus errors still retain their genuine caller-supplied selector text;
+there is no additional cause or discarded nonempty candidate set at that site.
+Human messages, validation/matching order, unique-match role assignment,
+same-key registration, conflict-state preservation and identity hashing are
+unchanged. Clone and equality operate on the retained native fields.
+
 ## Explicit capacity limits
 
 `purrdf_shapes::srl::infer_until` and `infer_triples_until` accept a borrowed
