@@ -485,7 +485,7 @@ impl<E: core::error::Error + 'static> core::error::Error for UpdateError<E> {
 impl<E: crate::error::StructuredError> crate::error::StructuredError for UpdateError<E> {
     crate::error_visit! {
         LengthOverflow { before, added } => "blake3-length-overflow" {
-            "before" => Unsigned(*before as u128), "added" => Unsigned(*added as u128)
+            "before" => Unsigned(u128::from(*before)), "added" => Unsigned(*added as u128)
         },
         Progress(cause) => "blake3-progress" { "cause" => Cause(cause) },
     }
@@ -1284,7 +1284,7 @@ mod tests {
         let mut record = RecordHasher::new();
         let mut extents = 0;
         let cause = Box::new(17);
-        let original = &*cause as *const usize;
+        let original = core::ptr::from_ref(cause.as_ref());
         let mut cause = Some(Cause(cause));
         let stopped = record.try_update(&bytes, |units| {
             assert!(units <= CHUNK as u64);
@@ -1296,7 +1296,9 @@ mod tests {
             }
         });
         match stopped {
-            Err(UpdateError::Progress(cause)) => assert_eq!(&*cause.0 as *const usize, original),
+            Err(UpdateError::Progress(cause)) => {
+                assert_eq!(core::ptr::from_ref(cause.0.as_ref()), original);
+            }
             _ => panic!("original progress cause"),
         }
         assert_eq!(extents, 3);
