@@ -573,6 +573,21 @@ Human messages, validation/matching order, unique-match role assignment,
 same-key registration, conflict-state preservation and identity hashing are
 unchanged. Clone and equality operate on the retained native fields.
 
+## Visualization scene refusal evidence
+
+`VizError::Scene` now owns a `VizSceneError` rather than rendered text. Duplicate
+identities retain total and distinct node/edge counts. Unbound elements retain
+their original identity. Missing node, port, edge and anchor errors retain the
+original typed `VizEndpoint`; port failures also retain ordered native ports
+and their kinds, while anchor failures retain the actual optional anchor ID.
+
+Standard sources and the shared borrowed visitor expose the native reason,
+endpoint fields and port records. An absent anchor remains distinct from a
+different anchor identity. Inspection does not render or materialize a list.
+Only refusal copies the borrowed evidence; successful scenes are not cloned.
+Human messages, duplicate/edge/node and source/target validation order, scene
+construction and successful projection/export behavior are unchanged.
+
 ## Explicit capacity limits
 
 `purrdf_shapes::srl::infer_until` and `infer_triples_until` accept a borrowed
