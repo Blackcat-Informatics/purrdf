@@ -518,6 +518,21 @@ contents; inspection does not reconstruct operands already rendered by their
 producers. Parsing, escaping, successful SVG/JSON bytes and human messages are
 unchanged.
 
+## Visualization specification refusals
+
+`purrdf_rdf::viz::VizError::InvalidVocabulary` now owns a `VizVocabularyError`:
+an empty mapping or a prefix/namespace conflict with the original lexical
+values and mapping positions. A conflict retains the most recent preceding
+mapping, including a repeated identical mapping. `InvalidSpec` now owns a
+`VizSpecError`: the first empty graph selector or the first repeated table
+field, its occurrence positions and the original total/distinct field counts.
+
+Inspect these native causes through standard error sources and the shared
+borrowed visitor. Table-field values retain their original enum; the visitor
+reports their existing human heading as text. Human messages, validation order,
+accepted repeated identical mappings, successful projections and export bytes
+are unchanged.
+
 ## Explicit capacity limits
 
 `purrdf_shapes::srl::infer_until` and `infer_triples_until` accept a borrowed

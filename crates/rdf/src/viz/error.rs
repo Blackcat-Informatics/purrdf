@@ -9,7 +9,7 @@ use purrdf_core::xml_escape::InvalidXmlChar;
 use purrdf_hash::error::StructuredError;
 use purrdf_lex::json::record::DecodeError;
 
-use super::{VizPresentationError, VizPresentationIssue};
+use super::{VizPresentationError, VizPresentationIssue, VizSpecError, VizVocabularyError};
 
 /// Visualization projection errors.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,9 +27,9 @@ pub enum VizError {
     /// A spec references an unknown role predicate.
     UnknownRolePredicate(String),
     /// A spec contains an invalid vocabulary mapping.
-    InvalidVocabulary(String),
+    InvalidVocabulary(VizVocabularyError),
     /// A visualization specification is internally inconsistent.
-    InvalidSpec(String),
+    InvalidSpec(VizSpecError),
     /// A graph-like input contains an invalid predicate.
     InvalidPredicate(String),
     /// A focus selector does not match any projected term or statement.
@@ -64,10 +64,9 @@ impl fmt::Display for VizError {
             Self::UnknownRolePredicate(iri) => {
                 write!(f, "visualization role predicate {iri:?} is not present")
             }
-            Self::InvalidVocabulary(message)
-            | Self::InvalidSpec(message)
-            | Self::Scene(message)
-            | Self::Layout(message) => f.write_str(message),
+            Self::InvalidVocabulary(cause) => cause.fmt(f),
+            Self::InvalidSpec(cause) => cause.fmt(f),
+            Self::Scene(message) | Self::Layout(message) => f.write_str(message),
             Self::InvalidPredicate(predicate) => {
                 write!(f, "visualization predicate {predicate:?} is not an IRI")
             }
@@ -88,7 +87,14 @@ impl fmt::Display for VizError {
     }
 }
 
-purrdf_hash::error_sources!(VizError, Serialize, Decode, Presentation);
+purrdf_hash::error_sources!(
+    VizError,
+    InvalidVocabulary,
+    InvalidSpec,
+    Serialize,
+    Decode,
+    Presentation
+);
 
 impl StructuredError for VizError {
     purrdf_hash::error_visit! {
@@ -97,8 +103,8 @@ impl StructuredError for VizError {
             "allowed" => Unsigned(*allowed as u128),
         },
         UnknownRolePredicate(predicate) => "rdf-viz-unknown-role-predicate" { "predicate" => Text(predicate) },
-        InvalidVocabulary(message) => "rdf-viz-invalid-vocabulary" { "message" => Message(message) },
-        InvalidSpec(message) => "rdf-viz-invalid-specification" { "message" => Message(message) },
+        InvalidVocabulary(cause) => "rdf-viz-invalid-vocabulary" { "cause" => Cause(cause) },
+        InvalidSpec(cause) => "rdf-viz-invalid-specification" { "cause" => Cause(cause) },
         InvalidPredicate(predicate) => "rdf-viz-invalid-predicate" { "predicate" => Text(predicate) },
         UnknownFocus(focus) => "rdf-viz-unknown-focus" { "focus" => Text(focus) },
         AmbiguousFocus(focus) => "rdf-viz-ambiguous-focus" { "focus" => Text(focus) },

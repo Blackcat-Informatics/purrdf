@@ -40,12 +40,14 @@ mod json;
 mod layout;
 mod presentation;
 mod scene;
+mod spec_error;
 mod svg;
 
 pub use error::VizError;
 pub use layout::*;
 pub use presentation::*;
 pub use scene::*;
+pub use spec_error::{VizSpecError, VizVocabularyError};
 pub use svg::*;
 
 const DEFAULT_GRAPH_ID: &str = "graph:default";
@@ -1376,42 +1378,71 @@ impl<'a> ProjectionBuilder<'a> {
     fn validate_spec(&self) -> Result<(), VizError> {
         let mut prefixes = BTreeMap::new();
         let mut namespaces = BTreeMap::new();
-        for mapping in &self.spec.vocabulary {
+        for (index, mapping) in self.spec.vocabulary.iter().enumerate() {
             if mapping.prefix.is_empty() || mapping.namespace.is_empty() {
                 return Err(VizError::InvalidVocabulary(
-                    "visualization vocabulary mappings require non-empty prefix and namespace"
-                        .to_owned(),
+                    VizVocabularyError::EmptyMapping {
+                        index,
+                        prefix: mapping.prefix.clone(),
+                        namespace: mapping.namespace.clone(),
+                    },
                 ));
             }
-            if let Some(existing) = prefixes.insert(&mapping.prefix, &mapping.namespace)
-                && existing != &mapping.namespace
+            if let Some(previous_index) = prefixes.insert(&mapping.prefix, index)
+                && self.spec.vocabulary[previous_index].namespace != mapping.namespace
             {
-                return Err(VizError::InvalidVocabulary(format!(
-                    "visualization prefix {:?} maps to multiple namespaces",
-                    mapping.prefix
-                )));
+                return Err(VizError::InvalidVocabulary(
+                    VizVocabularyError::PrefixConflict {
+                        index,
+                        previous_index,
+                        prefix: mapping.prefix.clone(),
+                        existing_namespace: self.spec.vocabulary[previous_index].namespace.clone(),
+                        incoming_namespace: mapping.namespace.clone(),
+                    },
+                ));
             }
-            if let Some(existing) = namespaces.insert(&mapping.namespace, &mapping.prefix)
-                && existing != &mapping.prefix
+            if let Some(previous_index) = namespaces.insert(&mapping.namespace, index)
+                && self.spec.vocabulary[previous_index].prefix != mapping.prefix
             {
-                return Err(VizError::InvalidVocabulary(format!(
-                    "visualization namespace {:?} maps to multiple prefixes",
-                    mapping.namespace
-                )));
+                return Err(VizError::InvalidVocabulary(
+                    VizVocabularyError::NamespaceConflict {
+                        index,
+                        previous_index,
+                        namespace: mapping.namespace.clone(),
+                        existing_prefix: self.spec.vocabulary[previous_index].prefix.clone(),
+                        incoming_prefix: mapping.prefix.clone(),
+                    },
+                ));
             }
         }
         if let VizGraphPolicy::Include(selectors) = &self.spec.graph_policy
-            && selectors.iter().any(String::is_empty)
+            && let Some(index) = selectors.iter().position(String::is_empty)
         {
-            return Err(VizError::InvalidSpec(
-                "visualization graph selectors must not be empty".to_owned(),
-            ));
+            return Err(VizError::InvalidSpec(VizSpecError::EmptyGraphSelector {
+                index,
+            }));
         }
         let field_count = self.spec.table_fields.iter().collect::<BTreeSet<_>>().len();
         if field_count != self.spec.table_fields.len() {
-            return Err(VizError::InvalidSpec(
-                "visualization table fields must be unique".to_owned(),
-            ));
+            let (field, first_index, index) = self
+                .spec
+                .table_fields
+                .iter()
+                .enumerate()
+                .find_map(|(index, field)| {
+                    self.spec.table_fields[..index]
+                        .iter()
+                        .position(|previous| previous == field)
+                        .map(|first_index| (*field, first_index, index))
+                })
+                .expect("INVARIANT: fewer distinct fields than requested implies a duplicate");
+            return Err(VizError::InvalidSpec(VizSpecError::DuplicateTableField {
+                field,
+                first_index,
+                index,
+                actual: self.spec.table_fields.len(),
+                unique: field_count,
+            }));
         }
         for rule in &self.spec.role_rules {
             if !self.role_predicates_seen.contains(&rule.predicate_iri)
@@ -2284,6 +2315,10 @@ mod tests {
 
     #[test]
     fn invalid_focus_and_duplicate_table_fields_hard_error() {
+        use purrdf_alloc_probe::CurrentThreadWindow;
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+
         let missing_focus = VizSpec {
             focus: Some(format!("{EX}missing")),
             ..VizSpec::default()
@@ -2298,6 +2333,136 @@ mod tests {
         let err =
             project_graph_input(&rich_input(), &duplicate_fields).expect_err("duplicate fields");
         assert!(matches!(err, VizError::InvalidSpec(_)));
+
+        // Refusal owners outlive the input and spec. Competing later errors must
+        // not replace the original vocabulary/selector/table validation order.
+        let mapping = |prefix: &str, namespace: &str| VizVocabularyMapping {
+            prefix: prefix.to_owned(),
+            namespace: namespace.to_owned(),
+        };
+        let cases = [
+            (
+                VizSpec {
+                    vocabulary: vec![mapping("a", "x"), mapping("", "y")],
+                    graph_policy: VizGraphPolicy::Include(vec![String::new()]),
+                    table_fields: duplicate_fields.table_fields.clone(),
+                    ..VizSpec::default()
+                },
+                VizError::InvalidVocabulary(VizVocabularyError::EmptyMapping {
+                    index: 1,
+                    prefix: String::new(),
+                    namespace: "y".to_owned(),
+                }),
+                "visualization vocabulary mappings require non-empty prefix and namespace",
+            ),
+            (
+                VizSpec {
+                    vocabulary: vec![
+                        mapping("a", "x"),
+                        mapping("b", "y"),
+                        mapping("a", "x"),
+                        mapping("a", "y"),
+                    ],
+                    ..VizSpec::default()
+                },
+                VizError::InvalidVocabulary(VizVocabularyError::PrefixConflict {
+                    index: 3,
+                    previous_index: 2,
+                    prefix: "a".to_owned(),
+                    existing_namespace: "x".to_owned(),
+                    incoming_namespace: "y".to_owned(),
+                }),
+                "visualization prefix \"a\" maps to multiple namespaces",
+            ),
+            (
+                VizSpec {
+                    vocabulary: vec![mapping("a", "x"), mapping("a", "x"), mapping("b", "x")],
+                    ..VizSpec::default()
+                },
+                VizError::InvalidVocabulary(VizVocabularyError::NamespaceConflict {
+                    index: 2,
+                    previous_index: 1,
+                    namespace: "x".to_owned(),
+                    existing_prefix: "a".to_owned(),
+                    incoming_prefix: "b".to_owned(),
+                }),
+                "visualization namespace \"x\" maps to multiple prefixes",
+            ),
+            (
+                VizSpec {
+                    graph_policy: VizGraphPolicy::Include(vec![
+                        "default".to_owned(),
+                        String::new(),
+                    ]),
+                    table_fields: duplicate_fields.table_fields,
+                    ..VizSpec::default()
+                },
+                VizError::InvalidSpec(VizSpecError::EmptyGraphSelector { index: 1 }),
+                "visualization graph selectors must not be empty",
+            ),
+            (
+                VizSpec {
+                    table_fields: vec![
+                        VizTableField::Depth,
+                        VizTableField::Statement,
+                        VizTableField::Depth,
+                        VizTableField::Statement,
+                    ],
+                    ..VizSpec::default()
+                },
+                VizError::InvalidSpec(VizSpecError::DuplicateTableField {
+                    field: VizTableField::Depth,
+                    first_index: 0,
+                    index: 2,
+                    actual: 4,
+                    unique: 2,
+                }),
+                "visualization table fields must be unique",
+            ),
+        ];
+        for (spec, expected, message) in cases {
+            let error = project_graph_input(&rich_input(), &spec).expect_err("native spec refusal");
+            drop(spec);
+            assert_eq!(error, expected);
+            assert_eq!(error.to_string(), message);
+            match &error {
+                VizError::InvalidVocabulary(_) => {
+                    assert!(
+                        std::error::Error::source(&error)
+                            .unwrap()
+                            .is::<VizVocabularyError>()
+                    );
+                }
+                VizError::InvalidSpec(_) => {
+                    assert!(
+                        std::error::Error::source(&error)
+                            .unwrap()
+                            .is::<VizSpecError>()
+                    );
+                }
+                _ => panic!("vocabulary or specification cause"),
+            }
+            let outer_events = Vec::with_capacity(32);
+            let events = Vec::with_capacity(32);
+            let window = CurrentThreadWindow::open();
+            let outer = Capture::read_with_buffer(&error, outer_events);
+            let ErrorValue::Cause(native) = outer.field("cause") else {
+                panic!("original native specification cause")
+            };
+            let fields = Capture::read_with_buffer(native, events);
+            let measured = window.close();
+            assert_eq!((measured.allocations, measured.requested_bytes), (0, 0));
+            assert!(matches!(fields.field("index"), ErrorValue::Unsigned(_)));
+        }
+
+        // Repeated identical mappings, nonempty caller-selected lexical values,
+        // and unique fields remain admitted.
+        let spec = VizSpec {
+            vocabulary: vec![mapping("a", "x"), mapping("a", "x"), mapping(" ", " ")],
+            table_fields: vec![VizTableField::Depth, VizTableField::Statement],
+            ..VizSpec::default()
+        };
+        assert!(project_graph_input(&rich_input(), &spec).is_ok());
     }
 
     #[test]
