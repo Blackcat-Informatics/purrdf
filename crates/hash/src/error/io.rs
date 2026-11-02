@@ -69,12 +69,38 @@ pub struct IoFailure {
     payload: Arc<Payload>,
 }
 
+fn native_io_cause(original: &std::io::Error) -> Option<&NativeIoCause> {
+    original.get_ref()?.downcast_ref::<NativeIoCause>()
+}
+
+/// Inspect an original I/O owner without capturing or rendering its presentation.
+/// Known bridge payloads remain structured; opaque payloads remain in the source
+/// owner and have no invented message or native fields.
+impl StructuredError for std::io::Error {
+    fn visit<'error>(&'error self, visitor: &mut dyn super::ErrorVisitor<'error>) {
+        visitor.variant("std-io");
+        visitor.begin_record(Some("kind"), "std-io-kind");
+        super::visit_io_kind_fields(self.kind(), visitor);
+        visitor.end_record();
+        visitor.value(
+            Some("raw_os_error"),
+            self.raw_os_error().map_or(ErrorValue::Absent, |code| {
+                ErrorValue::Signed(i128::from(code))
+            }),
+        );
+        visitor.value(Some("message"), ErrorValue::Absent);
+        visitor.value(
+            Some("cause"),
+            native_io_cause(self).map_or(ErrorValue::Absent, |cause| ErrorValue::Cause(cause)),
+        );
+    }
+}
+
 impl From<std::io::Error> for IoFailure {
     fn from(original: std::io::Error) -> Self {
-        let external_message = (!original
-            .get_ref()
-            .is_some_and(<dyn std::error::Error + Send + Sync + 'static>::is::<NativeIoCause>))
-        .then(|| original.to_string());
+        let external_message = native_io_cause(&original)
+            .is_none()
+            .then(|| original.to_string());
         Self {
             payload: Arc::new(Payload {
                 kind: original.kind(),
@@ -120,10 +146,7 @@ impl IoFailure {
     /// The typed bridge and original cause supplied through [`io_error`].
     #[must_use]
     pub fn native_cause(&self) -> Option<&dyn StructuredError> {
-        self.original()
-            .get_ref()?
-            .downcast_ref::<NativeIoCause>()
-            .map(|cause| cause as &dyn StructuredError)
+        native_io_cause(self.original()).map(|cause| cause as &dyn StructuredError)
     }
 }
 

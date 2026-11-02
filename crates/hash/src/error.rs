@@ -204,17 +204,20 @@ impl StructuredError for std::io::ErrorKind {
         // also produces hidden categories and may add further ones. Retain
         // their actual unit discriminant rather than calling them Other or
         // formatting them. This native value is not a persistent identity.
-        let name = io_error_kind_name(*self);
         visitor.variant("std-io-kind");
-        visitor.value(
-            Some("name"),
-            name.map_or(ErrorValue::Absent, ErrorValue::Code),
-        );
-        visitor.value(
-            Some("native_discriminant"),
-            ErrorValue::Unsigned(*self as u128),
-        );
+        visit_io_kind_fields(*self, visitor);
     }
+}
+
+fn visit_io_kind_fields(kind: std::io::ErrorKind, visitor: &mut dyn ErrorVisitor<'_>) {
+    visitor.value(
+        Some("name"),
+        io_error_kind_name(kind).map_or(ErrorValue::Absent, ErrorValue::Code),
+    );
+    visitor.value(
+        Some("native_discriminant"),
+        ErrorValue::Unsigned(kind as u128),
+    );
 }
 
 /// One field value. These primitive kinds form a closed interchange algebra.

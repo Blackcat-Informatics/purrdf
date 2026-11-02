@@ -12,7 +12,9 @@
 //!
 //! The trainer buffers the supplied corpus and computes directly on its bytes.
 //! No reservoir sampler, ambient random generator or filesystem traversal is used.
+mod error;
 mod fastcover;
+pub use error::{Error, StatisticsSource};
 
 use crate::bit_io::BitWriter;
 use crate::blocks::sequence_section::{
@@ -28,7 +30,6 @@ pub use fastcover::{
     FastCoverTuned,
 };
 use std::{
-    format,
     io::{self, Read},
     // `vec` import covers the `vec![..]` macro used below: this crate is
     // no_std-with-std-feature, so the std prelude isn't pulled in implicitly
@@ -81,7 +82,7 @@ pub struct FinalizeOptions {
     pub dict_id: Option<u32>,
 }
 
-fn serialize_huffman_table(sample_data: &[u8], raw_content: &[u8]) -> io::Result<Vec<u8>> {
+fn serialize_huffman_table(sample_data: &[u8], raw_content: &[u8]) -> Result<Vec<u8>, Error> {
     fn bounded_huffman_stats(data: &[u8]) -> Vec<u8> {
         if data.len() <= MAX_HUFFMAN_STATS_BYTES {
             return data.to_vec();
@@ -105,16 +106,39 @@ fn serialize_huffman_table(sample_data: &[u8], raw_content: &[u8]) -> io::Result
         stats = (0u8..=255).collect();
     }
 
-    let table = HuffmanEncoderTable::build_from_data(stats.as_slice());
+    let mut table = HuffmanEncoderTable::build_from_data(stats.as_slice());
+    if table.writeable_table_description_size().is_none() {
+        // A uniform full alphabet has 255 equal stored weights: FSE cannot
+        // encode its RLE description, and raw descriptions stop at 128 weights.
+        // Bias only an unwritable table, preserving every successful encoding.
+        // Doubling the bounded statistics gives the first symbol over half the
+        // observations, breaking uniform weights even for a large corpus.
+        let original_statistics_bytes = stats.len();
+        stats.resize(original_statistics_bytes * 2, stats[0]);
+        table = HuffmanEncoderTable::build_from_data(stats.as_slice());
+        if table.writeable_table_description_size().is_none() {
+            return Err(Error::UnrepresentableHuffman {
+                original_statistics_bytes,
+                statistics: stats,
+            });
+        }
+    }
     let mut writer = BitWriter::new();
     let mut encoder = HuffmanEncoder::new(&table, &mut writer);
     encoder.encode(&[stats[0]], true);
     let encoded = writer.dump();
 
     let mut decoder = HuffmanDecoderTable::new();
-    let table_size = decoder
-        .build_decoder(encoded.as_slice())
-        .map_err(|e| io::Error::other(format!("failed to decode generated huffman table: {e}")))?;
+    let table_size = match decoder.build_decoder(encoded.as_slice()) {
+        Ok(size) => size,
+        Err(cause) => {
+            return Err(Error::GeneratedHuffman {
+                cause,
+                statistics: stats,
+                encoded,
+            });
+        }
+    };
     Ok(encoded[..table_size as usize].to_vec())
 }
 
@@ -149,7 +173,7 @@ fn serialize_fse_table_from_corpus(
     raw_content: &[u8],
     max_symbol: u8,
     max_log: u8,
-) -> io::Result<Vec<u8>> {
+) -> Result<Vec<u8>, Error> {
     fn counts_total_for_source(source: &[u8], max_symbol: u8, counts: &mut [usize]) -> usize {
         counts.fill(0);
         for symbol in bounded_fse_symbols(source, max_symbol) {
@@ -160,6 +184,11 @@ fn serialize_fse_table_from_corpus(
 
     let mut counts = vec![0usize; usize::from(max_symbol) + 1];
     let using_sample = !sample_data.is_empty();
+    let mut statistics_source = if using_sample {
+        StatisticsSource::Sample
+    } else {
+        StatisticsSource::RawContent
+    };
     let mut total = counts_total_for_source(
         if using_sample {
             sample_data
@@ -171,12 +200,18 @@ fn serialize_fse_table_from_corpus(
     );
     if total <= 1 && using_sample && !raw_content.is_empty() {
         total = counts_total_for_source(raw_content, max_symbol, &mut counts);
+        statistics_source = StatisticsSource::RawContent;
     }
     if total <= 1 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "insufficient symbol statistics for FSE table",
-        ));
+        return Err(Error::InsufficientSymbolStatistics {
+            source: statistics_source,
+            sample_bytes: sample_data.len(),
+            raw_content_bytes: raw_content.len(),
+            max_symbol,
+            max_log,
+            total,
+            counts,
+        });
     }
     let table = build_table_from_symbol_counts(&counts, max_log, false);
     Ok(serialize_fse_table(&table))
@@ -186,7 +221,7 @@ fn finalized_content_budget(
     sample_data: &[u8],
     raw_fallback: &[u8],
     dict_size: usize,
-) -> io::Result<usize> {
+) -> Result<usize, Error> {
     let min_content_size = 8usize;
     let huf_len = serialize_huffman_table(sample_data, raw_fallback)?.len();
     let of_len =
@@ -210,10 +245,11 @@ fn finalized_content_budget(
     let header_len = DICT_MAGIC_NUM.len() + 4 + huf_len + of_len + ml_len + ll_len + 12;
     let max_content_budget = dict_size.saturating_sub(header_len);
     if max_content_budget < min_content_size {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "dictionary size too small to fit header and offset history",
-        ));
+        return Err(Error::DictionarySizeTooSmall {
+            dict_size,
+            header_len,
+            min_content_size,
+        });
     }
     Ok(max_content_budget)
 }
@@ -231,12 +267,12 @@ pub fn finalize_raw_dict(
     sample_data: &[u8],
     dict_size: usize,
     options: FinalizeOptions,
-) -> io::Result<Vec<u8>> {
+) -> Result<Vec<u8>, Error> {
     if raw_content.is_empty() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "raw dictionary content must not be empty",
-        ));
+        return Err(Error::EmptyRawContent {
+            dict_size,
+            sample_bytes: sample_data.len(),
+        });
     }
     let mut out = Vec::with_capacity(dict_size.max(256));
     out.extend_from_slice(&DICT_MAGIC_NUM);
@@ -244,10 +280,7 @@ pub fn finalize_raw_dict(
         .dict_id
         .unwrap_or_else(|| derive_dict_id(raw_content));
     if dict_id == 0 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "dictionary id must be non-zero",
-        ));
+        return Err(Error::ZeroDictionaryId { dict_id });
     }
     out.extend_from_slice(&dict_id.to_le_bytes());
     out.extend_from_slice(serialize_huffman_table(sample_data, raw_content)?.as_slice());
@@ -282,10 +315,11 @@ pub fn finalize_raw_dict(
     let min_content_size = 8usize;
     let max_content_budget = dict_size.saturating_sub(out.len());
     if max_content_budget < min_content_size {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "dictionary size too small to fit header and offset history",
-        ));
+        return Err(Error::DictionarySizeTooSmall {
+            dict_size,
+            header_len: out.len(),
+            min_content_size,
+        });
     }
 
     let content = if raw_content.len() > max_content_budget {
@@ -341,19 +375,18 @@ pub fn train_fastcover_raw_from_slice(
     sample: &[u8],
     dict_size: usize,
     options: &FastCoverOptions,
-) -> io::Result<(Vec<u8>, FastCoverTuned)> {
+) -> Result<(Vec<u8>, FastCoverTuned), Error> {
     if sample.is_empty() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "source stream is empty",
-        ));
+        return Err(Error::EmptyTrainingSample { dict_size });
     }
     let (dict, tuned) = train_fastcover_internal(sample, dict_size, options);
     if dict.is_empty() && dict_size > 0 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "training sample is too small for FastCOVER",
-        ));
+        return Err(Error::TrainingSampleTooSmall {
+            sample_bytes: sample.len(),
+            dict_size,
+            produced_bytes: dict.len(),
+            tuned,
+        });
     }
     Ok((dict, tuned))
 }
@@ -367,11 +400,10 @@ pub fn create_fastcover_raw_dict_from_source<R: Read, W: io::Write>(
     output: &mut W,
     dict_size: usize,
     options: &FastCoverOptions,
-) -> io::Result<FastCoverTuned> {
-    let mut sample = Vec::new();
-    source.read_to_end(&mut sample)?;
+) -> Result<FastCoverTuned, Error> {
+    let sample = read_sample(&mut source)?;
     let (dict, tuned) = train_fastcover_raw_from_slice(sample.as_slice(), dict_size, options)?;
-    output.write_all(dict.as_slice())?;
+    write_dictionary(output, &dict)?;
     Ok(tuned)
 }
 
@@ -385,20 +417,36 @@ pub fn create_fastcover_dict_from_source<R: Read, W: io::Write>(
     dict_size: usize,
     fastcover: &FastCoverOptions,
     finalize: FinalizeOptions,
-) -> io::Result<FastCoverTuned> {
-    let mut sample = Vec::new();
-    source.read_to_end(&mut sample)?;
+) -> Result<FastCoverTuned, Error> {
+    let sample = read_sample(&mut source)?;
     if sample.is_empty() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "source stream is empty",
-        ));
+        return Err(Error::EmptyTrainingSample { dict_size });
     }
     let content_budget = finalized_content_budget(sample.as_slice(), sample.as_slice(), dict_size)?;
     let (raw_dict, tuned) =
         train_fastcover_raw_from_slice(sample.as_slice(), content_budget, fastcover)?;
 
     let finalized = finalize_raw_dict(raw_dict.as_slice(), sample.as_slice(), dict_size, finalize)?;
-    output.write_all(finalized.as_slice())?;
+    write_dictionary(output, &finalized)?;
     Ok(tuned)
+}
+
+fn read_sample(source: &mut impl Read) -> Result<Vec<u8>, Error> {
+    let mut sample = Vec::new();
+    source
+        .read_to_end(&mut sample)
+        .map_err(|cause| Error::SourceRead {
+            cause,
+            bytes_read: sample.len(),
+        })?;
+    Ok(sample)
+}
+
+fn write_dictionary(output: &mut impl io::Write, dictionary: &[u8]) -> Result<(), Error> {
+    output
+        .write_all(dictionary)
+        .map_err(|cause| Error::OutputWrite {
+            cause,
+            output_bytes: dictionary.len(),
+        })
 }

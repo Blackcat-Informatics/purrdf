@@ -396,8 +396,6 @@ fn dictionary_and_key_envelope_errors_keep_native_fields() {
     let samples: &[&[u8]] = &[b"", b""];
     let raw = raw_content_dict(samples, 1024).unwrap_err();
     let trained = trained_dict(samples, 1024).unwrap_err();
-    assert_ne!(raw, trained, "the native authoring operations differ");
-    assert_eq!(raw.detail(), trained.detail());
     for (error, operation) in [(raw, "raw-content"), (trained, "train")] {
         let fields = Capture::read(&error);
         assert_eq!(fields.code, "gts-dictionary-empty-corpus");
@@ -414,7 +412,7 @@ fn dictionary_and_key_envelope_errors_keep_native_fields() {
     }
     let error = dictionary_id(&[]).unwrap_err();
     let fields = Capture::read(&error);
-    assert_eq!(fields.code, "gts-dictionary-external");
+    assert_eq!(fields.code, "gts-dictionary-decode");
     assert!(matches!(
         fields.field("operation"),
         ErrorValue::Code("decode")
@@ -424,7 +422,133 @@ fn dictionary_and_key_envelope_errors_keep_native_fields() {
         ErrorValue::ByteCount(0)
     ));
     assert!(matches!(fields.field("target_len"), ErrorValue::Absent));
-    assert!(matches!(fields.field("message"), ErrorValue::Message(value) if !value.is_empty()));
+    let native = fields.child("cause");
+    assert_eq!(native.code, "zstd-dictionary-decode-dictionary-too-small");
+    assert!(matches!(native.field("got"), ErrorValue::ByteCount(0)));
+    assert!(
+        std::error::Error::source(&error)
+            .unwrap()
+            .is::<purrdf_zstd::decoding::errors::DictionaryDecodeError>()
+    );
+
+    let accepted = raw_content_dict(&[b"ab"], 4096).unwrap();
+    let error = raw_content_dict(&[b"ab"], 1).unwrap_err();
+    let fields = Capture::read(&error);
+    assert_eq!(fields.code, "gts-dictionary-authoring");
+    assert!(matches!(
+        fields.field("input_bytes"),
+        ErrorValue::ByteCount(2)
+    ));
+    assert!(matches!(
+        fields.field("target_len"),
+        ErrorValue::ByteCount(1)
+    ));
+    let native = fields.child("cause");
+    assert_eq!(native.code, "zstd-dictionary-size-too-small");
+    assert!(
+        matches!(native.field("header_len"), ErrorValue::ByteCount(n) if n == (accepted.len() - 8) as u128)
+    );
+    assert!(matches!(
+        native.field("min_content_size"),
+        ErrorValue::ByteCount(8)
+    ));
+    assert_eq!(
+        error.to_string(),
+        "dictionary construction failed: dictionary size too small to fit header and offset history"
+    );
+
+    use purrdf_zstd::dictionary::{
+        FastCoverOptions, FinalizeOptions, finalize_raw_dict, train_fastcover_raw_from_slice,
+    };
+    let options = FastCoverOptions {
+        optimize: false,
+        k: 1,
+        d: 1,
+        f: 1,
+        accel: 0,
+        ..FastCoverOptions::default()
+    };
+    let error = train_fastcover_raw_from_slice(b"abc", 128, &options).unwrap_err();
+    let fields = Capture::read(&error);
+    assert_eq!(fields.code, "zstd-dictionary-training-sample-too-small");
+    assert!(matches!(
+        fields.field("sample_bytes"),
+        ErrorValue::ByteCount(3)
+    ));
+    assert!(matches!(
+        fields.field("dict_size"),
+        ErrorValue::ByteCount(128)
+    ));
+    assert!(matches!(
+        fields.field("produced_bytes"),
+        ErrorValue::ByteCount(0)
+    ));
+    let tuned = fields.child("tuned");
+    assert!(matches!(tuned.field("k"), ErrorValue::ByteCount(16)));
+    assert!(matches!(tuned.field("d"), ErrorValue::ByteCount(4)));
+    assert!(matches!(tuned.field("f"), ErrorValue::Unsigned(8)));
+    assert!(matches!(tuned.field("accel"), ErrorValue::Unsigned(1)));
+    assert!(matches!(tuned.field("score"), ErrorValue::Unsigned(0)));
+    for (error, code) in [
+        (
+            finalize_raw_dict(&[], b"ab", usize::MAX, FinalizeOptions { dict_id: Some(0) })
+                .unwrap_err(),
+            "zstd-dictionary-empty-raw-content",
+        ),
+        (
+            train_fastcover_raw_from_slice(&[], usize::MAX, &options).unwrap_err(),
+            "zstd-dictionary-empty-training-sample",
+        ),
+    ] {
+        let fields = Capture::read(&error);
+        assert_eq!(fields.code, code);
+        assert!(
+            matches!(fields.field("dict_size"), ErrorValue::ByteCount(n) if n == usize::MAX as u128)
+        );
+    }
+    let error =
+        finalize_raw_dict(b"ab", b"ab", 128, FinalizeOptions { dict_id: Some(0) }).unwrap_err();
+    let fields = Capture::read(&error);
+    assert_eq!(fields.code, "zstd-dictionary-zero-id");
+    assert!(matches!(fields.field("dict_id"), ErrorValue::Unsigned(0)));
+    let error = finalize_raw_dict(b"B", b"A", 4096, FinalizeOptions::default()).unwrap_err();
+    let events = Vec::with_capacity(64);
+    let window = CurrentThreadWindow::open();
+    let fields = Capture::read_with_buffer(&error, events);
+    assert_eq!(window.close().allocations, 0);
+    assert_eq!(
+        fields.code,
+        "zstd-dictionary-insufficient-symbol-statistics"
+    );
+    assert!(matches!(
+        fields.field("source"),
+        ErrorValue::Code("raw-content")
+    ));
+    assert!(matches!(fields.field("total"), ErrorValue::Unsigned(1)));
+    use purrdf_testkit::error_capture::Event;
+    assert!(fields.events.windows(4).any(|events| matches!(
+        events,
+        [
+            Event::BeginList(Some("counts"), 32),
+            Event::Value(None, ErrorValue::Unsigned(0)),
+            Event::Value(None, ErrorValue::Unsigned(0)),
+            Event::Value(None, ErrorValue::Unsigned(1)),
+        ]
+    )));
+    // The neighbouring two-observation corpus passes FSE admission after the
+    // formerly unwritable full-alphabet Huffman fallback is rebalanced.
+    for (raw, sample) in [
+        (b"BB".to_vec(), b"A".to_vec()),
+        ((0u8..=255).collect::<Vec<_>>().repeat(256), Vec::new()),
+    ] {
+        let accepted = finalize_raw_dict(&raw, &sample, 70_000, FinalizeOptions::default())
+            .expect("balanced Huffman weights must not panic or over-refuse");
+        purrdf_zstd::decoding::Dictionary::decode_dict(&accepted).unwrap();
+        assert_eq!(
+            accepted,
+            finalize_raw_dict(&raw, &sample, 70_000, FinalizeOptions::default()).unwrap()
+        );
+    }
     let error = {
         let input = String::from("not an armored key");
         purrdf_gts::openpgp::parse_transport_key(&input).unwrap_err()
@@ -433,6 +557,128 @@ fn dictionary_and_key_envelope_errors_keep_native_fields() {
     assert_eq!(fields.code, "gts-openpgp-rule");
     assert_eq!(fields.child("rule").code, "gts-openpgp-missing-begin");
     assert_eq!(error.to_string(), "missing armor BEGIN line");
+}
+
+fn dictionary_io_retains_original_owners_without_rendering() {
+    use purrdf_testkit::error_capture::CallerRefusal;
+    use purrdf_zstd::dictionary::{
+        FastCoverOptions, FinalizeOptions, create_fastcover_dict_from_source,
+        create_fastcover_raw_dict_from_source,
+    };
+    let options = FastCoverOptions {
+        optimize: false,
+        k: 16,
+        d: 4,
+        f: 8,
+        ..FastCoverOptions::default()
+    };
+    for bridged in [false, true] {
+        let cause = if bridged {
+            purrdf_hash::error::io_error(
+                std::io::ErrorKind::Other,
+                CallerRefusal { limit: u128::MAX },
+            )
+        } else {
+            std::io::Error::other(CallerRefusal { limit: u128::MAX })
+        };
+        let identity = core::ptr::from_ref(cause.get_ref().unwrap());
+        let error = create_fastcover_raw_dict_from_source(
+            HeaderFault {
+                prefix: std::io::Cursor::new(vec![1, 2, 3]),
+                error: Some(cause),
+            },
+            &mut Vec::new(),
+            0,
+            &options,
+        )
+        .unwrap_err();
+        let original = std::error::Error::source(&error)
+            .unwrap()
+            .downcast_ref::<std::io::Error>()
+            .unwrap();
+        assert!(core::ptr::eq(
+            core::ptr::from_ref(original.get_ref().unwrap()),
+            identity
+        ));
+        let events = Vec::with_capacity(32);
+        let io_events = Vec::with_capacity(32);
+        let window = CurrentThreadWindow::open();
+        let fields = Capture::read_with_buffer(&error, events);
+        let io = Capture::read_with_buffer(original, io_events);
+        assert_eq!(window.close().allocations, 0);
+        assert_eq!(fields.code, "zstd-dictionary-source-read");
+        assert!(matches!(
+            fields.field("bytes_read"),
+            ErrorValue::ByteCount(3)
+        ));
+        assert!(matches!(io.field("message"), ErrorValue::Absent));
+        if bridged {
+            assert!(matches!(
+                io.child("cause").child("cause").field("limit"),
+                ErrorValue::Unsigned(u128::MAX)
+            ));
+        } else {
+            assert!(matches!(io.field("cause"), ErrorValue::Absent));
+        }
+    }
+    // A healthy source with the same zero raw-output budget is still admitted.
+    create_fastcover_raw_dict_from_source(b"abc".as_slice(), &mut Vec::new(), 0, &options).unwrap();
+
+    let sample = b"abcdefghijklmnopqrstuvwxyz".repeat(4);
+    let mut accepted = Vec::new();
+    create_fastcover_dict_from_source(
+        sample.as_slice(),
+        &mut accepted,
+        512,
+        &options,
+        FinalizeOptions::default(),
+    )
+    .unwrap();
+    purrdf_zstd::decoding::Dictionary::decode_dict(&accepted).unwrap();
+    let cause = purrdf_hash::error::io_error(
+        std::io::ErrorKind::BrokenPipe,
+        CallerRefusal { limit: u128::MAX },
+    );
+    let identity = core::ptr::from_ref(cause.get_ref().unwrap());
+    let mut output = HeaderFault {
+        prefix: std::io::Cursor::new(Vec::new()),
+        error: Some(cause),
+    };
+    let error = create_fastcover_dict_from_source(
+        sample.as_slice(),
+        &mut output,
+        512,
+        &options,
+        FinalizeOptions::default(),
+    )
+    .unwrap_err();
+    drop((sample, output));
+    let original = std::error::Error::source(&error)
+        .unwrap()
+        .downcast_ref::<std::io::Error>()
+        .unwrap();
+    assert!(core::ptr::eq(
+        core::ptr::from_ref(original.get_ref().unwrap()),
+        identity
+    ));
+    let events = Vec::with_capacity(32);
+    let io_events = Vec::with_capacity(32);
+    let window = CurrentThreadWindow::open();
+    let fields = Capture::read_with_buffer(&error, events);
+    let io = Capture::read_with_buffer(original, io_events);
+    assert_eq!(window.close().allocations, 0);
+    assert_eq!(fields.code, "zstd-dictionary-output-write");
+    assert!(
+        matches!(fields.field("output_bytes"), ErrorValue::ByteCount(n) if n == accepted.len() as u128)
+    );
+    assert!(matches!(
+        io.child("kind").field("name"),
+        ErrorValue::Code("broken-pipe")
+    ));
+    assert!(matches!(
+        io.child("cause").child("cause").field("limit"),
+        ErrorValue::Unsigned(u128::MAX)
+    ));
 }
 
 fn refused_frame(
@@ -2757,6 +3003,7 @@ purrdf_testkit::harness_main!(
     transport_retains_native_source_errors_before_foreign_formatting,
     native_transport_framing_and_decoder_fields_survive,
     dictionary_and_key_envelope_errors_keep_native_fields,
+    dictionary_io_retains_original_owners_without_rendering,
     reader_causes_survive_input_graph_and_streaming_owners,
     reader_missing_catalog_keeps_ordered_native_cbor_fields,
     reader_blob_budget_keeps_original_counts_and_priority,

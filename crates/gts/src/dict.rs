@@ -22,13 +22,14 @@
 //!   corpus bytes, then finalizes the dictionary. The trainer has no random
 //!   generator or seed parameter.
 
-use purrdf_zstd::decoding::Dictionary;
+use purrdf_zstd::decoding::{Dictionary, errors::DictionaryDecodeError};
 use purrdf_zstd::dictionary::{
-    FastCoverOptions, FinalizeOptions, create_fastcover_dict_from_source, finalize_raw_dict,
+    Error as DictionaryBuildError, FastCoverOptions, FinalizeOptions,
+    create_fastcover_dict_from_source, finalize_raw_dict,
 };
 
 /// A dictionary could not be built from the supplied corpus.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 #[non_exhaustive]
 pub enum DictError {
     /// All supplied samples were empty.
@@ -40,16 +41,23 @@ pub enum DictError {
         /// Requested finalized dictionary bytes.
         target_len: usize,
     },
-    /// Explanation from the external dictionary implementation.
-    External {
-        /// Native operation that called the external implementation.
+    /// Original native dictionary authoring refusal.
+    Authoring {
+        /// Native authoring operation.
         operation: DictOperation,
         /// Original input byte count.
         input_bytes: usize,
-        /// Requested output bytes, absent for dictionary decoding.
-        target_len: Option<usize>,
-        /// Original opaque external explanation.
-        message: String,
+        /// Requested output bytes.
+        target_len: usize,
+        /// Original provider refusal and its operands.
+        cause: DictionaryBuildError,
+    },
+    /// Original native finalized-dictionary decoder refusal.
+    Decode {
+        /// Original supplied dictionary extent.
+        input_bytes: usize,
+        /// Original decoder refusal and its operands.
+        cause: DictionaryDecodeError,
     },
 }
 
@@ -77,23 +85,27 @@ impl DictOperation {
 }
 
 impl DictError {
-    /// Original human-readable refusal, without its display prefix.
-    #[must_use]
-    pub fn detail(&self) -> &str {
+    fn native_cause(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::EmptyCorpus { .. } => "empty corpus",
-            Self::External { message, .. } => message,
+            Self::EmptyCorpus { .. } => None,
+            Self::Authoring { cause, .. } => Some(cause),
+            Self::Decode { cause, .. } => Some(cause),
         }
     }
 }
 
 impl core::fmt::Display for DictError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "dictionary construction failed: {}", self.detail())
+        f.write_str("dictionary construction failed: ")?;
+        match self {
+            Self::EmptyCorpus { .. } => f.write_str("empty corpus"),
+            Self::Authoring { cause, .. } => core::fmt::Display::fmt(cause, f),
+            Self::Decode { cause, .. } => core::fmt::Display::fmt(cause, f),
+        }
     }
 }
 
-impl std::error::Error for DictError {}
+purrdf_hash::error_sources!(DictError, native native_cause);
 
 impl purrdf_hash::error::StructuredError for DictError {
     purrdf_hash::error_visit! {
@@ -101,10 +113,13 @@ impl purrdf_hash::error::StructuredError for DictError {
             "operation" => Code(operation.as_str()), "samples" => Unsigned(*samples as u128),
             "target_len" => ByteCount(*target_len as u128),
         },
-        External { operation, input_bytes, target_len, message } => "gts-dictionary-external" {
+        Authoring { operation, input_bytes, target_len, cause } => "gts-dictionary-authoring" {
             "operation" => Code(operation.as_str()), "input_bytes" => ByteCount(*input_bytes as u128),
-            "target_len" => Value(target_len.map_or(purrdf_hash::error::ErrorValue::Absent, |value| purrdf_hash::error::ErrorValue::ByteCount(value as u128))),
-            "message" => Message(message),
+            "target_len" => ByteCount(*target_len as u128), "cause" => Cause(cause),
+        },
+        Decode { input_bytes, cause } => "gts-dictionary-decode" {
+            "operation" => Code(DictOperation::Decode.as_str()), "input_bytes" => ByteCount(*input_bytes as u128),
+            "target_len" => Value(purrdf_hash::error::ErrorValue::Absent), "cause" => Cause(cause),
         },
     }
 }
@@ -146,12 +161,12 @@ pub fn raw_content_dict(corpus: &[&[u8]], target_len: usize) -> Result<Vec<u8>, 
             target_len,
         });
     }
-    finalize_raw_dict(&concat, &concat, target_len, FinalizeOptions::default()).map_err(|err| {
-        DictError::External {
+    finalize_raw_dict(&concat, &concat, target_len, FinalizeOptions::default()).map_err(|cause| {
+        DictError::Authoring {
             operation: DictOperation::Raw,
             input_bytes: concat.len(),
-            target_len: Some(target_len),
-            message: err.to_string(),
+            target_len,
+            cause,
         }
     })
 }
@@ -181,11 +196,11 @@ pub fn trained_dict(corpus: &[&[u8]], target_len: usize) -> Result<Vec<u8>, Dict
         &FastCoverOptions::default(),
         FinalizeOptions::default(),
     );
-    result.map_err(|err| DictError::External {
+    result.map_err(|cause| DictError::Authoring {
         operation: DictOperation::Train,
         input_bytes: concat.len(),
-        target_len: Some(target_len),
-        message: err.to_string(),
+        target_len,
+        cause,
     })?;
     Ok(out)
 }
@@ -199,11 +214,9 @@ pub fn trained_dict(corpus: &[&[u8]], target_len: usize) -> Result<Vec<u8>, Dict
 pub fn dictionary_id(dict: &[u8]) -> Result<u32, DictError> {
     Dictionary::decode_dict(dict)
         .map(|parsed| parsed.id)
-        .map_err(|err| DictError::External {
-            operation: DictOperation::Decode,
+        .map_err(|cause| DictError::Decode {
             input_bytes: dict.len(),
-            target_len: None,
-            message: err.to_string(),
+            cause,
         })
 }
 
@@ -287,22 +300,22 @@ mod tests {
 
     #[test]
     fn producers_reject_empty_corpus() {
-        assert_eq!(
-            trained_dict(&[], 4096).expect_err("empty corpus is rejected"),
-            DictError::EmptyCorpus {
+        assert!(matches!(
+            trained_dict(&[], 4096),
+            Err(DictError::EmptyCorpus {
                 operation: DictOperation::Train,
                 samples: 0,
                 target_len: 4096
-            }
-        );
-        assert_eq!(
-            raw_content_dict(&[], 4096).expect_err("empty corpus must be rejected"),
-            DictError::EmptyCorpus {
+            })
+        ));
+        assert!(matches!(
+            raw_content_dict(&[], 4096),
+            Err(DictError::EmptyCorpus {
                 operation: DictOperation::Raw,
                 samples: 0,
                 target_len: 4096
-            }
-        );
+            })
+        ));
     }
 
     #[test]
