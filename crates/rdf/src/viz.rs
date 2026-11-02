@@ -2394,7 +2394,7 @@ mod tests {
                         "default".to_owned(),
                         String::new(),
                     ]),
-                    table_fields: duplicate_fields.table_fields.clone(),
+                    table_fields: duplicate_fields.table_fields,
                     ..VizSpec::default()
                 },
                 VizError::InvalidSpec(VizSpecError::EmptyGraphSelector { index: 1 }),
