@@ -945,6 +945,10 @@ pub(crate) fn run(
     // usage error before the query is even parsed — never discovered only after a
     // successful evaluation, when serializing the answer would otherwise be the first
     // place `ProvenanceNamespace::new` could fail.
+    #[expect(
+        clippy::result_large_err,
+        reason = "The shared results error retains original cleanup owners inline without allocating after refusal; this adapter preserves it until the host usage conversion."
+    )]
     let provenance_namespace = options
         .provenance_namespace
         .map(|(prefix, iri)| ProvenanceNamespace::new(prefix, iri))
