@@ -983,6 +983,33 @@ mod tests {
             .push_annotation_in_graph(reifier, predicate, object, None)
             .unwrap();
 
+        let scoped = builder
+            .intern_blank("subject", BlankScope(3_000_000_001))
+            .unwrap();
+        builder.declare_named_graph(scoped).unwrap();
+        let lexical_integer = builder
+            .intern_literal(RdfLiteral::typed(
+                "00017",
+                "http://www.w3.org/2001/XMLSchema#integer",
+            ))
+            .unwrap();
+        builder
+            .push_quad(scoped, predicate, lexical_integer, None)
+            .unwrap();
+        let nested = builder.intern_triple(subject, predicate, triple).unwrap();
+        builder
+            .push_quad(subject, predicate, nested, Some(graph))
+            .unwrap();
+        let rtl = builder
+            .intern_literal(RdfLiteral {
+                lexical_form: "مرحبا".to_owned(),
+                datatype: None,
+                language: Some("ar".to_owned()),
+                direction: Some(RdfTextDirection::Rtl),
+            })
+            .unwrap();
+        builder.push_quad(subject, predicate, rtl, None).unwrap();
+
         let mut blobs = ContentStore::new();
         blobs.insert(b"first".to_vec());
         blobs.insert(b"second".to_vec());
@@ -991,7 +1018,84 @@ mod tests {
 
     #[test]
     fn full_conversion_round_trips_and_rewrites_identically() {
-        let (dataset, blobs) = fixture();
+        let (dataset, mut blobs) = fixture();
+        blobs.insert(Vec::new());
+        blobs.insert((0..4097).map(|index| (index % 251) as u8).collect());
+        // Compare the original model directly: blank labels/scopes, lexical
+        // forms and all three RDF streams are values, never remapped local IDs.
+        let state = |dataset: &RdfDataset| {
+            let row = |quad: QuadIds<purrdf_core::TermId>| {
+                (
+                    dataset.term_value(quad.s),
+                    dataset.term_value(quad.p),
+                    dataset.term_value(quad.o),
+                    quad.g.map(|id| dataset.term_value(id)),
+                )
+            };
+            let mut streams = [
+                dataset.quads().map(&row).collect::<Vec<_>>(),
+                dataset.reifier_quads().map(&row).collect(),
+                dataset.annotation_quads().map(&row).collect(),
+            ];
+            for stream in &mut streams {
+                stream.sort_unstable();
+            }
+            let mut graphs = dataset
+                .named_graphs()
+                .map(|id| dataset.term_value(id))
+                .collect::<Vec<_>>();
+            graphs.sort_unstable();
+            (streams, graphs)
+        };
+        let original_state = state(&dataset);
+        for (compression, encoding) in [
+            (Compression::Uncompressed, crate::EncodingPolicy::Plain),
+            (Compression::Uncompressed, crate::EncodingPolicy::Adaptive),
+            (Compression::Zstd, crate::EncodingPolicy::Dictionary),
+            (Compression::ZstdLevel(-5), crate::EncodingPolicy::Delta),
+            (Compression::ZstdLevel(0), crate::EncodingPolicy::Adaptive),
+            (Compression::ZstdLevel(22), crate::EncodingPolicy::Adaptive),
+        ] {
+            for (page_rows, group_rows) in [(1, 2), (2, 5), (65_536, 1_048_576)] {
+                let options = crate::WriteOptions {
+                    compression,
+                    encoding,
+                    bloom: Some(crate::BloomOptions::default()),
+                    columns: vec![crate::ColumnOptions {
+                        table: Table::Terms,
+                        column: 0,
+                        compression: Some(if compression == Compression::Uncompressed {
+                            Compression::ZstdLevel(-5)
+                        } else {
+                            Compression::Uncompressed
+                        }),
+                        encoding: None,
+                        bloom: None,
+                    }],
+                    page_rows,
+                    row_group_rows: group_rows,
+                    page_bytes: 32,
+                    row_group_bytes: 256,
+                    ..crate::WriteOptions::default()
+                };
+                let resident = crate::write_with_options(&*dataset, &blobs, &options).unwrap();
+                let mut streamed: [Vec<u8>; 5] = std::array::from_fn(|_| Vec::new());
+                let report = crate::write_to(&*dataset, &blobs, &options, |table, chunk| {
+                    streamed[crate::files::table_index(table)].extend_from_slice(chunk);
+                    Ok::<_, core::convert::Infallible>(())
+                })
+                .unwrap();
+                let streamed = ParquetFiles::from_array(streamed);
+                assert_eq!(resident.files, streamed);
+                for ((table, bytes), report) in streamed.iter().zip(report.tables) {
+                    assert_eq!(report.bytes, bytes.len() as u64, "{table:?}");
+                }
+                let restored = read(&streamed).unwrap();
+                assert_eq!(state(&restored.dataset), original_state);
+                assert_eq!(restored.blobs, blobs);
+                assert!(restored.losses.is_empty());
+            }
+        }
         let encoded = write(&*dataset, &blobs, Compression::Zstd).unwrap();
         let decoded = read(&encoded.files).unwrap();
         assert!(
@@ -1014,10 +1118,11 @@ mod tests {
             .named_graphs()
             .map(|id| match decoded.dataset.as_ref().resolve(id) {
                 purrdf_core::TermRef::Iri(iri) => iri.to_owned(),
-                _ => panic!("fixture graph names are IRIs"),
+                purrdf_core::TermRef::Blank { .. } => "scoped blank graph".to_owned(),
+                _ => panic!("fixture graph names are resources"),
             })
             .collect();
-        assert_eq!(graph_names.len(), 2);
+        assert_eq!(graph_names.len(), 3);
         assert!(graph_names.iter().any(|iri| iri.ends_with("/empty")));
 
         let rewritten = write(&*decoded.dataset, &decoded.blobs, Compression::Zstd).unwrap();

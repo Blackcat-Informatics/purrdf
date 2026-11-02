@@ -591,8 +591,8 @@ metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false
 
 [packages.twox-hash]
 category = "spec-codec"
-reason = "xxHash64 frame checksums for Zstandard"
-distinct = "xxHash64 frame checksums inside purrdf-zstd; purrdf-hash has no xxHash"
+reason = "xxHash64 frame checksums for Zstandard and standard Parquet Bloom filters"
+distinct = "The specified hash for Zstandard checksums and Parquet Bloom filters; purrdf-hash has no xxHash"
 metrics = { direct = true, exclusive_closure = 1, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.typenum]

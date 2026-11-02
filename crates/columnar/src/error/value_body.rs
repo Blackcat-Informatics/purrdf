@@ -10,6 +10,8 @@ use purrdf_core::ir::pack::bits::PackBitsError;
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ValueBodyReason {
+    /// Original native dictionary or delta value-codec refusal.
+    Encoding(super::EncodingReason),
     /// The shared varint reader refused an encoded run header.
     Varint {
         /// Byte position at which decoding began.
@@ -71,6 +73,7 @@ pub enum ValueBodyReason {
 
 impl purrdf_hash::error::StructuredError for ValueBodyReason {
     purrdf_hash::error_visit! {
+        Encoding(cause) => "columnar-value-encoding" { "cause" => Cause(cause) },
         Varint { offset, cause } => "columnar-value-varint" {
             "offset" => ByteCount(*offset as u128), "cause" => Cause(cause),
         },
@@ -105,6 +108,7 @@ impl fmt::Display for ValueBodyReason {
     /// Render the established detail from original operands without storing text.
     fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Encoding(cause) => cause.fmt(output),
             Self::Varint { cause, .. } => cause.fmt(output),
             Self::UnsupportedBitPackedRun { header } => header.cast_signed().fmt(output),
             Self::RunLength { .. } => output.write_str("run length exceeds usize"),
@@ -121,6 +125,7 @@ impl fmt::Display for ValueBodyReason {
 }
 
 purrdf_lex::error_source!(ValueBodyReason => {
+    Self::Encoding(cause) => cause,
     Self::Varint { cause, .. } => cause,
     Self::RunLength { cause, .. } => cause,
 });

@@ -3,13 +3,13 @@
 
 //! The five files of a seeded dataset, pinned byte for byte by digest.
 //!
-//! The digests were taken from the encoder that held each nullable `INT64`
-//! column as `Vec<Option<i64>>`, before the column moved to a presence bitmap
-//! and a dense value vector. They are not regenerated: a change that moves
-//! them changes the written bytes, which the byte-determinism contract
-//! forbids without a golden update and its reason.
+//! These native digests pin adaptive physical encodings, exact/conservative
+//! statistics and column/offset indexes. Their addition deliberately changes
+//! the file bytes while preserving the RDF model and schema version.
 
-use purrdf_columnar::{Compression, Table, read, write};
+#[cfg(not(target_arch = "wasm32"))]
+use purrdf_columnar::read;
+use purrdf_columnar::{Compression, Table, write};
 use purrdf_core::{
     BlankScope, ContentDigest, ContentStore, RdfDataset, RdfDatasetBuilder, RdfLiteral,
     RdfTextDirection,
@@ -113,13 +113,16 @@ fn fixture() -> (std::sync::Arc<RdfDataset>, ContentStore) {
 fn digests(compression: Compression) -> Vec<(Table, String)> {
     let (dataset, blobs) = fixture();
     let written = write(&*dataset, &blobs, compression).expect("the fixture encodes");
-    let read_back = read(&written.files).expect("the fixture decodes");
-    let rewritten =
-        write(&*read_back.dataset, &read_back.blobs, compression).expect("the read-back encodes");
-    assert_eq!(
-        rewritten.files, written.files,
-        "a read-back rewrites the same bytes"
-    );
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let read_back = read(&written.files).expect("the fixture decodes");
+        let rewritten = write(&*read_back.dataset, &read_back.blobs, compression)
+            .expect("the read-back encodes");
+        assert_eq!(
+            rewritten.files, written.files,
+            "a read-back rewrites the same bytes"
+        );
+    }
     written
         .files
         .iter()
@@ -131,52 +134,52 @@ const PINNED: [(Compression, Table, &str); 10] = [
     (
         Compression::Uncompressed,
         Table::Terms,
-        "f55714a0def2b5690fdb13d5370cf2955636b1a4dd247d9b98b3a21be0640ad0",
+        "5667849c1df292bd4de0bb4171d63e5e72c2cf20c3fa886661b7d46f9efb271a",
     ),
     (
         Compression::Uncompressed,
         Table::Quads,
-        "8989b60250dd18db1b5c0bf9e5f1fb97661800422a1a1dc37a9dea36ee367362",
+        "690c92c367bf75f0c6fe27946338eb687234bcca2cb668c6a99b085ccffe6095",
     ),
     (
         Compression::Uncompressed,
         Table::Reifiers,
-        "ca070d5511e4b5a20c221ac5c19045484368f56b6c43ae6236aaae47bd4ded54",
+        "0d7269e294c13b12d09eb0c808bc6f6b224618198a3dde7212146ec180d27195",
     ),
     (
         Compression::Uncompressed,
         Table::Annotations,
-        "13f0dfb715f0dc2b8e31f299f284bed32e90333dcb852fa4ebd8ef37a73fea92",
+        "4858d6fdd419114cf532ca5b11b2f5c55d97a53f4553298ae9e865138094443a",
     ),
     (
         Compression::Uncompressed,
         Table::Blobs,
-        "a70af1999d21847594dde92c43cf04588974f9ca9fbe1f0787703331aff7456d",
+        "8dedcd85027c02020f3b2f8d1c7a8508d7bd63a815be0b4ee78a173b8f5331a7",
     ),
     (
         Compression::Zstd,
         Table::Terms,
-        "1c86c691ef70e890e79c8e10da305bfdb81ebcf86cf85a256404d6154e82c36e",
+        "9fe1fb68c3600c25e2373d7df50389c3e91636b7f6a263b2fa27ab929b8170b4",
     ),
     (
         Compression::Zstd,
         Table::Quads,
-        "83dbdca636a40ff6446f113439547e3cc91f5ba7b8cab7dd291d721fedc709d5",
+        "818949c71b957b24213c90f7452c49e9b73e9b4f5c2831693c523e7f2bb0d789",
     ),
     (
         Compression::Zstd,
         Table::Reifiers,
-        "aa8ccfb58a9f9a009c721f46eb3c6c2aa0142b00f021d85b1de5524673ac3559",
+        "08e966eb4b412b2a386b9b912063edf4d06fa9c7b254115f29336c19725905e9",
     ),
     (
         Compression::Zstd,
         Table::Annotations,
-        "64687fcf66cbf767f68a5ff9b5d53917c28584ddf906d70262fc2351d3d1c149",
+        "d8ebc62e39d0f03f86ed28324105e24a636304e00ed4dbe52c793aed97a1668d",
     ),
     (
         Compression::Zstd,
         Table::Blobs,
-        "e6eeff0d444c8243411bcd8bf2f93665b6ccfbe1c855629a0e4a22e1601ef282",
+        "9dc6dd2c8d963d1f07bdeb790f36e4d58c9a96350119c9fb2dadaf5fb864c19c",
     ),
 ];
 

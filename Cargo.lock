@@ -505,11 +505,13 @@ version = "3.0.1"
 dependencies = [
  "purrdf-alloc-probe",
  "purrdf-core",
+ "purrdf-deflate",
  "purrdf-hash",
  "purrdf-lex",
  "purrdf-stack",
  "purrdf-testkit",
  "purrdf-zstd",
+ "twox-hash",
 ]
 
 [[package]]

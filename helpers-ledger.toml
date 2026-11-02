@@ -1327,6 +1327,14 @@ criterion = "a"
 anchor = "purrdf_shapes::schema_import::ImportContext::import_node_list"
 reason = "It reads a JSON Schema document back: `rdf:first` and `rdf:rest` are the property keys of the list conjunct the schema emitter wrote, matched as JSON, and no RDF collection is walked."
 
+[[job.variant]]
+symbol = "purrdf_rdf::native_codecs::text_parse::document_graph_in_context"
+file = "crates/rdf/src/native_codecs/text_parse.rs"
+detector = "forbidden"
+criterion = "a"
+anchor = "purrdf_rdf::native_codecs::text_parse::document_graph_in_context"
+reason = "The loop consumes a fixed array of five owned vocabulary IRIs and releases their strings through the original memory account. It follows no RDF edges, discovers no collection cells and applies no malformed-list policy."
+
 [[job]]
 id = "thread-stack"
 summary = "Running a closure on a thread with a stated stack, and refusing a request past the wasm32 shadow-stack floor"
@@ -1809,13 +1817,13 @@ reason = "Each resident carrier must explicitly grant retained admission in its 
 
 [[distinct]]
 members = [
-    "purrdf_gts::model::Graph::reifier",
-    "purrdf_rdf::native_codecs::ser_model::SerGraph::reifier",
+    "purrdf_core::fno::construction::Context::new",
+    "purrdf_rdf::native_codecs::acquisition::RunContext::new",
 ]
-kind = "body"
-criterion = "layering"
-anchor = "purrdf_rdf::native_codecs::ser_model::SerGraph"
-reason = "The native codec's serialization model may not depend on the GTS crate (tests/gts_codec_hygiene.rs), so it keeps its own first-row reifier lookup over the same row shape as the GTS model's."
+kind = "shim"
+criterion = "b"
+anchor = "purrdf_rdf::native_codecs::acquisition::RunContext"
+reason = "Each domain-private context retains the original progress and admission in its own owner and drop layout. These constructors only initialize three fields; admission and control already use OwnedAdmission and with_memory_control, so a shared generic container would add abstraction without centralizing another algorithm."
 
 [[distinct]]
 members = [
@@ -3273,81 +3281,81 @@ names = []
 [[job.capacity_proof]]
 file = "crates/rdf-core/src/ir/builder.rs"
 symbol = "crates/rdf-core/src/ir/builder.rs::lookup_hashed"
-line = 610
+line = 720
 sink = "source:bcb4a119fb003223"
 class = "local-stored-index"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a1cf50f35129bd2c",
-    "crates/rdf-core/src/ir/builder.rs=source:59b6b8f0e003a9e2",
-    "crates/rdf-core/src/ir/dataset.rs=source:a2eb19fbf12f57ee",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:034cb2510d6579ec",
-    "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+    "crates/lex/src/allocation.rs=source:bec76ca1eedc8cc0",
+    "crates/rdf-core/src/ir/builder.rs=source:0a79eabb4b1c066f",
+    "crates/rdf-core/src/ir/dataset.rs=source:6d00a6689239d51b",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:e808a24fa4585c24",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:7f7773b7d6de555e"
+constructors = "source:af539137ab5f6dca"
 reason = "The private interner hash stores only ordinals minted after LocalCapacity.required and TermId.from_index. Lookup reconstructs the stored ordinal and indexes the same live term vector."
 
 [[job.capacity_proof]]
 file = "crates/rdf-core/src/ir/builder.rs"
 symbol = "crates/rdf-core/src/ir/builder.rs::lookup_owned_blank"
-line = 636
+line = 765
 sink = "source:bcb4a119fb003223"
 class = "local-stored-index"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a1cf50f35129bd2c",
-    "crates/rdf-core/src/ir/builder.rs=source:59b6b8f0e003a9e2",
-    "crates/rdf-core/src/ir/dataset.rs=source:a2eb19fbf12f57ee",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:034cb2510d6579ec",
-    "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+    "crates/lex/src/allocation.rs=source:bec76ca1eedc8cc0",
+    "crates/rdf-core/src/ir/builder.rs=source:0a79eabb4b1c066f",
+    "crates/rdf-core/src/ir/dataset.rs=source:6d00a6689239d51b",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:e808a24fa4585c24",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:7f7773b7d6de555e"
+constructors = "source:af539137ab5f6dca"
 reason = "The private interner hash stores only ordinals minted after LocalCapacity.required and TermId.from_index. Lookup reconstructs the stored ordinal and indexes the same live term vector."
 
 [[job.capacity_proof]]
 file = "crates/rdf-core/src/ir/builder.rs"
 symbol = "crates/rdf-core/src/ir/builder.rs::transaction_try_with_memory"
-line = 868
+line = 997
 sink = "source:68501dd74980d201"
 class = "local-stored-index"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a1cf50f35129bd2c",
-    "crates/rdf-core/src/ir/builder.rs=source:59b6b8f0e003a9e2",
-    "crates/rdf-core/src/ir/dataset.rs=source:a2eb19fbf12f57ee",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:034cb2510d6579ec",
-    "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+    "crates/lex/src/allocation.rs=source:bec76ca1eedc8cc0",
+    "crates/rdf-core/src/ir/builder.rs=source:0a79eabb4b1c066f",
+    "crates/rdf-core/src/ir/dataset.rs=source:6d00a6689239d51b",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:e808a24fa4585c24",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:7f7773b7d6de555e"
+constructors = "source:af539137ab5f6dca"
 reason = "Rollback enumerates only the appended suffix of the admitted interner before truncation. Both the usize-to-u32 conversion and niche reconstruction address that same retained vector."
 
 [[job.capacity_proof]]
 file = "crates/rdf-core/src/ir/builder.rs"
 symbol = "crates/rdf-core/src/ir/builder.rs::transaction_try_with_memory"
-line = 868
+line = 997
 sink = "source:469fd0ba6adc3424"
 class = "local-stored-index"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a1cf50f35129bd2c",
-    "crates/rdf-core/src/ir/builder.rs=source:59b6b8f0e003a9e2",
-    "crates/rdf-core/src/ir/dataset.rs=source:a2eb19fbf12f57ee",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:034cb2510d6579ec",
-    "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+    "crates/lex/src/allocation.rs=source:bec76ca1eedc8cc0",
+    "crates/rdf-core/src/ir/builder.rs=source:0a79eabb4b1c066f",
+    "crates/rdf-core/src/ir/dataset.rs=source:6d00a6689239d51b",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:e808a24fa4585c24",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:7f7773b7d6de555e"
+constructors = "source:af539137ab5f6dca"
 reason = "Rollback enumerates only the appended suffix of the admitted interner before truncation. Both the usize-to-u32 conversion and niche reconstruction address that same retained vector."
 
 [[job.capacity_proof]]
 file = "crates/rdf-core/src/ir/builder.rs"
 symbol = "crates/rdf-core/src/ir/builder.rs::append_builder_with_memory"
-line = 2287
+line = 2446
 sink = "source:f9e400eaac2b01f1"
 class = "concrete-frozen-term-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a1cf50f35129bd2c",
-    "crates/rdf-core/src/ir/builder.rs=source:59b6b8f0e003a9e2",
-    "crates/rdf-core/src/ir/dataset.rs=source:a2eb19fbf12f57ee",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:034cb2510d6579ec",
-    "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+    "crates/lex/src/allocation.rs=source:bec76ca1eedc8cc0",
+    "crates/rdf-core/src/ir/builder.rs=source:0a79eabb4b1c066f",
+    "crates/rdf-core/src/ir/dataset.rs=source:6d00a6689239d51b",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:e808a24fa4585c24",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:7f7773b7d6de555e"
+constructors = "source:af539137ab5f6dca"
 reason = "Append enumerates the validated source builder term_count. The source interner bounds this count; the preceding u32 conversion already propagates refusal."
 
 [[job.capacity_proof]]
@@ -3357,14 +3365,14 @@ line = 261
 sink = "source:cff2cf01734ea1d3"
 class = "concrete-frozen-term-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a1cf50f35129bd2c",
-    "crates/rdf-core/src/ir/builder.rs=source:59b6b8f0e003a9e2",
+    "crates/lex/src/allocation.rs=source:bec76ca1eedc8cc0",
+    "crates/rdf-core/src/ir/builder.rs=source:0a79eabb4b1c066f",
     "crates/rdf-core/src/ir/composite.rs=source:84a07742277c23d0",
-    "crates/rdf-core/src/ir/dataset.rs=source:a2eb19fbf12f57ee",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:034cb2510d6579ec",
-    "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+    "crates/rdf-core/src/ir/dataset.rs=source:6d00a6689239d51b",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:e808a24fa4585c24",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:7f7773b7d6de555e"
+constructors = "source:af539137ab5f6dca"
 reason = "Carrier.term_ids uses native RdfDataset length or private Selection.ids length. Selection construction checks u32 length before publishing; Delta delegates its own iterator. Enumeration is strictly below the checked count."
 
 [[job.capacity_proof]]
@@ -3374,62 +3382,62 @@ line = 261
 sink = "source:d14392e033854316"
 class = "concrete-frozen-term-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a1cf50f35129bd2c",
-    "crates/rdf-core/src/ir/builder.rs=source:59b6b8f0e003a9e2",
+    "crates/lex/src/allocation.rs=source:bec76ca1eedc8cc0",
+    "crates/rdf-core/src/ir/builder.rs=source:0a79eabb4b1c066f",
     "crates/rdf-core/src/ir/composite.rs=source:84a07742277c23d0",
-    "crates/rdf-core/src/ir/dataset.rs=source:a2eb19fbf12f57ee",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:034cb2510d6579ec",
-    "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+    "crates/rdf-core/src/ir/dataset.rs=source:6d00a6689239d51b",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:e808a24fa4585c24",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:7f7773b7d6de555e"
+constructors = "source:af539137ab5f6dca"
 reason = "Carrier.term_ids uses native RdfDataset length or private Selection.ids length. Selection construction checks u32 length before publishing; Delta delegates its own iterator. Enumeration is strictly below the checked count."
 
 [[job.capacity_proof]]
 file = "crates/rdf-core/src/ir/dataset.rs"
 symbol = "crates/rdf-core/src/ir/dataset.rs::permutation"
-line = 1416
+line = 1420
 sink = "source:93359fa72451a90c"
 class = "resident-permutation"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a1cf50f35129bd2c",
-    "crates/rdf-core/src/ir/builder.rs=source:59b6b8f0e003a9e2",
-    "crates/rdf-core/src/ir/dataset.rs=source:a2eb19fbf12f57ee",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:034cb2510d6579ec",
-    "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+    "crates/lex/src/allocation.rs=source:bec76ca1eedc8cc0",
+    "crates/rdf-core/src/ir/builder.rs=source:0a79eabb4b1c066f",
+    "crates/rdf-core/src/ir/dataset.rs=source:6d00a6689239d51b",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:e808a24fa4585c24",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:7f7773b7d6de555e"
+constructors = "source:af539137ab5f6dca"
 reason = "Native frozen row tables have the original Quads bound, equal to the native permutation limit. This resident wrapper can still panic on physical allocation failure; reduced test limits use try_permutation and are not asserted here."
 
 [[job.capacity_proof]]
 file = "crates/rdf-core/src/ir/frozen_terms.rs"
 symbol = "crates/rdf-core/src/ir/frozen_terms.rs::find_term_hashed"
-line = 151
+line = 187
 sink = "source:bcb4a119fb003223"
 class = "local-stored-index"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a1cf50f35129bd2c",
-    "crates/rdf-core/src/ir/builder.rs=source:59b6b8f0e003a9e2",
-    "crates/rdf-core/src/ir/dataset.rs=source:a2eb19fbf12f57ee",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:034cb2510d6579ec",
-    "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+    "crates/lex/src/allocation.rs=source:bec76ca1eedc8cc0",
+    "crates/rdf-core/src/ir/builder.rs=source:0a79eabb4b1c066f",
+    "crates/rdf-core/src/ir/dataset.rs=source:6d00a6689239d51b",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:e808a24fa4585c24",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:7f7773b7d6de555e"
+constructors = "source:af539137ab5f6dca"
 reason = "Frozen hash entries are transferred from the admitted interner. Both predicates reconstruct an existing index; from_parts callers and consumer source are pinned."
 
 [[job.capacity_proof]]
 file = "crates/rdf-core/src/ir/frozen_terms.rs"
 symbol = "crates/rdf-core/src/ir/frozen_terms.rs::find_term_hashed"
-line = 154
+line = 190
 sink = "source:bcb4a119fb003223"
 class = "local-stored-index"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a1cf50f35129bd2c",
-    "crates/rdf-core/src/ir/builder.rs=source:59b6b8f0e003a9e2",
-    "crates/rdf-core/src/ir/dataset.rs=source:a2eb19fbf12f57ee",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:034cb2510d6579ec",
-    "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+    "crates/lex/src/allocation.rs=source:bec76ca1eedc8cc0",
+    "crates/rdf-core/src/ir/builder.rs=source:0a79eabb4b1c066f",
+    "crates/rdf-core/src/ir/dataset.rs=source:6d00a6689239d51b",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:e808a24fa4585c24",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:7f7773b7d6de555e"
+constructors = "source:af539137ab5f6dca"
 reason = "Frozen hash entries are transferred from the admitted interner. Both predicates reconstruct an existing index; from_parts callers and consumer source are pinned."
 
 [[job.capacity_proof]]
@@ -3445,7 +3453,7 @@ authorities = [
     "crates/rdf-core/src/ir/embedding/mod.rs=source:9b5f6f0268b9dfee",
     "crates/purrdf/src/embedding/wire.rs=source:946be390eabf2446",
 ]
-constructors = "source:7f7773b7d6de555e"
+constructors = "source:af539137ab5f6dca"
 reason = "FileLayout.plan validates section descriptors including count<=65535. Private entries retain that count; header narrows the already validated directory length."
 
 [[job.capacity_proof]]
@@ -3462,7 +3470,7 @@ authorities = [
     "crates/purrdf/src/embedding/wire.rs=source:946be390eabf2446",
     "crates/purrdf/src/embedding/writer.rs=source:90aebfe6d5b3af88",
 ]
-constructors = "source:7f7773b7d6de555e"
+constructors = "source:af539137ab5f6dca"
 reason = "This equality checks serialized byte shape, not a logical table limit. validate_row enforces stored_dimension; private MatrixScalar f32/f64 raw_bytes writes exactly WIDTH bytes per value. Row capacity was checked before allocation."
 
 [[job.capacity_proof]]
@@ -3479,7 +3487,7 @@ authorities = [
     "crates/purrdf/src/embedding/wire.rs=source:946be390eabf2446",
     "crates/purrdf/src/embedding/writer.rs=source:90aebfe6d5b3af88",
 ]
-constructors = "source:7f7773b7d6de555e"
+constructors = "source:af539137ab5f6dca"
 reason = "This equality checks the encoded matrix byte count. checked_matrix_byte_length and VectorDtype.width agree with private MatrixScalar raw_bytes; each row is validated before append. Arithmetic and allocation refusal remain separate."
 
 [[job.capacity_proof]]
@@ -3489,14 +3497,14 @@ line = 606
 sink = "source:c4edb708dec6980b"
 class = "concrete-frozen-term-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a1cf50f35129bd2c",
-    "crates/rdf-core/src/ir/builder.rs=source:59b6b8f0e003a9e2",
-    "crates/rdf-core/src/ir/dataset.rs=source:a2eb19fbf12f57ee",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:034cb2510d6579ec",
+    "crates/lex/src/allocation.rs=source:bec76ca1eedc8cc0",
+    "crates/rdf-core/src/ir/builder.rs=source:0a79eabb4b1c066f",
+    "crates/rdf-core/src/ir/dataset.rs=source:6d00a6689239d51b",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:e808a24fa4585c24",
     "crates/rdf-core/src/ir/mutable.rs=source:c2c581ca7cbb0af4",
-    "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:7f7773b7d6de555e"
+constructors = "source:af539137ab5f6dca"
 reason = "The blank visitor enumerates the concrete frozen base term table, whose constructor closure and original interner capacity are pinned."
 
 [[job.capacity_proof]]
@@ -3506,14 +3514,14 @@ line = 606
 sink = "source:eb9a0b3db238c761"
 class = "concrete-frozen-term-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a1cf50f35129bd2c",
-    "crates/rdf-core/src/ir/builder.rs=source:59b6b8f0e003a9e2",
-    "crates/rdf-core/src/ir/dataset.rs=source:a2eb19fbf12f57ee",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:034cb2510d6579ec",
+    "crates/lex/src/allocation.rs=source:bec76ca1eedc8cc0",
+    "crates/rdf-core/src/ir/builder.rs=source:0a79eabb4b1c066f",
+    "crates/rdf-core/src/ir/dataset.rs=source:6d00a6689239d51b",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:e808a24fa4585c24",
     "crates/rdf-core/src/ir/mutable.rs=source:c2c581ca7cbb0af4",
-    "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:7f7773b7d6de555e"
+constructors = "source:af539137ab5f6dca"
 reason = "The blank visitor enumerates the concrete frozen base term table, whose constructor closure and original interner capacity are pinned."
 
 [[job.capacity_proof]]
@@ -3523,14 +3531,14 @@ line = 159
 sink = "source:3d42d43948575620"
 class = "concrete-frozen-term-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a1cf50f35129bd2c",
-    "crates/rdf-core/src/ir/builder.rs=source:59b6b8f0e003a9e2",
-    "crates/rdf-core/src/ir/dataset.rs=source:a2eb19fbf12f57ee",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:034cb2510d6579ec",
+    "crates/lex/src/allocation.rs=source:bec76ca1eedc8cc0",
+    "crates/rdf-core/src/ir/builder.rs=source:0a79eabb4b1c066f",
+    "crates/rdf-core/src/ir/dataset.rs=source:6d00a6689239d51b",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:e808a24fa4585c24",
     "crates/rdf-core/src/ir/mutable/delta_view.rs=source:a57bd974415d2100",
-    "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:7f7773b7d6de555e"
+constructors = "source:af539137ab5f6dca"
 reason = "DeltaDatasetView.new enumerates its concrete frozen delta table before constructing the private delta ID mapping; both conversions reuse the native ordinal."
 
 [[job.capacity_proof]]
@@ -3540,14 +3548,14 @@ line = 159
 sink = "source:bfcc85921a648621"
 class = "concrete-frozen-term-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a1cf50f35129bd2c",
-    "crates/rdf-core/src/ir/builder.rs=source:59b6b8f0e003a9e2",
-    "crates/rdf-core/src/ir/dataset.rs=source:a2eb19fbf12f57ee",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:034cb2510d6579ec",
+    "crates/lex/src/allocation.rs=source:bec76ca1eedc8cc0",
+    "crates/rdf-core/src/ir/builder.rs=source:0a79eabb4b1c066f",
+    "crates/rdf-core/src/ir/dataset.rs=source:6d00a6689239d51b",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:e808a24fa4585c24",
     "crates/rdf-core/src/ir/mutable/delta_view.rs=source:a57bd974415d2100",
-    "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:7f7773b7d6de555e"
+constructors = "source:af539137ab5f6dca"
 reason = "DeltaDatasetView.new enumerates its concrete frozen delta table before constructing the private delta ID mapping; both conversions reuse the native ordinal."
 
 [[job.capacity_proof]]
@@ -3557,14 +3565,14 @@ line = 250
 sink = "source:c4edb708dec6980b"
 class = "concrete-frozen-term-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a1cf50f35129bd2c",
-    "crates/rdf-core/src/ir/builder.rs=source:59b6b8f0e003a9e2",
-    "crates/rdf-core/src/ir/dataset.rs=source:a2eb19fbf12f57ee",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:034cb2510d6579ec",
+    "crates/lex/src/allocation.rs=source:bec76ca1eedc8cc0",
+    "crates/rdf-core/src/ir/builder.rs=source:0a79eabb4b1c066f",
+    "crates/rdf-core/src/ir/dataset.rs=source:6d00a6689239d51b",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:e808a24fa4585c24",
     "crates/rdf-core/src/ir/mutable/delta_view.rs=source:a57bd974415d2100",
-    "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:7f7773b7d6de555e"
+constructors = "source:af539137ab5f6dca"
 reason = "DeltaDatasetView.term_ids enumerates the concrete frozen base table, then chains already minted added IDs. It does not trust a foreign DatasetView count."
 
 [[job.capacity_proof]]
@@ -3574,14 +3582,14 @@ line = 250
 sink = "source:eb9a0b3db238c761"
 class = "concrete-frozen-term-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a1cf50f35129bd2c",
-    "crates/rdf-core/src/ir/builder.rs=source:59b6b8f0e003a9e2",
-    "crates/rdf-core/src/ir/dataset.rs=source:a2eb19fbf12f57ee",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:034cb2510d6579ec",
+    "crates/lex/src/allocation.rs=source:bec76ca1eedc8cc0",
+    "crates/rdf-core/src/ir/builder.rs=source:0a79eabb4b1c066f",
+    "crates/rdf-core/src/ir/dataset.rs=source:6d00a6689239d51b",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:e808a24fa4585c24",
     "crates/rdf-core/src/ir/mutable/delta_view.rs=source:a57bd974415d2100",
-    "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:7f7773b7d6de555e"
+constructors = "source:af539137ab5f6dca"
 reason = "DeltaDatasetView.term_ids enumerates the concrete frozen base table, then chains already minted added IDs. It does not trust a foreign DatasetView count."
 
 [[job.capacity_proof]]
@@ -3591,14 +3599,14 @@ line = 95
 sink = "source:ae1073a499b2ccac"
 class = "concrete-frozen-term-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a1cf50f35129bd2c",
-    "crates/rdf-core/src/ir/builder.rs=source:59b6b8f0e003a9e2",
-    "crates/rdf-core/src/ir/dataset.rs=source:a2eb19fbf12f57ee",
+    "crates/lex/src/allocation.rs=source:bec76ca1eedc8cc0",
+    "crates/rdf-core/src/ir/builder.rs=source:0a79eabb4b1c066f",
+    "crates/rdf-core/src/ir/dataset.rs=source:6d00a6689239d51b",
     "crates/rdf-core/src/ir/event_sink.rs=source:06dde97381917c60",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:034cb2510d6579ec",
-    "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:e808a24fa4585c24",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:7f7773b7d6de555e"
+constructors = "source:af539137ab5f6dca"
 reason = "The event emitter enumerates its concrete frozen RdfDataset term table; no new slot is allocated by this reconstruction."
 
 [[job.capacity_proof]]
@@ -3608,10 +3616,10 @@ line = 432
 sink = "source:c1a00658c1ffa4e5"
 class = "global-stored-index"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a1cf50f35129bd2c",
+    "crates/lex/src/allocation.rs=source:bec76ca1eedc8cc0",
     "crates/rdf-core/src/ir/global.rs=source:5228f8d490189559",
 ]
-constructors = "source:7f7773b7d6de555e"
+constructors = "source:af539137ab5f6dca"
 reason = "GlobalDictionary private hash entries are inserted only after its exact GlobalTerms capacity and checked ID mint. The owner module pins all constructors and mutation paths."
 
 [[job.capacity_proof]]
@@ -3621,10 +3629,10 @@ line = 890
 sink = "source:921e8adc54613316"
 class = "resident-global-vec-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a1cf50f35129bd2c",
+    "crates/lex/src/allocation.rs=source:bec76ca1eedc8cc0",
     "crates/rdf-core/src/ir/global.rs=source:5228f8d490189559",
 ]
-constructors = "source:7f7773b7d6de555e"
+constructors = "source:af539137ab5f6dca"
 reason = "The value index enumerates the resident nonzero-sized GlobalInternedTerm vector. On supported 32/64-bit pointers its addressable element count is below the reserved u64 terminal index; no remote logical count is used."
 
 [[job.capacity_proof]]
@@ -3634,14 +3642,14 @@ line = 588
 sink = "source:ae1073a499b2ccac"
 class = "concrete-frozen-term-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a1cf50f35129bd2c",
-    "crates/rdf-core/src/ir/builder.rs=source:59b6b8f0e003a9e2",
-    "crates/rdf-core/src/ir/dataset.rs=source:a2eb19fbf12f57ee",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:034cb2510d6579ec",
+    "crates/lex/src/allocation.rs=source:bec76ca1eedc8cc0",
+    "crates/rdf-core/src/ir/builder.rs=source:0a79eabb4b1c066f",
+    "crates/rdf-core/src/ir/dataset.rs=source:6d00a6689239d51b",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:e808a24fa4585c24",
     "crates/rdf-core/src/ir/ingest.rs=source:003c1266a7e596e0",
-    "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:7f7773b7d6de555e"
+constructors = "source:af539137ab5f6dca"
 reason = "Both ingest passes enumerate the same concrete frozen RdfDataset term table, first for blank scopes and then emission. The original admitted count bounds both ordinal reconstructions."
 
 [[job.capacity_proof]]
@@ -3651,14 +3659,14 @@ line = 603
 sink = "source:ae1073a499b2ccac"
 class = "concrete-frozen-term-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a1cf50f35129bd2c",
-    "crates/rdf-core/src/ir/builder.rs=source:59b6b8f0e003a9e2",
-    "crates/rdf-core/src/ir/dataset.rs=source:a2eb19fbf12f57ee",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:034cb2510d6579ec",
+    "crates/lex/src/allocation.rs=source:bec76ca1eedc8cc0",
+    "crates/rdf-core/src/ir/builder.rs=source:0a79eabb4b1c066f",
+    "crates/rdf-core/src/ir/dataset.rs=source:6d00a6689239d51b",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:e808a24fa4585c24",
     "crates/rdf-core/src/ir/ingest.rs=source:003c1266a7e596e0",
-    "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:7f7773b7d6de555e"
+constructors = "source:af539137ab5f6dca"
 reason = "Both ingest passes enumerate the same concrete frozen RdfDataset term table, first for blank scopes and then emission. The original admitted count bounds both ordinal reconstructions."
 
 [[job.capacity_proof]]
@@ -3668,14 +3676,14 @@ line = 458
 sink = "source:20664803727b8ebe"
 class = "concrete-frozen-term-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a1cf50f35129bd2c",
-    "crates/rdf-core/src/ir/builder.rs=source:59b6b8f0e003a9e2",
-    "crates/rdf-core/src/ir/dataset.rs=source:a2eb19fbf12f57ee",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:034cb2510d6579ec",
+    "crates/lex/src/allocation.rs=source:bec76ca1eedc8cc0",
+    "crates/rdf-core/src/ir/builder.rs=source:0a79eabb4b1c066f",
+    "crates/rdf-core/src/ir/dataset.rs=source:6d00a6689239d51b",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:e808a24fa4585c24",
     "crates/rdf-core/src/ir/paged/provider.rs=source:7aa0b2bed0d1f840",
-    "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:7f7773b7d6de555e"
+constructors = "source:af539137ab5f6dca"
 reason = "logical_rdf_byte_len takes a concrete RdfDataset and enumerates its retained terms. The nested narrowing and niche conversion reconstruct native ordinals."
 
 [[job.capacity_proof]]
@@ -3685,14 +3693,14 @@ line = 458
 sink = "source:a89aa0bcdd678ca2"
 class = "concrete-frozen-term-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a1cf50f35129bd2c",
-    "crates/rdf-core/src/ir/builder.rs=source:59b6b8f0e003a9e2",
-    "crates/rdf-core/src/ir/dataset.rs=source:a2eb19fbf12f57ee",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:034cb2510d6579ec",
+    "crates/lex/src/allocation.rs=source:bec76ca1eedc8cc0",
+    "crates/rdf-core/src/ir/builder.rs=source:0a79eabb4b1c066f",
+    "crates/rdf-core/src/ir/dataset.rs=source:6d00a6689239d51b",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:e808a24fa4585c24",
     "crates/rdf-core/src/ir/paged/provider.rs=source:7aa0b2bed0d1f840",
-    "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:7f7773b7d6de555e"
+constructors = "source:af539137ab5f6dca"
 reason = "logical_rdf_byte_len takes a concrete RdfDataset and enumerates its retained terms. The nested narrowing and niche conversion reconstruct native ordinals."
 
 [[job.capacity_proof]]
@@ -3702,15 +3710,15 @@ line = 752
 sink = "source:77a0de8cadadbe03"
 class = "concrete-frozen-term-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a1cf50f35129bd2c",
-    "crates/rdf-core/src/ir/builder.rs=source:59b6b8f0e003a9e2",
-    "crates/rdf-core/src/ir/dataset.rs=source:a2eb19fbf12f57ee",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:034cb2510d6579ec",
+    "crates/lex/src/allocation.rs=source:bec76ca1eedc8cc0",
+    "crates/rdf-core/src/ir/builder.rs=source:0a79eabb4b1c066f",
+    "crates/rdf-core/src/ir/dataset.rs=source:6d00a6689239d51b",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:e808a24fa4585c24",
     "crates/rdf-core/src/ir/paged/query.rs=source:03295004fbd4b94c",
     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
-    "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:7f7773b7d6de555e"
+constructors = "source:af539137ab5f6dca"
 reason = "The query validates each local term in the private PageTranslation. Its sole builder copies a concrete frozen page length; remap preserves that length and clone copies it. The provider count is not the authority."
 
 [[job.capacity_proof]]
@@ -3720,15 +3728,15 @@ line = 752
 sink = "source:2b2967d384636018"
 class = "concrete-frozen-term-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a1cf50f35129bd2c",
-    "crates/rdf-core/src/ir/builder.rs=source:59b6b8f0e003a9e2",
-    "crates/rdf-core/src/ir/dataset.rs=source:a2eb19fbf12f57ee",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:034cb2510d6579ec",
+    "crates/lex/src/allocation.rs=source:bec76ca1eedc8cc0",
+    "crates/rdf-core/src/ir/builder.rs=source:0a79eabb4b1c066f",
+    "crates/rdf-core/src/ir/dataset.rs=source:6d00a6689239d51b",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:e808a24fa4585c24",
     "crates/rdf-core/src/ir/paged/query.rs=source:03295004fbd4b94c",
     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
-    "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:7f7773b7d6de555e"
+constructors = "source:af539137ab5f6dca"
 reason = "The query validates each local term in the private PageTranslation. Its sole builder copies a concrete frozen page length; remap preserves that length and clone copies it. The provider count is not the authority."
 
 [[job.capacity_proof]]
@@ -3738,11 +3746,11 @@ line = 467
 sink = "source:e56729be357eb4f1"
 class = "resident-global-vec-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a1cf50f35129bd2c",
+    "crates/lex/src/allocation.rs=source:bec76ca1eedc8cc0",
     "crates/rdf-core/src/ir/global.rs=source:5228f8d490189559",
     "crates/rdf-core/src/ir/paged/stack.rs=source:e2b618a6bf7d0851",
 ]
-constructors = "source:7f7773b7d6de555e"
+constructors = "source:af539137ab5f6dca"
 reason = "Current snapshots and checked historical prefixes enumerate retained GlobalDictionary resident term vectors. Prefix position is checked against the retained source list before selection; neither route uses a foreign logical interval. The private dictionary owner and consuming stack source are pinned."
 
 [[job.capacity_proof]]
@@ -3752,14 +3760,14 @@ line = 113
 sink = "source:082c3ff94178a18d"
 class = "concrete-frozen-term-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a1cf50f35129bd2c",
-    "crates/rdf-core/src/ir/builder.rs=source:59b6b8f0e003a9e2",
-    "crates/rdf-core/src/ir/dataset.rs=source:a2eb19fbf12f57ee",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:034cb2510d6579ec",
+    "crates/lex/src/allocation.rs=source:bec76ca1eedc8cc0",
+    "crates/rdf-core/src/ir/builder.rs=source:0a79eabb4b1c066f",
+    "crates/rdf-core/src/ir/dataset.rs=source:6d00a6689239d51b",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:e808a24fa4585c24",
     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
-    "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:7f7773b7d6de555e"
+constructors = "source:af539137ab5f6dca"
 reason = "PageTranslation.try_build copies exactly the concrete frozen page term_count. Both conversions reconstruct local IDs already admitted by that page owner."
 
 [[job.capacity_proof]]
@@ -3769,14 +3777,14 @@ line = 113
 sink = "source:dbc961a86092a7d3"
 class = "concrete-frozen-term-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a1cf50f35129bd2c",
-    "crates/rdf-core/src/ir/builder.rs=source:59b6b8f0e003a9e2",
-    "crates/rdf-core/src/ir/dataset.rs=source:a2eb19fbf12f57ee",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:034cb2510d6579ec",
+    "crates/lex/src/allocation.rs=source:bec76ca1eedc8cc0",
+    "crates/rdf-core/src/ir/builder.rs=source:0a79eabb4b1c066f",
+    "crates/rdf-core/src/ir/dataset.rs=source:6d00a6689239d51b",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:e808a24fa4585c24",
     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
-    "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:7f7773b7d6de555e"
+constructors = "source:af539137ab5f6dca"
 reason = "PageTranslation.try_build copies exactly the concrete frozen page term_count. Both conversions reconstruct local IDs already admitted by that page owner."
 
 [[job.capacity_proof]]
@@ -3786,14 +3794,14 @@ line = 196
 sink = "source:082c3ff94178a18d"
 class = "concrete-frozen-term-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a1cf50f35129bd2c",
-    "crates/rdf-core/src/ir/builder.rs=source:59b6b8f0e003a9e2",
-    "crates/rdf-core/src/ir/dataset.rs=source:a2eb19fbf12f57ee",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:034cb2510d6579ec",
+    "crates/lex/src/allocation.rs=source:bec76ca1eedc8cc0",
+    "crates/rdf-core/src/ir/builder.rs=source:0a79eabb4b1c066f",
+    "crates/rdf-core/src/ir/dataset.rs=source:6d00a6689239d51b",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:e808a24fa4585c24",
     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
-    "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:7f7773b7d6de555e"
+constructors = "source:af539137ab5f6dca"
 reason = "PageTranslation.remap enumerates its private local_to_global table created by try_build; it changes global values while preserving local cardinality. All owning module source is pinned."
 
 [[job.capacity_proof]]
@@ -3803,14 +3811,14 @@ line = 196
 sink = "source:dbc961a86092a7d3"
 class = "concrete-frozen-term-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a1cf50f35129bd2c",
-    "crates/rdf-core/src/ir/builder.rs=source:59b6b8f0e003a9e2",
-    "crates/rdf-core/src/ir/dataset.rs=source:a2eb19fbf12f57ee",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:034cb2510d6579ec",
+    "crates/lex/src/allocation.rs=source:bec76ca1eedc8cc0",
+    "crates/rdf-core/src/ir/builder.rs=source:0a79eabb4b1c066f",
+    "crates/rdf-core/src/ir/dataset.rs=source:6d00a6689239d51b",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:e808a24fa4585c24",
     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
-    "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:7f7773b7d6de555e"
+constructors = "source:af539137ab5f6dca"
 reason = "PageTranslation.remap enumerates its private local_to_global table created by try_build; it changes global values while preserving local cardinality. All owning module source is pinned."
 
 [[job.capacity_proof]]
@@ -3820,16 +3828,16 @@ line = 110
 sink = "source:399173dc809511f8"
 class = "segmented-checked-interval"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a1cf50f35129bd2c",
-    "crates/rdf-core/src/ir/builder.rs=source:59b6b8f0e003a9e2",
-    "crates/rdf-core/src/ir/dataset.rs=source:a2eb19fbf12f57ee",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:034cb2510d6579ec",
+    "crates/lex/src/allocation.rs=source:bec76ca1eedc8cc0",
+    "crates/rdf-core/src/ir/builder.rs=source:0a79eabb4b1c066f",
+    "crates/rdf-core/src/ir/dataset.rs=source:6d00a6689239d51b",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:e808a24fa4585c24",
     "crates/rdf-core/src/ir/global.rs=source:5228f8d490189559",
     "crates/rdf-core/src/ir/segmented/build.rs=source:2763f7a2cf26979d",
     "crates/rdf-core/src/ir/segmented/mod.rs=source:f7f048945fd74d6e",
-    "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:7f7773b7d6de555e"
+constructors = "source:af539137ab5f6dca"
 reason = "SegmentedBuildLimits private fields are created with bounded terms and checked first+terms. All builder mint paths enforce that term budget. global/map_id translate only admitted local IDs; local first subtracts/checks against the stored builder count. The entire interval owner and all encoding callers are pinned."
 
 [[job.capacity_proof]]
@@ -3839,16 +3847,16 @@ line = 127
 sink = "source:93bf37ec51519cfd"
 class = "segmented-checked-interval"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a1cf50f35129bd2c",
-    "crates/rdf-core/src/ir/builder.rs=source:59b6b8f0e003a9e2",
-    "crates/rdf-core/src/ir/dataset.rs=source:a2eb19fbf12f57ee",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:034cb2510d6579ec",
+    "crates/lex/src/allocation.rs=source:bec76ca1eedc8cc0",
+    "crates/rdf-core/src/ir/builder.rs=source:0a79eabb4b1c066f",
+    "crates/rdf-core/src/ir/dataset.rs=source:6d00a6689239d51b",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:e808a24fa4585c24",
     "crates/rdf-core/src/ir/global.rs=source:5228f8d490189559",
     "crates/rdf-core/src/ir/segmented/build.rs=source:2763f7a2cf26979d",
     "crates/rdf-core/src/ir/segmented/mod.rs=source:f7f048945fd74d6e",
-    "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:7f7773b7d6de555e"
+constructors = "source:af539137ab5f6dca"
 reason = "SegmentedBuildLimits private fields are created with bounded terms and checked first+terms. All builder mint paths enforce that term budget. global/map_id translate only admitted local IDs; local first subtracts/checks against the stored builder count. The entire interval owner and all encoding callers are pinned."
 
 [[job.capacity_proof]]
@@ -3858,16 +3866,16 @@ line = 531
 sink = "source:495627ce45322797"
 class = "segmented-checked-interval"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a1cf50f35129bd2c",
-    "crates/rdf-core/src/ir/builder.rs=source:59b6b8f0e003a9e2",
-    "crates/rdf-core/src/ir/dataset.rs=source:a2eb19fbf12f57ee",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:034cb2510d6579ec",
+    "crates/lex/src/allocation.rs=source:bec76ca1eedc8cc0",
+    "crates/rdf-core/src/ir/builder.rs=source:0a79eabb4b1c066f",
+    "crates/rdf-core/src/ir/dataset.rs=source:6d00a6689239d51b",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:e808a24fa4585c24",
     "crates/rdf-core/src/ir/global.rs=source:5228f8d490189559",
     "crates/rdf-core/src/ir/segmented/build.rs=source:2763f7a2cf26979d",
     "crates/rdf-core/src/ir/segmented/mod.rs=source:f7f048945fd74d6e",
-    "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:7f7773b7d6de555e"
+constructors = "source:af539137ab5f6dca"
 reason = "SegmentedBuildLimits private fields are created with bounded terms and checked first+terms. All builder mint paths enforce that term budget. global/map_id translate only admitted local IDs; local first subtracts/checks against the stored builder count. The entire interval owner and all encoding callers are pinned."
 
 [[job.capacity_proof]]
@@ -3877,50 +3885,50 @@ line = 556
 sink = "source:93bf37ec51519cfd"
 class = "segmented-checked-interval"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a1cf50f35129bd2c",
-    "crates/rdf-core/src/ir/builder.rs=source:59b6b8f0e003a9e2",
-    "crates/rdf-core/src/ir/dataset.rs=source:a2eb19fbf12f57ee",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:034cb2510d6579ec",
+    "crates/lex/src/allocation.rs=source:bec76ca1eedc8cc0",
+    "crates/rdf-core/src/ir/builder.rs=source:0a79eabb4b1c066f",
+    "crates/rdf-core/src/ir/dataset.rs=source:6d00a6689239d51b",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:e808a24fa4585c24",
     "crates/rdf-core/src/ir/global.rs=source:5228f8d490189559",
     "crates/rdf-core/src/ir/segmented/build.rs=source:2763f7a2cf26979d",
     "crates/rdf-core/src/ir/segmented/mod.rs=source:f7f048945fd74d6e",
-    "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
 ]
-constructors = "source:7f7773b7d6de555e"
+constructors = "source:af539137ab5f6dca"
 reason = "encode_dataset enumerates its concrete frozen input. seal uses the bounded builder; pack migration checks input count against the same validated limits before encoding. The interval, input constructor closure and consuming module are pinned."
 
 [[job.capacity_proof]]
 file = "crates/rdf-core/src/ir/validate.rs"
 symbol = "crates/rdf-core/src/ir/validate.rs::validate_triple_terms_with_memory"
-line = 552
+line = 558
 sink = "source:55afea662f67f62d"
 class = "concrete-frozen-term-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a1cf50f35129bd2c",
-    "crates/rdf-core/src/ir/builder.rs=source:59b6b8f0e003a9e2",
-    "crates/rdf-core/src/ir/dataset.rs=source:a2eb19fbf12f57ee",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:034cb2510d6579ec",
-    "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
-    "crates/rdf-core/src/ir/validate.rs=source:ed178e30b9601a6f",
+    "crates/lex/src/allocation.rs=source:bec76ca1eedc8cc0",
+    "crates/rdf-core/src/ir/builder.rs=source:0a79eabb4b1c066f",
+    "crates/rdf-core/src/ir/dataset.rs=source:6d00a6689239d51b",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:e808a24fa4585c24",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
+    "crates/rdf-core/src/ir/validate.rs=source:ca5c3028c6150f9f",
 ]
-constructors = "source:7f7773b7d6de555e"
+constructors = "source:af539137ab5f6dca"
 reason = "The private triple validator is called with the actual builder term_count in the same pinned module. Both passes enumerate that bounded interner; callers cannot provide an arbitrary count to this private helper."
 
 [[job.capacity_proof]]
 file = "crates/rdf-core/src/ir/validate.rs"
 symbol = "crates/rdf-core/src/ir/validate.rs::validate_triple_terms_with_memory"
-line = 600
+line = 607
 sink = "source:55afea662f67f62d"
 class = "concrete-frozen-term-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a1cf50f35129bd2c",
-    "crates/rdf-core/src/ir/builder.rs=source:59b6b8f0e003a9e2",
-    "crates/rdf-core/src/ir/dataset.rs=source:a2eb19fbf12f57ee",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:034cb2510d6579ec",
-    "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
-    "crates/rdf-core/src/ir/validate.rs=source:ed178e30b9601a6f",
+    "crates/lex/src/allocation.rs=source:bec76ca1eedc8cc0",
+    "crates/rdf-core/src/ir/builder.rs=source:0a79eabb4b1c066f",
+    "crates/rdf-core/src/ir/dataset.rs=source:6d00a6689239d51b",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:e808a24fa4585c24",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
+    "crates/rdf-core/src/ir/validate.rs=source:ca5c3028c6150f9f",
 ]
-constructors = "source:7f7773b7d6de555e"
+constructors = "source:af539137ab5f6dca"
 reason = "The private triple validator is called with the actual builder term_count in the same pinned module. Both passes enumerate that bounded interner; callers cannot provide an arbitrary count to this private helper."
 
 [[job.capacity_proof]]
@@ -3930,14 +3938,14 @@ line = 254
 sink = "source:ae1073a499b2ccac"
 class = "concrete-frozen-term-range"
 authorities = [
-    "crates/lex/src/allocation.rs=source:a1cf50f35129bd2c",
-    "crates/rdf-core/src/ir/builder.rs=source:59b6b8f0e003a9e2",
-    "crates/rdf-core/src/ir/dataset.rs=source:a2eb19fbf12f57ee",
-    "crates/rdf-core/src/ir/frozen_terms.rs=source:034cb2510d6579ec",
-    "crates/rdf-core/src/ir/term.rs=source:9b82577f216b62e0",
+    "crates/lex/src/allocation.rs=source:bec76ca1eedc8cc0",
+    "crates/rdf-core/src/ir/builder.rs=source:0a79eabb4b1c066f",
+    "crates/rdf-core/src/ir/dataset.rs=source:6d00a6689239d51b",
+    "crates/rdf-core/src/ir/frozen_terms.rs=source:e808a24fa4585c24",
+    "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
     "crates/rdf-core/src/turtle_render.rs=source:709dd6553dd0b117",
 ]
-constructors = "source:7f7773b7d6de555e"
+constructors = "source:af539137ab5f6dca"
 reason = "The Turtle renderer searches an explicitly borrowed RdfDataset. Enumeration reuses its original bounded term IDs; it is not a DatasetView count."
 
 [[job]]
