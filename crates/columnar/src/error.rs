@@ -5,6 +5,9 @@
 
 use std::fmt;
 
+mod sink;
+pub use sink::ColumnarSinkError;
+
 mod canonical;
 pub use canonical::CanonicalReason;
 mod zstd;
@@ -23,6 +26,7 @@ pub use compact::CompactReason;
 pub use projection::ProjectionReason;
 pub use reader::ReaderReason;
 mod value_body;
+pub use crate::parquet::EncodingReason;
 pub use value_body::ValueBodyReason;
 mod page_body;
 pub use page_body::PageBodyReason;
@@ -31,6 +35,42 @@ pub use page_body::PageBodyReason;
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum ColumnarError {
+    /// A physical override names no column in the closed schema.
+    InvalidColumn {
+        /// Original table.
+        table: crate::Table,
+        /// Original zero-based column ordinal.
+        column: usize,
+        /// Actual number of schema columns.
+        columns: usize,
+    },
+    /// Multiple overrides name the same schema column.
+    DuplicateColumn {
+        /// Original table.
+        table: crate::Table,
+        /// Repeated zero-based column ordinal.
+        column: usize,
+    },
+    /// A numeric Zstandard level lies outside the native codec's supported range.
+    CompressionLevel {
+        /// Original numeric level.
+        level: i32,
+        /// Native codec's minimum numeric level.
+        minimum: i32,
+        /// Native codec's maximum numeric level.
+        maximum: i32,
+    },
+    /// A runtime physical target is zero or exceeds its wire representation.
+    InvalidOptions {
+        /// Original option name.
+        field: &'static str,
+        /// Original supplied value.
+        value: u64,
+        /// Smallest admitted value.
+        minimum: u64,
+        /// Largest representable value.
+        maximum: u64,
+    },
     /// An exact file length cannot fit the canonical source manifest.
     ManifestLength {
         /// The original table.
@@ -145,6 +185,20 @@ pub enum ColumnarError {
 
 impl purrdf_hash::error::StructuredError for ColumnarError {
     purrdf_hash::error_visit! {
+        InvalidColumn { table, column, columns } => "columnar-invalid-column" {
+            "table" => Code(table.name()), "column" => Unsigned(*column as u128), "columns" => Unsigned(*columns as u128),
+        },
+        DuplicateColumn { table, column } => "columnar-duplicate-column" {
+            "table" => Code(table.name()), "column" => Unsigned(*column as u128),
+        },
+        CompressionLevel { level, minimum, maximum } => "columnar-compression-level" {
+            "level" => Signed(i128::from(*level)), "minimum" => Signed(i128::from(*minimum)), "maximum" => Signed(i128::from(*maximum)),
+        },
+        InvalidOptions { field, value, minimum, maximum } => "columnar-invalid-options" {
+            "field" => Code(field), "value" => Unsigned(u128::from(*value)),
+            "minimum" => Unsigned(u128::from(*minimum)),
+            "maximum" => Unsigned(u128::from(*maximum)),
+        },
         ManifestLength { table, length } => "columnar-manifest-length" {
             "table" => Code(table.name()), "length" => ByteCount(*length as u128),
         },
@@ -233,6 +287,37 @@ impl fmt::Display for ColumnarError {
     /// Render the established human prefix from the retained native cause.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidColumn {
+                table,
+                column,
+                columns,
+            } => write!(
+                f,
+                "columnar {} column {column} is outside its {columns} columns",
+                table.name()
+            ),
+            Self::DuplicateColumn { table, column } => write!(
+                f,
+                "columnar {} column {column} has multiple overrides",
+                table.name()
+            ),
+            Self::CompressionLevel {
+                level,
+                minimum,
+                maximum,
+            } => write!(
+                f,
+                "columnar Zstandard level {level} is outside {minimum} through {maximum}"
+            ),
+            Self::InvalidOptions {
+                field,
+                value,
+                minimum,
+                maximum,
+            } => write!(
+                f,
+                "columnar option {field} is {value}; expected {minimum} through {maximum}"
+            ),
             Self::ManifestLength { table, length } => write!(
                 f,
                 "columnar {} byte length {length} cannot fit the source manifest",

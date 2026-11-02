@@ -25,6 +25,7 @@ mod compact;
 pub mod error;
 mod files;
 mod manifest;
+mod options;
 mod ordinal;
 mod parquet;
 #[doc(hidden)]
@@ -35,14 +36,18 @@ pub mod schema;
 mod writer;
 
 pub use error::{
-    CanonicalReason, ColumnarError, ColumnarWriteError, CompactReason, ConstructionReason,
-    MetadataReason, PageBodyReason, ProjectionReason, ReaderReason, ValueBodyReason, ZstdReason,
+    CanonicalReason, ColumnarError, ColumnarSinkError, ColumnarWriteError, CompactReason,
+    ConstructionReason, EncodingReason, MetadataReason, PageBodyReason, ProjectionReason,
+    ReaderReason, ValueBodyReason, ZstdReason,
 };
 pub use files::ParquetFiles;
 pub use manifest::source_manifest;
+pub use options::{
+    BloomOptions, ColumnOptions, EncodingPolicy, TableWriteReport, WriteOptions, WriteReport,
+};
 pub use ordinal::{ColumnarOrdinal, ColumnarOrdinalRead, ColumnarOrdinalValue};
 pub use parquet::Compression;
 pub use projection::{ColumnarProjection, ProjectionCell, ProjectionRows};
 pub use reader::{ColumnarRead, read, read_with_ordinals};
 pub use schema::{ColumnSchema, PhysicalType, Repetition, Table, TableSchema};
-pub use writer::{ColumnarWrite, project, write};
+pub use writer::{ColumnarWrite, project, write, write_to, write_with_options};

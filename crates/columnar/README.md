@@ -15,11 +15,13 @@ content-addressed blob store onto exactly five flat tables:
 - `annotations.parquet`
 - `blobs.parquet`
 
-The crate implements the deliberately narrow Parquet subset it writes: INT64
-and BYTE_ARRAY physical columns, PLAIN values, RLE definition levels, Data Page
-V2, and either UNCOMPRESSED or ZSTD page bodies. It does not wrap Arrow,
-parquet-rs, or a general Thrift runtime. All APIs are in-memory and build for
-`wasm32-unknown-unknown`.
+The native codec writes flat `INT64` and `BYTE_ARRAY` columns with PLAIN,
+dictionary and delta value encodings, RLE definition levels and Data Page V2.
+It emits statistics and page indexes, with optional standard Bloom filters.
+Runtime options control page/group targets and per-column Zstandard levels.
+`write_to` emits incremental chunks; resident APIs collect the same output.
+Source preparation and growing footer metadata remain resident. The crate
+builds for `wasm32-unknown-unknown`.
 
 The exact schema and invariants are documented in
 [`docs/COLUMNAR.md`](../../docs/COLUMNAR.md). Most applications should access

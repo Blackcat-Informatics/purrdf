@@ -175,6 +175,39 @@ impl IntVector {
         }
     }
 
+    /// Admit backing storage for `additional` values before calling `push`.
+    /// Existing values and length remain unchanged on refusal.
+    ///
+    /// # Errors
+    /// Returns a size overflow or the original allocation refusal.
+    pub fn try_reserve(
+        &mut self,
+        additional: usize,
+    ) -> Result<(), purrdf_lex::allocation::StorageError> {
+        use purrdf_lex::allocation::StorageError;
+        let values = self
+            .len
+            .checked_add(additional)
+            .ok_or(StorageError::SizeOverflow)?;
+        let bits = (values as u64)
+            .checked_mul(u64::from(self.width))
+            .ok_or(StorageError::SizeOverflow)?;
+        let words = usize::try_from(bits.div_ceil(64)).map_err(|_| StorageError::SizeOverflow)?;
+        if words > self.words.capacity() {
+            self.words
+                .try_reserve_exact(words - self.words.len())
+                .map_err(|_| StorageError::AllocationFailed)?;
+        }
+        Ok(())
+    }
+
+    /// The little-endian backing bytes, including final word padding, without
+    /// a framing header or an intermediate allocation. A carrier with its own
+    /// bit count can take only its specified number of bytes.
+    pub fn packed_bytes(&self) -> impl Iterator<Item = u8> + '_ {
+        self.words.iter().flat_map(|word| word.to_le_bytes())
+    }
+
     /// The narrowest vector holding every one of `values`, in order: the width is
     /// [`bits_for`] of their maximum (0 for an empty slice), chosen once, and the
     /// backing words are sized once before the values are packed.
@@ -286,9 +319,7 @@ impl IntVector {
         let mut out = Vec::with_capacity(self.serialized_len());
         out.extend_from_slice(&(self.len as u64).to_le_bytes());
         out.extend_from_slice(&self.width.to_le_bytes());
-        for &w in &self.words {
-            out.extend_from_slice(&w.to_le_bytes());
-        }
+        out.extend(self.packed_bytes());
         out
     }
 

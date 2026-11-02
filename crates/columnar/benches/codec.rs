@@ -7,74 +7,76 @@
 
 //! Report-only end-to-end measurements for the five-table columnar codec.
 
-use std::sync::Arc;
-
 use purrdf_columnar::plain_bench::PlainInt64;
-use purrdf_columnar::{Compression, read, write};
-use purrdf_core::{BlankScope, ContentStore, RdfDataset, RdfDatasetBuilder, RdfLiteral};
+use purrdf_columnar::{Compression, WriteOptions, project, read, write, write_to};
 use purrdf_testkit::bench::{BatchSize, Bench, BenchmarkId, Throughput, bench_group, bench_main};
 use purrdf_testkit::rng::splitmix64_next as mix;
 
-const ROWS: u32 = 500;
-
-fn fixture() -> (Arc<RdfDataset>, ContentStore) {
-    let mut builder = RdfDatasetBuilder::new();
-    let predicate = builder.intern_iri("https://example.org/p").unwrap();
-    let graph = builder.intern_iri("https://example.org/g").unwrap();
-    for row in 0..ROWS {
-        let subject = builder
-            .intern_iri(&format!("https://example.org/s{row}"))
-            .unwrap();
-        let blank = builder
-            .intern_blank(&format!("b{row}"), BlankScope(row % 8))
-            .unwrap();
-        let literal = builder
-            .intern_literal(RdfLiteral::typed(
-                row.to_string(),
-                "http://www.w3.org/2001/XMLSchema#integer",
-            ))
-            .unwrap();
-        builder.push_quad(subject, predicate, blank, None).unwrap();
-        builder
-            .push_quad(blank, predicate, literal, Some(graph))
-            .unwrap();
-    }
-    let mut blobs = ContentStore::new();
-    for row in 0..16 {
-        blobs.insert(format!("payload-{row:04}").into_bytes());
-    }
-    (
-        builder.freeze().expect("benchmark fixture is valid RDF"),
-        blobs,
-    )
-}
+mod common;
 
 fn bench_codec(c: &mut Bench) {
-    let (dataset, blobs) = fixture();
-    let encoded = write(&*dataset, &blobs, Compression::Zstd)
-        .expect("benchmark fixture encodes as ZSTD Parquet");
-    let mut group = c.benchmark_group("columnar_codec_1000_quads");
-    group.bench_function("write_uncompressed", |bencher| {
-        bencher.iter(|| {
-            std::hint::black_box(
-                write(&*dataset, &blobs, Compression::Uncompressed)
-                    .expect("benchmark fixture encodes"),
-            )
+    for workload in [
+        common::Workload::Mixed,
+        common::Workload::Reifiers,
+        common::Workload::LargeBlobs,
+    ] {
+        let (dataset, blobs) = common::fixture(workload);
+        let encoded = write(&*dataset, &blobs, Compression::Zstd)
+            .expect("benchmark fixture encodes as ZSTD Parquet");
+        let projected = project(&*dataset, &blobs).expect("fixture projects");
+        let mut group = c.benchmark_group(format!("columnar_codec_{workload:?}"));
+        group.throughput(Throughput::Elements(u64::from(common::ROWS) * 3));
+        group.bench_function("project", |bencher| {
+            bencher.iter(|| {
+                std::hint::black_box(project(&*dataset, &blobs).expect("fixture projects"))
+            });
         });
-    });
-    group.bench_function("write_zstd", |bencher| {
-        bencher.iter(|| {
-            std::hint::black_box(
-                write(&*dataset, &blobs, Compression::Zstd).expect("benchmark fixture encodes"),
-            )
+        group.bench_function("write_uncompressed", |bencher| {
+            bencher.iter(|| {
+                std::hint::black_box(
+                    write(&*dataset, &blobs, Compression::Uncompressed)
+                        .expect("benchmark fixture encodes"),
+                )
+            });
         });
-    });
-    group.bench_function("read_zstd", |bencher| {
-        bencher.iter(|| {
-            std::hint::black_box(read(&encoded.files).expect("benchmark fixture decodes"))
+        group.bench_function("write_zstd", |bencher| {
+            bencher.iter(|| {
+                std::hint::black_box(
+                    write(&*dataset, &blobs, Compression::Zstd).expect("benchmark fixture encodes"),
+                )
+            });
         });
-    });
-    group.finish();
+        group.bench_function("read_zstd", |bencher| {
+            bencher.iter(|| {
+                std::hint::black_box(read(&encoded.files).expect("benchmark fixture decodes"))
+            });
+        });
+        group.bench_function("projected_zstd", |bencher| {
+            bencher.iter(|| {
+                std::hint::black_box(
+                    projected
+                        .to_parquet(Compression::Zstd)
+                        .expect("projected tables encode"),
+                )
+            });
+        });
+        group.bench_function("sink_zstd", |bencher| {
+            let options = WriteOptions {
+                compression: Compression::Zstd,
+                ..WriteOptions::default()
+            };
+            bencher.iter(|| {
+                std::hint::black_box(
+                    write_to(&*dataset, &blobs, &options, |_, bytes| {
+                        std::hint::black_box(bytes);
+                        Ok::<_, core::convert::Infallible>(())
+                    })
+                    .expect("fixture writes to sink"),
+                )
+            });
+        });
+        group.finish();
+    }
 }
 
 /// Rows per PLAIN `INT64` column: many chunk multiples, and past any small-size

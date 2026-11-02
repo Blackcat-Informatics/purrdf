@@ -12,6 +12,16 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   current term interner, including caller terms introduced after preparation.
   Repeated role-inclusion queries preserve distinct witness identities.
 
+- **Native Parquet export:** incremental five-file sink output preserves original
+  source and destination failures. Runtime options control practical page/group
+  targets, bounded physical dictionaries, adaptive dictionary/delta encodings,
+  per-column Zstandard levels and standard Bloom filters. Statistics and column/
+  offset indexes support independent-reader pruning. The native reader decodes
+  every emitted encoding with exact RDF and blob reconstruction. New encodings
+  and metadata deliberately change frozen file bytes while retaining the five-
+  table RDF schema. Exhaustive Rust matches on `Compression` must handle the
+  new `ZstdLevel(i32)` variant.
+
 - **Native Zstandard transport failures:** frame reset and block decoding retain
   original structured decoder causes through standard I/O and buffered transport
   errors. Native failure equality uses retained cause identity without formatting.

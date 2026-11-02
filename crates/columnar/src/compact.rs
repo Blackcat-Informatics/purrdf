@@ -111,6 +111,38 @@ impl CompactWriter {
         }
     }
 
+    pub(crate) fn list_i64_field(&mut self, id: i16, values: impl ExactSizeIterator<Item = i64>) {
+        self.field_header(id, TYPE_LIST);
+        self.list_header(values.len(), TYPE_I64);
+        for value in values {
+            write_varint(&mut self.bytes, zigzag_encode(value));
+        }
+    }
+
+    pub(crate) fn list_bool_field(&mut self, id: i16, values: impl ExactSizeIterator<Item = bool>) {
+        self.field_header(id, TYPE_LIST);
+        self.list_header(values.len(), TYPE_BOOL_TRUE);
+        for value in values {
+            self.bytes.push(if value {
+                TYPE_BOOL_TRUE
+            } else {
+                TYPE_BOOL_FALSE
+            });
+        }
+    }
+
+    pub(crate) fn list_binary_field<'a>(
+        &mut self,
+        id: i16,
+        values: impl ExactSizeIterator<Item = &'a [u8]>,
+    ) {
+        self.field_header(id, TYPE_LIST);
+        self.list_header(values.len(), TYPE_BINARY);
+        for value in values {
+            self.binary_value(value);
+        }
+    }
+
     pub(crate) fn list_string_field(&mut self, id: i16, values: &[&str]) {
         self.field_header(id, TYPE_LIST);
         self.list_header(values.len(), TYPE_BINARY);
