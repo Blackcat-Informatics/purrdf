@@ -11,6 +11,7 @@ impl purrdf_hash::error::StructuredError for crate::Compression {
     purrdf_hash::error_visit! {
         Uncompressed => "columnar-compression-uncompressed" {},
         Zstd => "columnar-compression-zstd" {},
+        ZstdLevel(level) => "columnar-compression-zstd-level" { "level" => Signed(i128::from(*level)) },
     }
 }
 
@@ -18,6 +19,13 @@ impl purrdf_hash::error::StructuredError for crate::Compression {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum MetadataReason {
+    /// A data page selects an encoding absent from its column metadata.
+    PageEncodings {
+        /// Original parsed page header.
+        observed: PageProfile,
+        /// Original declared encoding identifiers.
+        declared: Vec<i32>,
+    },
     /// The original key/value metadata differs from the closed profile.
     Metadata {
         /// Original metadata and its exact required key/value pairs.
@@ -213,6 +221,10 @@ pub enum MetadataReason {
 
 impl purrdf_hash::error::StructuredError for MetadataReason {
     purrdf_hash::error_visit! {
+        PageEncodings { observed, declared } => "columnar-page-encodings" {
+            "observed" => Record(observed),
+            "declared" => List(declared.iter().map(|value| purrdf_hash::error::ErrorValue::Signed(i128::from(*value)))),
+        },
         Metadata { profile } => "columnar-parquet-metadata" { "profile" => Record(profile) },
         SchemaRoot { observed, expected_children } => "columnar-parquet-schema-root" {
             "observed" => Record(observed), "expected_children" => Unsigned(*expected_children as u128),
@@ -296,6 +308,9 @@ purrdf_lex::error_source!(MetadataReason => { Self::Nonnegative { cause, .. } =>
 impl fmt::Display for MetadataReason {
     fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::PageEncodings { declared, .. } => {
+                write!(output, "page encoding is absent from declared {declared:?}")
+            }
             Self::Metadata { profile } => profile.fmt(output),
             Self::SchemaRoot { .. } => {
                 output.write_str("root shape differs from the fixed flat schema")

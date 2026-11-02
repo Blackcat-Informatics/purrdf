@@ -6,8 +6,8 @@
 use purrdf_hash::error::{ErrorValue, ErrorVisitor, StructuredError};
 
 use super::{
-    ParsedColumnChunk, ParsedColumnMeta, ParsedDataPageV2, ParsedPageHeader, ParsedRowGroup,
-    ParsedSchemaElement,
+    ParsedColumnChunk, ParsedColumnMeta, ParsedDataPageV2, ParsedDictionaryPage, ParsedPageHeader,
+    ParsedRowGroup, ParsedSchemaElement,
 };
 
 /// An original parsed schema node retained by a profile refusal.
@@ -88,7 +88,7 @@ impl StructuredError for ParsedSchemaElement {
 
 impl StructuredError for ParsedColumnMeta {
     purrdf_hash::error_visit! {
-        @record self { physical_type, encodings, path, codec, num_values, total_uncompressed_size, total_compressed_size, data_page_offset }
+        @record self { physical_type, encodings, path, codec, num_values, total_uncompressed_size, total_compressed_size, data_page_offset, dictionary_page_offset, bloom }
         => "columnar-parsed-column-metadata" {
             "physical_type" => Signed(i128::from(self.physical_type)),
             "encodings" => List(self.encodings.iter().map(|value| ErrorValue::Signed(i128::from(*value)))),
@@ -98,15 +98,19 @@ impl StructuredError for ParsedColumnMeta {
             "total_uncompressed_size" => Signed(i128::from(self.total_uncompressed_size)),
             "total_compressed_size" => Signed(i128::from(self.total_compressed_size)),
             "data_page_offset" => Signed(i128::from(self.data_page_offset)),
+            "dictionary_page_offset" => Value(self.dictionary_page_offset.map_or(ErrorValue::Absent, |value| ErrorValue::Signed(i128::from(value)))),
+            "bloom" => Value(self.bloom.as_ref().map_or(ErrorValue::Absent, |value| ErrorValue::Record(value))),
         }
     }
 }
 
 impl StructuredError for ParsedColumnChunk {
     purrdf_hash::error_visit! {
-        @record self { file_offset, metadata } => "columnar-parsed-column-chunk" {
+        @record self { file_offset, metadata, column_index, offset_index } => "columnar-parsed-column-chunk" {
             "file_offset" => Signed(i128::from(self.file_offset)),
             "metadata" => Record(&self.metadata),
+            "column_index" => Value(self.column_index.as_ref().map_or(ErrorValue::Absent, |value| ErrorValue::Record(value))),
+            "offset_index" => Value(self.offset_index.as_ref().map_or(ErrorValue::Absent, |value| ErrorValue::Record(value))),
         }
     }
 }
@@ -141,13 +145,24 @@ impl StructuredError for ParsedDataPageV2 {
 
 impl StructuredError for ParsedPageHeader {
     purrdf_hash::error_visit! {
-        @record self { page_type, uncompressed_page_size, compressed_page_size, data_v2, header_len }
+        @record self { page_type, uncompressed_page_size, compressed_page_size, data_v2, dictionary, header_len }
         => "columnar-parsed-page-header" {
             "page_type" => Signed(i128::from(self.page_type)),
             "uncompressed_page_size" => Signed(i128::from(self.uncompressed_page_size)),
             "compressed_page_size" => Signed(i128::from(self.compressed_page_size)),
-            "data_v2" => Record(&self.data_v2),
+            "data_v2" => Value(self.data_v2.as_ref().map_or(ErrorValue::Absent, |value| ErrorValue::Record(value))),
+            "dictionary" => Value(self.dictionary.as_ref().map_or(ErrorValue::Absent, |value| ErrorValue::Record(value))),
             "header_len" => ByteCount(self.header_len as u128),
+        }
+    }
+}
+
+impl StructuredError for ParsedDictionaryPage {
+    purrdf_hash::error_visit! {
+        @record self { num_values, encoding, is_sorted } => "columnar-parsed-dictionary-page" {
+            "num_values" => Signed(i128::from(self.num_values)),
+            "encoding" => Signed(i128::from(self.encoding)),
+            "is_sorted" => Value(self.is_sorted.map_or(ErrorValue::Absent, ErrorValue::Boolean)),
         }
     }
 }

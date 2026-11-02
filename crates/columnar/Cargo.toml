@@ -28,8 +28,10 @@ name = "purrdf_columnar"
 [dependencies]
 purrdf-hash.workspace = true
 purrdf-core = { workspace = true }
+purrdf-deflate.workspace = true
 purrdf-lex.workspace = true
 purrdf-zstd = { workspace = true }
+twox-hash.workspace = true
 
 [dev-dependencies]
 purrdf-alloc-probe.workspace = true

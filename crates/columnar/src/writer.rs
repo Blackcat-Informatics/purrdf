@@ -14,8 +14,9 @@ use crate::ProjectionCell;
 use crate::column::Int64Column;
 use crate::error::{ColumnarError, ColumnarWriteError, ProjectionReason};
 use crate::files::ParquetFiles;
-use crate::parquet::{ColumnValues, Compression, TableData, write_rows};
+use crate::parquet::{ColumnValues, Compression, TableData, write_rows_to};
 use crate::schema::Table;
+use crate::{ColumnarSinkError, WriteOptions, WriteReport};
 
 type QuadRow = (i64, i64, i64, Option<i64>);
 type ReifierRow = (i64, i64, i64, i64, Option<i64>);
@@ -50,18 +51,71 @@ pub fn write<D: DatasetView>(
     blobs: &ContentStore,
     compression: Compression,
 ) -> Result<ColumnarWrite, ColumnarWriteError<D::ReadError>> {
-    view.checked_read(|view| {
-        let prepared = prepare(view, blobs)?;
-        let mut files = std::array::from_fn(|_| Vec::new());
-        for (file, table) in files.iter_mut().zip(Table::ALL) {
-            *file = write_rows(table, prepared.rows(table), compression)?;
-        }
-        Ok(ColumnarWrite {
-            files: ParquetFiles::from_array(files),
-            losses: LossLedger::default(),
-        })
+    write_with_options(
+        view,
+        blobs,
+        &WriteOptions {
+            compression,
+            ..WriteOptions::default()
+        },
+    )
+}
+
+/// Export into resident file buffers through the same incremental writer as
+/// [`write_to`]. The complete returned files are additional output storage.
+///
+/// # Errors
+/// Preserves original source and native configuration/projection/codec failures.
+pub fn write_with_options<D: DatasetView>(
+    view: &D,
+    blobs: &ContentStore,
+    options: &WriteOptions,
+) -> Result<ColumnarWrite, ColumnarWriteError<D::ReadError>> {
+    let mut files: [Vec<u8>; 5] = std::array::from_fn(|_| Vec::new());
+    let report = write_to(view, blobs, options, |table, bytes| {
+        files[crate::files::table_index(table)].extend_from_slice(bytes);
+        Ok::<_, core::convert::Infallible>(())
     })
-    .map_err(ColumnarWriteError::SourceRead)?
+    .map_err(ColumnarWriteError::from)?;
+    Ok(ColumnarWrite {
+        files: ParquetFiles::from_array(files),
+        losses: report.losses,
+    })
+}
+
+/// Emit each of the five files in [`Table::ALL`] order without retaining a
+/// complete output file. Each callback must accept its whole chunk or fail.
+/// For ordinary Rust writers, the callback can select the table's writer and
+/// use `std::io::Write::write_all`, or the existing Core `WriterDrain` adapter.
+///
+/// Configuration and checked source preparation finish before the first
+/// callback. Preparation still retains the canonical dictionary and sorted
+/// source rows. Encoding retains one row group, page scratch and growing footer
+/// metadata; bounded output buffering is not bounded total export memory.
+///
+/// # Errors
+/// Returns original source, native codec, or caller destination errors without
+/// requiring `Clone`, `Debug` or `Display` on either caller error type. A late
+/// failure may leave earlier files complete and the current file incomplete.
+/// After failure there are no further callbacks, no rollback and no output
+/// certification. A failed callback may have written part or all of its chunk
+/// beyond the acknowledged byte count, even the final file marker. Callers own
+/// any temporary-file/rename transaction.
+pub fn write_to<D: DatasetView, E>(
+    view: &D,
+    blobs: &ContentStore,
+    options: &WriteOptions,
+    mut emit: impl FnMut(Table, &[u8]) -> Result<(), E>,
+) -> Result<WriteReport, ColumnarSinkError<D::ReadError, E>> {
+    options.validate()?;
+    let prepared = view
+        .checked_read(|view| prepare(view, blobs))
+        .map_err(ColumnarSinkError::SourceRead)??;
+    let mut report = WriteReport::default();
+    for (entry, table) in report.tables.iter_mut().zip(Table::ALL) {
+        *entry = write_rows_to(table, prepared.rows(table), options, &mut emit)?;
+    }
+    Ok(report)
 }
 
 /// Project an RDF view into the authoritative five-table schema.
@@ -586,6 +640,53 @@ mod tests {
 
     use super::*;
     use crate::parquet::read_table;
+
+    #[test]
+    fn sink_preparation_borrows_blob_bytes_and_output_does_not_accumulate() {
+        let (dataset, mut blobs) = fixture();
+        let payload_bytes = 1024 * 1024;
+        blobs.insert(vec![b'x'; payload_bytes]);
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let prepared = prepare(&*dataset, &blobs).unwrap();
+        let preparation = window.close();
+        // The retained preparation owner is the canonical term dictionary,
+        // sorted RDF rows and small blob descriptors, not copied payloads.
+        assert!(
+            preparation.retained_bytes < payload_bytes as i64 / 8,
+            "{preparation:?}"
+        );
+        let mut bytes = 0usize;
+        let mut largest_output = 0usize;
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        for table in Table::ALL {
+            write_rows_to::<core::convert::Infallible, core::convert::Infallible>(
+                table,
+                prepared.rows(table),
+                &WriteOptions::default(),
+                &mut |_, chunk| {
+                    bytes += chunk.len();
+                    largest_output = largest_output.max(chunk.len());
+                    Ok(())
+                },
+            )
+            .unwrap();
+        }
+        let encoding = window.close();
+        assert!(bytes > payload_bytes);
+        assert!(
+            largest_output <= payload_bytes + 512,
+            "largest output={largest_output}"
+        );
+        assert_eq!(encoding.retained_bytes, 0);
+        assert!(
+            encoding.peak_working_bytes <= (payload_bytes * 8 + 256 * 1024) as i64,
+            "{encoding:?}"
+        );
+        eprintln!(
+            "source preparation={preparation:?}; retained dictionary/sorted rows={}; encoding including output/footer scratch={encoding:?}; largest output chunk={largest_output}; total output={bytes}",
+            preparation.retained_bytes
+        );
+    }
 
     fn fixture() -> (std::sync::Arc<RdfDataset>, ContentStore) {
         let mut builder = RdfDatasetBuilder::new();

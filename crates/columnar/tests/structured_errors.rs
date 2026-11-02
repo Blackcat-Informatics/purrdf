@@ -9,8 +9,9 @@ use std::sync::{Arc, Weak};
 
 use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
 use purrdf_columnar::{
-    ColumnarError, ColumnarWriteError, Compression, ParquetFiles, ValueBodyReason, project, read,
-    write,
+    BloomOptions, ColumnOptions, ColumnarError, ColumnarSinkError, ColumnarWriteError, Compression,
+    EncodingPolicy, ParquetFiles, Table, ValueBodyReason, WriteOptions, project, read, write,
+    write_to, write_with_options,
 };
 use purrdf_core::{
     ContentDigest, ContentStore, ContentStoreError, DatasetView, GraphMatch, QuadIds, RdfDataset,
@@ -392,16 +393,37 @@ fn public_projection_and_write_preserve_source_owners_and_fields() {
         Phase::NestedResolution,
         Phase::CompletedWithCodec,
     ] {
-        for compression in [
-            None,
-            Some(Compression::Uncompressed),
-            Some(Compression::Zstd),
+        for (compression, streamed) in [
+            (None, false),
+            (Some(Compression::Uncompressed), false),
+            (Some(Compression::Zstd), false),
+            (Some(Compression::Uncompressed), true),
+            (Some(Compression::Zstd), true),
         ] {
             let (view, weak, counts) = fault_view(phase);
             let blobs = ContentStore::new();
-            let error = match compression {
-                None => project(&view, &blobs).unwrap_err(),
-                Some(compression) => write(&view, &blobs, compression).unwrap_err(),
+            let error = match (compression, streamed) {
+                (None, _) => project(&view, &blobs).unwrap_err(),
+                (Some(compression), false) => write(&view, &blobs, compression).unwrap_err(),
+                (Some(compression), true) => {
+                    let mut callbacks = 0;
+                    let error = write_to(
+                        &view,
+                        &blobs,
+                        &WriteOptions {
+                            compression,
+                            ..WriteOptions::default()
+                        },
+                        |_, _| {
+                            callbacks += 1;
+                            Ok::<_, core::convert::Infallible>(())
+                        },
+                    )
+                    .map_err(ColumnarWriteError::from)
+                    .unwrap_err();
+                    assert_eq!(callbacks, 0, "source refusal precedes any output");
+                    error
+                }
             };
             let native_returns = view.returned.get();
             assert_eq!(
@@ -551,6 +573,17 @@ fn replace_unique(bytes: &mut [u8], original: &[u8], replacement: &[u8]) {
     bytes[start..start + original.len()].copy_from_slice(replacement);
 }
 
+/// Select the actual PLAIN cell, excluding its copies in pruning metadata.
+fn replace_plain_bytes(bytes: &mut [u8], original: &[u8], replacement: &[u8]) {
+    assert_eq!(original.len(), replacement.len());
+    let length = i32::try_from(original.len()).unwrap().to_le_bytes();
+    replace_unique(
+        bytes,
+        &[length.as_slice(), original].concat(),
+        &[length.as_slice(), replacement].concat(),
+    );
+}
+
 #[derive(Default)]
 struct NativeInspection {
     fields: usize,
@@ -620,15 +653,18 @@ fn public_blob_read_preserves_original_integrity_cause() {
     let (stored, payload) = if a > b { (a, first) } else { (b, second) };
     let mut changed = payload.to_vec();
     changed[0] ^= 1;
-    let mut array = write(
+    let mut array = write_with_options(
         &RdfDatasetBuilder::new().freeze().unwrap(),
         &blobs,
-        Compression::Uncompressed,
+        &WriteOptions {
+            encoding: EncodingPolicy::Plain,
+            ..WriteOptions::default()
+        },
     )
     .unwrap()
     .files
     .into_array();
-    replace_unique(&mut array[4], payload, &changed);
+    replace_plain_bytes(&mut array[4], payload, &changed);
     let files = ParquetFiles::from_array(array);
     let error = read(&files).unwrap_err();
     drop(files);
@@ -673,15 +709,18 @@ fn public_blob_read_preserves_original_integrity_cause() {
             "row 0 is not canonical lowercase hexadecimal",
         ),
     ] {
-        let mut array = write(
+        let mut array = write_with_options(
             &RdfDatasetBuilder::new().freeze().unwrap(),
             &blobs,
-            Compression::Uncompressed,
+            &WriteOptions {
+                encoding: EncodingPolicy::Plain,
+                ..WriteOptions::default()
+            },
         )
         .unwrap()
         .files
         .into_array();
-        replace_unique(&mut array[4], digest.as_bytes(), &replacement);
+        replace_plain_bytes(&mut array[4], digest.as_bytes(), &replacement);
         let files = ParquetFiles::from_array(array);
         let error = read(&files).unwrap_err();
         drop(files);
@@ -711,15 +750,18 @@ fn public_reconstruction_preserves_original_diagnostic() {
     let mut builder = RdfDatasetBuilder::new();
     let id = builder.intern_iri("urn:original").unwrap();
     builder.push_quad(id, id, id, None).unwrap();
-    let mut array = write(
+    let mut array = write_with_options(
         &builder.freeze().unwrap(),
         &ContentStore::new(),
-        Compression::Uncompressed,
+        &WriteOptions {
+            encoding: EncodingPolicy::Plain,
+            ..WriteOptions::default()
+        },
     )
     .unwrap()
     .files
     .into_array();
-    replace_unique(&mut array[0], b"urn:original", b"0rn:original");
+    replace_plain_bytes(&mut array[0], b"urn:original", b"0rn:original");
     let files = ParquetFiles::from_array(array);
     let error = read(&files).unwrap_err();
     drop(files);
@@ -1159,9 +1201,255 @@ fn public_zstd_cause_survives_file_disposal_without_inspection_allocations() {
     );
 }
 
+/// Opaque destination failures stop at the first callback, including a callback
+/// which physically writes the final marker before reporting its original error.
+fn public_sink_refusals_preserve_original_failure_and_stop_publication() {
+    use std::rc::Rc;
+
+    // Deliberately has no formatting, cloning or standard-error implementation.
+    struct RefusedSink {
+        identity: Rc<()>,
+    }
+
+    let (view, weak, counts) = fault_view(Phase::Initial);
+    let mut callbacks = 0;
+    let invalid = WriteOptions {
+        page_rows: 0,
+        ..WriteOptions::default()
+    };
+    let error = write_to(&view, &ContentStore::new(), &invalid, |_, _| {
+        callbacks += 1;
+        Ok::<_, core::convert::Infallible>(())
+    })
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        ColumnarSinkError::Codec(ColumnarError::InvalidOptions {
+            field: "page_rows",
+            value: 0,
+            ..
+        })
+    ));
+    assert_eq!(callbacks, 0);
+    assert_eq!(view.reads.get(), 0);
+    assert_eq!(counts.clones.load(Ordering::Relaxed), 0);
+    drop((view, error));
+    assert_eq!(weak.strong_count(), 0);
+
+    let mut builder = RdfDatasetBuilder::new();
+    let term = builder.intern_iri("https://example.org/value").unwrap();
+    let other = builder.intern_iri("https://example.org/other").unwrap();
+    builder.push_quad(term, term, term, None).unwrap();
+    builder.push_quad(other, term, term, None).unwrap();
+    let dataset = builder.freeze().unwrap();
+    let mut blobs = ContentStore::new();
+    blobs.insert(b"original blob".to_vec());
+    // Every distinct configuration refusal precedes source access/output;
+    // the adjacent admitted configuration must actually finish encoding.
+    let column = |column| ColumnOptions {
+        table: Table::Terms,
+        column,
+        compression: None,
+        encoding: None,
+        bloom: None,
+    };
+    for (invalid, admitted, code) in [
+        (
+            WriteOptions {
+                compression: Compression::ZstdLevel(23),
+                ..WriteOptions::default()
+            },
+            WriteOptions {
+                compression: Compression::ZstdLevel(22),
+                ..WriteOptions::default()
+            },
+            "columnar-compression-level",
+        ),
+        (
+            WriteOptions {
+                compression: Compression::ZstdLevel(-131_073),
+                ..WriteOptions::default()
+            },
+            WriteOptions {
+                compression: Compression::ZstdLevel(-131_072),
+                ..WriteOptions::default()
+            },
+            "columnar-compression-level",
+        ),
+        (
+            WriteOptions {
+                columns: vec![column(Table::Terms.schema().columns.len())],
+                ..WriteOptions::default()
+            },
+            WriteOptions {
+                columns: vec![column(Table::Terms.schema().columns.len() - 1)],
+                ..WriteOptions::default()
+            },
+            "columnar-invalid-column",
+        ),
+        (
+            WriteOptions {
+                columns: vec![column(0), column(0)],
+                ..WriteOptions::default()
+            },
+            WriteOptions {
+                columns: vec![column(0)],
+                ..WriteOptions::default()
+            },
+            "columnar-duplicate-column",
+        ),
+        (
+            WriteOptions {
+                bloom: Some(BloomOptions {
+                    bits_per_value: 0,
+                    ..BloomOptions::default()
+                }),
+                ..WriteOptions::default()
+            },
+            WriteOptions {
+                bloom: Some(BloomOptions {
+                    bits_per_value: 1,
+                    ..BloomOptions::default()
+                }),
+                ..WriteOptions::default()
+            },
+            "columnar-invalid-options",
+        ),
+        (
+            WriteOptions {
+                bloom: Some(BloomOptions {
+                    max_bytes: 33,
+                    ..BloomOptions::default()
+                }),
+                ..WriteOptions::default()
+            },
+            WriteOptions {
+                bloom: Some(BloomOptions {
+                    max_bytes: 32,
+                    ..BloomOptions::default()
+                }),
+                ..WriteOptions::default()
+            },
+            "columnar-invalid-options",
+        ),
+        (
+            WriteOptions {
+                dictionary_max_entries: i32::MAX as u32 + 1,
+                ..WriteOptions::default()
+            },
+            WriteOptions {
+                encoding: EncodingPolicy::Dictionary,
+                dictionary_max_entries: 1,
+                ..WriteOptions::default()
+            },
+            "columnar-invalid-options",
+        ),
+        (
+            WriteOptions {
+                dictionary_max_bytes: i32::MAX as u64 + 1,
+                ..WriteOptions::default()
+            },
+            WriteOptions {
+                encoding: EncodingPolicy::Dictionary,
+                dictionary_max_bytes: 1,
+                ..WriteOptions::default()
+            },
+            "columnar-invalid-options",
+        ),
+    ] {
+        let (source, owner, counts) = fault_view(Phase::Initial);
+        let mut callbacks = 0;
+        let error = write_to(&source, &blobs, &invalid, |_, _| {
+            callbacks += 1;
+            Ok::<_, core::convert::Infallible>(())
+        })
+        .unwrap_err();
+        let ColumnarSinkError::Codec(cause) = &error else {
+            panic!("configuration is refused before the faulting source");
+        };
+        assert_eq!(Capture::read(cause).code, code);
+        assert_eq!(callbacks, 0);
+        assert_eq!(source.reads.get(), 0);
+        assert_eq!(counts.clones.load(Ordering::Relaxed), 0);
+        drop((source, error));
+        assert_eq!(owner.strong_count(), 0);
+        write_to(&*dataset, &blobs, &admitted, |_, _| {
+            Ok::<_, core::convert::Infallible>(())
+        })
+        .unwrap();
+    }
+    let options = WriteOptions {
+        page_rows: 1,
+        row_group_rows: 2,
+        ..WriteOptions::default()
+    };
+    for phase in 0..3 {
+        let identity = Rc::new(());
+        let mut files: [Vec<u8>; 5] = std::array::from_fn(|_| Vec::new());
+        let mut successful = [0u64; 5];
+        let mut failed = false;
+        let mut attempted = 0;
+        let result = write_to(&*dataset, &blobs, &options, |table, bytes| {
+            assert!(!failed, "nothing is published after the first refusal");
+            let index = Table::ALL.iter().position(|&value| value == table).unwrap();
+            let refuse = match phase {
+                0 => table == Table::Terms && successful[index] == 0,
+                1 => table == Table::Quads && successful[index] == 4,
+                _ => table == Table::Blobs && successful[index] > 4 && bytes == b"PAR1",
+            };
+            if refuse {
+                failed = true;
+                attempted = bytes.len();
+                if phase == 2 {
+                    files[index].extend_from_slice(bytes);
+                }
+                return Err(RefusedSink {
+                    identity: identity.clone(),
+                });
+            }
+            files[index].extend_from_slice(bytes);
+            successful[index] += bytes.len() as u64;
+            Ok(())
+        });
+        let Err(error) = result else {
+            panic!("original sink refusal is returned");
+        };
+        let ColumnarSinkError::Sink {
+            table,
+            successful_bytes,
+            attempted_bytes,
+            cause,
+        } = &error
+        else {
+            panic!("destination failure keeps its own category")
+        };
+        let index = Table::ALL.iter().position(|value| value == table).unwrap();
+        assert!(failed);
+        assert_eq!(*successful_bytes, successful[index]);
+        assert_eq!(*attempted_bytes, attempted);
+        assert!(Rc::ptr_eq(&cause.identity, &identity));
+        assert_eq!(Rc::strong_count(&identity), 2);
+        drop(error);
+        assert_eq!(Rc::strong_count(&identity), 1);
+        if phase == 2 {
+            // Physical completion never converts a reported refusal to success.
+            assert_eq!(read(&ParquetFiles::from_array(files)).unwrap().blobs, blobs);
+        }
+    }
+    let mut files: [Vec<u8>; 5] = std::array::from_fn(|_| Vec::new());
+    let healthy = write_to(&*dataset, &blobs, &options, |table, bytes| {
+        let index = Table::ALL.iter().position(|&value| value == table).unwrap();
+        files[index].extend_from_slice(bytes);
+        Ok::<_, RefusedSink>(())
+    });
+    assert!(healthy.is_ok());
+    assert_eq!(read(&ParquetFiles::from_array(files)).unwrap().blobs, blobs);
+}
+
 purrdf_testkit::harness_main!(
     original_parquet_bounds_survive_file_disposal_without_narrowing,
     public_projection_and_write_preserve_source_owners_and_fields,
+    public_sink_refusals_preserve_original_failure_and_stop_publication,
     human_presentation_preserves_codec_and_source_messages,
     public_blob_read_preserves_original_integrity_cause,
     public_reconstruction_preserves_original_diagnostic,
