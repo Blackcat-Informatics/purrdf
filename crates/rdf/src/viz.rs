@@ -44,7 +44,7 @@ mod scene;
 mod spec_error;
 mod svg;
 
-pub use error::VizError;
+pub use error::{VizError, VizFocusAmbiguity, VizIdentityCollision};
 pub use layout::*;
 pub use predicate_error::{VizPredicateError, VizResolvedPredicate};
 pub use presentation::*;
@@ -1235,7 +1235,12 @@ impl<'a> ProjectionBuilder<'a> {
         let id = format!("{prefix}:{}", stable_hash_hex(key));
         if let Some(existing) = self.identity_keys.get(&id) {
             if existing != key {
-                return Err(VizError::IdCollision(id));
+                return Err(VizError::IdCollision(VizIdentityCollision {
+                    identity: id,
+                    prefix: prefix.to_owned(),
+                    existing_key: existing.clone(),
+                    incoming_key: key.to_owned(),
+                }));
             }
         } else {
             self.identity_keys.insert(id.clone(), key.to_owned());
@@ -1371,7 +1376,11 @@ impl<'a> ProjectionBuilder<'a> {
                 }
                 Ok(())
             }
-            _ => Err(VizError::AmbiguousFocus(focus.to_owned())),
+            _ => Err(VizError::AmbiguousFocus(VizFocusAmbiguity {
+                focus: focus.to_owned(),
+                term_matches,
+                statement_matches,
+            })),
         }
     }
 
@@ -2604,18 +2613,194 @@ mod tests {
         );
     }
 
+    /// A real selector matching both term kinds and a statement retains the
+    /// separate original candidate lists after caller input/spec destruction.
+    #[test]
+    fn ambiguous_focus_retains_original_candidate_lists() {
+        use purrdf_alloc_probe::CurrentThreadWindow;
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::{Capture, Event};
+
+        let mut input = rich_input();
+        let statement = project_graph_input(&input, &VizSpec::default())
+            .unwrap()
+            .statements
+            .into_iter()
+            .next()
+            .unwrap()
+            .id;
+        for object in [
+            TermValue::Iri(statement.0.clone()),
+            TermValue::Literal {
+                lexical_form: statement.0.clone(),
+                datatype: "http://www.w3.org/2001/XMLSchema#string".to_owned(),
+                language: None,
+                direction: None,
+            },
+        ] {
+            input.quads.push(VizInputQuad {
+                subject: iri("selector"),
+                predicate: KNOWS.to_owned(),
+                object,
+                graph_name: None,
+            });
+        }
+        let mut terms = project_graph_input(&input, &VizSpec::default())
+            .unwrap()
+            .terms
+            .into_iter()
+            .filter_map(|term| {
+                let value = match &term.value {
+                    VizTermValue::Iri { value } => value,
+                    VizTermValue::Literal { lexical_form, .. } => lexical_form,
+                    VizTermValue::Blank { .. } => return None,
+                };
+                (value == &statement.0).then_some(term.id)
+            })
+            .collect::<Vec<_>>();
+        terms.sort();
+        assert_eq!(terms.len(), 2);
+        let spec = VizSpec {
+            focus: Some(statement.0.clone()),
+            ..VizSpec::default()
+        };
+        let error = project_graph_input(&input, &spec).unwrap_err();
+        drop(input);
+        drop(spec);
+        let native = std::error::Error::source(&error)
+            .unwrap()
+            .downcast_ref::<VizFocusAmbiguity>()
+            .unwrap();
+        assert_eq!(native.term_matches, terms);
+        assert_eq!(
+            native.statement_matches.as_slice(),
+            std::slice::from_ref(&statement)
+        );
+        let outer_events = Vec::with_capacity(16);
+        let native_events = Vec::with_capacity(32);
+        let window = CurrentThreadWindow::open();
+        let outer = Capture::read_with_buffer(&error, outer_events);
+        let ErrorValue::Cause(cause) = outer.field("cause") else {
+            panic!("native ambiguity")
+        };
+        let cause = Capture::read_with_buffer(cause, native_events);
+        let measured = window.close();
+        assert_eq!((measured.allocations, measured.requested_bytes), (0, 0));
+        assert_eq!(cause.code, "rdf-viz-focus-ambiguity");
+        assert!(matches!(cause.events.as_slice(), [
+            Event::Value(Some("focus"), ErrorValue::Text(focus)),
+            Event::BeginList(Some("term_matches"), 2),
+            Event::Value(None, ErrorValue::Text(first)),
+            Event::Value(None, ErrorValue::Text(second)), Event::EndList,
+            Event::BeginList(Some("statement_matches"), 1),
+            Event::Value(None, ErrorValue::Text(found_statement)), Event::EndList,
+        ] if *focus == statement.0.as_str() && *first == terms[0].0.as_str()
+            && *second == terms[1].0.as_str() && *found_statement == statement.0.as_str()));
+        assert_eq!(
+            error.to_string(),
+            format!("visualization focus {:?} is ambiguous", statement.0)
+        );
+    }
+
+    /// Exercise the real registration-conflict guard with pre-existing native
+    /// registry state; this is not a claim of finding an FNV collision.
+    #[test]
+    fn identity_registration_conflict_retains_original_operands() {
+        use purrdf_alloc_probe::CurrentThreadWindow;
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+
+        let (error, identity) = {
+            let spec = VizSpec::default();
+            let mut builder = ProjectionBuilder::new(&spec);
+            let prefix = "term:é|scope".to_owned();
+            let key = "incoming|\"β\"\n".to_owned();
+            let id = builder.mint_id(&prefix, &key).unwrap();
+            assert_eq!(builder.mint_id(&prefix, &key).unwrap(), id);
+            assert_eq!(builder.identity_keys.len(), 1);
+            builder
+                .identity_keys
+                .insert(id.clone(), "previous|\"α\"\n".to_owned());
+            let error = builder.mint_id(&prefix, &key).unwrap_err();
+            assert_eq!(
+                builder.identity_keys.get(&id).map(String::as_str),
+                Some("previous|\"α\"\n")
+            );
+            let neighbor = builder.mint_id(&prefix, "neighbor").unwrap();
+            assert_ne!(neighbor, id);
+            assert_eq!(
+                builder.identity_keys.get(&neighbor).map(String::as_str),
+                Some("neighbor")
+            );
+            (error, id)
+        };
+        let native = std::error::Error::source(&error)
+            .unwrap()
+            .downcast_ref::<VizIdentityCollision>()
+            .unwrap();
+        assert_eq!(native.identity, identity);
+        assert_eq!(native.prefix, "term:é|scope");
+        assert_eq!(native.existing_key, "previous|\"α\"\n");
+        assert_eq!(native.incoming_key, "incoming|\"β\"\n");
+        let outer_events = Vec::with_capacity(16);
+        let native_events = Vec::with_capacity(16);
+        let window = CurrentThreadWindow::open();
+        let outer = Capture::read_with_buffer(&error, outer_events);
+        let ErrorValue::Cause(cause) = outer.field("cause") else {
+            panic!("native conflict")
+        };
+        let cause = Capture::read_with_buffer(cause, native_events);
+        let measured = window.close();
+        assert_eq!((measured.allocations, measured.requested_bytes), (0, 0));
+        assert_eq!(cause.code, "rdf-viz-identity-conflict");
+        assert!(matches!(cause.field("identity"), ErrorValue::Text(value) if value == identity));
+        assert!(matches!(
+            cause.field("prefix"),
+            ErrorValue::Text("term:é|scope")
+        ));
+        assert!(matches!(
+            cause.field("existing_key"),
+            ErrorValue::Text("previous|\"α\"\n")
+        ));
+        assert!(matches!(
+            cause.field("incoming_key"),
+            ErrorValue::Text("incoming|\"β\"\n")
+        ));
+        assert_eq!(
+            error.to_string(),
+            format!("visualization structural identity collision for {identity}")
+        );
+    }
+
     #[test]
     fn invalid_focus_and_duplicate_table_fields_hard_error() {
         use purrdf_alloc_probe::CurrentThreadWindow;
         use purrdf_hash::error::ErrorValue;
         use purrdf_testkit::error_capture::Capture;
 
-        let missing_focus = VizSpec {
-            focus: Some(format!("{EX}missing")),
-            ..VizSpec::default()
+        let expected_focus = format!("{EX}missing");
+        let err = {
+            let missing_focus = VizSpec {
+                focus: Some(expected_focus.clone()),
+                ..VizSpec::default()
+            };
+            project_graph_input(&rich_input(), &missing_focus).expect_err("missing focus")
         };
-        let err = project_graph_input(&rich_input(), &missing_focus).expect_err("missing focus");
         assert!(matches!(err, VizError::UnknownFocus(_)));
+        assert!(std::error::Error::source(&err).is_none());
+        let events = Vec::with_capacity(8);
+        let window = CurrentThreadWindow::open();
+        let fields = Capture::read_with_buffer(&err, events);
+        let measured = window.close();
+        assert_eq!((measured.allocations, measured.requested_bytes), (0, 0));
+        assert_eq!(fields.code, "rdf-viz-unknown-focus");
+        assert!(
+            matches!(fields.field("focus"), ErrorValue::Text(value) if value == expected_focus)
+        );
+        assert_eq!(
+            err.to_string(),
+            format!("visualization focus {expected_focus:?} does not match the projection")
+        );
 
         let duplicate_fields = VizSpec {
             table_fields: vec![VizTableField::Statement, VizTableField::Statement],

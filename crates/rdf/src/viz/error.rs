@@ -6,12 +6,76 @@
 use std::fmt;
 
 use purrdf_core::xml_escape::InvalidXmlChar;
-use purrdf_hash::error::StructuredError;
+use purrdf_hash::error::{ErrorValue, StructuredError};
 use purrdf_lex::json::record::DecodeError;
 
 use super::{
-    VizPredicateError, VizPresentationError, VizPresentationIssue, VizSpecError, VizVocabularyError,
+    VizPredicateError, VizPresentationError, VizPresentationIssue, VizSpecError, VizStatementId,
+    VizTermId, VizVocabularyError,
 };
+
+/// The original sorted candidate identities for an ambiguous focus selector.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VizFocusAmbiguity {
+    /// Original caller-selected focus spelling.
+    pub focus: String,
+    /// Matching term identities, in the producer's sorted/deduplicated order.
+    pub term_matches: Vec<VizTermId>,
+    /// Matching statement identities, in the producer's sorted/deduplicated order.
+    pub statement_matches: Vec<VizStatementId>,
+}
+
+impl fmt::Display for VizFocusAmbiguity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "visualization focus {:?} is ambiguous", self.focus)
+    }
+}
+
+impl std::error::Error for VizFocusAmbiguity {}
+
+impl StructuredError for VizFocusAmbiguity {
+    purrdf_hash::error_visit! {
+        @record self { focus, term_matches, statement_matches } => "rdf-viz-focus-ambiguity" {
+            "focus" => Text(&self.focus),
+            "term_matches" => List(self.term_matches.iter().map(|id| ErrorValue::Text(&id.0))),
+            "statement_matches" => List(self.statement_matches.iter().map(|id| ErrorValue::Text(&id.0))),
+        }
+    }
+}
+
+/// Original comparison operands at an identity registration conflict.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VizIdentityCollision {
+    /// The already computed visualization identity.
+    pub identity: String,
+    /// Original namespace prefix supplied to the identity producer.
+    pub prefix: String,
+    /// Original raw key already registered for the identity.
+    pub existing_key: String,
+    /// Original raw key refused by this registration attempt.
+    pub incoming_key: String,
+}
+
+impl fmt::Display for VizIdentityCollision {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "visualization structural identity collision for {}",
+            self.identity
+        )
+    }
+}
+
+impl std::error::Error for VizIdentityCollision {}
+
+impl StructuredError for VizIdentityCollision {
+    purrdf_hash::error_visit! {
+        @record self { identity, prefix, existing_key, incoming_key } => "rdf-viz-identity-conflict" {
+            "identity" => Text(&self.identity), "prefix" => Text(&self.prefix),
+            "existing_key" => Text(&self.existing_key), "incoming_key" => Text(&self.incoming_key),
+        }
+    }
+}
 
 /// Visualization projection errors.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,9 +101,9 @@ pub enum VizError {
     /// A focus selector does not match any projected term or statement.
     UnknownFocus(String),
     /// A focus selector matches more than one projected entity.
-    AmbiguousFocus(String),
+    AmbiguousFocus(VizFocusAmbiguity),
     /// A deterministic identity hash collided with a different structural key.
-    IdCollision(String),
+    IdCollision(VizIdentityCollision),
     /// A renderer-neutral scene is structurally invalid.
     Scene(String),
     /// Deterministic layout could not satisfy its structural invariants.
@@ -76,10 +140,8 @@ impl fmt::Display for VizError {
                     "visualization focus {focus:?} does not match the projection"
                 )
             }
-            Self::AmbiguousFocus(focus) => write!(f, "visualization focus {focus:?} is ambiguous"),
-            Self::IdCollision(id) => {
-                write!(f, "visualization structural identity collision for {id}")
-            }
+            Self::AmbiguousFocus(cause) => cause.fmt(f),
+            Self::IdCollision(cause) => cause.fmt(f),
             Self::Serialize(cause) => cause.fmt(f),
             Self::Decode(cause) => write!(f, "visualization JSON: {cause}"),
             Self::Presentation(cause) => cause.fmt(f),
@@ -92,6 +154,8 @@ purrdf_hash::error_sources!(
     InvalidVocabulary,
     InvalidSpec,
     InvalidPredicate,
+    AmbiguousFocus,
+    IdCollision,
     Serialize,
     Decode,
     Presentation
@@ -108,8 +172,8 @@ impl StructuredError for VizError {
         InvalidSpec(cause) => "rdf-viz-invalid-specification" { "cause" => Cause(cause) },
         InvalidPredicate(cause) => "rdf-viz-invalid-predicate" { "cause" => Cause(cause) },
         UnknownFocus(focus) => "rdf-viz-unknown-focus" { "focus" => Text(focus) },
-        AmbiguousFocus(focus) => "rdf-viz-ambiguous-focus" { "focus" => Text(focus) },
-        IdCollision(identity) => "rdf-viz-identity-collision" { "identity" => Text(identity) },
+        AmbiguousFocus(cause) => "rdf-viz-ambiguous-focus" { "cause" => Cause(cause) },
+        IdCollision(cause) => "rdf-viz-identity-collision" { "cause" => Cause(cause) },
         Scene(message) => "rdf-viz-scene" { "message" => Message(message) },
         Layout(message) => "rdf-viz-layout" { "message" => Message(message) },
         Serialize(cause) => "rdf-viz-xml" { "cause" => Cause(cause) },
