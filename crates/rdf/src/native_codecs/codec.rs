@@ -111,12 +111,12 @@ impl RdfCodec for LineCodec {
             &mut context,
         )?;
         let dataset =
-            super::parse::dataset_from_text_ser_graph_in_context(&graph, None, &mut context)
-                .map_err(super::acquisition::resident_error);
-        let cleanup = context
-            .release(|memory| super::text_parse::release_lowered_graph_rows(graph, memory))
-            .map_err(super::acquisition::resident_error);
-        dataset.and_then(|dataset| cleanup.map(|()| Arc::new(dataset)))
+            super::parse::dataset_from_text_ser_graph_in_context(&graph, None, &mut context);
+        let cleanup =
+            context.release(|memory| super::text_parse::release_lowered_graph_rows(graph, memory));
+        super::parse::finish_dataset_in_context(dataset, cleanup, &mut context)
+            .map(Arc::new)
+            .map_err(super::acquisition::resident_error)
     }
 
     fn serialize_into(

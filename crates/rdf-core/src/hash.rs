@@ -5,7 +5,7 @@
 //!
 //! Every hash map / set on a hot IR or evaluator path uses [`FastHasher`] —
 //! the workspace's **fixed-key**, non-cryptographic
-//! [`FixedHasher`](purrdf_hash::fixed::FixedHasher). The keys are compile-time
+//! [`FixedHasher`]. The keys are compile-time
 //! constants (no runtime RNG seeding), which keeps the dependency tree
 //! wasm-clean and free of per-process nondeterminism.
 //!

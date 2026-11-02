@@ -143,14 +143,14 @@ pub use purrdf_gts::transport::{
 pub use native_codecs::{
     BorrowedReadError, BorrowedSource, GTS_EXTENSIONS, GtsCodecBackend, NativeParseError,
     NativeRdfFormat, PACK_EXTENSIONS, ParseControlError, ParseFailure, ParseOptions, ParseOutcome,
-    ParseRefusal, RetainedParse, SerializeOptions, SerializeOutcome, SerializeReport, SourceFormat,
-    SourceOccurrence, SourceOccurrences, SourceOriginId, SourceOriginKind, SourceRole, SourceRule,
-    SourceSemanticReference, SourceStatementKind, SourceTermOrigin, SpanTable, StatementLayer,
-    classify, classify_source, empty_named_graphs_dropped, parse_dataset, parse_dataset_controlled,
-    parse_dataset_from_reader, parse_dataset_reporting_failure, parse_dataset_with,
-    serialize_dataset, serialize_dataset_to_format,
-    serialize_dataset_to_format_with_jsonld_options, serialize_dataset_to_writer,
-    serialize_dataset_to_writer_with, serialize_dataset_with,
+    ParseRefusal, RetainedParse, SerializeOptions, SerializeOutcome, SerializeReport,
+    SourceAssociationError, SourceFormat, SourceOccurrence, SourceOccurrences, SourceOriginId,
+    SourceOriginKind, SourceRole, SourceRule, SourceSemanticReference, SourceStatementKind,
+    SourceTermOrigin, SpanTable, StatementLayer, classify, classify_source,
+    empty_named_graphs_dropped, parse_dataset, parse_dataset_controlled, parse_dataset_from_reader,
+    parse_dataset_reporting_failure, parse_dataset_with, serialize_dataset,
+    serialize_dataset_to_format, serialize_dataset_to_format_with_jsonld_options,
+    serialize_dataset_to_writer, serialize_dataset_to_writer_with, serialize_dataset_with,
     serialize_dataset_with_jsonld_options, transcode_under_document_base,
 };
 pub use native_quads::{

@@ -17,6 +17,8 @@ pub enum NativeParseError {
     Diagnostic(RdfDiagnostic),
     /// Physical allocation, layout or memory-admission refusal.
     Storage(StorageError),
+    /// An inconsistent source association from native lowering or folding.
+    SourceAssociation(super::source_occurrence::SourceAssociationError),
     /// Original composite literal grammar or blank-binding failure.
     Composite(purrdf_core::cdt_blank::CdtBlankError),
     /// Controls and exact source occurrences are unsupported for this format.
@@ -62,6 +64,7 @@ pub enum NativeParseError {
 
 purrdf_lex::variant_from!(NativeParseError {
     Storage(StorageError),
+    SourceAssociation(super::source_occurrence::SourceAssociationError),
     Diagnostic(RdfDiagnostic),
 });
 
@@ -81,6 +84,7 @@ impl purrdf_hash::error::StructuredError for NativeParseError {
     purrdf_hash::error_visit! {
         Diagnostic(cause) => "native-parse-diagnostic" { "cause" => Cause(cause) },
         Storage(cause) => "native-parse-storage" { "cause" => Cause(cause) },
+        SourceAssociation(cause) => "native-parse-source-association" { "cause" => Cause(cause) },
         Composite(cause) => "native-parse-composite" { "cause" => Cause(cause) },
         UnsupportedFormat(format) => "native-parse-unsupported-format" { "format" => Code(format.media_type()) },
         Base { cause } => "native-parse-base" { "cause" => Cause(cause) },
@@ -97,6 +101,7 @@ impl core::fmt::Display for NativeParseError {
             Self::Diagnostic(cause) => cause.fmt(output),
             Self::Storage(cause) => cause.fmt(output),
             Self::Composite(cause) => cause.fmt(output),
+            Self::SourceAssociation(cause) => cause.fmt(output),
             Self::UnsupportedFormat(format) => write!(
                 output,
                 "controlled source acquisition does not support {}",
@@ -128,6 +133,7 @@ impl NativeParseError {
             Self::Diagnostic(cause) => Some(cause),
             Self::Storage(cause) => Some(cause),
             Self::Composite(cause) => Some(cause),
+            Self::SourceAssociation(cause) => Some(cause),
             Self::Base { cause } | Self::Iri { cause, .. } => Some(cause),
             Self::Utf8 { cause, .. } => Some(cause),
             Self::Position { cause, .. } => Some(cause),
@@ -148,7 +154,19 @@ pub(crate) struct SourceFailure<'a, A: Admission, C: Progress> {
     _context: RunContext<A, C>,
 }
 
-impl<A: Admission, C: Progress> SourceFailure<'_, A, C> {
+impl<'a, A: Admission, C: Progress> SourceFailure<'a, A, C> {
+    pub(crate) fn unsupported(
+        input: &'a [u8],
+        format: super::NativeRdfFormat,
+        context: RunContext<A, C>,
+    ) -> Self {
+        Self {
+            input,
+            cause: NativeParseError::UnsupportedFormat(format).into(),
+            _context: context,
+        }
+    }
+
     pub(crate) fn input(&self) -> &[u8] {
         self.input
     }
@@ -440,6 +458,9 @@ pub(crate) fn resident_error(error: TextError<core::convert::Infallible>) -> Rdf
         ControlledError::Native(NativeParseError::Diagnostic(diagnostic)) => diagnostic,
         ControlledError::Native(NativeParseError::Storage(error)) => error.into(),
         ControlledError::Native(NativeParseError::Composite(error)) => error.into(),
+        ControlledError::Native(NativeParseError::SourceAssociation(error)) => {
+            RdfDiagnostic::error("native-source-association", error.to_string())
+        }
         ControlledError::Native(NativeParseError::UnsupportedFormat(format)) => {
             RdfDiagnostic::error(
                 "native-control-format",

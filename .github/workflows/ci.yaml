@@ -839,7 +839,8 @@ jobs:
           path: |
             target/asm-diagnostics/
             target/asm-reports/${{ matrix.config }}.json
-            target/simd-asm/contexts/**/purrdf_core*.s
+            target/*/release/build/purrdf-*/*/out/purrdf_*.s
+            target/*/release/deps/purrdf_*.s
             target/simd-asm/contexts/**/cargo.graph-*.stdout.jsonl
             target/simd-asm/contexts/**/cargo.graph-*.stderr.log
             target/simd-asm/contexts/**/evidence/*.json
@@ -918,7 +919,8 @@ jobs:
           name: asm-projection
           path: |
             target/asm-projection/
-            target/simd-asm/contexts/**/purrdf_core*.s
+            target/*/release/build/purrdf-*/*/out/purrdf_*.s
+            target/*/release/deps/purrdf_*.s
             target/simd-asm/contexts/**/cargo.graph-*.stdout.jsonl
             target/simd-asm/contexts/**/cargo.graph-*.stderr.log
             target/simd-asm/contexts/**/evidence/*.json

@@ -506,6 +506,33 @@ impl<'a, S: Admission + ?Sized> Memory<'a, S> {
         self.try_scope(body)
     }
 
+    /// Consume originally admitted inputs while constructing their replacement.
+    /// The owning closure must destroy all consumed inputs and partial output on
+    /// failure. It must leave unrelated preexisting owners alive and admitted.
+    /// Successful output retains its original grant; failure refunds the consumed
+    /// input and all new scratch after destruction, preserving unrelated grants.
+    ///
+    /// # Errors
+    /// Returns an unbalanced input layout or the body's first storage refusal.
+    /// A refused cleanup shrink never replaces the original failure.
+    pub fn consuming_scope<T>(
+        &mut self,
+        input_bytes: usize,
+        body: impl FnOnce(&mut Self) -> Result<T, StorageError>,
+    ) -> Result<T, StorageError> {
+        let unrelated = self
+            .live
+            .checked_sub(input_bytes)
+            .ok_or(StorageError::SizeOverflow)?;
+        let result = body(self);
+        if result.is_err()
+            && let Some(released) = self.live.checked_sub(unrelated)
+        {
+            let _ = self.release_bytes(released);
+        }
+        result
+    }
+
     /// Scope native construction while preserving its original typed domain error.
     /// Failed local payloads die before their original grant delta is released.
     ///

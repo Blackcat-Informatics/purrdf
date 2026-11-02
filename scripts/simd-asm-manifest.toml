@@ -6927,7 +6927,7 @@ summary = "MD5 and the SHA3/Keccak-f[1600] permutation: each step of both consum
 
 [[site]]
 id = "hash.fixed-compress"
-summary = "Fixed-key table hashing: the portable engine uses folded multiplies; the AES engine keeps a full-width accumulator. Short AES byte updates inline into the public Hasher wrapper, while the longer four-lane compression remains out of line to preserve the short-string caller inline budget. Only aarch64-neoverse-v1 enables AES among the seven audited configurations. Portable Engine<Portable>::bytes is instantiated by downstream callers and attributed to its originating purrdf_hash crate"
+summary = "Fixed-key table hashing: the portable engine uses folded multiplies; the AES engine keeps a full-width accumulator. Short AES byte updates inline into the public Hasher wrapper, while the longer four-lane compression remains out of line to preserve the short-string caller inline budget. Only aarch64-neoverse-v1 enables AES among the seven audited configurations. Portable Engine<Portable>::try_bytes retains the complete short/long folded-multiply byte update and is instantiated by downstream callers and attributed to its originating purrdf_hash crate"
 
   # `aarch64-neoverse-v1` is the only one of the seven configurations that compiles
   # `aes` at the target level (SSE2, `x86-64-v3` and `x86-64-v4` do not carry AES in
@@ -6938,20 +6938,20 @@ summary = "Fixed-key table hashing: the portable engine uses folded multiplies; 
   label = "aes"
   configs = ["aarch64-neoverse-v1"]
   crate = "purrdf_hash"
-  symbol = "purrdf_hash::fixed::aes::compress_long"
+  symbol = "purrdf_hash::fixed::aes::try_compress_long"
   min_vector_ops = 25
   require_mnemonics = ["aese", "aesmc"]
   max_fma = 0
   forbid_relaxed = true
 
-  # Measured v0 on x86_64, x86_64-v3, x86_64-v4 (in `purrdf_core`, `purrdf_datalog`,
-  # `purrdf_sparql_eval` and `purrdf_rdf`, every copy agreeing); folded multiplies have
-  # no vector form.
+  # Baseline x86_64 Core emits the complete short/long no-progress update here:
+  # v0, thirteen multiplies and no outlined calls. The long portable compressor
+  # inlines into this owner; every matching monomorph remains checked.
   [[site.measure]]
   label = "portable"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "wasm32", "wasm32-simd128"]
   crate = "purrdf_hash"
-  symbol = "<purrdf_hash::fixed::Engine<purrdf_hash::fixed::Portable>>::bytes"
+  symbol = "<purrdf_hash::fixed::Engine<purrdf_hash::fixed::Portable>>::try_bytes"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true

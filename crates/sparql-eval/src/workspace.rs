@@ -5167,7 +5167,7 @@ pub(crate) mod owned_row_regressions {
             ready: Arc<AtomicBool>,
             decoder_growths: Arc<AtomicUsize>,
         }
-        impl purrdf_core::WorkspaceReservation for LateReservation {
+        impl WorkspaceReservation for LateReservation {
             type Error = Refusal;
             fn resize(&mut self, bytes: u64) -> Result<(), Refusal> {
                 let old = self.ledger.live.load(Ordering::Relaxed);

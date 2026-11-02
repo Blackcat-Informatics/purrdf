@@ -565,14 +565,13 @@ fn parse_text_retained<'a>(
     let folded = source.with_text(|_, context| {
         parsed.and_then(|(graph, mut spans)| {
             let associations = spans.as_mut().map(SpanTable::source_occurrences_mut);
-            let dataset = dataset_from_text_ser_graph_in_context(&graph, associations, context)
-                .map_err(resident_error);
-            // Builder/fold governance remains unfinished. Its original temporary
-            // lowered rows nevertheless die before their same admission is refunded.
+            let dataset = dataset_from_text_ser_graph_in_context(&graph, associations, context);
+            // Original lowering storage dies before its admission is refunded.
             let cleanup = context
-                .release(|memory| super::text_parse::release_lowered_graph_rows(graph, memory))
-                .map_err(resident_error);
-            dataset.and_then(|dataset| cleanup.map(|()| (dataset, spans)))
+                .release(|memory| super::text_parse::release_lowered_graph_rows(graph, memory));
+            finish_dataset_in_context(dataset, cleanup, context)
+                .map(|dataset| (dataset, spans))
+                .map_err(resident_error)
         })
     });
     let output = match folded {
@@ -630,15 +629,15 @@ fn parse_turtle_retained<'a, A: Admission, C: Progress>(
     options: &ParseOptions,
     context: RunContext<A, C>,
 ) -> Result<RetainedParse<'a, A, C>, SourceFailure<'a, A, C>> {
+    if !matches!(format, NativeRdfFormat::Turtle | NativeRdfFormat::TriG) {
+        return Err(SourceFailure::unsupported(bytes, format, context));
+    }
     let mut source = context.source(bytes)?;
     let mut base = BaseScope::empty();
     let mut document_prefixes = OrderedTable::default();
     let mut spans = options.track_source_spans.then(SpanTable::default);
     let parsed = source.with_text(|text, context| -> Result<SerGraph, TextError<C::Error>> {
         context.charge(0)?;
-        if !matches!(format, NativeRdfFormat::Turtle | NativeRdfFormat::TriG) {
-            return Err(NativeParseError::UnsupportedFormat(format).into());
-        }
         if let Some(iri) = base_iri {
             context.native(|memory| {
                 base.rebind_with_memory(iri, BaseOrigin::Caller, memory)
@@ -700,7 +699,7 @@ fn parse_turtle_retained<'a, A: Admission, C: Progress>(
             let dataset = dataset_from_text_ser_graph_in_context(&graph, associations, context);
             let cleanup = context
                 .release(|memory| super::text_parse::release_lowered_graph_rows(graph, memory));
-            dataset.and_then(|dataset| cleanup.and_then(|()| context.charge(0).map(|()| dataset)))
+            finish_dataset_in_context(dataset, cleanup, context)
         })
     });
     let output = match folded {
@@ -713,6 +712,25 @@ fn parse_turtle_retained<'a, A: Admission, C: Progress>(
         Err(cause) => Err(RetainedFailure::new(cause, base, document_prefixes)),
     };
     Ok(RetainedParse::new(source, output))
+}
+
+/// Finish original lowering cleanup and poll before publishing its dataset.
+/// A failed completion destroys the dataset before refunding its exact original
+/// grant, leaving caller input, source associations and the first cause intact.
+pub(super) fn finish_dataset_in_context<A: Admission, C: Progress>(
+    result: Result<(RdfDataset, usize), TextError<C::Error>>,
+    cleanup: Result<(), TextError<C::Error>>,
+    context: &mut RunContext<A, C>,
+) -> Result<RdfDataset, TextError<C::Error>> {
+    let (dataset, bytes) = result?;
+    match cleanup.and_then(|()| context.charge(0)) {
+        Ok(()) => Ok(dataset),
+        Err(cause) => {
+            drop(dataset);
+            let _ = context.release(|memory| memory.release_bytes(bytes));
+            Err(cause)
+        }
+    }
 }
 
 /// Build the in-scope base stack for a caller-supplied base string.
@@ -890,7 +908,7 @@ pub(super) fn dataset_from_text_ser_graph_in_context<A: Admission, C: Progress>(
     graph: &SerGraph,
     source: Option<&mut SourceOccurrences>,
     context: &mut RunContext<A, C>,
-) -> Result<RdfDataset, TextError<C::Error>> {
+) -> Result<(RdfDataset, usize), TextError<C::Error>> {
     dataset_from_ser_graph_in_context(
         graph,
         false,
@@ -952,21 +970,20 @@ fn dataset_from_ser_graph_impl(
     let mut resident = Resident;
     let mut memory = Memory::new(&mut resident);
     dataset_from_ser_graph_with_memory(graph, flatten_to_default_graph, blanks, source, &mut memory)
-        .map(Arc::new)
+        .map(|(dataset, _)| Arc::new(dataset))
         .map_err(|cause| resident_error(ControlledError::Native(cause)))
 }
 
-/// Stage native fold results outside the child callback, so a final refusal
-/// drops the unpublished resident result while the original account still lives.
-/// Only row staging/pending storage and source associations use that account;
-/// builder, membership and freeze governance remain unfinished.
+/// Stage the governed dataset and its exact original replacement grant outside
+/// the callback. A refused final poll destroys and refunds only that dataset;
+/// persistent source associations keep their original account.
 fn dataset_from_ser_graph_in_context<A: Admission, C: Progress>(
     graph: &SerGraph,
     flatten_to_default_graph: bool,
     blanks: BlankIngress,
     source: Option<&mut SourceOccurrences>,
     context: &mut RunContext<A, C>,
-) -> Result<RdfDataset, TextError<C::Error>> {
+) -> Result<(RdfDataset, usize), TextError<C::Error>> {
     let mut staged = None;
     let result = context.native(|memory| {
         staged = Some(dataset_from_ser_graph_with_memory(
@@ -981,7 +998,10 @@ fn dataset_from_ser_graph_in_context<A: Admission, C: Progress>(
     match result {
         Ok(()) => Ok(staged.expect("successful native fold staged its result")),
         Err(cause) => {
-            drop(staged);
+            if let Some((dataset, bytes)) = staged {
+                drop(dataset);
+                let _ = context.release(|memory| memory.release_bytes(bytes));
+            }
             Err(cause)
         }
     }
@@ -993,7 +1013,7 @@ fn dataset_from_ser_graph_with_memory<S: Admission + ?Sized>(
     blanks: BlankIngress,
     source: Option<&mut SourceOccurrences>,
     memory: &mut Memory<'_, S>,
-) -> Result<RdfDataset, NativeParseError> {
+) -> Result<(RdfDataset, usize), NativeParseError> {
     let mut builder = RdfDatasetBuilder::new();
     let mapping_memory = RefCell::new(memory);
     let interner = SerInterner {
@@ -1162,9 +1182,19 @@ fn dataset_from_ser_graph_with_memory<S: Admission + ?Sized>(
         let _ = builder.discard_with_memory(&mut mapping_memory.borrow_mut());
         return Err(cause);
     }
-    builder
-        .freeze_with_memory(&mut mapping_memory.borrow_mut())
-        .map_err(NativeParseError::from)
+    let mut memory = mapping_memory.borrow_mut();
+    // Source associations have finished growing. Subtract only the builder's
+    // originally admitted buffers before its consuming freeze replaces them.
+    let unrelated = memory
+        .admitted_bytes()
+        .checked_sub(builder.native_buffer_bytes()?)
+        .ok_or(StorageError::SizeOverflow)?;
+    let dataset = builder.freeze_with_memory(&mut memory)?;
+    let bytes = memory
+        .admitted_bytes()
+        .checked_sub(unrelated)
+        .ok_or(StorageError::SizeOverflow)?;
+    Ok((dataset, bytes))
 }
 
 /// Intern [`SerGraph`] terms into a builder, resolving quoted-triple terms through their
@@ -1698,6 +1728,37 @@ mod tests {
         assert_eq!(failure.admitted_bytes(), 0);
         assert_eq!(live.load(Ordering::SeqCst), 0);
         drop(failure);
+        // Unsupported formats refuse before UTF-8, admission or stop polling.
+        for input in [b"valid text".as_slice(), b"\xff"] {
+            let mut polls = 0;
+            let result = parse_dataset_controlled(
+                input,
+                NativeRdfFormat::NTriples,
+                None,
+                Grant {
+                    live: Arc::clone(&live),
+                    limit: 0,
+                },
+                |_| {
+                    polls += 1;
+                    Err(Stop(0))
+                },
+            );
+            let failure = match result {
+                Err(failure) => failure,
+                Ok(_) => panic!("unsupported input cannot succeed"),
+            };
+            assert!(core::ptr::eq(failure.input(), input));
+            assert!(matches!(
+                failure.cause(),
+                ControlledError::Native(NativeParseError::UnsupportedFormat(
+                    NativeRdfFormat::NTriples
+                ))
+            ));
+            drop(failure);
+            assert_eq!(polls, 0);
+            assert_eq!(live.load(Ordering::SeqCst), 0);
+        }
     }
 
     #[test]

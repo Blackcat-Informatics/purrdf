@@ -37,8 +37,9 @@ use std::borrow::Cow;
 
 use super::acquisition::{NativeParseError, ParserContext, RunContext, TextError, resident_error};
 use super::source_occurrence::{
-    NativeSourceRow, SourceOccurrence, SourceOccurrences, SourceOriginId, SourceOriginKind,
-    SourceRole, SourceRule, SourceSemanticReference, SourceStatementOrigins, SourceTermOrigin,
+    NativeSourceRow, SourceAssociationError, SourceOccurrence, SourceOccurrences, SourceOriginId,
+    SourceOriginKind, SourceRole, SourceRule, SourceSemanticReference, SourceStatementOrigins,
+    SourceTermOrigin,
 };
 use super::syntax::check_language_tag;
 use purrdf_lex::allocation::OrderedTable;
@@ -3690,7 +3691,7 @@ impl Interner {
         origin: Option<SourceOriginId>,
         source: &mut Option<&mut SourceOccurrences>,
         memory: &mut Memory<'_, A>,
-    ) -> Result<usize, StorageError> {
+    ) -> Result<usize, NativeParseError> {
         let components = source
             .as_deref()
             .and_then(|source| source.components(origin));
@@ -3843,7 +3844,7 @@ impl GraphAccumulator {
             &mut None,
             &mut Memory::resume(&mut resident, live),
         )
-        .map_err(RdfDiagnostic::from)
+        .map_err(|cause| resident_error(ControlledError::Native(cause)))
     }
 
     fn push_observed<A: Admission + ?Sized>(
@@ -3853,7 +3854,7 @@ impl GraphAccumulator {
         statement: Option<usize>,
         source: &mut Option<&mut SourceOccurrences>,
         memory: &mut Memory<'_, A>,
-    ) -> Result<(), StorageError> {
+    ) -> Result<(), NativeParseError> {
         let (s, p, o, gname) = (&nodes[0], &nodes[1], &nodes[2], nodes.get(3));
         if let (Node::Iri(_) | Node::Bnode(_), Node::Iri(predicate), Node::Triple(ts, tp, to), None) =
             (s, p, o, gname)
@@ -4061,7 +4062,7 @@ fn lower_statements_in_context<A: Admission, C: Progress>(
     context: &mut RunContext<A, C>,
 ) -> Result<SerGraph, TextError<C::Error>> {
     let mut staged = None;
-    let result = context.memory(|memory| {
+    let result = context.native(|memory| {
         staged = Some(build_gts_graph_observed(
             statements,
             named_graphs,
@@ -4084,18 +4085,18 @@ fn lower_statements_in_context<A: Admission, C: Progress>(
 /// Lower the flat statement list into the in-memory [`SerGraph`], reproducing
 /// `from_nquads`'s `build_gts` (the `rdf:reifies` statement-layer shorthand,
 /// first-seen interning, statement-order quads, encounter-order reifiers).
-/// Row buffers, explicit reifier lookup and source associations use this account;
-/// native term/other-index governance is still required before publication.
+/// Term text, atom/triple indexes, row buffers, explicit reifier lookup and source
+/// associations use this account. Temporary indexes die before publication.
 fn build_gts_graph_observed<A: Admission + ?Sized>(
     statements: &[Statement],
     named_graphs: &[Node],
     source: Option<&mut SourceOccurrences>,
     memory: &mut Memory<'_, A>,
-) -> Result<SerGraph, StorageError> {
+) -> Result<SerGraph, NativeParseError> {
     let mut source = source.filter(|source| source.is_active());
     let mut accumulator = GraphAccumulator::new();
     let mut declared = Vec::new();
-    let result: Result<(), StorageError> = (|| {
+    let result: Result<(), NativeParseError> = (|| {
         for (ordinal, nodes) in statements.iter().enumerate() {
             memory.admission_mut().checkpoint(1)?;
             let origins = source
@@ -4115,18 +4116,20 @@ fn build_gts_graph_observed<A: Admission + ?Sized>(
             memory.admission_mut().checkpoint(1)?;
             let id = accumulator.interner.atom(name, memory)?;
             if let Some(source) = source.as_deref_mut() {
-                let origin = source
-                    .declarations
-                    .get(ordinal)
-                    .copied()
-                    .ok_or(StorageError::SizeOverflow)?;
+                let origin = source.declarations.get(ordinal).copied().ok_or(
+                    SourceAssociationError::MissingDeclaration {
+                        declaration: ordinal,
+                    },
+                )?;
                 source.bind_native(Some(origin), id, memory)?;
             }
             push_lowering_row(&mut declared, id, memory)?;
         }
         Ok(())
     })();
-    let index_refund = accumulator.release_bound(memory);
+    let index_refund = accumulator
+        .release_bound(memory)
+        .map_err(NativeParseError::Storage);
     let result = result.and(index_refund);
     let mut graph = accumulator.finish();
     graph.named_graphs = declared;
@@ -5420,8 +5423,8 @@ mod tests {
             assert_eq!(parser.context.live, retained);
             assert_eq!(live.load(Ordering::SeqCst), retained);
 
-            // Only the native temporary row arrays are governed at this slice;
-            // term strings, lookup tables and final builder work remain pending.
+            // The original grant retains every lowered row and term payload;
+            // temporary atom/triple indexes are gone before publication.
             let before = work.load(Ordering::SeqCst);
             let lowered = lower_statements_in_context(
                 &statements,
@@ -5440,21 +5443,39 @@ mod tests {
                 + std::alloc::Layout::array::<usize>(lowered.named_graphs.capacity())
                     .unwrap()
                     .size();
-            assert_eq!(parser.context.live, retained + row_bytes);
-            assert_eq!(live.load(Ordering::SeqCst), retained + row_bytes);
+            let term_bytes = std::alloc::Layout::array::<SerTerm>(lowered.terms.capacity())
+                .unwrap()
+                .size()
+                + lowered
+                    .terms
+                    .iter()
+                    .flat_map(|term| [&term.value, &term.lang, &term.direction])
+                    .flatten()
+                    .map(String::capacity)
+                    .sum::<usize>();
+            let annotation_bytes = std::alloc::Layout::array::<
+                super::super::ser_model::SerAnnotationRow,
+            >(lowered.annotations.capacity())
+            .unwrap()
+            .size();
+            assert_eq!(
+                parser.context.live,
+                retained + row_bytes + term_bytes + annotation_bytes
+            );
+            assert_eq!(live.load(Ordering::SeqCst), parser.context.live);
 
-            // The real fold stages all native rows before either pass, then
-            // keeps input and pending arrays alive together. Builder/index and
-            // nested-walk payload governance is still outside this boundary.
+            // The real fold keeps input and pending arrays alive together;
+            // only the governed dataset grant survives successful publication.
             let fold_baseline = parser.context.live;
             let before = work.load(Ordering::SeqCst);
             peak.store(fold_baseline, Ordering::SeqCst);
-            let dataset = super::super::parse::dataset_from_text_ser_graph_in_context(
-                &lowered,
-                None,
-                &mut parser.context,
-            )
-            .expect("original native fold");
+            let (dataset, dataset_bytes) =
+                super::super::parse::dataset_from_text_ser_graph_in_context(
+                    &lowered,
+                    None,
+                    &mut parser.context,
+                )
+                .expect("original native fold");
             let fold_boundaries = work.load(Ordering::SeqCst) - before;
             type Association = Option<(NativeSourceRow, Option<usize>)>;
             let input_rows = lowered.quads.len()
@@ -5483,10 +5504,17 @@ mod tests {
                 "original input and pending buffers overlap under the same grant"
             );
             assert_eq!(
-                parser.context.live, fold_baseline,
+                parser.context.live,
+                fold_baseline + dataset_bytes,
                 "all fold scratch refunds before result publication"
             );
+            assert!(dataset_bytes > 0);
             drop(dataset);
+            parser
+                .context
+                .release(|memory| memory.release_bytes(dataset_bytes))
+                .unwrap();
+            assert_eq!(parser.context.live, fold_baseline);
             for boundary in 0..fold_boundaries {
                 let before = work.load(Ordering::SeqCst);
                 refuse.store(before + boundary, Ordering::SeqCst);

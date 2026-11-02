@@ -458,25 +458,31 @@ impl Interner {
         derivation_predicate: Option<String>,
         memory: &mut Memory<'_, S>,
     ) -> Result<super::frozen_terms::FrozenTerms, StorageError> {
-        // Configuration does not intern a missing predicate at freeze.
-        let derivation_predicate_iri = derivation_predicate
-            .map(|text| -> Result<Box<str>, StorageError> {
-                let exact = memory.string(&text)?;
-                memory.release_string(text)?;
-                Ok(exact.into_boxed_str())
+        let input_bytes = self
+            .buffer_bytes()?
+            .checked_add(derivation_predicate.as_ref().map_or(0, String::capacity))
+            .ok_or(StorageError::SizeOverflow)?;
+        memory.consuming_scope(input_bytes, move |memory| {
+            // Configuration does not intern a missing predicate at freeze.
+            let derivation_predicate_iri = derivation_predicate
+                .map(|text| -> Result<Box<str>, StorageError> {
+                    let exact = memory.string(&text)?;
+                    memory.release_string(text)?;
+                    Ok(exact.into_boxed_str())
+                })
+                .transpose()?;
+            let derivation_predicate = derivation_predicate_iri
+                .as_deref()
+                .and_then(|iri| self.lookup_iri(iri));
+            Ok(super::frozen_terms::FrozenTerms {
+                arena: memory.boxed_slice(self.arena)?,
+                terms: memory.boxed_slice(self.terms)?,
+                term_index: self.index,
+                content_ids: self.content_ids,
+                content_scheme: self.content_scheme,
+                derivation_predicate,
+                derivation_predicate_iri,
             })
-            .transpose()?;
-        let derivation_predicate = derivation_predicate_iri
-            .as_deref()
-            .and_then(|iri| self.lookup_iri(iri));
-        Ok(super::frozen_terms::FrozenTerms {
-            arena: memory.boxed_slice(self.arena)?,
-            terms: memory.boxed_slice(self.terms)?,
-            term_index: self.index,
-            content_ids: self.content_ids,
-            content_scheme: self.content_scheme,
-            derivation_predicate,
-            derivation_predicate_iri,
         })
     }
 
@@ -559,71 +565,77 @@ impl Interner {
                 .required(CapacitySpace::LocalTerms, self.terms.len(), 1)?;
         let i = u32::try_from(self.terms.len()).map_err(|_| StorageError::SizeOverflow)?;
         let id = TermId::from_index(i)?;
-        let text_bytes = match &lookup {
-            TermLookup::Iri(text) | TermLookup::Blank { label: text, .. } => text.len(),
-            TermLookup::Literal {
-                lexical, language, ..
-            } => lexical
-                .len()
-                .checked_add(language.map_or(0, str::len))
-                .ok_or(StorageError::SizeOverflow)?,
-            TermLookup::Triple { .. } => 0,
-        };
-        let required_bytes =
-            self.capacity
-                .required(CapacitySpace::LocalTermBytes, self.arena.len(), text_bytes)?;
-        // Reserve every miss destination before recording even the first range.
-        let capacity =
-            purrdf_lex::allocation::growth_capacity::<u8>(self.arena.capacity(), required_bytes)?;
-        memory.reserve(&mut self.arena, capacity)?;
-        let capacity = purrdf_lex::allocation::growth_capacity::<InternedTerm>(
-            self.terms.capacity(),
-            required_terms,
-        )?;
-        memory.reserve(&mut self.terms, capacity)?;
-        let (arena, terms) = (&self.arena, &self.terms);
-        crate::hash::try_reserve_table_with_memory(
-            &mut self.index,
-            required_terms,
-            |&i, memory| hash_stored_value_with_memory(arena, &terms[i as usize], memory),
-            memory,
-        )?;
-        // Content-id recognition and its side table are part of the same miss.
-        // Admit the side table before publishing either lexical bytes or a term;
-        // a refused grant must not leave a term absent from the value index.
-        let recognized: Option<Blake3ContentId> = match &lookup {
-            TermLookup::Iri(iri) => self
-                .content_scheme
-                .as_ref()
-                .and_then(|scheme| iri.strip_prefix(scheme.prefix()))
-                .and_then(Blake3ContentId::from_hex),
-            _ => None,
-        };
-        if recognized.is_some() {
-            let required = self
-                .content_ids
-                .len()
-                .checked_add(1)
-                .ok_or(StorageError::SizeOverflow)?;
-            crate::hash::reserve_map_with_retained_memory(
-                &mut self.content_ids,
-                &mut self.content_ids_bytes,
-                required,
+        let buffers = self.buffer_bytes()?;
+        let admitted = memory.admitted_bytes();
+        let result = (|| {
+            let text_bytes = match &lookup {
+                TermLookup::Iri(text) | TermLookup::Blank { label: text, .. } => text.len(),
+                TermLookup::Literal {
+                    lexical, language, ..
+                } => lexical
+                    .len()
+                    .checked_add(language.map_or(0, str::len))
+                    .ok_or(StorageError::SizeOverflow)?,
+                TermLookup::Triple { .. } => 0,
+            };
+            let required_bytes = self.capacity.required(
+                CapacitySpace::LocalTermBytes,
+                self.arena.len(),
+                text_bytes,
+            )?;
+            // Reserve every miss destination before recording even the first range.
+            let capacity = purrdf_lex::allocation::growth_capacity::<u8>(
+                self.arena.capacity(),
+                required_bytes,
+            )?;
+            memory.reserve(&mut self.arena, capacity)?;
+            let capacity = purrdf_lex::allocation::growth_capacity::<InternedTerm>(
+                self.terms.capacity(),
+                required_terms,
+            )?;
+            memory.reserve(&mut self.terms, capacity)?;
+            let (arena, terms) = (&self.arena, &self.terms);
+            crate::hash::try_reserve_table_with_memory(
+                &mut self.index,
+                required_terms,
+                |&i, memory| hash_stored_value_with_memory(arena, &terms[i as usize], memory),
                 memory,
             )?;
-        }
-        // The IR-boundary absoluteness invariant (miss branch, IRI arm ONLY). A
-        // violation cannot be reported from this signature, so it is recorded and
-        // `super::validate::validate` turns it into the hard `Err` that
-        // `RdfDatasetBuilder::freeze` returns — before any `RdfDataset` exists.
-        // Skipped once a violation is already pending: the dataset can no longer be
-        // frozen, so re-validating later IRIs could not change the outcome and would
-        // only slow down the walk to the error.
-        if let TermLookup::Iri(iri) = lookup
-            && self.relative_iri.is_none()
-        {
-            let invalid =
-                memory.scope(|memory| {
+            // Content-id recognition and its side table are part of the same miss.
+            // Admit the side table before publishing either lexical bytes or a term;
+            // a refused grant must not leave a term absent from the value index.
+            let recognized: Option<Blake3ContentId> = match &lookup {
+                TermLookup::Iri(iri) => self
+                    .content_scheme
+                    .as_ref()
+                    .and_then(|scheme| iri.strip_prefix(scheme.prefix()))
+                    .and_then(Blake3ContentId::from_hex),
+                _ => None,
+            };
+            if recognized.is_some() {
+                let required = self
+                    .content_ids
+                    .len()
+                    .checked_add(1)
+                    .ok_or(StorageError::SizeOverflow)?;
+                crate::hash::reserve_map_with_retained_memory(
+                    &mut self.content_ids,
+                    &mut self.content_ids_bytes,
+                    required,
+                    memory,
+                )?;
+            }
+            // The IR-boundary absoluteness invariant (miss branch, IRI arm ONLY). A
+            // violation cannot be reported from this signature, so it is recorded and
+            // `super::validate::validate` turns it into the hard `Err` that
+            // `RdfDatasetBuilder::freeze` returns — before any `RdfDataset` exists.
+            // Skipped once a violation is already pending: the dataset can no longer be
+            // frozen, so re-validating later IRIs could not change the outcome and would
+            // only slow down the walk to the error.
+            if let TermLookup::Iri(iri) = lookup
+                && self.relative_iri.is_none()
+            {
+                let invalid = memory.scope(|memory| {
                     match super::absolute::check_absolute_with_memory(iri, memory) {
                         Ok(()) => Ok(None),
                         Err(purrdf_iri::IriReadError::Storage(cause)) => Err(cause),
@@ -632,63 +644,73 @@ impl Interner {
                         }
                     }
                 })?;
-            self.relative_iri = invalid;
-        }
-        // Miss: now (and only now) push the strings to the arena and build the term.
-        let term = match lookup {
-            TermLookup::Iri(iri) => InternedTerm::Iri(self.push_str_with_memory(iri, memory)?),
-            TermLookup::Blank { label, scope } => InternedTerm::Blank {
-                label: self.push_str_with_memory(label, memory)?,
-                scope,
-            },
-            TermLookup::Literal {
-                lexical,
-                datatype,
-                language,
-                direction,
-            } => {
-                let lexical_form = self.push_str_with_memory(lexical, memory)?;
-                let language = language
-                    .map(|l| self.push_str_with_memory(l, memory))
-                    .transpose()?;
-                InternedTerm::Literal(InternedLiteral {
-                    lexical_form,
+                self.relative_iri = invalid;
+            }
+            // Miss: now (and only now) push the strings to the arena and build the term.
+            let term = match lookup {
+                TermLookup::Iri(iri) => InternedTerm::Iri(self.push_str_with_memory(iri, memory)?),
+                TermLookup::Blank { label, scope } => InternedTerm::Blank {
+                    label: self.push_str_with_memory(label, memory)?,
+                    scope,
+                },
+                TermLookup::Literal {
+                    lexical,
                     datatype,
                     language,
                     direction,
-                })
+                } => {
+                    let lexical_form = self.push_str_with_memory(lexical, memory)?;
+                    let language = language
+                        .map(|l| self.push_str_with_memory(l, memory))
+                        .transpose()?;
+                    InternedTerm::Literal(InternedLiteral {
+                        lexical_form,
+                        datatype,
+                        language,
+                        direction,
+                    })
+                }
+                TermLookup::Triple { s, p, o } => InternedTerm::Triple { s, p, o },
+            };
+            memory.push(&mut self.terms, term)?;
+            if let Some(content_id) = recognized {
+                self.content_ids.insert(id, content_id);
             }
-            TermLookup::Triple { s, p, o } => InternedTerm::Triple { s, p, o },
-        };
-        memory.push(&mut self.terms, term)?;
-        if let Some(content_id) = recognized {
-            self.content_ids.insert(id, content_id);
-        }
-        let (arena, terms) = (&self.arena, &self.terms);
-        let inserted = self
-            .index
-            .try_insert_unique_with_control(
-                hash,
-                i,
-                |&i, memory| hash_stored_value_with_memory(arena, &terms[i as usize], memory),
-                memory,
-            )
-            .map(|_| ())
-            .map_err(|refusal| crate::hash::table_storage_error(refusal.cause));
-        if let Err(cause) = inserted {
-            self.terms.pop();
+            let (arena, terms) = (&self.arena, &self.terms);
+            self.index
+                .try_insert_unique_with_control(
+                    hash,
+                    i,
+                    |&i, memory| hash_stored_value_with_memory(arena, &terms[i as usize], memory),
+                    memory,
+                )
+                .map(|_| ())
+                .map_err(|refusal| crate::hash::table_storage_error(refusal.cause))?;
+            Ok(id)
+        })();
+        if result.is_err() {
+            self.terms.truncate(i as usize);
             self.arena.truncate(arena_start);
             self.content_ids.remove(&id);
-            if !had_relative && let Some((iri, error)) = self.relative_iri.take() {
-                let bytes = iri.capacity().checked_add(error.owned_text_bytes());
-                drop((iri, error));
-                if let Some(bytes) = bytes {
-                    let _ = memory.release_bytes(bytes);
-                }
+            if !had_relative {
+                self.relative_iri = None;
             }
-            return Err(cause);
+            // Rollback keeps grown capacities but destroys newly owned scratch
+            // and the pending relative-IRI payload before releasing their grant.
+            let _ = (|| {
+                let retained = self
+                    .buffer_bytes()?
+                    .checked_sub(buffers)
+                    .and_then(|growth| admitted.checked_add(growth))
+                    .ok_or(StorageError::SizeOverflow)?;
+                let released = memory
+                    .admitted_bytes()
+                    .checked_sub(retained)
+                    .ok_or(StorageError::SizeOverflow)?;
+                memory.release_bytes(released)
+            })();
         }
-        Ok(id)
+        result
     }
 
     /// The decoded content id for a recognized term, if any (builder-level
@@ -3140,196 +3162,201 @@ impl RdfDatasetBuilder {
         self,
         memory: &mut Memory<'_, S>,
     ) -> Result<RdfDataset, StorageError> {
-        let discarded_indexes = [
-            &self.quad_index,
-            &self.reifier_index,
-            &self.annotation_index,
-        ]
-        .into_iter()
-        .try_fold(0usize, |total, table| {
-            total
-                .checked_add(
-                    crate::hash::hash_table_retained_bound(table)
-                        .ok_or(StorageError::SizeOverflow)?,
-                )
-                .ok_or(StorageError::SizeOverflow)
-        })?;
-        let scope_bytes = std::alloc::Layout::array::<BlankScope>(self.used_scopes.capacity())
-            .map_err(|_| StorageError::SizeOverflow)?
-            .size();
-        let Self {
-            interner,
-            quads,
-            quad_index,
-            mut reifiers,
-            reifier_index,
-            mut annotations,
-            annotation_index,
-            locations,
-            declared_graphs,
-            used_scopes,
-            scope_journal,
-            derivation_predicate,
-            ..
-        } = self;
-        drop(quad_index);
-        drop(reifier_index);
-        drop(annotation_index);
-        drop(used_scopes);
-        memory.release_vec(scope_journal)?;
-        memory.release_bytes(discarded_indexes)?;
-        memory.release_bytes(scope_bytes)?;
-
-        // Deterministic, reproducible frozen order: sort by id tuples. Terms keep
-        // their interning (allocation) order, which is itself deterministic for a
-        // fixed push sequence.
-        //
-        // A `QuadHandle` addresses a quad by its FROZEN ordinal, but locations are
-        // pushed keyed by the *push-order* ordinal. Sorting the quads moves each one
-        // to a new position, so every location handle must be remapped to its quad's
-        // post-sort index — otherwise `location_of` returns a *different* quad's
-        // location, an LSP break for any consumer reading through the compat bridge.
-        let (quads, mut locations) = if locations.is_empty() {
-            let mut quads = quads;
-            sort_rows_with_memory(&mut quads, Ord::cmp, memory)?;
-            (quads, locations)
-        } else {
-            let old_quad_bytes = std::alloc::Layout::array::<QuadRow>(quads.capacity())
+        let input_bytes = self.native_buffer_bytes()?;
+        memory.consuming_scope(input_bytes, move |memory| {
+            let discarded_indexes = [
+                &self.quad_index,
+                &self.reifier_index,
+                &self.annotation_index,
+            ]
+            .into_iter()
+            .try_fold(0usize, |total, table| {
+                total
+                    .checked_add(
+                        crate::hash::hash_table_retained_bound(table)
+                            .ok_or(StorageError::SizeOverflow)?,
+                    )
+                    .ok_or(StorageError::SizeOverflow)
+            })?;
+            let scope_bytes = std::alloc::Layout::array::<BlankScope>(self.used_scopes.capacity())
                 .map_err(|_| StorageError::SizeOverflow)?
                 .size();
-            let mut indexed = memory.collect(
-                quads
-                    .into_iter()
-                    .enumerate()
-                    .map(|(push, row)| (row, push as u32)),
-            )?;
-            memory.release_bytes(old_quad_bytes)?;
+            let Self {
+                interner,
+                quads,
+                quad_index,
+                mut reifiers,
+                reifier_index,
+                mut annotations,
+                annotation_index,
+                locations,
+                declared_graphs,
+                used_scopes,
+                scope_journal,
+                derivation_predicate,
+                ..
+            } = self;
+            drop(quad_index);
+            drop(reifier_index);
+            drop(annotation_index);
+            drop(used_scopes);
+            memory.release_vec(scope_journal)?;
+            memory.release_bytes(discarded_indexes)?;
+            memory.release_bytes(scope_bytes)?;
+
+            // Deterministic, reproducible frozen order: sort by id tuples. Terms keep
+            // their interning (allocation) order, which is itself deterministic for a
+            // fixed push sequence.
+            //
+            // A `QuadHandle` addresses a quad by its FROZEN ordinal, but locations are
+            // pushed keyed by the *push-order* ordinal. Sorting the quads moves each one
+            // to a new position, so every location handle must be remapped to its quad's
+            // post-sort index — otherwise `location_of` returns a *different* quad's
+            // location, an LSP break for any consumer reading through the compat bridge.
+            let (quads, mut locations) = if locations.is_empty() {
+                let mut quads = quads;
+                sort_rows_with_memory(&mut quads, Ord::cmp, memory)?;
+                (quads, locations)
+            } else {
+                let old_quad_bytes = std::alloc::Layout::array::<QuadRow>(quads.capacity())
+                    .map_err(|_| StorageError::SizeOverflow)?
+                    .size();
+                let mut indexed = memory.collect(
+                    quads
+                        .into_iter()
+                        .enumerate()
+                        .map(|(push, row)| (row, push as u32)),
+                )?;
+                memory.release_bytes(old_quad_bytes)?;
+                sort_rows_with_memory(
+                    &mut indexed,
+                    |(left, _), (right, _)| left.cmp(right),
+                    memory,
+                )?;
+
+                // Push ordinals are dense, so a dense remap is both smaller and faster
+                // than hashing each ordinal. This allocation exists only for datasets
+                // that actually carry source locations.
+                let mut push_to_frozen =
+                    memory.collect(core::iter::repeat_n(u32::MAX, indexed.len()))?;
+                let old_indexed_bytes =
+                    std::alloc::Layout::array::<(QuadRow, u32)>(indexed.capacity())
+                        .map_err(|_| StorageError::SizeOverflow)?
+                        .size();
+                let quads = memory.collect(indexed.into_iter().enumerate().map(
+                    |(frozen, (row, push))| {
+                        push_to_frozen[push as usize] = frozen as u32;
+                        row
+                    },
+                ))?;
+                memory.release_bytes(old_indexed_bytes)?;
+                let old_location_bytes =
+                    std::alloc::Layout::array::<(QuadHandle, RdfLocation)>(locations.capacity())
+                        .map_err(|_| StorageError::SizeOverflow)?
+                        .size();
+                let locations =
+                    memory.collect(locations.into_iter().filter_map(|(handle, loc)| {
+                        push_to_frozen
+                            .get(handle.index())
+                            .copied()
+                            .filter(|&frozen| frozen != u32::MAX)
+                            .map(|frozen| (QuadHandle::from_index(frozen), loc))
+                    }))?;
+                memory.release_bytes(old_location_bytes)?;
+                memory.release_vec(push_to_frozen)?;
+                (quads, locations)
+            };
+            sort_rows_with_memory(&mut reifiers, Ord::cmp, memory)?;
+            sort_rows_with_memory(&mut annotations, Ord::cmp, memory)?;
             sort_rows_with_memory(
-                &mut indexed,
+                &mut locations,
                 |(left, _), (right, _)| left.cmp(right),
                 memory,
             )?;
 
-            // Push ordinals are dense, so a dense remap is both smaller and faster
-            // than hashing each ordinal. This allocation exists only for datasets
-            // that actually carry source locations.
-            let mut push_to_frozen =
-                memory.collect(core::iter::repeat_n(u32::MAX, indexed.len()))?;
-            let old_indexed_bytes = std::alloc::Layout::array::<(QuadRow, u32)>(indexed.capacity())
-                .map_err(|_| StorageError::SizeOverflow)?
-                .size();
-            let quads = memory.collect(indexed.into_iter().enumerate().map(
-                |(frozen, (row, push))| {
-                    push_to_frozen[push as usize] = frozen as u32;
-                    row
-                },
-            ))?;
-            memory.release_bytes(old_indexed_bytes)?;
-            let old_location_bytes =
-                std::alloc::Layout::array::<(QuadHandle, RdfLocation)>(locations.capacity())
-                    .map_err(|_| StorageError::SizeOverflow)?
-                    .size();
-            let locations = memory.collect(locations.into_iter().filter_map(|(handle, loc)| {
-                push_to_frozen
-                    .get(handle.index())
-                    .copied()
-                    .filter(|&frozen| frozen != u32::MAX)
-                    .map(|frozen| (QuadHandle::from_index(frozen), loc))
-            }))?;
-            memory.release_bytes(old_location_bytes)?;
-            memory.release_vec(push_to_frozen)?;
-            (quads, locations)
-        };
-        sort_rows_with_memory(&mut reifiers, Ord::cmp, memory)?;
-        sort_rows_with_memory(&mut annotations, Ord::cmp, memory)?;
-        sort_rows_with_memory(
-            &mut locations,
-            |(left, _), (right, _)| left.cmp(right),
-            memory,
-        )?;
-
-        // The frozen `GRAPH ?g` enumeration set: every graph term that owns a quad,
-        // UNION every graph the caller explicitly declared (possibly empty).
-        let mut named_graphs: Vec<TermId> = declared_graphs;
-        // `filter_map` reports a zero lower bound, so the three `extend`s below
-        // would otherwise grow by doubling; the exact upper bound is known here.
-        //
-        // Guarded by a scan for any graph slot at all, because the upper bound is the
-        // ROW COUNT and the common dataset has no named graph whatsoever: reserving
-        // unconditionally asks the allocator for one `TermId` per row of a
-        // default-graph-only dataset and then frees every byte of it again at
-        // `into_boxed_slice`. The scan allocates nothing and reads the same slices the
-        // extends are about to.
-        if memory.admission().progress_enabled() {
-            for graph in quads
-                .iter()
-                .map(|row| row.g)
-                .chain(reifiers.iter().map(|row| row.2))
-                .chain(annotations.iter().map(|row| row.3))
-            {
-                memory.admission_mut().checkpoint(1)?;
-                if let Some(graph) = graph {
-                    memory.push_copy_with_progress(&mut named_graphs, graph)?;
+            // The frozen `GRAPH ?g` enumeration set: every graph term that owns a quad,
+            // UNION every graph the caller explicitly declared (possibly empty).
+            let mut named_graphs: Vec<TermId> = declared_graphs;
+            // `filter_map` reports a zero lower bound, so the three `extend`s below
+            // would otherwise grow by doubling; the exact upper bound is known here.
+            //
+            // Guarded by a scan for any graph slot at all, because the upper bound is the
+            // ROW COUNT and the common dataset has no named graph whatsoever: reserving
+            // unconditionally asks the allocator for one `TermId` per row of a
+            // default-graph-only dataset and then frees every byte of it again at
+            // `into_boxed_slice`. The scan allocates nothing and reads the same slices the
+            // extends are about to.
+            if memory.admission().progress_enabled() {
+                for graph in quads
+                    .iter()
+                    .map(|row| row.g)
+                    .chain(reifiers.iter().map(|row| row.2))
+                    .chain(annotations.iter().map(|row| row.3))
+                {
+                    memory.admission_mut().checkpoint(1)?;
+                    if let Some(graph) = graph {
+                        memory.push_copy_with_progress(&mut named_graphs, graph)?;
+                    }
                 }
+            } else {
+                if quads.iter().any(|q| q.g.is_some())
+                    || reifiers.iter().any(|(_, _, g)| g.is_some())
+                    || annotations.iter().any(|(_, _, _, g)| g.is_some())
+                {
+                    let additional = quads
+                        .len()
+                        .checked_add(reifiers.len())
+                        .and_then(|count| count.checked_add(annotations.len()))
+                        .ok_or(StorageError::SizeOverflow)?;
+                    let required = named_graphs
+                        .len()
+                        .checked_add(additional)
+                        .ok_or(StorageError::SizeOverflow)?;
+                    memory.reserve(&mut named_graphs, required)?;
+                }
+                memory.extend(&mut named_graphs, quads.iter().filter_map(|q| q.g))?;
+                // A reifier / annotation declared inside a `GRAPH g { … }` block owns no base
+                // quad in g (the `<< … >>` folds entirely into the side-tables), so g would be
+                // invisible to `GRAPH ?g` enumeration unless its overlay rows are counted too.
+                memory.extend(
+                    &mut named_graphs,
+                    reifiers.iter().filter_map(|(_, _, g)| *g),
+                )?;
+                memory.extend(
+                    &mut named_graphs,
+                    annotations.iter().filter_map(|(_, _, _, g)| *g),
+                )?;
             }
-        } else {
-            if quads.iter().any(|q| q.g.is_some())
-                || reifiers.iter().any(|(_, _, g)| g.is_some())
-                || annotations.iter().any(|(_, _, _, g)| g.is_some())
-            {
-                let additional = quads
-                    .len()
-                    .checked_add(reifiers.len())
-                    .and_then(|count| count.checked_add(annotations.len()))
-                    .ok_or(StorageError::SizeOverflow)?;
-                let required = named_graphs
-                    .len()
-                    .checked_add(additional)
-                    .ok_or(StorageError::SizeOverflow)?;
-                memory.reserve(&mut named_graphs, required)?;
+            sort_rows_with_memory(&mut named_graphs, Ord::cmp, memory)?;
+            if memory.admission().progress_enabled() {
+                purrdf_lex::walk::try_dedup_by(&mut named_graphs, |left, right| {
+                    memory.admission_mut().checkpoint(1)?;
+                    Ok::<_, StorageError>(left == right)
+                })?;
+            } else {
+                named_graphs.dedup();
             }
-            memory.extend(&mut named_graphs, quads.iter().filter_map(|q| q.g))?;
-            // A reifier / annotation declared inside a `GRAPH g { … }` block owns no base
-            // quad in g (the `<< … >>` folds entirely into the side-tables), so g would be
-            // invisible to `GRAPH ?g` enumeration unless its overlay rows are counted too.
-            memory.extend(
-                &mut named_graphs,
-                reifiers.iter().filter_map(|(_, _, g)| *g),
-            )?;
-            memory.extend(
-                &mut named_graphs,
-                annotations.iter().filter_map(|(_, _, _, g)| *g),
-            )?;
-        }
-        sort_rows_with_memory(&mut named_graphs, Ord::cmp, memory)?;
-        if memory.admission().progress_enabled() {
-            purrdf_lex::walk::try_dedup_by(&mut named_graphs, |left, right| {
-                memory.admission_mut().checkpoint(1)?;
-                Ok::<_, StorageError>(left == right)
-            })?;
-        } else {
-            named_graphs.dedup();
-        }
 
-        let caps = compute_capabilities(
-            &interner.terms,
-            !named_graphs.is_empty(),
-            &reifiers,
-            &annotations,
-            !locations.is_empty(),
-            memory,
-        )?;
+            let caps = compute_capabilities(
+                &interner.terms,
+                !named_graphs.is_empty(),
+                &reifiers,
+                &annotations,
+                !locations.is_empty(),
+                memory,
+            )?;
 
-        RdfDataset::from_parts(
-            interner.freeze_with_memory(derivation_predicate, memory)?,
-            memory.boxed_slice(quads)?,
-            memory.boxed_slice(reifiers)?,
-            memory.boxed_slice(annotations)?,
-            memory.boxed_slice(locations)?,
-            caps,
-            memory.boxed_slice(named_graphs)?,
-            memory,
-        )
+            RdfDataset::from_parts(
+                interner.freeze_with_memory(derivation_predicate, memory)?,
+                memory.boxed_slice(quads)?,
+                memory.boxed_slice(reifiers)?,
+                memory.boxed_slice(annotations)?,
+                memory.boxed_slice(locations)?,
+                caps,
+                memory.boxed_slice(named_graphs)?,
+                memory,
+            )
+        })
     }
 }
 
@@ -5544,7 +5571,7 @@ mod native_graph_birth_tests {
             .unwrap();
         // The fixture dictionary keeps its resident ownership independently of
         // the account used to construct each new statistics result.
-        let mut resident = purrdf_lex::allocation::Resident;
+        let mut resident = Resident;
         let fixture_bytes = fixture.interner.buffer_bytes().unwrap();
         let mut fixture_memory = Memory::resume(&mut resident, fixture_bytes);
         let dictionary_fixture = fixture
@@ -5741,6 +5768,150 @@ mod native_graph_birth_tests {
     }
 
     #[test]
+    fn interner_progress_refusal_restores_lexical_prefix_and_relative_identity() {
+        struct StopGrant {
+            live: usize,
+            remaining: usize,
+        }
+        impl Admission for StopGrant {
+            fn progress_enabled(&self) -> bool {
+                true
+            }
+            fn checkpoint(&mut self, _: u64) -> Result<(), StorageError> {
+                self.remaining = self
+                    .remaining
+                    .checked_sub(1)
+                    .ok_or(StorageError::AdmissionFailed)?;
+                Ok(())
+            }
+            fn resize(&mut self, live: usize) -> Result<(), StorageError> {
+                self.live = live;
+                Ok(())
+            }
+        }
+        let text = "x".repeat(40);
+        for relative in [false, true] {
+            let mut completed = false;
+            for allowed in 0..1024 {
+                let mut grant = StopGrant {
+                    live: 0,
+                    remaining: usize::MAX,
+                };
+                let mut memory = Memory::new(&mut grant);
+                let parent = memory.string("original caller").unwrap();
+                let parent_bytes = memory.admitted_bytes();
+                let mut interner = Interner::new();
+                let prior = interner
+                    .intern_with_memory(TermLookup::Iri("urn:prior"), &mut memory)
+                    .unwrap();
+                let arena = interner.arena.clone();
+                let lookup = if relative {
+                    TermLookup::Iri(&text)
+                } else {
+                    TermLookup::Literal {
+                        lexical: &text,
+                        datatype: prior,
+                        language: Some("en"),
+                        direction: None,
+                    }
+                };
+                memory.admission_mut().remaining = allowed;
+                match interner.intern_with_memory(lookup, &mut memory) {
+                    Ok(id) => {
+                        assert_eq!(id.index(), 1);
+                        completed = true;
+                    }
+                    Err(cause) => {
+                        assert_eq!(cause, StorageError::AdmissionFailed);
+                        assert_eq!(interner.terms.len(), 1);
+                        assert_eq!(interner.arena, arena);
+                        assert!(interner.relative_iri.is_none());
+                        assert_eq!(
+                            memory.admitted_bytes(),
+                            parent_bytes + interner.buffer_bytes().unwrap()
+                        );
+                        memory.admission_mut().remaining = usize::MAX;
+                        let lookup = if relative {
+                            TermLookup::Iri(&text)
+                        } else {
+                            TermLookup::Literal {
+                                lexical: &text,
+                                datatype: prior,
+                                language: Some("en"),
+                                direction: None,
+                            }
+                        };
+                        assert_eq!(
+                            interner
+                                .intern_with_memory(lookup, &mut memory)
+                                .unwrap()
+                                .index(),
+                            1
+                        );
+                    }
+                }
+                let bytes = interner.buffer_bytes().unwrap();
+                drop(interner);
+                memory.release_bytes(bytes).unwrap();
+                memory.release_string(parent).unwrap();
+                assert_eq!(memory.admitted_bytes(), 0);
+                if completed {
+                    break;
+                }
+            }
+            assert!(completed);
+        }
+    }
+
+    #[test]
+    fn consumed_freeze_refusal_preserves_only_unrelated_parent_storage() {
+        let mut completed = false;
+        for allowed in 0..128 {
+            let mut grant = GrowthGrant {
+                live: 0,
+                remaining: usize::MAX,
+            };
+            let mut memory = Memory::new(&mut grant);
+            let parent = memory.string("original caller").unwrap();
+            let parent_bytes = memory.admitted_bytes();
+            let mut builder = RdfDatasetBuilder::new();
+            let s = builder
+                .intern_iri_with_memory("urn:subject", &mut memory)
+                .unwrap();
+            let p = builder
+                .intern_iri_with_memory("urn:predicate", &mut memory)
+                .unwrap();
+            let o = builder
+                .intern_literal_parts_with_memory("value", None, None, None, &mut memory)
+                .unwrap();
+            builder
+                .push_quad_with_memory(s, p, o, Some(s), &mut memory)
+                .unwrap();
+            // Exercise the validated public entry; its private materialization
+            // also serves ordinary freeze after native validation.
+            let validated = builder.validate().unwrap();
+            memory.admission_mut().remaining = allowed;
+            match validated.freeze_with_memory(&mut memory) {
+                Ok(dataset) => {
+                    assert_eq!(dataset.quad_count(), 1);
+                    let bytes = memory.admitted_bytes() - parent_bytes;
+                    drop(dataset);
+                    memory.release_bytes(bytes).unwrap();
+                    completed = true;
+                }
+                Err(cause) => assert_eq!(cause, StorageError::AdmissionFailed),
+            }
+            assert_eq!(memory.admitted_bytes(), parent_bytes);
+            assert_eq!(parent, "original caller");
+            memory.release_string(parent).unwrap();
+            if completed {
+                break;
+            }
+        }
+        assert!(completed);
+    }
+
+    #[test]
     fn native_structural_failure_releases_builder_and_retains_only_the_diagnostic() {
         let mut grant = Grant {
             live: 0,
@@ -5748,6 +5919,8 @@ mod native_graph_birth_tests {
             peak: 0,
         };
         let mut memory = Memory::new(&mut grant);
+        let parent = memory.string("unrelated caller").unwrap();
+        let parent_bytes = memory.admitted_bytes();
         let mut builder = RdfDatasetBuilder::new();
         let s = builder
             .intern_literal_parts_with_memory("literal", None, None, None, &mut memory)
@@ -5767,13 +5940,15 @@ mod native_graph_birth_tests {
         assert_eq!(diagnostic.code, "rdf-ir-literal-subject");
         assert_eq!(
             memory.admitted_bytes(),
-            diagnostic.code.capacity() + diagnostic.message.capacity()
+            parent_bytes + diagnostic.retained_bytes().unwrap()
         );
-        let bytes = memory.admitted_bytes();
+        let bytes = memory.admitted_bytes() - parent_bytes;
         drop(diagnostic);
         memory
             .release_bytes(bytes)
             .expect("diagnostic dies before its grant");
+        assert_eq!(memory.admitted_bytes(), parent_bytes);
+        memory.release_string(parent).unwrap();
         assert_eq!(memory.admitted_bytes(), 0);
     }
 }

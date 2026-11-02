@@ -83,8 +83,8 @@ pub use parse::{
 pub use retained::{BorrowedReadError, BorrowedSource, ParseRefusal, RetainedParse};
 pub use source_format::{GTS_EXTENSIONS, PACK_EXTENSIONS, SourceFormat, classify_source};
 pub use source_occurrence::{
-    SourceOccurrence, SourceOccurrences, SourceOriginId, SourceOriginKind, SourceRole, SourceRule,
-    SourceSemanticReference, SourceStatementKind, SourceTermOrigin,
+    SourceAssociationError, SourceOccurrence, SourceOccurrences, SourceOriginId, SourceOriginKind,
+    SourceRole, SourceRule, SourceSemanticReference, SourceStatementKind, SourceTermOrigin,
 };
 pub use span::{ParseOptions, SpanTable};
 pub use stream::parse_dataset_from_reader;

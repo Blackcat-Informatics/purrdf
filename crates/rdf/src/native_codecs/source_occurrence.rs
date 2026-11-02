@@ -3,6 +3,7 @@
 
 //! Native Turtle/TriG source occurrences before statement-layer folding.
 
+use super::acquisition::NativeParseError;
 use crate::TermId;
 use core::ops::Range;
 use purrdf_lex::allocation::{Admission, Memory, StorageError};
@@ -85,6 +86,106 @@ pub enum SourceSemanticReference {
     ConstantIri(&'static str),
     /// A native triple construction whose components retain their own origins.
     ConstructedTriple([SourceOriginId; 3]),
+}
+
+/// An inconsistent association produced by native lowering or statement folding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceAssociationError {
+    /// A source statement ordinal has no recorded roots.
+    MissingStatement {
+        /// Original native statement ordinal.
+        statement: usize,
+    },
+    /// A referenced origin is absent from the source table.
+    MissingOrigin {
+        /// Original source origin.
+        origin: SourceOriginId,
+    },
+    /// A lowered graph declaration has no original source declaration.
+    MissingDeclaration {
+        /// Original named graph declaration ordinal.
+        declaration: usize,
+    },
+    /// One origin was associated with different native terms.
+    ConflictingNative {
+        /// Original source origin.
+        origin: SourceOriginId,
+        /// Previously established association.
+        previous: usize,
+        /// Incompatible incoming association.
+        incoming: usize,
+    },
+    /// One origin was associated with incompatible semantic references.
+    ConflictingSemantic {
+        /// Original source origin.
+        origin: SourceOriginId,
+        /// Previously established association.
+        previous: SourceSemanticReference,
+        /// Incompatible incoming association.
+        incoming: SourceSemanticReference,
+    },
+    /// One native term was associated with different frozen terms.
+    ConflictingFinal {
+        /// Original native term index.
+        native: usize,
+        /// Previously established association.
+        previous: TermId,
+        /// Incompatible incoming association.
+        incoming: TermId,
+    },
+    /// Original source presence disagrees with the folded statement's term slot.
+    PresenceMismatch {
+        /// Original native statement ordinal.
+        statement: usize,
+        /// Statement slot whose presence disagrees.
+        role: SourceRole,
+        /// Original source origin.
+        origin: Option<SourceOriginId>,
+        /// Term actually observed by native folding.
+        term: Option<TermId>,
+    },
+}
+impl core::fmt::Display for SourceAssociationError {
+    fn fmt(&self, output: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(output, "inconsistent native source association: {self:?}")
+    }
+}
+impl std::error::Error for SourceAssociationError {}
+
+impl purrdf_hash::error::StructuredError for SourceSemanticReference {
+    purrdf_hash::error_visit! {
+        Term(term) => "source-reference-term" { "term" => Unsigned(term.index() as u128) },
+        ConstantIri(iri) => "source-reference-constant" { "iri" => Text(iri) },
+        ConstructedTriple(origins) => "source-reference-triple" {
+            "subject" => Unsigned(origins[0].0 as u128),
+            "predicate" => Unsigned(origins[1].0 as u128),
+            "object" => Unsigned(origins[2].0 as u128)
+        },
+    }
+}
+impl purrdf_hash::error::StructuredError for SourceAssociationError {
+    purrdf_hash::error_visit! {
+        MissingStatement { statement } => "source-missing-statement" { "statement" => Unsigned(*statement as u128) },
+        MissingOrigin { origin } => "source-missing-origin" { "origin" => Unsigned(origin.0 as u128) },
+        MissingDeclaration { declaration } => "source-missing-declaration" { "declaration" => Unsigned(*declaration as u128) },
+        ConflictingNative { origin, previous, incoming } => "source-conflicting-native" {
+            "origin" => Unsigned(origin.0 as u128), "previous" => Unsigned(*previous as u128), "incoming" => Unsigned(*incoming as u128)
+        },
+        ConflictingSemantic { origin, previous, incoming } => "source-conflicting-semantic" {
+            "origin" => Unsigned(origin.0 as u128), "previous" => Record(previous), "incoming" => Record(incoming)
+        },
+        ConflictingFinal { native, previous, incoming } => "source-conflicting-final" {
+            "native" => Unsigned(*native as u128), "previous" => Unsigned(previous.index() as u128), "incoming" => Unsigned(incoming.index() as u128)
+        },
+        PresenceMismatch { statement, role, origin, term } => "source-presence-mismatch" {
+            "statement" => Unsigned(*statement as u128),
+            "role" => Code(match role {
+                SourceRole::Subject => "subject", SourceRole::Predicate => "predicate", SourceRole::Object => "object", SourceRole::Graph => "graph", SourceRole::GraphDeclaration => "graph-declaration"
+            }),
+            "origin" => Value(origin.map_or(purrdf_hash::error::ErrorValue::Absent, |origin| purrdf_hash::error::ErrorValue::Unsigned(origin.0 as u128))),
+            "term" => Value(term.map_or(purrdf_hash::error::ErrorValue::Absent, |term| purrdf_hash::error::ErrorValue::Unsigned(term.index() as u128)))
+        },
+    }
 }
 
 /// The native statement layer selected by the original two-pass fold.
@@ -204,11 +305,11 @@ impl SourceOccurrences {
     pub(crate) fn roots(
         &self,
         statement: usize,
-    ) -> Result<[Option<SourceOriginId>; 4], StorageError> {
+    ) -> Result<[Option<SourceOriginId>; 4], SourceAssociationError> {
         self.statements
             .get(statement)
             .map(|source| source.roots)
-            .ok_or(StorageError::SizeOverflow)
+            .ok_or(SourceAssociationError::MissingStatement { statement })
     }
     pub(crate) fn components(&self, origin: Option<SourceOriginId>) -> Option<[SourceOriginId; 3]> {
         origin
@@ -220,19 +321,24 @@ impl SourceOccurrences {
         origin: Option<SourceOriginId>,
         native: usize,
         memory: &mut Memory<'_, S>,
-    ) -> Result<(), StorageError> {
+    ) -> Result<(), NativeParseError> {
         let mut current = origin;
         while let Some(origin) = current {
             memory.admission_mut().checkpoint(1)?;
             let record = self
                 .origins
                 .get_mut(origin.0)
-                .ok_or(StorageError::SizeOverflow)?;
+                .ok_or(SourceAssociationError::MissingOrigin { origin })?;
             if let Some(previous) = record.native_term {
                 return if previous == native {
                     Ok(())
                 } else {
-                    Err(StorageError::SizeOverflow)
+                    Err(SourceAssociationError::ConflictingNative {
+                        origin,
+                        previous,
+                        incoming: native,
+                    }
+                    .into())
                 };
             }
             record.native_term = Some(native);
@@ -254,17 +360,22 @@ impl SourceOccurrences {
         origin: Option<SourceOriginId>,
         semantic: SourceSemanticReference,
         memory: &mut Memory<'_, S>,
-    ) -> Result<(), StorageError> {
+    ) -> Result<(), NativeParseError> {
         let mut current = origin;
         while let Some(origin) = current {
             memory.admission_mut().checkpoint(1)?;
             let record = self
                 .origins
                 .get_mut(origin.0)
-                .ok_or(StorageError::SizeOverflow)?;
+                .ok_or(SourceAssociationError::MissingOrigin { origin })?;
             if let Some(previous) = record.semantic {
                 if previous != semantic {
-                    return Err(StorageError::SizeOverflow);
+                    return Err(SourceAssociationError::ConflictingSemantic {
+                        origin,
+                        previous,
+                        incoming: semantic,
+                    }
+                    .into());
                 }
             } else {
                 record.semantic = Some(semantic);
@@ -287,17 +398,22 @@ impl SourceOccurrences {
         origin: Option<SourceOriginId>,
         term: TermId,
         memory: &mut Memory<'_, S>,
-    ) -> Result<(), StorageError> {
+    ) -> Result<(), NativeParseError> {
         let mut current = origin;
         while let Some(origin) = current {
             memory.admission_mut().checkpoint(1)?;
             let record = self
                 .origins
                 .get_mut(origin.0)
-                .ok_or(StorageError::SizeOverflow)?;
+                .ok_or(SourceAssociationError::MissingOrigin { origin })?;
             if let Some(SourceSemanticReference::Term(previous)) = record.semantic {
                 if previous != term {
-                    return Err(StorageError::SizeOverflow);
+                    return Err(SourceAssociationError::ConflictingSemantic {
+                        origin,
+                        previous: SourceSemanticReference::Term(previous),
+                        incoming: SourceSemanticReference::Term(term),
+                    }
+                    .into());
                 }
             }
             record.semantic = Some(SourceSemanticReference::Term(term));
@@ -314,7 +430,7 @@ impl SourceOccurrences {
         native: usize,
         term: TermId,
         memory: &mut Memory<'_, S>,
-    ) -> Result<(), StorageError> {
+    ) -> Result<(), NativeParseError> {
         while self.native.final_terms.len() <= native {
             memory.admission_mut().checkpoint(1)?;
             memory.push(&mut self.native.final_terms, None)?;
@@ -324,7 +440,12 @@ impl SourceOccurrences {
             return if previous == term {
                 Ok(())
             } else {
-                Err(StorageError::SizeOverflow)
+                Err(SourceAssociationError::ConflictingFinal {
+                    native,
+                    previous,
+                    incoming: term,
+                }
+                .into())
             };
         }
         self.native.final_terms[native] = Some(term);
@@ -361,7 +482,7 @@ impl SourceOccurrences {
         kind: SourceStatementKind,
         terms: [Option<TermId>; 4],
         memory: &mut Memory<'_, S>,
-    ) -> Result<(), StorageError> {
+    ) -> Result<(), NativeParseError> {
         let (groups, index) = match row {
             NativeSourceRow::Quad(index) => (&self.native.quads, index),
             NativeSourceRow::Reifier(index) => (&self.native.reifiers, index),
@@ -375,11 +496,24 @@ impl SourceOccurrences {
             };
             let roots = self.roots(statement)?;
             self.statements[statement].kind = Some(kind);
-            for (origin, term) in roots.into_iter().zip(terms) {
+            for ((origin, term), role) in roots.into_iter().zip(terms).zip([
+                SourceRole::Subject,
+                SourceRole::Predicate,
+                SourceRole::Object,
+                SourceRole::Graph,
+            ]) {
                 match (origin, term) {
                     (Some(origin), Some(term)) => self.bind_term(Some(origin), term, memory)?,
                     (None, None) => {}
-                    _ => return Err(StorageError::SizeOverflow),
+                    _ => {
+                        return Err(SourceAssociationError::PresenceMismatch {
+                            statement,
+                            role,
+                            origin,
+                            term,
+                        }
+                        .into());
+                    }
                 }
             }
         }
