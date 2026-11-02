@@ -160,20 +160,39 @@ pub(crate) fn parse_gts_direction(
     value: Option<&str>,
     language: Option<&str>,
 ) -> Result<Option<RdfTextDirection>, RdfDiagnostic> {
+    parse_gts_direction_with_memory(
+        value,
+        language,
+        &mut purrdf_lex::allocation::Memory::new(&mut purrdf_lex::allocation::Resident),
+    )
+    .map_err(RdfDiagnostic::from)
+}
+
+/// Inspect the same native direction through the source's original account.
+pub(crate) fn parse_gts_direction_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+    value: Option<&str>,
+    language: Option<&str>,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+) -> Result<Option<RdfTextDirection>, purrdf_core::ir::NativeBuildError> {
+    memory.admission_mut().checkpoint(1)?;
     let Some(value) = value else {
         return Ok(None);
     };
-    let direction = RdfTextDirection::from_str_token(value).ok_or_else(|| {
-        RdfDiagnostic::error(
+    let Some(direction) = RdfTextDirection::from_str_token(value) else {
+        return Err(RdfDiagnostic::try_error_with_memory(
             "gts-invalid-direction",
-            format!("unrecognized GTS literal base direction {value:?}"),
-        )
-    })?;
+            &format_args!("unrecognized GTS literal base direction {value:?}"),
+            memory,
+        )?
+        .into());
+    };
     if language.is_none_or(str::is_empty) {
-        return Err(RdfDiagnostic::error(
+        return Err(RdfDiagnostic::try_error_with_memory(
             "gts-direction-without-language",
-            "an RDF 1.2 literal base direction requires a non-empty language tag",
-        ));
+            &"an RDF 1.2 literal base direction requires a non-empty language tag",
+            memory,
+        )?
+        .into());
     }
     Ok(Some(direction))
 }

@@ -9,33 +9,11 @@
 //! assert *why* a string was rejected, not merely that it was.
 
 use core::fmt;
-use core::fmt::Write as _;
+use purrdf_lex::text_out::Quoted as QuotedOperand;
 
 use purrdf_lex::diagnostic::{DiagnosticParameter, DiagnosticPresentation, DiagnosticValue};
 
 use crate::base::BaseInScope;
-
-/// The standard string Debug spelling, emitted one native Unicode scalar at a
-/// time so a fallible formatter can stop before scanning a remaining operand.
-/// Apostrophes stay literal in strings; every other escape decision belongs to
-/// char::escape_debug, using the same standard Unicode tables as str Debug.
-struct QuotedOperand<'a>(&'a str);
-
-impl fmt::Debug for QuotedOperand<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_char('"')?;
-        for scalar in self.0.chars() {
-            if scalar == '\'' {
-                f.write_char(scalar)?;
-            } else {
-                for escaped in scalar.escape_debug() {
-                    f.write_char(escaped)?;
-                }
-            }
-        }
-        f.write_char('"')
-    }
-}
 
 /// The remedy for [`IriError::NoBase`].
 ///

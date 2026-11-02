@@ -59,7 +59,7 @@ impl Iri {
         memory: &mut purrdf_lex::allocation::Memory<'_, S>,
     ) -> core::result::Result<Self, purrdf_lex::allocation::StorageError> {
         Ok(Self {
-            text: memory.string(&self.text)?,
+            text: memory.string_with_progress(&self.text)?,
             scheme: self.scheme.clone(),
             authority: self.authority.clone(),
             path: self.path.clone(),
@@ -78,6 +78,13 @@ impl Iri {
     #[must_use]
     pub fn into_text(self) -> String {
         self.text
+    }
+
+    /// Original owned text capacity, excluding the inline component ranges.
+    /// This is a destruction census; it does not admit or adopt an IRI whose
+    /// storage belongs to another account.
+    pub fn owned_text_bytes(&self) -> usize {
+        self.text.capacity()
     }
 
     /// The scheme (without the trailing `:`), if present.
@@ -481,7 +488,7 @@ pub fn parse_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
     memory: &mut purrdf_lex::allocation::Memory<'_, S>,
 ) -> core::result::Result<Iri, IriReadError> {
     let spans = scan_admitted(s, memory)?;
-    Ok(iri_from_spans(memory.string(s)?, spans))
+    Ok(iri_from_spans(memory.string_with_progress(s)?, spans))
 }
 
 pub(crate) fn parse_owned_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(

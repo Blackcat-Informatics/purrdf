@@ -177,4 +177,4 @@ pub use parse::{
     Components, Iri, IriReadError, absolute_verdict, absolute_verdict_with_memory, components,
     is_absolute, is_absolute_with_memory, parse, parse_uri, parse_with_memory,
 };
-pub use pos::{LineIndex, Position, PositionError};
+pub use pos::{LineIndex, Position, PositionCursor, PositionError};

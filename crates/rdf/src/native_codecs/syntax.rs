@@ -133,9 +133,36 @@ pub(super) fn check_language_tag(
     tag: &str,
     message: impl FnOnce(&LanguageTagError) -> String,
 ) -> Result<(), RdfDiagnostic> {
-    langtag::parse_with(tag, langtag::Profile::ConcreteSyntaxLangtagBounded)
-        .map(drop)
-        .map_err(|error| RdfDiagnostic::error(error.diagnostic_code(), message(&error)))
+    check_language_tag_with_memory(
+        tag,
+        message,
+        &mut purrdf_lex::allocation::Memory::new(&mut purrdf_lex::allocation::Resident),
+    )
+    .map_err(Into::into)
+}
+
+/// The same concrete-syntax language grammar and diagnostic through original
+/// physical/progress admission. The codec supplies its native wording lazily.
+pub(super) fn check_language_tag_with_memory<
+    S: purrdf_lex::allocation::Admission + ?Sized,
+    M: fmt::Display,
+>(
+    tag: &str,
+    message: impl FnOnce(&LanguageTagError) -> M,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+) -> Result<(), purrdf_core::ir::builder::NativeBuildError> {
+    match langtag::parse_with_memory(tag, langtag::Profile::ConcreteSyntaxLangtagBounded, memory) {
+        Ok(_) => Ok(()),
+        Err(purrdf_lex::control::ControlledError::Control(cause)) => Err(cause.into()),
+        Err(purrdf_lex::control::ControlledError::Native(cause)) => {
+            Err(RdfDiagnostic::try_error_with_memory(
+                cause.diagnostic_code(),
+                &message(&cause),
+                memory,
+            )?
+            .into())
+        }
+    }
 }
 
 /// The concatenated direct text children of `element`: an XML literal's

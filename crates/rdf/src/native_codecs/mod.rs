@@ -40,6 +40,8 @@ pub mod okf;
 // First-party N-Triples / N-Quads / Turtle / TriG text parser: lowers
 // directly to the in-memory GtsGraph the statement-layer fold consumes, replacing the
 // purrdf-gts text codecs for the line/Turtle family.
+mod acquisition;
+mod retained;
 mod text_parse;
 // First-party RDF/XML codec: implements the W3C RDF/XML grammar in-repo on
 // the workspace's one XML reader (`purrdf_lex::xml`), parsing straight into the frozen IR through the
@@ -57,6 +59,7 @@ mod hextuples;
 // Opt-in triple → source-position side table (SARIF source tracing). A runtime option,
 // NOT a Cargo feature; the default `NoSpans` collector monomorphizes the recording out
 // so the pre-existing parse path is byte-identical.
+mod source_occurrence;
 mod span;
 mod syntax;
 // Per-format codec dispatch: the single `NativeRdfFormat` → behavior chokepoint. Holds
@@ -71,11 +74,18 @@ mod codec;
 // resident. Non-line-oriented grammars are read whole, as their syntax requires.
 mod stream;
 
+pub use acquisition::{NativeParseError, TextError as ParseControlError};
 pub use media_type::{NativeRdfFormat, classify};
 pub use parse::{
-    ParseFailure, ParseOutcome, parse_dataset, parse_dataset_reporting_failure, parse_dataset_with,
+    ParseFailure, ParseOutcome, parse_dataset, parse_dataset_controlled,
+    parse_dataset_reporting_failure, parse_dataset_with,
 };
+pub use retained::{BorrowedReadError, BorrowedSource, ParseRefusal, RetainedParse};
 pub use source_format::{GTS_EXTENSIONS, PACK_EXTENSIONS, SourceFormat, classify_source};
+pub use source_occurrence::{
+    SourceAssociationError, SourceOccurrence, SourceOccurrences, SourceOriginId, SourceOriginKind,
+    SourceRole, SourceRule, SourceSemanticReference, SourceStatementKind, SourceTermOrigin,
+};
 pub use span::{ParseOptions, SpanTable};
 pub use stream::parse_dataset_from_reader;
 // Bench/test-only sequential baseline for the chunk-parallel N-Triples/N-Quads path;

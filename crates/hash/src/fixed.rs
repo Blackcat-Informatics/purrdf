@@ -61,6 +61,19 @@ use core::fmt;
 use core::hash::BuildHasher;
 use core::marker::PhantomData;
 
+#[inline]
+pub(crate) fn no_progress(_units: u64) -> Result<(), core::convert::Infallible> {
+    Ok(())
+}
+
+#[inline]
+pub(crate) fn infallible<T>(result: Result<T, core::convert::Infallible>) -> T {
+    match result {
+        Ok(value) => value,
+        Err(impossible) => match impossible {},
+    }
+}
+
 #[cfg(all(
     any(target_arch = "x86_64", target_arch = "aarch64"),
     target_endian = "little",
@@ -119,7 +132,10 @@ pub(crate) trait Compress {
     /// The portable terminal path folds its two compressed words separately.
     const TERMINAL_FOLD_LANES: bool;
     /// Two words standing for `bytes`, which is longer than 16 bytes.
-    fn compress_long(bytes: &[u8]) -> (u64, u64);
+    fn try_compress_long<E>(
+        bytes: &[u8],
+        progress: &mut (impl FnMut(u64) -> Result<(), E> + ?Sized),
+    ) -> Result<(u64, u64), E>;
 }
 
 /// Folded multiplies on every length.
@@ -130,8 +146,11 @@ impl Compress for Portable {
     const NAME: &'static str = "portable";
     const TERMINAL_FOLD_LANES: bool = true;
     #[inline]
-    fn compress_long(bytes: &[u8]) -> (u64, u64) {
-        portable::compress_long(bytes)
+    fn try_compress_long<E>(
+        bytes: &[u8],
+        progress: &mut (impl FnMut(u64) -> Result<(), E> + ?Sized),
+    ) -> Result<(u64, u64), E> {
+        portable::try_compress_long(bytes, progress)
     }
 }
 
@@ -153,8 +172,11 @@ impl Compress for Aes {
     const NAME: &'static str = "aes";
     const TERMINAL_FOLD_LANES: bool = false;
     #[inline]
-    fn compress_long(bytes: &[u8]) -> (u64, u64) {
-        aes::compress_long(bytes)
+    fn try_compress_long<E>(
+        bytes: &[u8],
+        progress: &mut (impl FnMut(u64) -> Result<(), E> + ?Sized),
+    ) -> Result<(u64, u64), E> {
+        aes::try_compress_long(bytes, progress)
     }
 }
 
@@ -235,12 +257,24 @@ impl<P: Compress> Engine<P> {
 
     #[inline]
     pub(crate) fn bytes(&mut self, bytes: &[u8]) {
+        infallible(self.try_bytes(bytes, &mut no_progress));
+    }
+
+    #[inline]
+    pub(crate) fn try_bytes<E>(
+        &mut self,
+        bytes: &[u8],
+        progress: &mut (impl FnMut(u64) -> Result<(), E> + ?Sized),
+    ) -> Result<(), E> {
+        progress(0)?;
         let (first, second) = if bytes.len() <= 16 {
+            progress(bytes.len() as u64)?;
             portable::pack_short(bytes)
         } else {
-            P::compress_long(bytes)
+            P::try_compress_long(bytes, progress)?
         };
         self.pair(first, second, length_term(bytes.len()));
+        Ok(())
     }
 
     #[inline]
@@ -249,16 +283,21 @@ impl<P: Compress> Engine<P> {
     }
 
     #[inline]
-    pub(crate) fn terminal(tag: u8, bytes: &[u8]) -> u64 {
+    pub(crate) fn try_terminal<E>(
+        tag: u8,
+        bytes: &[u8],
+        progress: &mut (impl FnMut(u64) -> Result<(), E> + ?Sized),
+    ) -> Result<u64, E> {
+        progress(0)?;
         if bytes.len() <= 16 {
             // Small key spaces need the two-stage streaming finalization to
             // satisfy the exhaustive two-byte avalanche check.
             let mut hasher = Self::new();
             hasher.word(u64::from(tag));
-            hasher.bytes(bytes);
-            return hasher.finish();
+            hasher.try_bytes(bytes, progress)?;
+            return Ok(hasher.finish());
         }
-        let (first, second) = P::compress_long(bytes);
+        let (first, second) = P::try_compress_long(bytes, progress)?;
         // A tag and one byte slice are the entire key: there is no later
         // field to separate. Each compressed word has already mixed its own
         // input. The portable path folds them separately before one final
@@ -272,9 +311,9 @@ impl<P: Compress> Engine<P> {
             // rotating and XOR-ing their raw tail words first would let
             // sparse differences cancel before any final mixer could see them.
             let lanes = fold(first ^ domain, K_A) ^ fold(second ^ domain.rotate_left(31), K_B);
-            fold(lanes, FIN_M)
+            Ok(fold(lanes, FIN_M))
         } else {
-            fold(first ^ second.rotate_left(29) ^ domain, FIN_M)
+            Ok(fold(first ^ second.rotate_left(29) ^ domain, FIN_M))
         }
     }
 }
@@ -295,7 +334,67 @@ macro_rules! hasher {
             #[must_use]
             #[inline]
             pub fn hash_terminal(tag: u8, bytes: &[u8]) -> u64 {
-                <$engine>::terminal(tag, bytes)
+                $crate::fixed::infallible(Self::try_hash_terminal(
+                    tag, bytes, &mut $crate::fixed::no_progress,
+                ))
+            }
+
+            /// Hash one complete tagged key with bounded native progress checks.
+            /// Each original compression block is checked before its bytes are
+            /// read, including the original overlapping final block. The input
+            /// remains one framed byte field. Zero checks precede work and
+            /// publication; a refusal returns the original error immediately.
+            ///
+            /// ```
+            /// use purrdf_hash::fixed::FixedHasher;
+            /// let bytes = b"http://example.org/subject";
+            /// let hash = FixedHasher::try_hash_terminal(0, bytes,
+            ///     &mut |_| Ok::<_, ()>(())).unwrap();
+            /// assert_eq!(hash, FixedHasher::hash_terminal(0, bytes));
+            /// ```
+            ///
+            /// # Errors
+            /// Returns the callback's unchanged first error. No hash is returned
+            /// and no later callback is invoked after refusal.
+            #[inline]
+            pub fn try_hash_terminal<E>(
+                tag: u8,
+                bytes: &[u8],
+                progress: &mut (impl FnMut(u64) -> Result<(), E> + ?Sized),
+            ) -> Result<u64, E> {
+                let hash = <$engine>::try_terminal(tag, bytes, progress)?;
+                progress(0)?;
+                Ok(hash)
+            }
+
+            /// Write one complete byte field through the original native hash
+            /// body. Successful writes produce the same state as [`Hasher::write`](core::hash::Hasher::write),
+            /// including this field's length and original block overlap.
+            ///
+            /// ```
+            /// use core::hash::Hasher;
+            /// use purrdf_hash::fixed::FixedHasher;
+            /// let mut hash = FixedHasher::default();
+            /// let before = hash.finish();
+            /// assert_eq!(hash.try_write(b"subject", &mut |_| Err("stop")), Err("stop"));
+            /// assert_eq!(hash.finish(), before);
+            /// ```
+            ///
+            /// # Errors
+            /// Returns the unchanged first callback error, without changing the
+            /// hasher or polling again. Even refusal at the publication check
+            /// leaves the original state intact.
+            #[inline]
+            pub fn try_write<E>(
+                &mut self,
+                bytes: &[u8],
+                progress: &mut (impl FnMut(u64) -> Result<(), E> + ?Sized),
+            ) -> Result<(), E> {
+                let mut candidate = self.0;
+                candidate.try_bytes(bytes, progress)?;
+                progress(0)?;
+                self.0 = candidate;
+                Ok(())
             }
         }
 

@@ -50,7 +50,7 @@ use purrdf_core::TermBox;
 use purrdf_core::{BlankScope, RdfTextDirection, TermValue};
 use purrdf_lex::json::{self, Event, Kind, Limits, Reader, Value};
 
-use crate::error::{Error, ReadReason, ReadRefusal, ReadShape, ReadToken};
+use crate::error::{Error, NativePrimary, ReadReason, ReadRefusal, ReadShape, ReadToken};
 use crate::model::{ProvenanceNamespace, ResultProvenance, SolutionProvenance};
 
 use purrdf_core::datatype::XSD_STRING;
@@ -70,6 +70,368 @@ type Shaped<T> = Result<T, Error>;
 /// shape refusal and ends the read at once; the inner one is a shape refusal
 /// the step recorded after reading its whole value.
 type Step<T> = Result<Shaped<T>, Error>;
+
+/// Original JSON parser containers retained after a cleanup refusal.
+///
+/// This owner reuses the original admitted allocations. Releasing it under the
+/// same account retries cleanup and returns every remaining owner on failure.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct JsonRelease {
+    strings: Option<Vec<String>>,
+    text: Option<String>,
+    row: Option<BindingRow>,
+    rows: Option<Vec<BindingRow>>,
+    frame: Option<Open>,
+    scratch: Option<RowScratch>,
+    term: Option<TermValue>,
+    primary: Option<NativePrimary>,
+    superseded: Option<NativePrimary>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum ReleaseRetained {
+    Strings(Vec<String>),
+    Row(BindingRow),
+    Rows(Vec<BindingRow>),
+    Parts(Box<TripleParts>),
+    Binding(Box<BindingFields>),
+    Scratch(RowScratch),
+}
+
+impl JsonRelease {
+    fn new(retained: ReleaseRetained) -> Self {
+        let mut owner = Self::default();
+        match retained {
+            ReleaseRetained::Strings(value) => {
+                if value.capacity() != 0 {
+                    owner.strings = Some(value);
+                }
+            }
+            ReleaseRetained::Row(value) => {
+                if value.capacity() != 0 {
+                    owner.row = Some(value);
+                }
+            }
+            ReleaseRetained::Rows(value) => {
+                if value.capacity() != 0 {
+                    owner.rows = Some(value);
+                }
+            }
+            ReleaseRetained::Parts(value) => owner.frame = Some(Open::Triple(value)),
+            ReleaseRetained::Binding(value) => owner.frame = Some(Open::Binding(value)),
+            ReleaseRetained::Scratch(value) => owner.scratch = Some(value),
+        }
+        owner
+    }
+
+    // One current row, its preceding rows, the single head, and the shared
+    // scratch belong to distinct scopes. Nested frames stay in their original
+    // parent slots; a physical refusal aborts decoding before another cell starts.
+    fn merge(&mut self, mut other: Self) {
+        macro_rules! merge_slot {
+            ($slot:ident) => {
+                if other.$slot.is_some() {
+                    assert!(
+                        self.$slot.is_none(),
+                        "one original JSON cleanup owner per scope"
+                    );
+                    self.$slot = other.$slot.take();
+                }
+            };
+        }
+        // A producer's take() leaves a zero-capacity placeholder of the same
+        // vector type. It has no elements or original allocation to retain.
+        macro_rules! merge_vector {
+            ($slot:ident) => {
+                if self.$slot.is_some() && other.$slot.is_some() {
+                    if self
+                        .$slot
+                        .as_ref()
+                        .is_some_and(|value| value.capacity() == 0)
+                    {
+                        self.$slot = None;
+                    } else if other
+                        .$slot
+                        .as_ref()
+                        .is_some_and(|value| value.capacity() == 0)
+                    {
+                        other.$slot = None;
+                    }
+                }
+                merge_slot!($slot);
+            };
+        }
+        merge_vector!(strings);
+        merge_slot!(text);
+        merge_vector!(row);
+        merge_vector!(rows);
+        merge_slot!(frame);
+        merge_slot!(scratch);
+        merge_slot!(term);
+        if let Some(discarded) = other.primary.take() {
+            if self.primary.is_some() {
+                // The caller already selected its cause by projected column.
+                // A failed disposal returns the discarded cause as its own
+                // primary; keep that payload without changing the selection.
+                self.retain_superseded(discarded);
+            } else {
+                self.primary = Some(discarded);
+            }
+        }
+        if let Some(discarded) = other.superseded.take() {
+            self.retain_superseded(discarded);
+        }
+    }
+
+    fn retain_superseded(&mut self, discarded: NativePrimary) {
+        if matches!(
+            &discarded,
+            NativePrimary::Format(ReadRefusal {
+                reason: ReadReason::Token { .. } | ReadReason::Predicate(_),
+                ..
+            }) | NativePrimary::LanguageTag { .. }
+                | NativePrimary::TermRelease { term: Some(_), .. }
+        ) {
+            // One selected refusal can coexist with one discarded/replaced
+            // refusal whose disposal failed. That physical failure ends the
+            // row before another cell or later syntax can add another owner.
+            assert!(self.superseded.is_none(), "one stopped semantic disposal");
+            self.superseded = Some(discarded);
+        }
+    }
+
+    fn absorb_cleanup(&mut self, error: Error) -> StorageError {
+        match error {
+            Error::Storage(cause) => cause,
+            Error::TermRelease { term, cause } => {
+                assert!(self.term.is_none(), "one failed completed JSON term");
+                self.term = term;
+                cause
+            }
+            Error::JsonRelease { owner, cause } => {
+                self.merge(owner);
+                cause
+            }
+            _ => unreachable!("native cleanup returns a physical refusal"),
+        }
+    }
+
+    fn with_prior(mut self, error: Error) -> (Self, Option<StorageError>) {
+        match error {
+            Error::Storage(cause) => {
+                if self.primary.is_none() {
+                    self.primary = Some(
+                        NativePrimary::from_error(Error::Storage(cause))
+                            .expect("native storage refusal"),
+                    );
+                }
+                (self, Some(cause))
+            }
+            Error::JsonRelease { owner, cause } => {
+                self.merge(owner);
+                (self, Some(cause))
+            }
+            Error::TermRelease { term, cause } => {
+                assert!(self.term.is_none(), "one failed completed JSON term");
+                self.term = term;
+                (self, Some(cause))
+            }
+            error => {
+                let primary =
+                    NativePrimary::from_error(error).expect("a non-container native error");
+                if let Some(previous) = self.primary.take() {
+                    self.retain_superseded(previous);
+                }
+                self.primary = Some(primary);
+                (self, None)
+            }
+        }
+    }
+
+    pub(crate) fn kind(&self) -> &'static str {
+        if self.frame.is_some() {
+            "frame"
+        } else if self.row.is_some() {
+            "row"
+        } else if self.rows.is_some() {
+            "rows"
+        } else if self.strings.is_some() {
+            "strings"
+        } else if self.scratch.is_some() {
+            "scratch"
+        } else {
+            "completed"
+        }
+    }
+
+    fn original_error(&self) -> Option<&Error> {
+        let open = self
+            .frame
+            .as_ref()
+            .or_else(|| self.scratch.as_ref()?.open.last())?;
+        let finished = match open {
+            Open::Binding(fields) => &fields.finished,
+            Open::Triple(parts) => &parts.finished,
+        };
+        finished.as_ref().and_then(|result| result.as_ref().err())
+    }
+
+    pub(crate) fn primary<'a>(
+        &'a self,
+        cause: &'a StorageError,
+    ) -> &'a (dyn purrdf_hash::error::NativeError + 'static) {
+        if let Some(primary) = &self.primary {
+            primary
+        } else if let Some(error) = self.original_error() {
+            error
+        } else {
+            cause
+        }
+    }
+
+    fn cleanup_containers<S: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), StorageError> {
+        let result = (|| {
+            if let Some(value) = self.strings.take() {
+                release_strings(value, memory)?;
+            }
+            if let Some(value) = self.text.take() {
+                memory.release_string(value).map_err(Error::Storage)?;
+            }
+            if let Some(value) = self.rows.take() {
+                release_rows(value, memory)?;
+            }
+            if let Some(value) = self.row.take() {
+                release_row(value, memory)?;
+            }
+            if let Some(value) = self.term.take() {
+                release_term(value, memory)?;
+            }
+            if let Some(value) = self.frame.take() {
+                match value {
+                    Open::Binding(fields) => release_binding(fields, memory)?,
+                    Open::Triple(parts) => release_parts(parts, memory)?,
+                }
+            }
+            if let Some(value) = self.scratch.take() {
+                release_scratch(value, memory)?;
+            }
+            if let Some(value) = self.superseded.take()
+                && let Err((retained, cause)) = value.release_with_memory(memory)
+            {
+                self.superseded = retained;
+                return Err(Error::Storage(cause));
+            }
+            Ok(())
+        })();
+        result.map_err(|error| self.absorb_cleanup(error))
+    }
+
+    /// Retry destruction under the containers' original admission account.
+    ///
+    /// # Errors
+    /// Returns the first cleanup refusal with every remaining original owner.
+    pub fn release_with_memory<S: Admission + ?Sized>(
+        mut self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), Error> {
+        let result = self.cleanup_containers(memory).and_then(|()| {
+            if let Some(value) = self.primary.take()
+                && let Err((retained, cause)) = value.release_with_memory(memory)
+            {
+                self.primary = retained;
+                return Err(cause);
+            }
+            Ok(())
+        });
+        result.map_err(|cause| Error::JsonRelease { owner: self, cause })
+    }
+}
+
+/// Stage separate row/refusal/output owners before cleanup can fail. A physical
+/// refusal only moves the remaining owners; it never starts another census.
+fn finish_cleanup<T, S: Admission + ?Sized>(
+    mut pending: JsonRelease,
+    result: Step<T>,
+    retain_output: impl FnOnce(T, &mut JsonRelease),
+    memory: &mut Memory<'_, S>,
+) -> Step<T> {
+    let (error, outer) = match result {
+        Ok(Ok(value)) => {
+            assert!(
+                pending.primary.is_none() && pending.superseded.is_none(),
+                "successful decoding has no pending refusal"
+            );
+            return match pending.cleanup_containers(memory) {
+                Ok(()) => Ok(Ok(value)),
+                Err(cause) => {
+                    retain_output(value, &mut pending);
+                    Err(Error::JsonRelease {
+                        owner: pending,
+                        cause,
+                    })
+                }
+            };
+        }
+        Ok(Err(error)) => (error, false),
+        Err(error) => (error, true),
+    };
+    let (mut pending, original_physical) = pending.with_prior(error);
+    if let Some(cause) = original_physical {
+        return Err(Error::JsonRelease {
+            owner: pending,
+            cause,
+        });
+    }
+    match pending.cleanup_containers(memory) {
+        Err(cause) => Err(Error::JsonRelease {
+            owner: pending,
+            cause,
+        }),
+        Ok(()) => {
+            let error = pending
+                .primary
+                .take()
+                .expect("the original native refusal is retained")
+                .into_error();
+            if outer { Err(error) } else { Ok(Err(error)) }
+        }
+    }
+}
+
+fn retain_plain_result<T>(
+    mut pending: JsonRelease,
+    result: Result<T, Error>,
+    retain_output: impl FnOnce(T, &mut JsonRelease),
+    cause: StorageError,
+) -> Result<T, Error> {
+    let cause = match result {
+        Ok(value) => {
+            retain_output(value, &mut pending);
+            cause
+        }
+        Err(error) => {
+            let (retained, original_physical) = pending.with_prior(error);
+            pending = retained;
+            original_physical.unwrap_or(cause)
+        }
+    };
+    Err(Error::JsonRelease {
+        owner: pending,
+        cause,
+    })
+}
+
+fn finish_plain<T, S: Admission + ?Sized>(
+    pending: JsonRelease,
+    result: Result<T, Error>,
+    retain_output: impl FnOnce(T, &mut JsonRelease),
+    memory: &mut Memory<'_, S>,
+) -> Result<T, Error> {
+    finish_cleanup(pending, result.map(Ok), retain_output, memory).and_then(|result| result)
+}
 
 /// A decoded `SELECT` result set: ordered variable names plus dense rows. A
 /// `None` cell is an unbound (absent) binding for that variable in that row.
@@ -125,18 +487,20 @@ pub struct BoundedParsedSolutions {
 /// `type`/`value` shape is invalid.
 pub fn from_json(bytes: &[u8]) -> Result<ParsedSolutions, Error> {
     let mut storage = Resident;
-    let mut memory = Memory::new(&mut storage);
-    let mut reader = Reader::from_slice(bytes, LIMITS)
-        .map_err(|error| syntax_with_memory(error, &mut memory))?;
-    let result = select_document(&mut reader, &mut memory);
-    reader
-        .release_with_memory(&mut memory)
-        .map_err(Error::Storage)?;
-    result?
+    from_json_with_memory(bytes, None, &mut Memory::new(&mut storage))
+        .map(|parsed| parsed.solutions)
+        .map_err(|error| match error {
+            ReadError::Lexical(error) => error,
+            ReadError::Storage(cause) => Error::Storage(cause),
+        })
 }
 
 /// The original result shape refusal or physical producer failure.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "The shared error retains original JSON owners inline without allocating after refusal."
+)]
 pub enum ReadError {
     /// JSON syntax or SPARQL result shape, preserving its original native cause.
     Lexical(Error),
@@ -179,9 +543,20 @@ pub fn from_json_with_memory<S: Admission + ?Sized>(
         }
         let mut reader =
             Reader::from_slice(bytes, LIMITS).map_err(|error| syntax_with_memory(error, memory))?;
-        let result = select_document(&mut reader, memory);
-        reader.release_with_memory(memory).map_err(Error::Storage)?;
-        result?.map(|solutions| BoundedParsedSolutions {
+        let result = select_document(&mut reader, memory).and_then(|result| result);
+        let result = match reader.release_with_memory(memory) {
+            Ok(()) => result,
+            Err(cause) => retain_plain_result(
+                JsonRelease::default(),
+                result,
+                |solutions, pending| {
+                    pending.strings = Some(solutions.variables);
+                    pending.rows = Some(solutions.rows);
+                },
+                cause,
+            ),
+        };
+        result.map(|solutions| BoundedParsedSolutions {
             solutions,
             truncated: false,
         })
@@ -245,10 +620,13 @@ fn bounded_document<S: Admission + ?Sized>(
     let (rows, truncated) = match scan_bindings(bytes, &variables, row_limit, memory) {
         Ok(rows) => rows,
         Err(error) => {
-            release_items(variables, memory, |text, memory| {
-                memory.release_string(text).map_err(Error::Storage)
-            })?;
-            return Err(error);
+            return finish_cleanup(
+                JsonRelease::new(ReleaseRetained::Strings(variables)),
+                Err(error),
+                |_: BoundedParsedSolutions, _| {},
+                memory,
+            )
+            .and_then(|result| result);
         }
     };
     Ok(BoundedParsedSolutions {
@@ -265,9 +643,9 @@ fn scan_variables<S: Admission + ?Sized>(
 ) -> Result<Vec<String>, Error> {
     let mut reader =
         Reader::from_slice(bytes, LIMITS).map_err(|error| syntax_with_memory(error, memory))?;
+    let mut variables = None;
     let result = (|| {
         open_object(&mut reader, ReadShape::TopObject, memory)?;
-        let mut variables = None;
         while let Some(key) = next_key(&mut reader, memory)? {
             if key == "head" && variables.is_none() {
                 variables = Some(head_variables(&mut reader, memory)?);
@@ -280,10 +658,28 @@ fn scan_variables<S: Admission + ?Sized>(
         reader
             .finish_with_memory(memory)
             .map_err(|error| syntax_with_memory(error, memory))?;
-        variables.ok_or_else(|| fmt_with_memory(ReadShape::Head, memory))
+        variables
+            .take()
+            .ok_or_else(|| fmt_with_memory(ReadShape::Head, memory))
     })();
-    reader.release_with_memory(memory).map_err(Error::Storage)?;
-    result
+    let pending = JsonRelease {
+        strings: variables,
+        ..JsonRelease::default()
+    };
+    if let Err(cause) = reader.release_with_memory(memory) {
+        return retain_plain_result(
+            pending,
+            result,
+            |strings, pending| pending.strings = Some(strings),
+            cause,
+        );
+    }
+    finish_plain(
+        pending,
+        result,
+        |strings, pending| pending.strings = Some(strings),
+        memory,
+    )
 }
 
 /// Second bounded-decoder pass: locate `results.bindings`, materializing only the prefix
@@ -328,11 +724,36 @@ fn scan_bindings<S: Admission + ?Sized>(
             .take()
             .ok_or_else(|| fmt_with_memory(ReadShape::Results, memory))
     })();
+    let mut pending = JsonRelease::default();
     if let Some((rows, _)) = found {
-        release_items(rows, memory, release_row)?;
+        pending.rows = Some(rows);
     }
-    reader.release_with_memory(memory).map_err(Error::Storage)?;
-    result
+    let result = match reader.release_with_memory(memory) {
+        Ok(()) => result,
+        Err(cause) => {
+            return retain_plain_result(
+                pending,
+                result,
+                |(rows, _), pending| {
+                    pending.rows = Some(rows);
+                },
+                cause,
+            );
+        }
+    };
+    finish_cleanup(
+        pending,
+        result.map(Ok),
+        |(rows, _), pending| {
+            assert!(
+                pending.rows.is_none(),
+                "successful bounded rows moved out before cleanup"
+            );
+            pending.rows = Some(rows);
+        },
+        memory,
+    )
+    .and_then(|result| result)
 }
 
 /// Parse a SPARQL Results JSON `ASK` document into its boolean.
@@ -534,7 +955,18 @@ fn select_document<S: Admission + ?Sized>(
             Some(Ok(Bindings::Unread(span))) => {
                 let mut rows = Reader::new(&reader.text()[span], LIMITS);
                 let result = binding_rows(&mut rows, variables, &mut scratch, memory);
-                rows.release_with_memory(memory).map_err(Error::Storage)?;
+                let result = match rows.release_with_memory(memory) {
+                    Ok(()) => result,
+                    Err(cause) => retain_plain_result(
+                        JsonRelease::default(),
+                        result.and_then(|result| result),
+                        |rows, pending| {
+                            pending.rows = Some(rows);
+                        },
+                        cause,
+                    )
+                    .map(Ok),
+                };
                 result?
             }
         };
@@ -548,26 +980,40 @@ fn select_document<S: Admission + ?Sized>(
             .expect("the projected head was checked above");
         Ok(Ok(ParsedSolutions { variables, rows }))
     })();
+    let mut pending = JsonRelease::new(ReleaseRetained::Scratch(scratch));
     if let Some(head) = head {
         match head {
-            Ok(variables) => release_items(variables, memory, |text, memory| {
-                memory.release_string(text).map_err(Error::Storage)
-            })?,
-            Err(error) => release_error(error, memory)?,
+            Ok(variables) => pending.strings = Some(variables),
+            Err(error) => pending = pending.with_prior(error).0,
         }
     }
     if let Some(results) = results {
         match results {
             Ok(Bindings::Unread(_)) => {}
-            Ok(Bindings::Decoded(Ok(rows))) => release_items(rows, memory, release_row)?,
-            Ok(Bindings::Decoded(Err(error))) | Err(error) => release_error(error, memory)?,
+            Ok(Bindings::Decoded(Ok(rows))) => pending.rows = Some(rows),
+            Ok(Bindings::Decoded(Err(error))) | Err(error) => pending = pending.with_prior(error).0,
         }
     }
-    release_scratch(scratch, memory)?;
-    result
+    finish_cleanup(
+        pending,
+        result,
+        |solutions, pending| {
+            assert!(
+                pending.strings.is_none() && pending.rows.is_none(),
+                "published solutions moved their original head and rows"
+            );
+            pending.strings = Some(solutions.variables);
+            pending.rows = Some(solutions.rows);
+        },
+        memory,
+    )
 }
 
 /// The `results.bindings` array as [`select_document`] found it.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "The shared error retains original JSON owners inline without allocating after refusal."
+)]
 enum Bindings {
     /// Decoded where it stood: its rows, or its first row's refusal.
     Decoded(Shaped<Vec<BindingRow>>),
@@ -590,21 +1036,34 @@ fn read_head<S: Admission + ?Sized>(
         .next_event_with_memory(memory)
         .map_err(|error| syntax_with_memory(error, memory))?;
     let mut variables: Option<Shaped<Vec<String>>> = None;
-    while let Some(key) = next_key(reader, memory)? {
-        if key == "vars" && variables.is_none() && reader.peek_kind() == Some(Kind::Array) {
-            variables = Some(string_items(reader, ReadShape::Variable, memory)?);
-        } else {
-            if key == "vars" && variables.is_none() {
-                // A results doc with no `vars` array is degenerate but valid
-                // (zero columns).
-                variables = Some(Ok(Vec::new()));
+    let result = (|| {
+        while let Some(key) = next_key(reader, memory)? {
+            if key == "vars" && variables.is_none() && reader.peek_kind() == Some(Kind::Array) {
+                variables = Some(string_items(reader, ReadShape::Variable, memory)?);
+            } else {
+                if key == "vars" && variables.is_none() {
+                    variables = Some(Ok(Vec::new()));
+                }
+                reader
+                    .check_value_with_memory(memory)
+                    .map_err(|error| syntax_with_memory(error, memory))?;
             }
-            reader
-                .check_value_with_memory(memory)
-                .map_err(|error| syntax_with_memory(error, memory))?;
+        }
+        Ok(variables.take().unwrap_or_else(|| Ok(Vec::new())))
+    })();
+    let mut pending = JsonRelease::default();
+    if let Some(variables) = variables {
+        match variables {
+            Ok(strings) => pending.strings = Some(strings),
+            Err(error) => pending = pending.with_prior(error).0,
         }
     }
-    Ok(variables.unwrap_or_else(|| Ok(Vec::new())))
+    finish_cleanup(
+        pending,
+        result,
+        |strings, pending| pending.strings = Some(strings),
+        memory,
+    )
 }
 
 /// A string-only array: its strings, or `item_error` at its first other item.
@@ -616,51 +1075,73 @@ fn string_items<S: Admission + ?Sized>(
     reader
         .next_event_with_memory(memory)
         .map_err(|error| syntax_with_memory(error, memory))?;
-    let mut items = Ok(Vec::new());
-    while reader
-        .next_item()
-        .map_err(|error| syntax_with_memory(error, memory))?
-    {
-        match (&mut items, reader.peek_kind()) {
-            (Ok(strings), Some(Kind::String)) => {
+    let mut strings = Vec::new();
+    let mut text = None;
+    let mut refusal = None;
+    let result = (|| {
+        while reader
+            .next_item()
+            .map_err(|error| syntax_with_memory(error, memory))?
+        {
+            if refusal.is_none() && reader.peek_kind() == Some(Kind::String) {
                 let Event::String(item) = reader
                     .next_event_with_memory(memory)
                     .map_err(|error| syntax_with_memory(error, memory))?
                 else {
                     unreachable!("a string begins at the cursor");
                 };
-                let text = owned_text(
+                text = Some(owned_text(
                     item.decode_with_memory(memory)
                         .map_err(|error| syntax_with_memory(error, memory))?,
                     memory,
-                )?;
-                memory.push(strings, text).map_err(Error::Storage)?;
-            }
-            (found, _) => {
-                if found.is_ok() {
-                    let previous =
-                        std::mem::replace(found, Err(fmt_with_memory(item_error, memory)));
-                    if let Ok(strings) = previous {
-                        release_items(strings, memory, |text, memory| {
-                            memory.release_string(text).map_err(Error::Storage)
-                        })?;
-                    }
+                )?);
+                memory
+                    .reserve_for_push(&mut strings)
+                    .map_err(Error::Storage)?;
+                strings.push(text.take().expect("the decoded original string exists"));
+            } else {
+                if refusal.is_none() {
+                    let original = fmt_with_memory(item_error, memory);
+                    let prefix = std::mem::take(&mut strings);
+                    refusal = Some(
+                        finish_cleanup(
+                            JsonRelease::new(ReleaseRetained::Strings(prefix)),
+                            Ok::<_, Error>(Err(original)),
+                            |_: Vec<String>, _| {},
+                            memory,
+                        )?
+                        .expect_err("the item was refused"),
+                    );
                 }
                 reader
                     .check_value_with_memory(memory)
                     .map_err(|error| syntax_with_memory(error, memory))?;
             }
         }
+        Ok(match refusal.take() {
+            Some(error) => Err(error),
+            None => Ok(std::mem::take(&mut strings)),
+        })
+    })();
+    let mut pending = JsonRelease::new(ReleaseRetained::Strings(strings));
+    pending.text = text;
+    if let Some(error) = refusal {
+        pending = pending.with_prior(error).0;
     }
-    Ok(items)
+    finish_cleanup(
+        pending,
+        result,
+        |strings, pending| pending.strings = Some(strings),
+        memory,
+    )
 }
 
 /// A `results` value: its `bindings` array, decoded when `variables` are
 /// known and checked otherwise, or the refusal it earns.
-fn read_results<'a, S: Admission + ?Sized>(
-    reader: &mut Reader<'a>,
+fn read_results<S: Admission + ?Sized>(
+    reader: &mut Reader<'_>,
     variables: Option<&[String]>,
-    scratch: &mut RowScratch<'a>,
+    scratch: &mut RowScratch,
     memory: &mut Memory<'_, S>,
 ) -> Step<Bindings> {
     if reader.peek_kind() != Some(Kind::Object) {
@@ -673,45 +1154,68 @@ fn read_results<'a, S: Admission + ?Sized>(
         .next_event_with_memory(memory)
         .map_err(|error| syntax_with_memory(error, memory))?;
     let mut bindings: Option<Shaped<Bindings>> = None;
-    while let Some(key) = next_key(reader, memory)? {
-        if key != "bindings" || bindings.is_some() {
-            reader
-                .check_value_with_memory(memory)
-                .map_err(|error| syntax_with_memory(error, memory))?;
-            continue;
-        }
-        bindings = Some(if reader.peek_kind() != Some(Kind::Array) {
-            reader
-                .check_value_with_memory(memory)
-                .map_err(|error| syntax_with_memory(error, memory))?;
-            Err(fmt_with_memory(ReadShape::Bindings, memory))
-        } else if let Some(variables) = variables {
-            Ok(Bindings::Decoded(binding_rows(
-                reader, variables, scratch, memory,
-            )?))
-        } else {
-            Ok(Bindings::Unread(
+    let result = (|| {
+        while let Some(key) = next_key(reader, memory)? {
+            if key != "bindings" || bindings.is_some() {
                 reader
                     .check_value_with_memory(memory)
-                    .map_err(|error| syntax_with_memory(error, memory))?,
-            ))
-        });
+                    .map_err(|error| syntax_with_memory(error, memory))?;
+                continue;
+            }
+            bindings = Some(if reader.peek_kind() != Some(Kind::Array) {
+                reader
+                    .check_value_with_memory(memory)
+                    .map_err(|error| syntax_with_memory(error, memory))?;
+                Err(fmt_with_memory(ReadShape::Bindings, memory))
+            } else if let Some(variables) = variables {
+                Ok(Bindings::Decoded(binding_rows(
+                    reader, variables, scratch, memory,
+                )?))
+            } else {
+                Ok(Bindings::Unread(
+                    reader
+                        .check_value_with_memory(memory)
+                        .map_err(|error| syntax_with_memory(error, memory))?,
+                ))
+            });
+        }
+        Ok(bindings
+            .take()
+            .unwrap_or_else(|| Err(fmt_with_memory(ReadShape::Bindings, memory))))
+    })();
+    let mut pending = JsonRelease::default();
+    if let Some(bindings) = bindings {
+        match bindings {
+            Ok(Bindings::Unread(_)) => {}
+            Ok(Bindings::Decoded(Ok(rows))) => pending.rows = Some(rows),
+            Ok(Bindings::Decoded(Err(error))) | Err(error) => pending = pending.with_prior(error).0,
+        }
     }
-    Ok(bindings.unwrap_or_else(|| Err(fmt_with_memory(ReadShape::Bindings, memory))))
+    finish_cleanup(
+        pending,
+        result,
+        |bindings, pending| {
+            if let Bindings::Decoded(Ok(rows)) = bindings {
+                pending.rows = Some(rows);
+            }
+        },
+        memory,
+    )
 }
 
 /// A `bindings` array, the cursor on its `[`: every row, or the first row's
 /// refusal once the rest of the array is checked.
-fn binding_rows<'a, S: Admission + ?Sized>(
-    reader: &mut Reader<'a>,
+fn binding_rows<S: Admission + ?Sized>(
+    reader: &mut Reader<'_>,
     variables: &[String],
-    scratch: &mut RowScratch<'a>,
+    scratch: &mut RowScratch,
     memory: &mut Memory<'_, S>,
 ) -> Step<Vec<BindingRow>> {
     reader
         .next_event_with_memory(memory)
         .map_err(|error| syntax_with_memory(error, memory))?;
     let mut rows = Vec::new();
+    let mut current = None;
     let mut refusal = None;
     let result = (|| {
         while reader
@@ -719,7 +1223,11 @@ fn binding_rows<'a, S: Admission + ?Sized>(
             .map_err(|error| syntax_with_memory(error, memory))?
         {
             match binding_row(reader, variables, scratch, memory)? {
-                Ok(row) => memory.push(&mut rows, row).map_err(Error::Storage)?,
+                Ok(row) => {
+                    current = Some(row);
+                    memory.reserve_for_push(&mut rows).map_err(Error::Storage)?;
+                    rows.push(current.take().expect("the decoded original row exists"));
+                }
                 Err(error) => {
                     refusal = Some(error);
                     while reader
@@ -736,18 +1244,30 @@ fn binding_rows<'a, S: Admission + ?Sized>(
         }
         Ok(Ok(std::mem::take(&mut rows)))
     })();
-    release_items(rows, memory, release_row)?;
+    let mut pending = JsonRelease::new(ReleaseRetained::Rows(rows));
+    pending.row = current;
     if let Some(error) = refusal {
-        release_error(error, memory)?;
+        pending = pending.with_prior(error).0;
     }
-    result
+    finish_cleanup(
+        pending,
+        result,
+        |rows, pending| {
+            assert!(
+                pending.rows.is_none(),
+                "successful rows moved out before cleanup"
+            );
+            pending.rows = Some(rows);
+        },
+        memory,
+    )
 }
 
 /// Buffers one row decode reuses from the last: the open binding objects and
 /// which variables the row has bound.
-#[derive(Default)]
-struct RowScratch<'a> {
-    open: Vec<Open<'a>>,
+#[derive(Debug, Default, PartialEq, Eq)]
+struct RowScratch {
+    open: Vec<Open>,
     bound: Vec<bool>,
 }
 
@@ -757,10 +1277,10 @@ struct RowScratch<'a> {
 ///
 /// A cell is the FIRST member named after its variable; a later member of the
 /// same name, like every member no variable names, is checked and not decoded.
-fn binding_row<'a, S: Admission + ?Sized>(
-    reader: &mut Reader<'a>,
+fn binding_row<S: Admission + ?Sized>(
+    reader: &mut Reader<'_>,
     variables: &[String],
-    scratch: &mut RowScratch<'a>,
+    scratch: &mut RowScratch,
     memory: &mut Memory<'_, S>,
 ) -> Step<BindingRow> {
     if reader.peek_kind() != Some(Kind::Object) {
@@ -773,18 +1293,17 @@ fn binding_row<'a, S: Admission + ?Sized>(
         .next_event_with_memory(memory)
         .map_err(|error| syntax_with_memory(error, memory))?;
     let mut row = Vec::new();
-    memory
-        .reserve(&mut row, variables.len())
-        .map_err(Error::Storage)?;
-    row.resize_with(variables.len(), || None);
-    scratch.bound.clear();
-    memory
-        .reserve(&mut scratch.bound, variables.len())
-        .map_err(Error::Storage)?;
-    scratch.bound.resize(variables.len(), false);
-    // The refusal of the earliest variable whose cell has one.
     let mut refusal: Option<(usize, Error)> = None;
     let result = (|| {
+        memory
+            .reserve(&mut row, variables.len())
+            .map_err(Error::Storage)?;
+        row.resize_with(variables.len(), || None);
+        scratch.bound.clear();
+        memory
+            .reserve(&mut scratch.bound, variables.len())
+            .map_err(Error::Storage)?;
+        scratch.bound.resize(variables.len(), false);
         while let Some(raw) = reader
             .next_key_with_memory(memory)
             .map_err(|error| syntax_with_memory(error, memory))?
@@ -811,35 +1330,46 @@ fn binding_row<'a, S: Admission + ?Sized>(
             let start = reader.offset();
             let cell = binding(reader, &mut scratch.open, memory)?;
             let end = reader.offset();
-            // Move the original cell to its first column. Repeated head names use
-            // the same binding producer over the source span, admitting each actual
-            // copy before birth rather than cloning an unpriced term tree.
-            for column in index..variables.len() {
-                if variables[column] == variables[index] {
-                    scratch.bound[column] = true;
-                    if column != index && cell.is_ok() {
-                        let mut duplicate = Reader::new(&reader.text()[start..end], LIMITS);
-                        let decoded = binding(&mut duplicate, &mut scratch.open, memory);
-                        duplicate
-                            .release_with_memory(memory)
-                            .map_err(Error::Storage)?;
-                        row[column] = Some(decoded??);
-                    }
-                }
-            }
+            let copied = cell.is_ok();
             match cell {
                 Err(error)
                     if refusal
                         .as_ref()
                         .is_none_or(|(earliest, _)| index < *earliest) =>
                 {
-                    if let Some((_, previous)) = refusal.take() {
+                    if let Some((_, previous)) = refusal.replace((index, error)) {
                         release_error(previous, memory)?;
                     }
-                    refusal = Some((index, error));
                 }
                 Ok(term) => row[index] = Some(term),
                 Err(error) => release_error(error, memory)?,
+            }
+            for column in index..variables.len() {
+                if variables[column] == variables[index] {
+                    scratch.bound[column] = true;
+                    if column != index && copied {
+                        let mut duplicate = Reader::new(&reader.text()[start..end], LIMITS);
+                        let decoded = binding(&mut duplicate, &mut scratch.open, memory)
+                            .and_then(|result| result);
+                        let refund = duplicate.release_with_memory(memory);
+                        match (decoded, refund) {
+                            (Ok(term), refund) => {
+                                row[column] = Some(term);
+                                refund.map_err(Error::Storage)?;
+                            }
+                            (Err(error), Ok(())) => return Err(error),
+                            (Err(error), Err(cause)) => {
+                                return retain_plain_result(
+                                    JsonRelease::default(),
+                                    Err(error),
+                                    |_: BindingRow, _| {},
+                                    cause,
+                                )
+                                .map(Ok);
+                            }
+                        }
+                    }
+                }
             }
         }
         Ok(match refusal.take() {
@@ -847,72 +1377,136 @@ fn binding_row<'a, S: Admission + ?Sized>(
             None => Ok(std::mem::take(&mut row)),
         })
     })();
-    release_row(row, memory)?;
+    let mut pending = JsonRelease::new(ReleaseRetained::Row(row));
     if let Some((_, error)) = refusal {
-        release_error(error, memory)?;
+        pending = pending.with_prior(error).0;
     }
-    result
+    finish_cleanup(
+        pending,
+        result,
+        |row, pending| {
+            assert!(
+                pending.row.is_none(),
+                "successful row moved out before cleanup"
+            );
+            pending.row = Some(row);
+        },
+        memory,
+    )
 }
 
 /// A binding object or a triple term's `value` object, open and being read.
-enum Open<'a> {
-    Binding(Box<BindingFields<'a>>),
+#[derive(Debug, PartialEq, Eq)]
+enum Open {
+    Binding(Box<BindingFields>),
     Triple(Box<TripleParts>),
 }
 
 /// The members of a binding object that decide its term: the FIRST member of
 /// each name, `None` when it has none.
-#[derive(Default)]
-struct BindingFields<'a> {
-    kind: Option<Member<'a>>,
-    value: Option<BindingValue<'a>>,
-    language: Option<Member<'a>>,
-    its_dir: Option<Member<'a>>,
-    dir: Option<Member<'a>>,
-    datatype: Option<Member<'a>>,
+#[derive(Debug, Default, PartialEq, Eq)]
+struct BindingFields {
+    kind: Option<Member>,
+    value: Option<BindingValue>,
+    language: Option<Member>,
+    its_dir: Option<Member>,
+    dir: Option<Member>,
+    datatype: Option<Member>,
+    finished: Option<Shaped<TermValue>>,
+}
+
+/// Borrowed lexical fields retain only their original reader-relative body span.
+/// Cleanup never projects a span; normal finish uses the same binding reader text.
+#[derive(Debug, PartialEq, Eq)]
+enum Lexical {
+    Borrowed(Range<usize>),
+    Owned(String),
+}
+
+impl Lexical {
+    fn text<'a>(&'a self, source: &'a str) -> &'a str {
+        match self {
+            Self::Borrowed(span) => &source[span.clone()],
+            Self::Owned(text) => text,
+        }
+    }
+
+    fn own<S: Admission + ?Sized>(
+        &mut self,
+        source: &str,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), Error> {
+        if let Self::Borrowed(span) = self {
+            let text = memory
+                .string(&source[span.clone()])
+                .map_err(Error::Storage)?;
+            *self = Self::Owned(text);
+        }
+        Ok(())
+    }
+
+    fn release<S: Admission + ?Sized>(
+        self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), StorageError> {
+        match self {
+            Self::Borrowed(_) => Ok(()),
+            Self::Owned(text) => memory.release_string(text),
+        }
+    }
 }
 
 /// A binding object's member whose value is a string when it is well formed.
-enum Member<'a> {
-    /// The string.
-    String(Cow<'a, str>),
+#[derive(Debug, PartialEq, Eq)]
+enum Member {
+    /// The original decoded lexical owner or source span.
+    String(Lexical),
     /// A value of another kind.
     Other,
 }
 
-impl<'a> Member<'a> {
+impl Member {
     /// The string, when the member holds one.
-    fn text(member: Option<Self>) -> Option<Cow<'a, str>> {
+    fn text<'a>(member: Option<&'a Self>, source: &'a str) -> Option<&'a str> {
         match member {
-            Some(Self::String(text)) => Some(text),
+            Some(Self::String(text)) => Some(text.text(source)),
             Some(Self::Other) | None => None,
         }
     }
 }
 
 /// A binding object's `value` member.
-enum BindingValue<'a> {
+#[derive(Debug, PartialEq, Eq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "The shared error retains original JSON owners inline without allocating after refusal."
+)]
+enum BindingValue {
     /// A string: an IRI, a label or a lexical form.
-    String(Cow<'a, str>),
+    String(Lexical),
     /// An object, read as a triple term's components whatever the binding's
     /// `type` turns out to be; only a `triple` binding consults them.
     Triple(Box<TripleParts>),
+    /// Original completed result retained across a cleanup refusal.
+    Finished(Shaped<TermValue>),
     /// Anything else.
     Other,
 }
 
 /// A triple term's components: the FIRST `subject`, `predicate` and `object`
 /// member, each decoded or refused, and the one being read.
-#[derive(Default)]
+#[derive(Debug, Default, PartialEq, Eq)]
 struct TripleParts {
     subject: Option<Shaped<TermValue>>,
     predicate: Option<Shaped<TermValue>>,
     object: Option<Shaped<TermValue>>,
     reading: Option<Component>,
+    finished: Option<Shaped<TermValue>>,
+    boxed: [Option<TermBox>; 3],
 }
 
 /// A triple term's component.
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Component {
     Subject,
     Predicate,
@@ -946,111 +1540,124 @@ impl TripleParts {
                 Some(Ok(_)) => {}
             }
         }
-        let s = self.subject.take().expect("the subject exists")?;
-        let p = self.predicate.take().expect("the predicate exists")?;
-        let o = self.object.take().expect("the object exists")?;
-        if !matches!(p, TermValue::Iri(_)) {
-            release_term(s, memory)?;
-            release_term(o, memory)?;
+        if !matches!(self.predicate.as_ref(), Some(Ok(TermValue::Iri(_)))) {
+            let p = self.predicate.take().expect("the predicate exists")?;
             return Err(Error::Format(ReadRefusal {
                 format: crate::SparqlResultsFormat::Json,
                 reason: ReadReason::Predicate(p),
             }));
         }
+        for component in [Component::Subject, Component::Predicate, Component::Object] {
+            let term = self
+                .slot(component)
+                .take()
+                .expect("the checked component exists")?;
+            match memory.boxed_retaining(term) {
+                Ok(value) => self.boxed[component as usize] = Some(value.into()),
+                Err((term, cause)) => {
+                    *self.slot(component) = Some(Ok(term));
+                    return Err(Error::Storage(cause));
+                }
+            }
+        }
         Ok(TermValue::Triple {
-            s: TermBox::try_new(s, memory).map_err(Error::Storage)?,
-            p: TermBox::try_new(p, memory).map_err(Error::Storage)?,
-            o: TermBox::try_new(o, memory).map_err(Error::Storage)?,
+            s: self.boxed[0]
+                .take()
+                .expect("the subject box was constructed"),
+            p: self.boxed[1]
+                .take()
+                .expect("the predicate box was constructed"),
+            o: self.boxed[2]
+                .take()
+                .expect("the object box was constructed"),
         })
     }
 }
 
-impl BindingFields<'_> {
-    /// The term the binding object denotes, or its refusal.
-    fn finish<S: Admission + ?Sized>(&mut self, memory: &mut Memory<'_, S>) -> Shaped<TermValue> {
-        let Some(kind) = Member::text(self.kind.take()) else {
+impl BindingFields {
+    /// Keep every fallible intermediate in its original admitted field. Only
+    /// after all native strings exist do infallible moves assemble the term.
+    fn finish<S: Admission + ?Sized>(
+        &mut self,
+        source: &str,
+        memory: &mut Memory<'_, S>,
+    ) -> Shaped<TermValue> {
+        let Some(kind) = Member::text(self.kind.as_ref(), source) else {
             return Err(fmt_with_memory(ReadShape::BindingType, memory));
         };
-        let result = (|| match kind.as_ref() {
-            "uri" => Ok(TermValue::Iri(binding_text(self.value.take(), memory)?)),
-            "bnode" => Ok(TermValue::Blank {
-                label: binding_text(self.value.take(), memory)?,
-                scope: BlankScope::DEFAULT,
-            }),
+        match kind {
+            "uri" | "bnode" => {
+                let blank = kind == "bnode";
+                own_binding_text(&mut self.value, source, memory)?;
+                let value = take_binding_text(&mut self.value);
+                Ok(if blank {
+                    TermValue::Blank {
+                        label: value,
+                        scope: BlankScope::DEFAULT,
+                    }
+                } else {
+                    TermValue::Iri(value)
+                })
+            }
             "literal" | "typed-literal" => {
-                let lexical_form = binding_text(self.value.take(), memory)?;
-                let language = Member::text(self.language.take());
-                if let Some(lang) = language.as_deref()
-                    && let Some(error) = crate::error::language_tag_refusal(lang)
-                {
-                    let language = owned_text(
-                        language.expect("the refused language member exists"),
-                        memory,
-                    )?;
-                    memory
-                        .release_string(lexical_form)
-                        .map_err(Error::Storage)?;
+                own_binding_text(&mut self.value, source, memory)?;
+                let language = Member::text(self.language.as_ref(), source);
+                if let Some(cause) = language.and_then(crate::error::language_tag_refusal) {
+                    own_member(&mut self.language, source, memory)?;
                     return Err(Error::LanguageTag {
                         format: "SPARQL-JSON",
-                        language,
-                        cause: error,
+                        language: take_member(&mut self.language)
+                            .expect("the rejected language exists"),
+                        cause,
                     });
                 }
-                let direction_token = Member::text(self.its_dir.take().or_else(|| self.dir.take()));
-                let direction = match direction_token.as_deref() {
-                    Some(token) => {
-                        let Some(direction) = RdfTextDirection::from_str_token(token) else {
-                            let error = ReadRefusal::token(
+                let has_language = language.is_some();
+                let selected = if self.its_dir.is_some() {
+                    &mut self.its_dir
+                } else {
+                    &mut self.dir
+                };
+                let direction = match Member::text(selected.as_ref(), source) {
+                    Some(token) => match RdfTextDirection::from_str_token(token) {
+                        Some(direction) => Some(direction),
+                        None => {
+                            return Err(ReadRefusal::token(
                                 crate::SparqlResultsFormat::Json,
                                 ReadToken::Direction,
                                 token,
                                 memory,
-                            );
-                            memory
-                                .release_string(lexical_form)
-                                .map_err(Error::Storage)?;
-                            if let Some(language) = language {
-                                release_text(language, memory)?;
-                            }
-                            if let Some(token) = direction_token {
-                                release_text(token, memory)?;
-                            }
-                            return Err(error);
-                        };
-                        Some(direction)
-                    }
+                            ));
+                        }
+                    },
                     None => None,
                 };
-                if let Some(token) = direction_token {
-                    release_text(token, memory)?;
+                // Preserve the native successful order: release the selected
+                // direction token before datatype construction, then own language.
+                if let Some(Member::String(text)) = selected.take() {
+                    text.release(memory).map_err(Error::Storage)?;
                 }
-                let datatype = Member::text(self.datatype.take());
-                let datatype = match datatype {
-                    Some(value) => owned_text(value, memory)?,
-                    None => {
-                        resolve_datatype(None, language.is_some(), direction.is_some(), memory)?
-                    }
-                };
+                if Member::text(self.datatype.as_ref(), source).is_some() {
+                    own_member(&mut self.datatype, source, memory)?;
+                } else {
+                    let datatype =
+                        resolve_datatype(None, has_language, direction.is_some(), memory)?;
+                    self.datatype = Some(Member::String(Lexical::Owned(datatype)));
+                }
+                own_member(&mut self.language, source, memory)?;
                 Ok(TermValue::Literal {
-                    lexical_form,
-                    datatype,
-                    language: language.map(|lang| owned_text(lang, memory)).transpose()?,
+                    lexical_form: take_binding_text(&mut self.value),
+                    datatype: take_member(&mut self.datatype).expect("the native datatype exists"),
+                    language: take_member(&mut self.language),
                     direction,
                 })
             }
             "triple" => match self.value.take() {
                 Some(BindingValue::Triple(mut parts)) => {
                     let term = parts.finish(memory);
-                    release_parts(*parts, memory)?;
-                    memory
-                        .release_bytes(size_of::<TripleParts>())
-                        .map_err(Error::Storage)?;
-                    term
+                    release_finished_parts(parts, term, memory)
                 }
                 value => {
-                    if let Some(value) = value {
-                        release_binding_value(value, memory)?;
-                    }
+                    self.value = value;
                     Err(fmt_with_memory(ReadShape::TripleValue, memory))
                 }
             },
@@ -1060,18 +1667,55 @@ impl BindingFields<'_> {
                 other,
                 memory,
             )),
-        })();
-        release_text(kind, memory)?;
-        result
+        }
+    }
+}
+
+fn own_member<S: Admission + ?Sized>(
+    member: &mut Option<Member>,
+    source: &str,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), Error> {
+    if let Some(Member::String(text)) = member {
+        text.own(source, memory)?;
+    }
+    Ok(())
+}
+
+fn take_member(member: &mut Option<Member>) -> Option<String> {
+    match member.take() {
+        Some(Member::String(Lexical::Owned(text))) => Some(text),
+        Some(Member::String(Lexical::Borrowed(_))) => {
+            unreachable!("the native field was owned before assembly")
+        }
+        _ => None,
+    }
+}
+
+fn own_binding_text<S: Admission + ?Sized>(
+    value: &mut Option<BindingValue>,
+    source: &str,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), Error> {
+    match value {
+        Some(BindingValue::String(text)) => text.own(source, memory),
+        _ => Err(fmt_with_memory(ReadShape::BindingValue, memory)),
+    }
+}
+
+fn take_binding_text(value: &mut Option<BindingValue>) -> String {
+    match value.take() {
+        Some(BindingValue::String(Lexical::Owned(text))) => text,
+        _ => unreachable!("the native lexical field was owned before assembly"),
     }
 }
 
 /// A member's value, the cursor on it: the string it holds, or
 /// [`Member::Other`] once a value of another kind has been checked.
-fn string_member<'a, S: Admission + ?Sized>(
-    reader: &mut Reader<'a>,
+fn string_member<S: Admission + ?Sized>(
+    reader: &mut Reader<'_>,
     memory: &mut Memory<'_, S>,
-) -> Result<Member<'a>, Error> {
+) -> Result<Member, Error> {
     if reader.peek_kind() == Some(Kind::String) {
         let Event::String(text) = reader
             .next_event_with_memory(memory)
@@ -1079,9 +1723,15 @@ fn string_member<'a, S: Admission + ?Sized>(
         else {
             unreachable!("a string begins at the cursor");
         };
+        let span = text.span();
         return text
             .decode_with_memory(memory)
-            .map(Member::String)
+            .map(|text| {
+                Member::String(match text {
+                    Cow::Borrowed(_) => Lexical::Borrowed(span),
+                    Cow::Owned(text) => Lexical::Owned(text),
+                })
+            })
             .map_err(|error| syntax_with_memory(error, memory));
     }
     reader
@@ -1100,9 +1750,9 @@ fn string_member<'a, S: Admission + ?Sized>(
 /// come in any order, so each object is read whole before it is judged: a
 /// `value` object is read as a triple term's components before the `type` that
 /// says whether it is one may have been seen.
-fn binding<'a, S: Admission + ?Sized>(
-    reader: &mut Reader<'a>,
-    open: &mut Vec<Open<'a>>,
+fn binding<S: Admission + ?Sized>(
+    reader: &mut Reader<'_>,
+    open: &mut Vec<Open>,
     memory: &mut Memory<'_, S>,
 ) -> Step<TermValue> {
     open.clear();
@@ -1126,12 +1776,16 @@ fn binding<'a, S: Admission + ?Sized>(
             // it, or it is the binding.
             match open.pop().expect("an object is open") {
                 Open::Binding(mut fields) => {
-                    let term = fields.finish(memory);
-                    release_fields(&mut fields, memory)?;
-                    drop(fields);
-                    memory
-                        .release_bytes(size_of::<BindingFields<'_>>())
-                        .map_err(Error::Storage)?;
+                    let term = fields.finish(reader.text(), memory);
+                    let term = release_finished_fields(fields, term, memory)?;
+                    let term = match term {
+                        Err(
+                            error @ (Error::Storage(_)
+                            | Error::TermRelease { .. }
+                            | Error::JsonRelease { .. }),
+                        ) => return Err(error),
+                        term => term,
+                    };
                     match open.last_mut() {
                         None => return Ok(term),
                         Some(Open::Triple(parts)) => {
@@ -1275,71 +1929,129 @@ fn release_text<S: Admission + ?Sized>(
     }
 }
 
-fn binding_text<S: Admission + ?Sized>(
-    value: Option<BindingValue<'_>>,
-    memory: &mut Memory<'_, S>,
-) -> Result<String, Error> {
-    match value {
-        Some(BindingValue::String(text)) => owned_text(text, memory),
-        value => {
-            if let Some(value) = value {
-                release_binding_value(value, memory)?;
-            }
-            Err(fmt_with_memory(ReadShape::BindingValue, memory))
-        }
-    }
-}
-
 fn release_error<S: Admission + ?Sized>(
     error: Error,
     memory: &mut Memory<'_, S>,
 ) -> Result<(), Error> {
-    match error {
-        Error::Format(ReadRefusal { format: _, reason }) => match reason {
-            ReadReason::Shape(_) => Ok(()),
-            ReadReason::Token { token, .. } => memory.release_string(token).map_err(Error::Storage),
-            ReadReason::Predicate(term) => release_term(term, memory),
-        },
-        Error::LanguageTag { language, .. } => {
-            memory.release_string(language).map_err(Error::Storage)
+    match NativePrimary::from_error(error) {
+        Ok(native) => {
+            native
+                .release_with_memory(memory)
+                .map_err(|(retained, cause)| match retained {
+                    Some(native) => {
+                        let (owner, original) =
+                            JsonRelease::default().with_prior(native.into_error());
+                        Error::JsonRelease {
+                            owner,
+                            cause: original.unwrap_or(cause),
+                        }
+                    }
+                    None => Error::Storage(cause),
+                })
         }
-        // A write failure belongs to its original destination owner. The JSON
-        // reader creates no destination payload under this parsing account.
-        Error::Storage(_)
-        | Error::Write { .. }
-        | Error::Json(_)
-        | Error::XmlCharacter(_)
-        | Error::XmlSyntax { .. }
-        | Error::Utf8 { .. }
-        | Error::InvalidNamespace(_)
-        | Error::MalformedTerm(_)
-        | Error::UnsupportedResult { .. }
-        | Error::TsvHeader { .. } => Ok(()),
+        Err((owner, original)) => owner
+            .release_with_memory(memory)
+            .map_err(|error| original_release_cause(error, original)),
     }
 }
 
-/// Release an original parser vector and each independently admitted payload.
+fn original_release_cause(error: Error, original: StorageError) -> Error {
+    match error {
+        Error::TermRelease { term, .. } => Error::TermRelease {
+            term,
+            cause: original,
+        },
+        Error::JsonRelease { owner, .. } => Error::JsonRelease {
+            owner,
+            cause: original,
+        },
+        Error::Storage(_) => Error::Storage(original),
+        error => error,
+    }
+}
+
+/// Pop only after reserving each original slot for restoration on failure.
+/// A popped value leaves spare capacity, so restoring it cannot allocate.
 fn release_items<T, S: Admission + ?Sized>(
     mut items: Vec<T>,
     memory: &mut Memory<'_, S>,
-    mut release: impl FnMut(T, &mut Memory<'_, S>) -> Result<(), Error>,
-) -> Result<(), Error> {
-    // Keep the original allocation for Memory::release_vec to destroy and refund.
-    // IntoIter would consume it before that capacity-accounting boundary.
-    #[allow(clippy::iter_with_drain)]
-    for item in items.drain(..).rev() {
-        release(item, memory)?;
+    mut release: impl FnMut(T, &mut Memory<'_, S>) -> Result<(), (Option<T>, StorageError)>,
+) -> Result<(), (Vec<T>, StorageError)> {
+    while let Some(item) = items.pop() {
+        if let Err((retained, cause)) = release(item, memory) {
+            if let Some(item) = retained {
+                // The successful pop left this exact admitted slot vacant.
+                items.push(item);
+            }
+            return Err((items, cause));
+        }
     }
-    memory.release_vec(items).map_err(Error::Storage)
+    memory
+        .release_vec(items)
+        .map_err(|cause| (Vec::new(), cause))
+}
+
+fn retained_release(retained: ReleaseRetained, cause: StorageError) -> Error {
+    Error::JsonRelease {
+        owner: JsonRelease::new(retained),
+        cause,
+    }
+}
+
+fn release_strings<S: Admission + ?Sized>(
+    strings: Vec<String>,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), Error> {
+    release_items(strings, memory, |text, memory| {
+        memory.release_string(text).map_err(|cause| (None, cause))
+    })
+    .map_err(|(strings, cause)| {
+        if strings.capacity() == 0 {
+            Error::Storage(cause)
+        } else {
+            retained_release(ReleaseRetained::Strings(strings), cause)
+        }
+    })
+}
+
+fn release_row_owned<S: Admission + ?Sized>(
+    row: BindingRow,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), (BindingRow, StorageError)> {
+    release_items(row, memory, |term, memory| match term {
+        Some(term) => term
+            .release_with_memory(memory)
+            .map_err(|(term, cause)| (term.map(Some), cause)),
+        None => Ok(()),
+    })
 }
 
 fn release_row<S: Admission + ?Sized>(
     row: BindingRow,
     memory: &mut Memory<'_, S>,
 ) -> Result<(), Error> {
-    release_items(row, memory, |term, memory| match term {
-        Some(term) => release_term(term, memory),
-        None => Ok(()),
+    release_row_owned(row, memory).map_err(|(row, cause)| {
+        if row.capacity() == 0 {
+            Error::Storage(cause)
+        } else {
+            retained_release(ReleaseRetained::Row(row), cause)
+        }
+    })
+}
+
+fn release_rows<S: Admission + ?Sized>(
+    rows: Vec<BindingRow>,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), Error> {
+    release_items(rows, memory, |row, memory| {
+        release_row_owned(row, memory).map_err(|(row, cause)| (Some(row), cause))
+    })
+    .map_err(|(rows, cause)| {
+        if rows.capacity() == 0 {
+            Error::Storage(cause)
+        } else {
+            retained_release(ReleaseRetained::Rows(rows), cause)
+        }
     })
 }
 
@@ -1347,87 +2059,246 @@ fn release_term<S: Admission + ?Sized>(
     term: TermValue,
     memory: &mut Memory<'_, S>,
 ) -> Result<(), Error> {
-    term.release_with_memory(memory).map_err(Error::Storage)
+    term.release_with_memory(memory)
+        .map_err(|(term, cause)| Error::TermRelease { term, cause })
+}
+
+/// Recover the physical cause from these sealed native cleanup paths.
+fn cleanup_cause(error: &Error) -> StorageError {
+    match error {
+        Error::Storage(cause)
+        | Error::TermRelease { cause, .. }
+        | Error::JsonRelease { cause, .. } => *cause,
+        _ => unreachable!("native cleanup returns a physical refusal"),
+    }
+}
+
+fn release_shaped<S: Admission + ?Sized>(
+    slot: &mut Option<Shaped<TermValue>>,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), StorageError> {
+    match slot.take() {
+        None => Ok(()),
+        Some(Ok(term)) => match term.release_with_memory(memory) {
+            Ok(()) => Ok(()),
+            Err((term, cause)) => {
+                *slot = term.map(Ok);
+                Err(cause)
+            }
+        },
+        Some(Err(error)) => match release_error(error, memory) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                let cause = cleanup_cause(&error);
+                *slot = Some(Err(error));
+                Err(cause)
+            }
+        },
+    }
+}
+
+fn release_parts_contents<S: Admission + ?Sized>(
+    parts: &mut TripleParts,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), StorageError> {
+    for component in [Component::Subject, Component::Predicate, Component::Object] {
+        if let Some(value) = parts.boxed[component as usize].take() {
+            // The original edge allocation dies before its exact box grant is
+            // refunded; the unboxed payload stays in its original component slot.
+            *parts.slot(component) = Some(Ok(value.into_inner()));
+            memory.release_bytes(size_of::<TermValue>())?;
+        }
+        release_shaped(parts.slot(component), memory)?;
+    }
+    release_shaped(&mut parts.finished, memory)
 }
 
 fn release_parts<S: Admission + ?Sized>(
-    parts: TripleParts,
+    mut parts: Box<TripleParts>,
     memory: &mut Memory<'_, S>,
 ) -> Result<(), Error> {
-    for term in [parts.subject, parts.predicate, parts.object]
-        .into_iter()
-        .flatten()
-    {
-        match term {
-            Ok(term) => release_term(term, memory)?,
-            Err(error) => release_error(error, memory)?,
+    if let Err(cause) = release_parts_contents(&mut parts, memory) {
+        return Err(retained_release(ReleaseRetained::Parts(parts), cause));
+    }
+    drop(parts);
+    memory
+        .release_bytes(size_of::<TripleParts>())
+        .map_err(Error::Storage)
+}
+
+/// A completed result remains owned across the original container's cleanup.
+fn release_finished_parts<S: Admission + ?Sized>(
+    mut parts: Box<TripleParts>,
+    result: Shaped<TermValue>,
+    memory: &mut Memory<'_, S>,
+) -> Shaped<TermValue> {
+    let result = match result {
+        Err(
+            error @ (Error::Storage(_) | Error::TermRelease { .. } | Error::JsonRelease { .. }),
+        ) => {
+            let cause = cleanup_cause(&error);
+            parts.finished = Some(Err(error));
+            return Err(retained_release(ReleaseRetained::Parts(parts), cause));
+        }
+        result => result,
+    };
+    if let Err(cause) = release_parts_contents(&mut parts, memory) {
+        parts.finished = Some(result);
+        return Err(retained_release(ReleaseRetained::Parts(parts), cause));
+    }
+    drop(parts);
+    retain_finished_result(result, memory.release_bytes(size_of::<TripleParts>()))
+}
+
+fn retain_finished_result(
+    result: Shaped<TermValue>,
+    refund: Result<(), StorageError>,
+) -> Shaped<TermValue> {
+    match refund {
+        Ok(()) => result,
+        Err(cause) => {
+            let mut owner = JsonRelease::default();
+            let cause = match result {
+                Ok(term) => {
+                    owner.term = Some(term);
+                    cause
+                }
+                Err(error) => {
+                    let (retained, original_physical) = owner.with_prior(error);
+                    owner = retained;
+                    original_physical.unwrap_or(cause)
+                }
+            };
+            Err(Error::JsonRelease { owner, cause })
         }
     }
-    Ok(())
 }
 
 fn release_binding_value<S: Admission + ?Sized>(
-    value: BindingValue<'_>,
+    value: BindingValue,
     memory: &mut Memory<'_, S>,
 ) -> Result<(), Error> {
     match value {
-        BindingValue::String(text) => release_text(text, memory),
-        BindingValue::Triple(parts) => {
-            release_parts(*parts, memory)?;
-            memory
-                .release_bytes(size_of::<TripleParts>())
-                .map_err(Error::Storage)
-        }
+        BindingValue::String(text) => text.release(memory).map_err(Error::Storage),
+        BindingValue::Triple(parts) => release_parts(parts, memory),
+        BindingValue::Finished(Ok(term)) => release_term(term, memory),
+        BindingValue::Finished(Err(error)) => release_error(error, memory),
         BindingValue::Other => Ok(()),
     }
 }
 
 fn release_fields<S: Admission + ?Sized>(
-    fields: &mut BindingFields<'_>,
+    fields: &mut BindingFields,
     memory: &mut Memory<'_, S>,
-) -> Result<(), Error> {
-    for member in [
-        fields.kind.take(),
-        fields.language.take(),
-        fields.its_dir.take(),
-        fields.dir.take(),
-        fields.datatype.take(),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        if let Member::String(text) = member {
-            release_text(text, memory)?;
+) -> Result<(), StorageError> {
+    for slot in [
+        &mut fields.kind,
+        &mut fields.language,
+        &mut fields.its_dir,
+        &mut fields.dir,
+        &mut fields.datatype,
+    ] {
+        if let Some(Member::String(text)) = slot.take() {
+            text.release(memory)?;
         }
     }
-    if let Some(value) = fields.value.take() {
-        release_binding_value(value, memory)?;
+    if let Some(value) = fields.value.take()
+        && let Err(error) = release_binding_value(value, memory)
+    {
+        let cause = cleanup_cause(&error);
+        fields.value = Some(BindingValue::Finished(Err(error)));
+        return Err(cause);
     }
-    Ok(())
+    release_shaped(&mut fields.finished, memory)
+}
+
+fn release_binding<S: Admission + ?Sized>(
+    mut fields: Box<BindingFields>,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), Error> {
+    if let Err(cause) = release_fields(&mut fields, memory) {
+        return Err(retained_release(ReleaseRetained::Binding(fields), cause));
+    }
+    drop(fields);
+    memory
+        .release_bytes(size_of::<BindingFields>())
+        .map_err(Error::Storage)
+}
+
+fn release_finished_fields<S: Admission + ?Sized>(
+    mut fields: Box<BindingFields>,
+    result: Shaped<TermValue>,
+    memory: &mut Memory<'_, S>,
+) -> Result<Shaped<TermValue>, Error> {
+    let result = match result {
+        Err(
+            error @ (Error::Storage(_) | Error::TermRelease { .. } | Error::JsonRelease { .. }),
+        ) => {
+            let cause = cleanup_cause(&error);
+            if fields.finished.is_none() {
+                fields.finished = Some(Err(error));
+            } else {
+                // Only the kind-string refund can leave a completed result here;
+                // its returned primitive cause owns no additional payload.
+                assert!(
+                    matches!(error, Error::Storage(_)),
+                    "kind refund returns an inline cause"
+                );
+            }
+            return Err(retained_release(ReleaseRetained::Binding(fields), cause));
+        }
+        result => result,
+    };
+    if let Err(cause) = release_fields(&mut fields, memory) {
+        fields.finished = Some(result);
+        return Err(retained_release(ReleaseRetained::Binding(fields), cause));
+    }
+    drop(fields);
+    let refund = memory.release_bytes(size_of::<BindingFields>());
+    match refund {
+        Ok(()) => Ok(result),
+        Err(cause) => Err(retain_finished_result(result, Err(cause))
+            .expect_err("a refused refund retains its original result")),
+    }
 }
 
 fn release_scratch<S: Admission + ?Sized>(
-    mut scratch: RowScratch<'_>,
+    mut scratch: RowScratch,
     memory: &mut Memory<'_, S>,
 ) -> Result<(), Error> {
     while let Some(open) = scratch.open.pop() {
-        match open {
-            Open::Binding(mut fields) => {
-                release_fields(&mut fields, memory)?;
-                drop(fields);
-                memory
-                    .release_bytes(size_of::<BindingFields<'_>>())
-                    .map_err(Error::Storage)?;
+        let result = match open {
+            Open::Binding(mut fields) => match release_fields(&mut fields, memory) {
+                Err(cause) => Err((Some(Open::Binding(fields)), cause)),
+                Ok(()) => {
+                    drop(fields);
+                    memory
+                        .release_bytes(size_of::<BindingFields>())
+                        .map_err(|cause| (None, cause))
+                }
+            },
+            Open::Triple(mut parts) => match release_parts_contents(&mut parts, memory) {
+                Err(cause) => Err((Some(Open::Triple(parts)), cause)),
+                Ok(()) => {
+                    drop(parts);
+                    memory
+                        .release_bytes(size_of::<TripleParts>())
+                        .map_err(|cause| (None, cause))
+                }
+            },
+        };
+        if let Err((retained, cause)) = result {
+            if let Some(open) = retained {
+                // Pop reserved this original slot; restoring it cannot allocate.
+                scratch.open.push(open);
             }
-            Open::Triple(parts) => {
-                release_parts(*parts, memory)?;
-                memory
-                    .release_bytes(size_of::<TripleParts>())
-                    .map_err(Error::Storage)?;
-            }
+            return Err(retained_release(ReleaseRetained::Scratch(scratch), cause));
         }
     }
-    memory.release_vec(scratch.open).map_err(Error::Storage)?;
+    let open = std::mem::take(&mut scratch.open);
+    if let Err(cause) = memory.release_vec(open) {
+        return Err(retained_release(ReleaseRetained::Scratch(scratch), cause));
+    }
     memory.release_vec(scratch.bound).map_err(Error::Storage)
 }
 
@@ -1536,16 +2407,28 @@ fn head_variables<S: Admission + ?Sized>(
 ) -> Result<Vec<String>, Error> {
     open_object(reader, ReadShape::Head, memory)?;
     let mut variables = None;
-    while let Some(key) = next_key(reader, memory)? {
-        if key == "vars" && variables.is_none() && reader.peek_kind() == Some(Kind::Array) {
-            variables = Some(string_array(reader, ReadShape::Variable, memory)?);
-        } else {
-            reader
-                .skip_value_with_memory(memory)
-                .map_err(|error| syntax_with_memory(error, memory))?;
+    let result = (|| {
+        while let Some(key) = next_key(reader, memory)? {
+            if key == "vars" && variables.is_none() && reader.peek_kind() == Some(Kind::Array) {
+                variables = Some(string_array(reader, ReadShape::Variable, memory)?);
+            } else {
+                reader
+                    .skip_value_with_memory(memory)
+                    .map_err(|error| syntax_with_memory(error, memory))?;
+            }
         }
-    }
-    Ok(variables.unwrap_or_default())
+        Ok(variables.take().unwrap_or_default())
+    })();
+    let pending = JsonRelease {
+        strings: variables,
+        ..JsonRelease::default()
+    };
+    finish_plain(
+        pending,
+        result,
+        |strings, pending| pending.strings = Some(strings),
+        memory,
+    )
 }
 
 /// Read a string-only JSON array.
@@ -1556,6 +2439,7 @@ fn string_array<S: Admission + ?Sized>(
 ) -> Result<Vec<String>, Error> {
     open_array(reader, ReadShape::Array, memory)?;
     let mut items = Vec::new();
+    let mut text = None;
     let result = (|| {
         while reader
             .next_item()
@@ -1569,18 +2453,25 @@ fn string_array<S: Admission + ?Sized>(
                     let decoded = item
                         .decode_with_memory(memory)
                         .map_err(|error| syntax_with_memory(error, memory))?;
-                    let text = owned_text(decoded, memory)?;
-                    memory.push(&mut items, text).map_err(Error::Storage)?;
+                    text = Some(owned_text(decoded, memory)?);
+                    memory
+                        .reserve_for_push(&mut items)
+                        .map_err(Error::Storage)?;
+                    items.push(text.take().expect("the decoded original string exists"));
                 }
                 _ => return Err(fmt_with_memory(item_error, memory)),
             }
         }
         Ok(std::mem::take(&mut items))
     })();
-    release_items(items, memory, |text, memory| {
-        memory.release_string(text).map_err(Error::Storage)
-    })?;
-    result
+    let mut pending = JsonRelease::new(ReleaseRetained::Strings(items));
+    pending.text = text;
+    finish_plain(
+        pending,
+        result,
+        |strings, pending| pending.strings = Some(strings),
+        memory,
+    )
 }
 
 /// Read the first `bindings` array in a `results` object through a bounded sink.
@@ -1591,17 +2482,31 @@ fn bounded_results<S: Admission + ?Sized>(
     memory: &mut Memory<'_, S>,
 ) -> BoundedRowsResult {
     open_object(reader, ReadShape::Results, memory)?;
-    let mut result = None;
-    while let Some(key) = next_key(reader, memory)? {
-        if key == "bindings" && result.is_none() {
-            result = Some(bounded_binding_array(reader, variables, row_limit, memory)?);
-        } else {
-            reader
-                .skip_value_with_memory(memory)
-                .map_err(|error| syntax_with_memory(error, memory))?;
+    let mut found = None;
+    let result = (|| {
+        while let Some(key) = next_key(reader, memory)? {
+            if key == "bindings" && found.is_none() {
+                found = Some(bounded_binding_array(reader, variables, row_limit, memory)?);
+            } else {
+                reader
+                    .skip_value_with_memory(memory)
+                    .map_err(|error| syntax_with_memory(error, memory))?;
+            }
         }
+        found
+            .take()
+            .ok_or_else(|| fmt_with_memory(ReadShape::Bindings, memory))
+    })();
+    let mut pending = JsonRelease::default();
+    if let Some((rows, _)) = found {
+        pending.rows = Some(rows);
     }
-    result.ok_or_else(|| fmt_with_memory(ReadShape::Bindings, memory))
+    finish_plain(
+        pending,
+        result,
+        |(rows, _), pending| pending.rows = Some(rows),
+        memory,
+    )
 }
 
 /// Decode the prefix of a bindings array that fits `row_limit`, then syntax-scan the
@@ -1614,6 +2519,7 @@ fn bounded_binding_array<S: Admission + ?Sized>(
 ) -> BoundedRowsResult {
     open_array(reader, ReadShape::Bindings, memory)?;
     let mut rows = Vec::new();
+    let mut current = None;
     let mut truncated = false;
     let mut scratch = RowScratch::default();
     let result = (|| {
@@ -1622,8 +2528,9 @@ fn bounded_binding_array<S: Admission + ?Sized>(
             .map_err(|error| syntax_with_memory(error, memory))?
         {
             if row_limit.is_none_or(|limit| rows.len() < limit) {
-                let row = binding_row(reader, variables, &mut scratch, memory)??;
-                memory.push(&mut rows, row).map_err(Error::Storage)?;
+                current = Some(binding_row(reader, variables, &mut scratch, memory)??);
+                memory.reserve_for_push(&mut rows).map_err(Error::Storage)?;
+                rows.push(current.take().expect("the decoded original row exists"));
             } else {
                 truncated = true;
                 reader
@@ -1633,9 +2540,15 @@ fn bounded_binding_array<S: Admission + ?Sized>(
         }
         Ok((std::mem::take(&mut rows), truncated))
     })();
-    release_items(rows, memory, release_row)?;
-    release_scratch(scratch, memory)?;
-    result
+    let mut pending = JsonRelease::new(ReleaseRetained::Rows(rows));
+    pending.row = current;
+    pending.scratch = Some(scratch);
+    finish_plain(
+        pending,
+        result,
+        |(rows, _), pending| pending.rows = Some(rows),
+        memory,
+    )
 }
 
 #[cfg(test)]
@@ -2449,11 +3362,22 @@ mod tests {
             live: usize,
             peak: usize,
             limit: usize,
+            growths: usize,
+            refuse_at: Option<usize>,
+            refused: bool,
+            later_growths: usize,
         }
         impl Admission for Grant {
             fn resize(&mut self, bytes: usize) -> Result<(), StorageError> {
-                if bytes > self.limit {
-                    return Err(StorageError::AdmissionFailed);
+                if bytes > self.live {
+                    self.growths += 1;
+                    if self.refused {
+                        self.later_growths += 1;
+                    }
+                    if self.refused || self.refuse_at == Some(self.growths) || bytes > self.limit {
+                        self.refused = true;
+                        return Err(StorageError::AdmissionFailed);
+                    }
                 }
                 self.live = bytes;
                 self.peak = self.peak.max(bytes);
@@ -2478,6 +3402,7 @@ mod tests {
             };
             let mut memory = Memory::new(&mut grant);
             let parsed = from_json_with_memory(bytes, ceiling, &mut memory).expect("native SELECT");
+            let decoder_growths = memory.admission_mut().growths;
             assert!(!parsed.truncated);
             assert_eq!(parsed.solutions, from_json(bytes).expect("resident parity"));
             assert_eq!(parsed.solutions.rows[0][0], parsed.solutions.rows[0][1]);
@@ -2535,6 +3460,40 @@ mod tests {
             assert_eq!(memory.admitted_bytes(), 0);
             assert_eq!(grant.live, 0);
             assert!(grant.peak >= expected);
+
+            // Every native growth cut exercises the actual staged Strings,
+            // rows, duplicate readers, literal fields and partial child boxes.
+            for cut in 1..=decoder_growths {
+                let mut grant = Grant {
+                    limit: 1 << 20,
+                    ..Grant::default()
+                };
+                let mut memory = Memory::new(&mut grant);
+                let parent = memory.string("healthy-original-parent").unwrap();
+                let baseline = memory.admitted_bytes();
+                memory.admission_mut().refuse_at = Some(cut + 1);
+                let error = from_json_with_memory(bytes, ceiling, &mut memory)
+                    .expect_err("the selected original growth refuses");
+                assert_eq!(
+                    memory.admission_mut().later_growths,
+                    0,
+                    "no allocation or census follows the first physical refusal"
+                );
+                assert_eq!(parent, "healthy-original-parent");
+                memory.admission_mut().refused = false;
+                memory.admission_mut().refuse_at = None;
+                match error {
+                    ReadError::Lexical(error) => release_error(error, &mut memory).unwrap(),
+                    ReadError::Storage(cause) => assert_eq!(cause, StorageError::AdmissionFailed),
+                }
+                assert_eq!(
+                    memory.admitted_bytes(),
+                    baseline,
+                    "all failed decoder owners release under their original account"
+                );
+                memory.release_string(parent).unwrap();
+                assert_eq!(memory.admitted_bytes(), 0);
+            }
         }
     }
 
@@ -2621,6 +3580,276 @@ mod tests {
                 memory.release_string(original).unwrap();
                 assert_eq!(memory.admitted_bytes(), 0);
             }
+        }
+
+        // Cleanup refusal retains the failed term and every untouched row,
+        // component and original container allocation. A scalar neighbor can
+        // still be released without asking for traversal growth.
+        struct Grant<'a> {
+            live: usize,
+            refuse_growth: &'a std::cell::Cell<bool>,
+            refused: &'a std::cell::Cell<usize>,
+        }
+        impl Admission for Grant<'_> {
+            fn resize(&mut self, next: usize) -> Result<(), StorageError> {
+                if next > self.live && self.refuse_growth.get() {
+                    self.refused.set(self.refused.get() + 1);
+                    return Err(StorageError::AdmissionFailed);
+                }
+                self.live = next;
+                Ok(())
+            }
+        }
+        let refuse_growth = std::cell::Cell::new(false);
+        let refused = std::cell::Cell::new(0);
+        let mut grant = Grant {
+            live: 0,
+            refuse_growth: &refuse_growth,
+            refused: &refused,
+        };
+        let mut memory = Memory::new(&mut grant);
+        let source = TermValue::Triple {
+            s: TermValue::iri("subject").into(),
+            p: TermValue::iri("predicate").into(),
+            o: TermValue::iri("object").into(),
+        };
+        for container in ["rows", "parts", "scratch"] {
+            let term = source
+                .try_clone_with_memory(&mut memory, |_| Ok::<_, std::convert::Infallible>(()))
+                .unwrap();
+            let neighbor = TermValue::Iri(memory.string("healthy-neighbor").unwrap());
+            let residual = if container == "rows" {
+                let mut first = Vec::new();
+                let first_term = TermValue::Iri(memory.string("first-row").unwrap());
+                memory.push(&mut first, Some(first_term)).unwrap();
+                let mut last = Vec::new();
+                let remaining_term = TermValue::Iri(memory.string("remaining-column").unwrap());
+                memory.push(&mut last, Some(remaining_term)).unwrap();
+                memory.push(&mut last, Some(term)).unwrap();
+                let mut rows = Vec::new();
+                memory.push(&mut rows, first).unwrap();
+                memory.push(&mut rows, last).unwrap();
+                ReleaseRetained::Rows(rows)
+            } else {
+                let predicate = TermValue::Iri(memory.string("remaining-predicate").unwrap());
+                let object = TermValue::Iri(memory.string("remaining-object").unwrap());
+                let original_error = ReadRefusal::token(
+                    crate::SparqlResultsFormat::Json,
+                    ReadToken::BindingType,
+                    "original-component-kind",
+                    &mut memory,
+                );
+                let parts = memory
+                    .boxed(TripleParts {
+                        subject: Some(Ok(term)),
+                        predicate: Some(Ok(predicate)),
+                        object: Some(Ok(object)),
+                        reading: None,
+                        finished: Some(Err(original_error)),
+                        boxed: [None, None, None],
+                    })
+                    .unwrap();
+                if container == "parts" {
+                    ReleaseRetained::Parts(parts)
+                } else {
+                    let text = memory.string("original-owned-metadata").unwrap();
+                    let fields = memory
+                        .boxed(BindingFields {
+                            // Cleanup must not project a span or require the original source.
+                            kind: Some(Member::String(Lexical::Borrowed(
+                                usize::MAX - 1..usize::MAX,
+                            ))),
+                            datatype: Some(Member::String(Lexical::Owned(text))),
+                            ..BindingFields::default()
+                        })
+                        .unwrap();
+                    let mut open = Vec::new();
+                    memory.push(&mut open, Open::Binding(fields)).unwrap();
+                    memory.push(&mut open, Open::Triple(parts)).unwrap();
+                    let mut bound = Vec::new();
+                    memory.push(&mut bound, true).unwrap();
+                    ReleaseRetained::Scratch(RowScratch { open, bound })
+                }
+            };
+            let pending = JsonRelease::new(residual);
+            let semantic = if container == "rows" {
+                Some(ReadRefusal::token(
+                    crate::SparqlResultsFormat::Json,
+                    ReadToken::BindingType,
+                    "original-row-kind",
+                    &mut memory,
+                ))
+            } else {
+                None
+            };
+            let expected_primary = semantic.as_ref().map_or_else(
+                || format_error("unknown binding type `original-component-kind`"),
+                ToString::to_string,
+            );
+            let baseline = memory.admitted_bytes();
+            refuse_growth.set(true);
+            let before_refusal = refused.get();
+            let error = if let Some(semantic) = semantic {
+                finish_cleanup(pending, Ok(Err(semantic)), |(): (), _| {}, &mut memory).unwrap_err()
+            } else {
+                pending.release_with_memory(&mut memory).unwrap_err()
+            };
+            assert_eq!(
+                error.to_string(),
+                expected_primary,
+                "the original semantic refusal remains primary"
+            );
+            assert_eq!(
+                memory.admitted_bytes(),
+                baseline,
+                "no retained payload or backing credit was lost"
+            );
+            assert_eq!(
+                refused.get() - before_refusal,
+                1,
+                "cleanup starts no later census after the first refusal"
+            );
+            assert_eq!(
+                purrdf_testkit::error_capture::Capture::read(&error)
+                    .child("cause")
+                    .code,
+                "sparql-results-format"
+            );
+            let Error::JsonRelease { owner, cause } = error else {
+                panic!("the original residual owner survives");
+            };
+            assert_eq!(cause, StorageError::AdmissionFailed);
+            match (&owner.rows, &owner.frame) {
+                (Some(rows), _) => {
+                    assert_eq!(rows.len(), 2);
+                    assert_eq!(rows[0][0], Some(TermValue::iri("first-row")));
+                    assert_eq!(rows[1].len(), 2);
+                    assert_eq!(rows[1][0], Some(TermValue::iri("remaining-column")));
+                    assert_eq!(rows[1][1], Some(source.clone()));
+                    assert!(
+                        rows.capacity() >= 2 && rows[0].capacity() >= 1 && rows[1].capacity() >= 2
+                    );
+                }
+                (_, Some(Open::Triple(parts))) => {
+                    assert_eq!(parts.subject.as_ref().unwrap().as_ref().unwrap(), &source);
+                    assert_eq!(
+                        parts.predicate.as_ref().unwrap().as_ref().unwrap(),
+                        &TermValue::iri("remaining-predicate")
+                    );
+                    assert_eq!(
+                        parts.object.as_ref().unwrap().as_ref().unwrap(),
+                        &TermValue::iri("remaining-object")
+                    );
+                }
+                _ if owner.scratch.is_some() => {
+                    let scratch = owner.scratch.as_ref().unwrap();
+                    assert_eq!(scratch.open.len(), 2);
+                    assert_eq!(scratch.bound, [true]);
+                    let Open::Binding(fields) = &scratch.open[0] else {
+                        panic!("the original parent frame survives");
+                    };
+                    assert!(matches!(
+                        fields.kind,
+                        Some(Member::String(Lexical::Borrowed(_)))
+                    ));
+                    assert!(matches!(
+                        fields.datatype,
+                        Some(Member::String(Lexical::Owned(_)))
+                    ));
+                    let Open::Triple(parts) = &scratch.open[1] else {
+                        panic!("the failed original component frame survives");
+                    };
+                    assert_eq!(parts.subject.as_ref().unwrap().as_ref().unwrap(), &source);
+                    assert!(parts.finished.as_ref().unwrap().is_err());
+                }
+                _ => panic!("the selected original container survives"),
+            }
+            release_term(neighbor, &mut memory).unwrap();
+            refuse_growth.set(false);
+            release_error(Error::JsonRelease { owner, cause }, &mut memory).unwrap();
+            assert_eq!(memory.admitted_bytes(), 0);
+        }
+
+        // Projected order selects a in both source orders. Disposing b's
+        // non-IRI nested-triple predicate must not replace a or lose b's owner.
+        struct PredicateCensusRefusal {
+            live: usize,
+            armed: bool,
+            refused: bool,
+            later_growths: usize,
+        }
+        impl Admission for PredicateCensusRefusal {
+            fn resize(&mut self, next: usize) -> Result<(), StorageError> {
+                if next > self.live {
+                    if self.refused {
+                        self.later_growths += 1;
+                        return Err(StorageError::AdmissionFailed);
+                    }
+                    // This is the original term census's three-answer buffer.
+                    if self.armed && next - self.live == 3 * size_of::<usize>() {
+                        self.refused = true;
+                        return Err(StorageError::AdmissionFailed);
+                    }
+                }
+                self.live = next;
+                Ok(())
+            }
+        }
+        let a = r#""a":{"type":"literal","value":"selected","xml:lang":"en us"}"#;
+        let b = r#""b":{"type":"triple","value":{"subject":{"type":"uri","value":"urn:outer-s"},"predicate":{"type":"triple","value":{"subject":{"type":"uri","value":"urn:inner-s"},"predicate":{"type":"uri","value":"urn:inner-p"},"object":{"type":"uri","value":"urn:inner-o"}}},"object":{"type":"uri","value":"urn:outer-o"}}}"#;
+        for (first, second) in [(a, b), (b, a)] {
+            let input = format!(
+                r#"{{"head":{{"vars":["a","b"]}},"results":{{"bindings":[{{{first},{second}}}]}}}}"#
+            );
+            let mut grant = PredicateCensusRefusal {
+                live: 0,
+                armed: false,
+                refused: false,
+                later_growths: 0,
+            };
+            let mut memory = Memory::new(&mut grant);
+            let parent = memory.string("healthy-original-parent").unwrap();
+            let neighbor = TermValue::Iri(memory.string("healthy-neighbor").unwrap());
+            memory.admission_mut().armed = true;
+            let error = from_json_with_memory(input.as_bytes(), None, &mut memory).unwrap_err();
+            drop(input);
+            assert!(
+                memory.admission_mut().refused,
+                "the nested predicate disposal reached its original census"
+            );
+            assert_eq!(memory.admission_mut().later_growths, 0);
+            assert!(error.to_string().contains("invalid language tag `en us`"));
+            let ReadError::Lexical(Error::JsonRelease { owner, cause }) = error else {
+                panic!("both semantic payloads survive the physical refusal");
+            };
+            assert_eq!(cause, StorageError::AdmissionFailed);
+            assert!(
+                matches!(&owner.primary, Some(NativePrimary::LanguageTag { language, .. }) if language == "en us")
+            );
+            assert!(matches!(
+                &owner.superseded,
+                Some(NativePrimary::Format(ReadRefusal {
+                    reason: ReadReason::Predicate(TermValue::Triple { .. }),
+                    ..
+                }))
+            ));
+            assert_eq!(parent, "healthy-original-parent");
+            neighbor.release_with_memory(&mut memory).unwrap();
+            assert_eq!(
+                memory.admission_mut().later_growths,
+                0,
+                "a healthy scalar neighbor requires no new census buffer"
+            );
+            memory.admission_mut().armed = false;
+            memory.admission_mut().refused = false;
+            release_error(Error::JsonRelease { owner, cause }, &mut memory).unwrap();
+            assert_eq!(
+                memory.admitted_bytes(),
+                parent.capacity(),
+                "selected and discarded causes plus every original parser container were refunded"
+            );
+            memory.release_string(parent).unwrap();
+            assert_eq!(memory.admitted_bytes(), 0);
         }
     }
 }

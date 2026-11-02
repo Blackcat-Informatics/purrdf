@@ -1557,6 +1557,7 @@ fn blanks_in_term<D: DatasetView>(
             },
             |_, (), (), (), _| check_stop(stop).map_err(CanonError::with_read_error),
             CanonError::Read,
+            |(), _| {},
             |cause, _| CanonError::Storage(cause),
             memory,
         )

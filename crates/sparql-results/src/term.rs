@@ -178,8 +178,7 @@ mod tests {
             "expected MalformedTerm: {err:?}"
         );
         drop(v);
-        let retained = err.clone();
-        drop(err);
+        let retained = err;
         let fields = purrdf_testkit::error_capture::Capture::read(&retained);
         let cause = fields.child("cause");
         assert_eq!(cause.code, "results-predicate");

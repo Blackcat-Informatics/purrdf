@@ -49,6 +49,22 @@ division, WKT and GeoJSON parsing resource policies, the SPARQL pre-binding rewr
 SPARQL diagnostic codes.
 Each has its own section below.
 
+## Controlled native RDF parsing
+
+`parse_dataset_controlled` accepts Turtle and TriG with caller-owned storage,
+work and cancellation controls. Success retains the dataset, original source,
+ordered exact occurrences and document directives under one admission owner.
+Its views borrow that owner; query workspace must be admitted separately.
+`ParseRefusal` retains the original typed failure and input, with the directives
+read before refusal, and exposes no partial dataset. Other formats refuse
+explicitly. Existing resident parser entry points use the same implementation.
+
+Source-directory sealing now uses one fallible digest sorter in both resident
+and controlled parsing. Equal-digest records can have a different encoded
+source-local address permutation from earlier releases. Rebuild persisted
+source images; RDF meaning, encounter order and value-derived identities are
+unchanged. Controlled buffer growth also admits its actual relocation work.
+
 ## Native table allocation errors
 
 `QueryIndexAllocationError::StatementHistogram` carries
@@ -65,6 +81,39 @@ The ordinal-array `Permutation` variant retains its existing storage error.
 Propagate the result with `?` or handle source, scratch admission and storage
 failures before using the count. Traversal buffers and the distinct ID table
 now use the source's scratch admission, preserving its original refusal.
+
+## Admitted term-fold ownership
+
+`try_fold_nested_with_memory` now takes `discard_answer(ctx, answer, memory)`
+before `storage_error`. `try_fold_term_with_memory` similarly takes
+`discard_answer(answer, memory)` after `read_error`. The shared traversal
+releases only its work-list spill and answer-array backing allocations.
+Callbacks retain responsibility for their payloads: discard abandoned completed
+answers, and destroy/refund partial locals or moved triple operands when a
+callback fails. Disposal must not poll work or replace the original failure.
+Persistent callback state and error payloads retain their original grants.
+The storage error factory runs once after scratch cleanup. Native order remains
+subject, predicate, object, then triple assembly.
+
+The native `TermValue` and dataset copying adapters continue to refund their
+closed partial-copy payloads before constructing public storage errors. Scratch
+admission alone does not establish a bound on vector relocation work.
+
+`TermValue::release_with_memory` returns
+`Result<(), (Option<TermValue>, StorageError)>`. A failed pre-destruction census
+returns `Some(original_term)` with its original grant. A refund refusal after
+destruction returns `None`. Keep or explicitly release a returned owner; do not
+discard it while treating its grant as refunded. SPARQL results errors retain
+these payloads in `Error::TermRelease { term, cause }`.
+
+SPARQL results cleanup errors retain their original row, preceding rows and
+parser scratch in the opaque `JsonRelease` owner. Its `release_with_memory`
+method retries disposal under the same original account. Earlier semantic
+refusals remain primary; the cleanup cause remains independently available.
+`Error`, `ReadError` and `JsonRelease` are move-only: remove calls to `clone()`
+on errors and move the original error across input disposal instead. Cloning
+an admitted residual owner would duplicate its payload without acquiring a
+second grant and could refund the same account twice.
 
 ## Declared retrieval ranks
 

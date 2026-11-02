@@ -74,7 +74,9 @@ struct ValueDisplay<'a>(&'a DiagnosticValue, bool);
 impl fmt::Display for ValueDisplay<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.0 {
-            DiagnosticValue::Text(value) if self.1 => write!(f, "{value:?}"),
+            DiagnosticValue::Text(value) if self.1 => {
+                fmt::Debug::fmt(&crate::text_out::Quoted(value), f)
+            }
             DiagnosticValue::Text(value) => f.write_str(value),
             DiagnosticValue::Unsigned(value) => fmt::Display::fmt(value, f),
             DiagnosticValue::Signed(value) => fmt::Display::fmt(value, f),
@@ -307,7 +309,7 @@ impl DiagnosticPresentation {
         parameters: Vec<DiagnosticParameter>,
         memory: &mut crate::allocation::Memory<'_, S>,
     ) -> Result<Self, DiagnosticPresentationError> {
-        let message_id = memory.string(message_id)?;
+        let message_id = memory.string_with_progress(message_id)?;
         if message_id.is_empty() {
             return Err(DiagnosticPresentationError::EmptyIdentity);
         }
@@ -323,7 +325,7 @@ impl DiagnosticPresentation {
                     .all(|b| b.is_ascii_alphanumeric() || b == b'_')
             {
                 return Err(DiagnosticPresentationError::InvalidParameter(
-                    memory.string(&parameter.name)?,
+                    memory.string_with_progress(&parameter.name)?,
                 ));
             }
             if parameters[..index]
@@ -331,7 +333,7 @@ impl DiagnosticPresentation {
                 .any(|other| other.name == parameter.name)
             {
                 return Err(DiagnosticPresentationError::DuplicateParameter(
-                    memory.string(&parameter.name)?,
+                    memory.string_with_progress(&parameter.name)?,
                 ));
             }
         }
@@ -371,20 +373,21 @@ impl DiagnosticPresentation {
                 .map_or_else(
                     || {
                         Err(DiagnosticPresentationError::MissingParameter(
-                            memory.string(name)?,
+                            memory.string_with_progress(name)?,
                         ))
                     },
                     Ok,
                 )?;
             used[index] = true;
-            let rendered = memory.format(&ValueDisplay(&parameters[index].value, debug))?;
-            memory.push_str(&mut english, &rendered)?;
+            let rendered =
+                memory.format_with_progress(&ValueDisplay(&parameters[index].value, debug))?;
+            memory.push_str_with_progress(&mut english, &rendered)?;
             memory.release_string(rendered)?;
             memory.release_string(token)?;
         }
         if let Some(index) = used.iter().position(|used| !used) {
             return Err(DiagnosticPresentationError::UnusedParameter(
-                memory.string(&parameters[index].name)?,
+                memory.string_with_progress(&parameters[index].name)?,
             ));
         }
         memory.release_vec(used)?;

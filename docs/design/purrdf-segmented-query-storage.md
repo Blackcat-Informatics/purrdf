@@ -163,7 +163,10 @@ Resident checkpoints store only complete 32-record prefixes, with the zero prefi
 implicit and the final partial block read directly. Checkpoint storage is sized
 once to that exact count. Scalar term hashing streams the initial value directly;
 only nested triple terms require admitted traversal scratch. These storage choices
-preserve the persisted directory bytes and source identities.
+preserve source identities. In 4.0, resident and controlled sealing share the
+fallible digest sorter. Its permutation of equal-digest source-local addresses
+can change persisted directory bytes from earlier releases; regenerate those
+images when upgrading.
 
 An observation retains an effective directory of canonical keys. Its immutable Patricia tree uses leaves of at most
 32 keys and copies only changed leaves and paths. Each node and leaf buffer

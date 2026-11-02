@@ -339,8 +339,7 @@ mod tests {
         let err = ProvenanceNamespace::new("prov", "http://example.org/<bad>")
             .expect_err("a syntactically invalid IRI must be rejected");
         assert!(matches!(err, Error::InvalidNamespace(_)), "{err:?}");
-        let retained = err.clone();
-        drop(err);
+        let retained = err;
         let fields = purrdf_testkit::error_capture::Capture::read(&retained);
         let cause = fields.child("cause");
         assert_eq!(cause.code, "results-namespace-iri");

@@ -8,6 +8,7 @@ use purrdf_hash::multiset::Multiset256;
 use purrdf_hash::{Domain, blake3::RecordHasher, frame::frame_le_with};
 use purrdf_lex::allocation::{Admission, Memory, StorageError};
 
+use crate::ir::OwnedTermFoldError;
 use crate::ir::term::CanonicalNode;
 use crate::{RdfTextDirection, TermValue};
 
@@ -67,9 +68,13 @@ impl SourceRowRef<'_> {
     ) -> Result<[[u8; 32]; 2], StorageError> {
         let mut row = SourceRowHasher::with_graph(self.graph, memory)?;
         for term in [self.subject, self.predicate, self.object] {
-            term.visit_canonical_bytes_with_memory(|bytes| row.term(bytes), memory)?;
+            term.try_visit_canonical_bytes_with_memory(
+                |bytes, memory| row.term(bytes, memory),
+                memory,
+            )
+            .map_err(|error| source_visit_error(&error))?;
         }
-        Ok(row.finish())
+        row.finish(memory)
     }
 }
 
@@ -219,15 +224,19 @@ impl LiteralSourceRow<'_> {
     /// borrowed directly and is never copied into a temporary owned term.
     ///
     /// # Errors
-    /// Returns original traversal-storage refusal. No digest is returned for a
-    /// partially encoded row.
+    /// Returns original traversal-storage or progress refusal. No digest is
+    /// returned for a partially encoded row; its inline hash state is discarded.
     pub fn hashes_with_memory<S: Admission + ?Sized>(
         &self,
         memory: &mut Memory<'_, S>,
     ) -> Result<[[u8; 32]; 2], StorageError> {
         let mut row = SourceRowHasher::with_graph(self.graph, memory)?;
         for term in [self.subject, self.predicate] {
-            term.visit_canonical_bytes_with_memory(|bytes| row.term(bytes), memory)?;
+            term.try_visit_canonical_bytes_with_memory(
+                |bytes, memory| row.term(bytes, memory),
+                memory,
+            )
+            .map_err(|error| source_visit_error(&error))?;
         }
         CanonicalNode::Literal {
             lexical: self.lexical,
@@ -235,8 +244,8 @@ impl LiteralSourceRow<'_> {
             language: self.language,
             direction: self.direction,
         }
-        .visit_bytes(&mut |bytes| row.term(bytes));
-        Ok(row.finish())
+        .try_visit_bytes(&mut |bytes| row.term(bytes, memory))?;
+        row.finish(memory)
     }
 }
 
@@ -254,39 +263,94 @@ impl SourceRowHasher {
         graph: Option<&TermValue>,
         memory: &mut Memory<'_, S>,
     ) -> Result<Self, StorageError> {
-        let mut row = Self::new(graph.is_some());
+        let mut row = Self::new(graph.is_some(), memory)?;
         if let Some(graph) = graph {
-            graph.visit_canonical_bytes_with_memory(|bytes| row.graph(bytes), memory)?;
+            graph
+                .try_visit_canonical_bytes_with_memory(
+                    |bytes, memory| row.graph(bytes, memory),
+                    memory,
+                )
+                .map_err(|error| source_visit_error(&error))?;
         }
         Ok(row)
     }
 
-    pub(crate) fn new(named_graph: bool) -> Self {
+    pub(crate) fn new<S: Admission + ?Sized>(
+        named_graph: bool,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Self, StorageError> {
         let mut graph = RecordHasher::new();
-        frame_le_with(ROW.as_bytes(), &mut |bytes| {
-            graph.update(bytes);
-        });
-        graph.update(&[u8::from(named_graph)]);
+        purrdf_hash::frame::try_frame_le_with(ROW.as_bytes(), |bytes| {
+            source_hash_update(&mut graph, bytes, memory)
+        })?;
+        source_hash_update(&mut graph, &[u8::from(named_graph)], memory)?;
         let mut triple = RecordHasher::new();
-        frame_le_with(TRIPLE_ROW.as_bytes(), &mut |bytes| {
-            triple.update(bytes);
-        });
-        Self { graph, triple }
+        purrdf_hash::frame::try_frame_le_with(TRIPLE_ROW.as_bytes(), |bytes| {
+            source_hash_update(&mut triple, bytes, memory)
+        })?;
+        Ok(Self { graph, triple })
     }
 
-    pub(crate) fn graph(&mut self, bytes: &[u8]) {
-        self.graph.update(bytes);
+    pub(crate) fn graph<S: Admission + ?Sized>(
+        &mut self,
+        bytes: &[u8],
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), StorageError> {
+        source_hash_update(&mut self.graph, bytes, memory)
     }
 
-    pub(crate) fn term(&mut self, bytes: &[u8]) {
-        self.graph.update(bytes);
-        self.triple.update(bytes);
+    pub(crate) fn term<S: Admission + ?Sized>(
+        &mut self,
+        bytes: &[u8],
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), StorageError> {
+        source_hash_update(&mut self.graph, bytes, memory)?;
+        source_hash_update(&mut self.triple, bytes, memory)
     }
 
-    pub(crate) fn finish(self) -> [[u8; 32]; 2] {
-        [
-            *self.graph.finalize().as_bytes(),
-            *self.triple.finalize().as_bytes(),
-        ]
+    pub(crate) fn finish<S: Admission + ?Sized>(
+        self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<[[u8; 32]; 2], StorageError> {
+        let graph = source_hash_finalize(&self.graph, memory)?;
+        let triple = source_hash_finalize(&self.triple, memory)?;
+        Ok([graph, triple])
+    }
+}
+
+/// A refused source row discards its partial inline hash state. The operational
+/// adapter retains the original typed control cause behind StorageError.
+pub(crate) fn source_hash_update<const BUFFER: usize, S: Admission + ?Sized>(
+    hash: &mut purrdf_hash::blake3::Streaming<BUFFER>,
+    bytes: &[u8],
+    memory: &mut Memory<'_, S>,
+) -> Result<(), StorageError> {
+    if !memory.admission().progress_enabled() {
+        hash.update(bytes);
+        return Ok(());
+    }
+    hash.try_update(bytes, |units| memory.admission_mut().checkpoint(units))
+        .map(|_| ())
+        .map_err(|error| match error {
+            purrdf_hash::blake3::UpdateError::LengthOverflow { .. } => StorageError::SizeOverflow,
+            purrdf_hash::blake3::UpdateError::Progress(error) => error,
+        })
+}
+
+pub(crate) fn source_hash_finalize<const BUFFER: usize, S: Admission + ?Sized>(
+    hash: &purrdf_hash::blake3::Streaming<BUFFER>,
+    memory: &mut Memory<'_, S>,
+) -> Result<[u8; 32], StorageError> {
+    let digest = if memory.admission().progress_enabled() {
+        hash.try_finalize(|units| memory.admission_mut().checkpoint(units))?
+    } else {
+        hash.finalize()
+    };
+    Ok(*digest.as_bytes())
+}
+
+pub(crate) fn source_visit_error(error: &OwnedTermFoldError<StorageError>) -> StorageError {
+    match error {
+        OwnedTermFoldError::Storage(error) | OwnedTermFoldError::Visitor(error) => *error,
     }
 }

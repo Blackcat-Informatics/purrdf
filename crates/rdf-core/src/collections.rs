@@ -738,12 +738,16 @@ where
     let mut index = 0;
     while let Some(member) = members.next() {
         emit(copy(&current)?, copy(&vocab.first)?, member)?;
-        let next = if members.peek().is_some() {
-            index += 1;
-            cell(index)?
-        } else {
-            copy(&vocab.nil)?
-        };
+        if members.peek().is_none() {
+            // Preserve the necessary nil-before-rest copy order, moving the
+            // terminator directly into its final row. No unused copied nil is
+            // left as current after the expansion has finished.
+            let nil = copy(&vocab.nil)?;
+            emit(current, copy(&vocab.rest)?, nil)?;
+            return Ok(head);
+        }
+        index += 1;
+        let next = cell(index)?;
         emit(current, copy(&vocab.rest)?, copy(&next)?)?;
         current = next;
     }

@@ -50,6 +50,111 @@ use purrdf_hash_conformance::iri_corpus;
 use purrdf_testkit::rng::Xoshiro256;
 use purrdf_testkit::vectors::{VectorFile, decode_str, encode_str};
 
+// The frozen-vector runner exercises the same public progress seam on every
+// native backend that it already replays, without a second hash implementation.
+trait ProgressVectors: Hasher + Default {
+    fn checked_write(
+        &mut self,
+        bytes: &[u8],
+        progress: &mut dyn FnMut(u64) -> Result<(), usize>,
+    ) -> Result<(), usize>;
+    fn checked_terminal(
+        tag: u8,
+        bytes: &[u8],
+        progress: &mut dyn FnMut(u64) -> Result<(), usize>,
+    ) -> Result<u64, usize>;
+}
+
+macro_rules! progress_vectors {
+    ($hasher:ty) => {
+        impl ProgressVectors for $hasher {
+            fn checked_write(
+                &mut self,
+                bytes: &[u8],
+                progress: &mut dyn FnMut(u64) -> Result<(), usize>,
+            ) -> Result<(), usize> {
+                self.try_write(bytes, progress)
+            }
+            fn checked_terminal(
+                tag: u8,
+                bytes: &[u8],
+                progress: &mut dyn FnMut(u64) -> Result<(), usize>,
+            ) -> Result<u64, usize> {
+                Self::try_hash_terminal(tag, bytes, progress)
+            }
+        }
+    };
+}
+progress_vectors!(FixedHasher);
+progress_vectors!(PortableFixedHasher);
+#[cfg(all(
+    any(target_arch = "x86_64", target_arch = "aarch64"),
+    target_endian = "little",
+    target_feature = "aes"
+))]
+progress_vectors!(AesFixedHasher);
+
+fn vector_write<H: ProgressVectors>(hash: &mut H, bytes: &[u8], controlled: bool) {
+    if controlled {
+        hash.checked_write(bytes, &mut |units| {
+            assert!(
+                units <= 64,
+                "only bounded original native blocks are admitted"
+            );
+            Ok(())
+        })
+        .expect("accepting byte progress");
+    } else {
+        hash.write(bytes);
+    }
+}
+
+/// A refused native block or publication poll returns no hash and cannot alter
+/// a caller's previous streaming state; there is no later progress callback.
+fn refusal_preserves_original_hash<H: ProgressVectors>() {
+    fn sweep(
+        mut operation: impl FnMut(&mut dyn FnMut(u64) -> Result<(), usize>) -> Result<u64, usize>,
+    ) {
+        let mut calls = 0;
+        operation(&mut |units| {
+            assert!(units <= 64);
+            calls += 1;
+            Ok(())
+        })
+        .expect("accepting progress");
+        for refuse in 0..calls {
+            let mut observed = 0;
+            let result = operation(&mut |_| {
+                let at = observed;
+                observed += 1;
+                if at == refuse { Err(at) } else { Ok(()) }
+            });
+            assert_eq!(result, Err(refuse));
+            assert_eq!(observed, refuse + 1, "no poll after refusal");
+        }
+    }
+    for len in [0, 1, 16, 17, 32, 33, 64, 65, 127, 256, 4097] {
+        let bytes = xoshiro256_bytes(len, 0x7072_6f67_7265_7373);
+        sweep(|progress| {
+            let mut hash = H::default();
+            hash.write_u64(0x1234_5678_9abc_def0);
+            let before = hash.finish();
+            match hash.checked_write(&bytes, progress) {
+                Ok(()) => Ok(hash.finish()),
+                Err(cause) => {
+                    assert_eq!(
+                        hash.finish(),
+                        before,
+                        "failed field did not change the original state"
+                    );
+                    Err(cause)
+                }
+            }
+        });
+        sweep(|progress| H::checked_terminal(3, &bytes, progress));
+    }
+}
+
 // --- inputs ------------------------------------------------------------------
 
 fn one<H: Hasher + Default>(feed: impl FnOnce(&mut H)) -> u64 {
@@ -100,7 +205,11 @@ fn portable_structured_fields_do_not_cancel() {
 // --- the vector file ---------------------------------------------------------
 
 /// One record's streaming or terminal operation.
-fn apply<H: Hasher + Default>(fields: &[&str], terminal: fn(u8, &[u8]) -> u64) -> u64 {
+fn apply<H: ProgressVectors>(
+    fields: &[&str],
+    terminal: fn(u8, &[u8]) -> u64,
+    controlled: bool,
+) -> u64 {
     let hex = |field: &str| u128::from_str_radix(field, 16).expect("a hexadecimal value");
     let decimal = |field: &str| field.parse::<usize>().expect("a decimal length");
     match fields[0] {
@@ -114,22 +223,30 @@ fn apply<H: Hasher + Default>(fields: &[&str], terminal: fn(u8, &[u8]) -> u64) -
         }),
         "bytes" => {
             let data = xoshiro256_bytes(decimal(fields[1]), hex(fields[2]) as u64);
-            one::<H>(|h| h.write(&data))
+            one::<H>(|h| vector_write(h, &data, controlled))
         }
         "terminal" => {
             let data = xoshiro256_bytes(decimal(fields[2]), hex(fields[3]) as u64);
-            terminal(hex(fields[1]) as u8, &data)
+            if controlled {
+                H::checked_terminal(hex(fields[1]) as u8, &data, &mut |units| {
+                    assert!(units <= 64);
+                    Ok(())
+                })
+                .expect("accepting terminal progress")
+            } else {
+                terminal(hex(fields[1]) as u8, &data)
+            }
         }
         "text" => {
             let text = decode_str(fields[1]).expect("an encoded text field");
-            one::<H>(|h| h.write(text.as_bytes()))
+            one::<H>(|h| vector_write(h, text.as_bytes(), controlled))
         }
         "chain" => {
             // write_u32(a), write(bytes), write_u8(b), write_u64(c).
             let data = xoshiro256_bytes(decimal(fields[2]), hex(fields[3]) as u64);
             one::<H>(|h| {
                 h.write_u32(hex(fields[1]) as u32);
-                h.write(&data);
+                vector_write(h, &data, controlled);
                 h.write_u8(hex(fields[4]) as u8);
                 h.write_u64(hex(fields[5]) as u64);
             })
@@ -224,13 +341,19 @@ const PORTABLE_VECTORS: &str = include_str!("vectors/fixed_hasher_portable_vecto
 const AES_VECTORS: &str = include_str!("vectors/fixed_hasher_aes_vectors.txt");
 
 /// Replays `text` against `H`, returning the number of records.
-fn replay<H: Hasher + Default>(name: &str, text: &str, terminal: fn(u8, &[u8]) -> u64) -> usize {
+fn replay<H: ProgressVectors>(name: &str, text: &str, terminal: fn(u8, &[u8]) -> u64) -> usize {
     let file = VectorFile::parse(text).unwrap_or_else(|error| panic!("{name}: {error}"));
     // Every operation's inputs precede the one answer field.
     let mut total = 0;
     for record in file.records() {
         let (inputs, answer) = record.fields.split_at(record.fields.len() - 1);
-        let actual = format!("{:016x}", apply::<H>(inputs, terminal));
+        let actual = format!("{:016x}", apply::<H>(inputs, terminal, false));
+        let controlled = format!("{:016x}", apply::<H>(inputs, terminal, true));
+        assert_eq!(
+            controlled, answer[0],
+            "{name}, line {}: accepting governed hashing preserves the frozen answer",
+            record.line
+        );
         assert_eq!(
             actual, answer[0],
             "{name}, line {}: {inputs:?} hashed differently",
@@ -247,6 +370,7 @@ fn replay<H: Hasher + Default>(name: &str, text: &str, terminal: fn(u8, &[u8]) -
 }
 
 fn portable_vectors_are_reproduced() {
+    refusal_preserves_original_hash::<PortableFixedHasher>();
     let count = purrdf_testkit::harness::without_host_clock_or_entropy(|| {
         replay::<PortableFixedHasher>(
             "portable",
@@ -263,12 +387,14 @@ fn portable_vectors_are_reproduced() {
     target_feature = "aes"
 ))]
 fn aes_vectors_are_reproduced() {
+    refusal_preserves_original_hash::<AesFixedHasher>();
     let count = replay::<AesFixedHasher>("aes", AES_VECTORS, AesFixedHasher::hash_terminal);
     purrdf_testkit::harness::print_line(&format!("fixed hasher: aes, {count} records"));
 }
 
 /// `FixedHasher` and `FixedState` answer as the path this build names.
 fn the_selected_function_answers_its_own_vectors() {
+    refusal_preserves_original_hash::<FixedHasher>();
     let text = match FIXED_HASHER_PATH {
         "portable" => PORTABLE_VECTORS,
         #[cfg(all(
@@ -358,7 +484,7 @@ fn record_vectors_when_asked() {
         purrdf_testkit::harness::print_line(&format!("recorded {file}"));
     };
     write("fixed_hasher_portable_vectors.txt", "portable", &|fields| {
-        apply::<PortableFixedHasher>(fields, PortableFixedHasher::hash_terminal)
+        apply::<PortableFixedHasher>(fields, PortableFixedHasher::hash_terminal, false)
     });
     #[cfg(all(
         any(target_arch = "x86_64", target_arch = "aarch64"),
@@ -366,7 +492,7 @@ fn record_vectors_when_asked() {
         target_feature = "aes"
     ))]
     write("fixed_hasher_aes_vectors.txt", "aes", &|fields| {
-        apply::<AesFixedHasher>(fields, AesFixedHasher::hash_terminal)
+        apply::<AesFixedHasher>(fields, AesFixedHasher::hash_terminal, false)
     });
 }
 

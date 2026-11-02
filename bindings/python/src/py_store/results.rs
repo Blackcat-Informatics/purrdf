@@ -114,6 +114,10 @@ pub(crate) fn serialize_sparql_solutions<'py>(
     };
     let (prov, namespace) = decode_provenance(provenance_namespace, query_hash)?;
     // The native serialization runs detached (GIL released).
+    #[expect(
+        clippy::result_large_err,
+        reason = "The shared results error retains original cleanup owners inline without allocating after refusal; the detached call preserves it until Python error conversion."
+    )]
     let outcome = py
         .detach(|| serialize_results(&result, fmt, &prov, namespace.as_ref()))
         .map_err(|e| PyValueError::new_err(format!("SPARQL results serialize error: {e}")))?;
@@ -140,6 +144,10 @@ pub(crate) fn serialize_sparql_boolean<'py>(
     let fmt = parse_format(format)?;
     let result = SparqlResult::Boolean(value);
     let (prov, namespace) = decode_provenance(provenance_namespace, query_hash)?;
+    #[expect(
+        clippy::result_large_err,
+        reason = "The shared results error retains original cleanup owners inline without allocating after refusal; the detached call preserves it until Python error conversion."
+    )]
     let outcome = py
         .detach(|| serialize_results(&result, fmt, &prov, namespace.as_ref()))
         .map_err(|e| PyValueError::new_err(format!("SPARQL results serialize error: {e}")))?;

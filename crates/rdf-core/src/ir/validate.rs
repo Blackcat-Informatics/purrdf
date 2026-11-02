@@ -348,6 +348,7 @@ pub(crate) fn validate_with_memory<S: Admission + ?Sized>(
     builder: &RdfDatasetBuilder,
     memory: &mut Memory<'_, S>,
 ) -> Result<(), NativeBuildError> {
+    memory.admission_mut().checkpoint(0)?;
     validate_rows_with_memory(
         builder,
         builder.quad_rows().iter().copied(),
@@ -384,6 +385,7 @@ pub(super) fn validate_rows_with_memory<S: Admission + ?Sized>(
     // 2. Every declared named graph names an in-range IRI or blank node, exactly as
     //    a quad's graph slot must: `RdfDataset::named_graphs` reports it as a graph.
     for (i, &graph) in builder.declared_graph_rows().iter().enumerate() {
+        memory.admission_mut().checkpoint(1)?;
         check_id_in_range_with_memory(
             graph,
             term_count,
@@ -400,6 +402,7 @@ pub(super) fn validate_rows_with_memory<S: Admission + ?Sized>(
 
     // 3. Quad positional + id-reference validity.
     for (i, q) in quads.into_iter().enumerate() {
+        memory.admission_mut().checkpoint(1)?;
         check_id_in_range_with_memory(q.s, term_count, &QuadContext(i, "subject"), memory)?;
         check_id_in_range_with_memory(q.p, term_count, &QuadContext(i, "predicate"), memory)?;
         check_id_in_range_with_memory(q.o, term_count, &QuadContext(i, "object"), memory)?;
@@ -422,6 +425,7 @@ pub(super) fn validate_rows_with_memory<S: Admission + ?Sized>(
 
     // 4. Reifier id-reference validity; the reified target MUST be a triple term.
     for (i, (reifier, triple, graph)) in reifiers.into_iter().enumerate() {
+        memory.admission_mut().checkpoint(1)?;
         check_id_in_range_with_memory(
             reifier,
             term_count,
@@ -469,6 +473,7 @@ pub(super) fn validate_rows_with_memory<S: Admission + ?Sized>(
 
     // 5. Annotation id-reference validity + predicate-is-IRI.
     for (i, (reifier, p, o, graph)) in annotations.into_iter().enumerate() {
+        memory.admission_mut().checkpoint(1)?;
         check_id_in_range_with_memory(
             reifier,
             term_count,
@@ -549,6 +554,7 @@ fn validate_triple_terms_with_memory<S: Admission + ?Sized>(
     // an IRI or a blank node and its predicate is an IRI, exactly like an asserted
     // statement; only the OBJECT may nest another triple term.
     for raw in 0..term_count {
+        memory.admission_mut().checkpoint(1)?;
         let id = TermId::from_index(raw as u32).expect("stored term index is representable");
         if let InternedTerm::Triple { s, p, o } = *builder.term(id) {
             check_id_in_range_with_memory(
@@ -597,6 +603,7 @@ fn validate_triple_terms_with_memory<S: Admission + ?Sized>(
     let mut state = memory.collect(core::iter::repeat_n(VisitState::Unvisited, term_count))?;
     let result = (|| {
         for raw in 0..term_count {
+            memory.admission_mut().checkpoint(1)?;
             let id = TermId::from_index(raw as u32).expect("stored term index is representable");
             if matches!(builder.term(id), InternedTerm::Triple { .. }) {
                 check_acyclic_with_memory(builder, id, 0, &mut state, memory)?;
@@ -604,8 +611,8 @@ fn validate_triple_terms_with_memory<S: Admission + ?Sized>(
         }
         Ok(())
     })();
-    memory.release_vec(state)?;
-    result
+    let cleanup = memory.release_vec(state).map_err(NativeBuildError::Storage);
+    result.and(cleanup)
 }
 
 fn nesting_limit_with_memory<S: Admission + ?Sized>(
@@ -627,6 +634,7 @@ fn check_acyclic_with_memory<S: Admission + ?Sized>(
     state: &mut [VisitState],
     memory: &mut Memory<'_, S>,
 ) -> Result<usize, NativeBuildError> {
+    memory.admission_mut().checkpoint(1)?;
     if depth > MAX_TERM_NESTING_DEPTH {
         return Err(nesting_limit_with_memory(memory));
     }

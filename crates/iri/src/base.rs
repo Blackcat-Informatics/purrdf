@@ -522,7 +522,7 @@ impl BaseInScope {
         Ok(match self {
             Self::Absent => Self::Absent,
             Self::InForce { iri, origin } => Self::InForce {
-                iri: memory.string(iri)?,
+                iri: memory.string_with_progress(iri)?,
                 origin: *origin,
             },
         })
@@ -685,6 +685,7 @@ impl BaseScope {
         let mut bases = Vec::new();
         memory.reserve(&mut bases, self.0.len())?;
         for base in &self.0 {
+            memory.admission_mut().checkpoint(1)?;
             bases.push(ScopedBase::new(
                 BaseIri::parse_with_memory(base.iri().as_str(), memory)?,
                 base.origin(),

@@ -1010,23 +1010,65 @@ impl TermValue {
         mut output: impl FnMut(&[u8]),
         memory: &mut purrdf_lex::allocation::Memory<'_, S>,
     ) -> Result<(), purrdf_lex::allocation::StorageError> {
-        if !matches!(self, Self::Triple { .. }) {
-            self.canonical_node().visit_bytes(&mut output);
-            return Ok(());
+        match self.try_visit_canonical_bytes_with_memory(
+            |bytes, _| {
+                output(bytes);
+                Ok::<_, core::convert::Infallible>(())
+            },
+            memory,
+        ) {
+            Ok(()) => Ok(()),
+            Err(super::term_walk::OwnedTermFoldError::Storage(error)) => Err(error),
+            Err(super::term_walk::OwnedTermFoldError::Visitor(never)) => match never {},
         }
-        memory.try_scope(|memory| {
-            let mut pending = Vec::new();
-            memory.push(&mut pending, self)?;
-            while let Some(term) = pending.pop() {
-                term.canonical_node().visit_bytes(&mut output);
+    }
+
+    /// Stream canonical bytes through a fallible callback and original admission.
+    /// A refused callback stops before later fields or children. Traversal scratch
+    /// alone is destroyed and refunded; callback-owned values and errors retain
+    /// their original grants. Partial encodings must never be published.
+    ///
+    /// # Errors
+    /// Returns the original callback error or native traversal-storage refusal.
+    ///
+    /// ```
+    /// use purrdf_core::TermValue;
+    /// use purrdf_lex::allocation::{Memory, Resident};
+    /// let term = TermValue::Iri("urn:example".into());
+    /// let mut account = Resident;
+    /// let mut memory = Memory::new(&mut account);
+    /// term.try_visit_canonical_bytes_with_memory(|_, _| Ok::<_, ()>(()), &mut memory).unwrap();
+    /// ```
+    pub fn try_visit_canonical_bytes_with_memory<S, E>(
+        &self,
+        mut output: impl FnMut(&[u8], &mut purrdf_lex::allocation::Memory<'_, S>) -> Result<(), E>,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<(), super::term_walk::OwnedTermFoldError<E>>
+    where
+        S: purrdf_lex::allocation::Admission + ?Sized,
+    {
+        use super::term_walk::OwnedTermFoldError;
+        let mut pending = Vec::new();
+        let result = (|| {
+            let mut current = Some(self);
+            while let Some(term) = current {
+                term.canonical_node()
+                    .try_visit_bytes(&mut |bytes| output(bytes, memory))
+                    .map_err(OwnedTermFoldError::Visitor)?;
                 if let Self::Triple { s, p, o } = term {
                     for child in [&**o, &**p, &**s] {
-                        memory.push(&mut pending, child)?;
+                        memory.push_copy_with_progress(&mut pending, child)?;
                     }
                 }
+                current = pending.pop();
             }
-            memory.release_vec(pending)
-        })
+            Ok(())
+        })();
+        let released = memory.release_vec(pending);
+        match result {
+            Err(error) => Err(error),
+            Ok(()) => released.map_err(OwnedTermFoldError::Storage),
+        }
     }
 
     /// This term's canonical byte encoding as a fresh `Vec<u8>`.
@@ -1409,6 +1451,80 @@ mod tests {
         assert_eq!(out[..2], [0xAAu8, 0xBB], "the prefix must be preserved");
         assert_eq!(&out[2..], term.to_canonical_bytes().as_slice());
         assert_eq!(term.clone().to_canonical_bytes(), term.to_canonical_bytes());
+
+        use purrdf_lex::allocation::{Admission, Memory, StorageError};
+        struct Grant {
+            live: usize,
+            stopped: bool,
+        }
+        impl Admission for Grant {
+            fn progress_enabled(&self) -> bool {
+                true
+            }
+            fn checkpoint(&mut self, _: u64) -> Result<(), StorageError> {
+                assert!(!self.stopped, "no progress after visitor refusal");
+                Ok(())
+            }
+            fn resize(&mut self, next: usize) -> Result<(), StorageError> {
+                assert!(
+                    !self.stopped || next <= self.live,
+                    "no growth after refusal"
+                );
+                self.live = next;
+                Ok(())
+            }
+        }
+        struct Cause(String);
+        let mut grant = Grant {
+            live: 0,
+            stopped: false,
+        };
+        let mut memory = Memory::new(&mut grant);
+        let nested = TermValue::Triple {
+            s: TermBox::new(term),
+            p: TermBox::new(TermValue::iri("urn:later:predicate")),
+            o: TermBox::new(TermValue::iri("urn:later:object")),
+        };
+        let mut visited = 0;
+        let result = nested.try_visit_canonical_bytes_with_memory(
+            |bytes, memory| {
+                visited += 1;
+                if bytes == b"hello" {
+                    let text = memory.string("original error").unwrap();
+                    memory.admission_mut().stopped = true;
+                    Err(Cause(text))
+                } else {
+                    Ok(())
+                }
+            },
+            &mut memory,
+        );
+        let super::super::term_walk::OwnedTermFoldError::Visitor(cause) = result.err().unwrap()
+        else {
+            panic!("original opaque visitor error");
+        };
+        assert_eq!(visited, 4); // triple tag, literal tag, length, lexical field
+        assert_eq!(cause.0, "original error");
+        assert_eq!(memory.admitted_bytes(), cause.0.capacity());
+        let bytes = cause.0.capacity();
+        drop(cause);
+        memory.release_bytes(bytes).unwrap();
+        assert_eq!(memory.admitted_bytes(), 0);
+
+        // Refusing a triple tag precedes even its first pending-child growth.
+        memory.admission_mut().stopped = false;
+        let result = nested.try_visit_canonical_bytes_with_memory(
+            |_, memory| {
+                memory.admission_mut().stopped = true;
+                Err::<(), _>(())
+            },
+            &mut memory,
+        );
+        assert!(matches!(
+            result,
+            Err(super::super::term_walk::OwnedTermFoldError::Visitor(()))
+        ));
+        assert_eq!(memory.admitted_bytes(), 0);
     }
 
     /// Length framing: without it, a boundary can be moved between two adjacent

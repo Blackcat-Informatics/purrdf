@@ -26,6 +26,16 @@ impl<E, F: FnMut(u64) -> Result<(), E>> Progress for F {
     }
 }
 
+/// Keep native progress callbacks on the original allocation account. A native
+/// hasher or equality callback can borrow that same account for its own work.
+impl<S: Admission + ?Sized> Progress for Memory<'_, S> {
+    type Error = StorageError;
+
+    fn charge(&mut self, units: u64) -> Result<(), Self::Error> {
+        self.admission_mut().checkpoint(units)
+    }
+}
+
 /// Explicit resident execution without an external work or stop authority.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Unmetered;

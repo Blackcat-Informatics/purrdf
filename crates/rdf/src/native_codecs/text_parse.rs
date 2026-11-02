@@ -33,19 +33,29 @@
 //! sparql-algebra lexer, which decodes them in `IRIREF` position), so `test060`
 //! now parses.
 
-use super::syntax::check_language_tag;
-use std::collections::BTreeMap;
+use std::borrow::Cow;
 
-use purrdf_core::collections::{ListVocab, build_rdf_list};
+use super::acquisition::{NativeParseError, ParserContext, RunContext, TextError, resident_error};
+use super::source_occurrence::{
+    NativeSourceRow, SourceAssociationError, SourceOccurrence, SourceOccurrences, SourceOriginId,
+    SourceOriginKind, SourceRole, SourceRule, SourceSemanticReference, SourceStatementOrigins,
+    SourceTermOrigin,
+};
+use super::syntax::check_language_tag;
+use purrdf_lex::allocation::OrderedTable;
+use purrdf_lex::allocation::{Admission, Memory, Resident, StorageError};
+use purrdf_lex::control::{ControlledError, Progress, Unmetered};
+
+use purrdf_core::collections::{ListVocab, try_build_rdf_list_with_copy};
 use purrdf_core::{DiagnosticParameter, DiagnosticPresentation, DiagnosticValue};
 use purrdf_iri::scan::find_byte2;
 use purrdf_iri::terminals;
 use purrdf_iri::{BaseOrigin, BaseScope, Iri, IriError, Position};
-use purrdf_sparql_algebra::lexer::{Spanned, Token, tokenize, tokenize_turtle};
+use purrdf_sparql_algebra::lexer::{Spanned, Token, tokenize};
 use rayon::prelude::*;
 
 use super::media_type::NativeRdfFormat;
-use super::ser_model::{SerGraph, SerTerm, SerTermKind, SerTriple3};
+use super::ser_model::{SerGraph, SerQuad, SerReifierRow, SerTerm, SerTermKind, SerTriple3};
 use super::span::{NoSpans, SpanCollector};
 use crate::nesting::{MAX_PARSE_NESTING_DEPTH, nesting_too_deep};
 use crate::{RdfDiagnostic, RdfLocation};
@@ -83,12 +93,55 @@ fn err(detail: impl Into<String>) -> RdfDiagnostic {
 }
 
 /// Build a located parse diagnostic (1-based line/column).
-fn err_at(detail: impl Into<String>, line: u64, column: u32) -> RdfDiagnostic {
+pub(super) fn err_at(detail: impl Into<String>, line: u64, column: u32) -> RdfDiagnostic {
     err(detail).with_location(RdfLocation {
         line: Some(line),
         column: Some(column),
         ..RdfLocation::default()
     })
+}
+
+/// The admitted native reporting boundary, sharing the existing presentation
+/// identity/template and exact compatibility location/message fields.
+fn parser_error<A: Admission, C: Progress>(
+    context: &mut RunContext<A, C>,
+    detail: impl std::fmt::Display,
+    line: u64,
+    column: u32,
+) -> TextError<C::Error> {
+    context.diagnostic(|memory| parser_diagnostic_with_memory(&detail, line, column, memory))
+}
+
+#[expect(
+    clippy::literal_string_with_formatting_args,
+    reason = "the fixed template is checked by the native presentation constructor"
+)]
+fn parser_diagnostic_with_memory<A: Admission + ?Sized>(
+    detail: &(impl std::fmt::Display + ?Sized),
+    line: u64,
+    column: u32,
+    memory: &mut Memory<'_, A>,
+) -> Result<RdfDiagnostic, StorageError> {
+    let text = memory.format_with_progress(detail)?;
+    let parameter =
+        DiagnosticParameter::try_new_with_memory("detail", DiagnosticValue::Text(text), memory)?;
+    let mut parameters = Vec::new();
+    memory.push(&mut parameters, parameter)?;
+    let presentation = DiagnosticPresentation::try_new_with_memory(
+        "native-codec-parse.detail",
+        "{detail}",
+        parameters,
+        memory,
+    )
+    .map_err(|cause| cause.fixed_template_storage())?;
+    let mut diagnostic = RdfDiagnostic::try_error_with_memory("native-codec-parse", &"", memory)?
+        .with_presentation_with_memory(presentation, memory)?;
+    diagnostic.location = Some(memory.boxed(RdfLocation {
+        line: Some(line),
+        column: Some(column),
+        ..RdfLocation::default()
+    })?);
+    Ok(diagnostic)
 }
 
 /// Surface a `purrdf-iri` failure as a located codec diagnostic.
@@ -98,7 +151,7 @@ fn err_at(detail: impl Into<String>, line: u64, column: u32) -> RdfDiagnostic {
 /// `iri-not-absolute-by-grammar` cannot drift between this codec and any other. The
 /// message is the error's own `Display`, which already names the offending reference
 /// verbatim and tells the user to add `@base`/`BASE` or pass a base.
-fn iri_err_at(error: &IriError, line: u64, column: u32) -> RdfDiagnostic {
+pub(super) fn iri_err_at(error: &IriError, line: u64, column: u32) -> RdfDiagnostic {
     RdfDiagnostic::from_iri(error).with_location(RdfLocation {
         line: Some(line),
         column: Some(column),
@@ -178,6 +231,177 @@ enum Node {
     Triple(Box<Self>, Box<Self>, Box<Self>),
 }
 
+struct DocNode {
+    value: Node,
+    origin: Option<SourceOriginId>,
+}
+
+#[derive(Clone, Copy)]
+struct DocNodeRef<'a> {
+    value: &'a Node,
+    origin: Option<SourceOriginId>,
+    inherited: bool,
+}
+impl DocNode {
+    fn as_ref(&self) -> DocNodeRef<'_> {
+        DocNodeRef {
+            value: &self.value,
+            origin: self.origin,
+            inherited: false,
+        }
+    }
+}
+impl DocNodeRef<'_> {
+    fn inherited(self) -> Self {
+        Self {
+            inherited: true,
+            ..self
+        }
+    }
+}
+fn clone_doc_node_with_memory<A: Admission + ?Sized>(
+    node: &DocNode,
+    memory: &mut Memory<'_, A>,
+) -> Result<DocNode, StorageError> {
+    Ok(DocNode {
+        value: clone_node_with_memory(&node.value, memory)?,
+        origin: node.origin,
+    })
+}
+
+/// Exact native syntax payload census for destruction, never late admission.
+fn node_owned_bytes(node: &Node) -> Result<usize, StorageError> {
+    match node {
+        Node::Iri(iri) => Ok(iri.owned_text_bytes()),
+        Node::Bnode(label) => Ok(label.capacity()),
+        Node::Literal {
+            value,
+            lang,
+            direction,
+            datatype,
+        } => [
+            Some(value),
+            lang.as_ref(),
+            direction.as_ref(),
+            datatype.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        .try_fold(0usize, |bytes, text| {
+            bytes
+                .checked_add(text.capacity())
+                .ok_or(StorageError::SizeOverflow)
+        }),
+        Node::Triple(s, p, o) => [s, p, o].into_iter().try_fold(0usize, |bytes, node| {
+            let owned = node_owned_bytes(node)?;
+            bytes
+                .checked_add(size_of::<Node>())
+                .and_then(|bytes| bytes.checked_add(owned))
+                .ok_or(StorageError::SizeOverflow)
+        }),
+    }
+}
+
+fn release_node_with_memory<A: Admission + ?Sized>(
+    node: Node,
+    memory: &mut Memory<'_, A>,
+) -> Result<(), StorageError> {
+    let bytes = node_owned_bytes(&node)?;
+    drop(node);
+    memory.release_bytes(bytes)
+}
+
+fn release_doc_nodes_with_memory<A: Admission + ?Sized>(
+    nodes: Vec<DocNode>,
+    memory: &mut Memory<'_, A>,
+) -> Result<(), StorageError> {
+    let bytes = std::alloc::Layout::array::<DocNode>(nodes.capacity())
+        .map_err(|_| StorageError::SizeOverflow)?
+        .size();
+    let bytes = nodes.iter().try_fold(bytes, |bytes, node| {
+        bytes
+            .checked_add(node_owned_bytes(&node.value)?)
+            .ok_or(StorageError::SizeOverflow)
+    })?;
+    drop(nodes);
+    memory.release_bytes(bytes)
+}
+
+fn insert_prefix_with_memory<A: Admission + ?Sized>(
+    table: &mut OrderedTable<String, String>,
+    key: String,
+    value: String,
+    memory: &mut Memory<'_, A>,
+) -> Result<(), StorageError> {
+    let key_bytes = key.capacity();
+    let entry = table.prepare_insert_with_memory(key, memory, |left, right, memory| {
+        purrdf_lex::control::compare_bytes(left.as_bytes(), right.as_bytes(), &mut |units| {
+            memory.admission_mut().checkpoint(units)
+        })
+    })?;
+    let occupied = entry.is_occupied();
+    let (_, old) = entry.publish(value);
+    if occupied {
+        memory.release_bytes(key_bytes)?;
+    }
+    if let Some(old) = old {
+        memory.release_string(old)?;
+    }
+    Ok(())
+}
+
+fn take_text_with_memory<A: Admission + ?Sized>(
+    text: Cow<'_, str>,
+    memory: &mut Memory<'_, A>,
+) -> Result<String, StorageError> {
+    match text {
+        Cow::Borrowed(text) => memory.string_with_progress(text),
+        Cow::Owned(text) => Ok(text),
+    }
+}
+
+/// Clone the native syntax value through the same physical account at each
+/// owned string/box birth. The syntax nesting limit bounds recursive depth.
+fn clone_node_with_memory<A: Admission + ?Sized>(
+    node: &Node,
+    memory: &mut Memory<'_, A>,
+) -> Result<Node, StorageError> {
+    memory.admission_mut().checkpoint(1)?;
+    Ok(match node {
+        Node::Iri(iri) => Node::Iri(iri.clone_with_memory(memory)?),
+        Node::Bnode(label) => Node::Bnode(memory.string_with_progress(label)?),
+        Node::Literal {
+            value,
+            lang,
+            direction,
+            datatype,
+        } => Node::Literal {
+            value: memory.string_with_progress(value)?,
+            lang: lang
+                .as_deref()
+                .map(|text| memory.string_with_progress(text))
+                .transpose()?,
+            direction: direction
+                .as_deref()
+                .map(|text| memory.string_with_progress(text))
+                .transpose()?,
+            datatype: datatype
+                .as_deref()
+                .map(|text| memory.string_with_progress(text))
+                .transpose()?,
+        },
+        Node::Triple(s, p, o) => {
+            let s = clone_node_with_memory(s, memory)?;
+            let s = memory.boxed(s)?;
+            let p = clone_node_with_memory(p, memory)?;
+            let p = memory.boxed(p)?;
+            let o = clone_node_with_memory(o, memory)?;
+            let o = memory.boxed(o)?;
+            Node::Triple(s, p, o)
+        }
+    })
+}
+
 /// Line-family execution mode: `Auto` routes N-Triples/N-Quads inputs at or above
 /// [`PARALLEL_MIN_BYTES`] through the chunk-parallel phase-1 tokenizer;
 /// `ForceSequential` pins the single-pass pipeline (the bench baseline and the
@@ -209,7 +433,7 @@ pub(super) enum LineParseMode {
 /// is the caller's base without those grammars having to say anything.
 ///
 /// `prefixes` receives, for Turtle and TriG, the prefix bindings the document declared
-/// and left in force at its END (see [`document_statements`]); N-Triples / N-Quads have
+/// and left in force at its END (see [`document_graph_in_context`]); N-Triples / N-Quads have
 /// no prefix directive and leave it untouched.
 pub(super) fn parse_to_gts_graph_mode<S: SpanCollector>(
     format: NativeRdfFormat,
@@ -218,24 +442,47 @@ pub(super) fn parse_to_gts_graph_mode<S: SpanCollector>(
     mode: LineParseMode,
     collector: &mut S,
     prefixes: &mut Vec<(String, String)>,
+    context: &mut RunContext<Resident, Unmetered>,
 ) -> Result<SerGraph, RdfDiagnostic> {
     if text.len() >= u32::MAX as usize {
         for (line, raw) in physical_lines(text).enumerate() {
             check_line_columns(raw.text, line as u64 + 1)?;
         }
     }
-    let mut named_graphs = Vec::new();
+    if matches!(format, NativeRdfFormat::Turtle | NativeRdfFormat::TriG) {
+        let mut declared = OrderedTable::default();
+        let parsed = document_graph_in_context(
+            text,
+            base,
+            format == NativeRdfFormat::TriG,
+            collector,
+            &mut declared,
+            context,
+        )
+        .map_err(resident_error);
+        let mut reported = Vec::new();
+        let export = context
+            .release(|memory| {
+                memory.reserve(&mut reported, declared.len())?;
+                while let Some(pair) = declared.pop_first() {
+                    reported.push(pair);
+                }
+                declared.release(memory)
+            })
+            .map_err(resident_error);
+        *prefixes = reported;
+        return parsed.and_then(|graph| export.map(|()| graph));
+    }
+    let named_graphs = Vec::new();
     let statements = match format {
         // N-Triples / N-Quads admit no relative reference by grammar, so they never
         // consult `base` — they route every IRI through `resolve_absolute_only`. This
         // arm matches the `admits_relative_iri = false` column for those two rows.
         NativeRdfFormat::NTriples => parse_lines(text, false, mode, base, collector)?,
         NativeRdfFormat::NQuads => parse_lines(text, true, mode, base, collector)?,
-        NativeRdfFormat::Turtle => {
-            document_statements(text, base, false, collector, prefixes, &mut named_graphs)?
-        }
-        NativeRdfFormat::TriG => {
-            document_statements(text, base, true, collector, prefixes, &mut named_graphs)?
+        // Both document grammars returned through the original context above.
+        NativeRdfFormat::Turtle | NativeRdfFormat::TriG => {
+            unreachable!("document grammar already handled")
         }
         NativeRdfFormat::RdfXml => {
             return Err(err("RDF/XML is not a line/Turtle-family format"));
@@ -249,7 +496,8 @@ pub(super) fn parse_to_gts_graph_mode<S: SpanCollector>(
             ));
         }
     };
-    build_gts_graph(&statements, &named_graphs)
+    lower_statements_in_context(&statements, &named_graphs, collector.sources_mut(), context)
+        .map_err(resident_error)
 }
 
 /// Run the Turtle/TriG document parser over `text`, leaving `base` holding the base in
@@ -275,20 +523,140 @@ pub(super) fn parse_to_gts_graph_mode<S: SpanCollector>(
 /// the directives the document really made
 /// ([`ParseFailure`](super::parse::ParseFailure)); a caller that only wants the
 /// dataset discards them with the error.
-fn document_statements<S: SpanCollector>(
+/// Run the same native document parser while retaining original directives and
+/// disposing lexical/parser scratch before lowering and dataset publication.
+pub(super) fn document_graph_in_context<S: SpanCollector, A: Admission, C: Progress>(
     text: &str,
     base: &mut BaseScope,
     allow_named_graphs: bool,
     collector: &mut S,
-    prefixes: &mut Vec<(String, String)>,
-    named_graphs: &mut Vec<Node>,
-) -> Result<Vec<Statement>, RdfDiagnostic> {
-    let mut parser = DocParser::new(text, base.clone(), allow_named_graphs, collector);
-    let statements = parser.parse();
-    *base = parser.base;
-    *prefixes = parser.declared_prefixes.into_iter().collect();
-    *named_graphs = parser.named_graphs;
-    statements
+    document_prefixes: &mut OrderedTable<String, String>,
+    context: &mut RunContext<A, C>,
+) -> Result<SerGraph, TextError<C::Error>> {
+    let mut parser = match DocParser::new_in_context(
+        text,
+        std::mem::take(base),
+        allow_named_graphs,
+        collector,
+        context,
+    ) {
+        Ok(parser) => parser,
+        Err((cause, _context, original_base)) => {
+            *base = original_base;
+            return Err(cause);
+        }
+    };
+    let parsed = parser.parse_controlled();
+    let DocParser {
+        tokens,
+        prefixes,
+        declared_prefixes,
+        base: original_base,
+        rdf_type,
+        rdf_first,
+        rdf_rest,
+        rdf_nil,
+        rdf_reifies,
+        statements: pending,
+        named_graphs,
+        collector,
+        source,
+        context: mut account,
+        ..
+    } = parser;
+    *base = original_base;
+    *document_prefixes = declared_prefixes;
+    collector.finish_sources(source);
+
+    let cleanup = account.release(|memory| {
+        let token_bytes = std::alloc::Layout::array::<Spanned<'_>>(tokens.capacity())
+            .map_err(|_| StorageError::SizeOverflow)?
+            .size();
+        for token in tokens {
+            match token.token {
+                Token::Iri(Cow::Owned(text))
+                | Token::PrefixedName(_, Cow::Owned(text))
+                | Token::StringLit(Cow::Owned(text))
+                | Token::LongStringLit(Cow::Owned(text)) => memory.release_string(text)?,
+                _ => {}
+            }
+        }
+        memory.release_bytes(token_bytes)?;
+        let prefix_text = prefixes.iter().try_fold(0usize, |total, (key, value)| {
+            total
+                .checked_add(key.capacity())
+                .and_then(|total| total.checked_add(value.capacity()))
+                .ok_or(StorageError::SizeOverflow)
+        })?;
+        prefixes.release(memory)?;
+        memory.release_bytes(prefix_text)?;
+        for iri in [rdf_type, rdf_first, rdf_rest, rdf_nil, rdf_reifies] {
+            memory.release_string(iri.into_text())?;
+        }
+        release_statements_with_memory(pending, memory)
+    });
+    let statements = match parsed {
+        Ok(statements) => {
+            cleanup?;
+            statements
+        }
+        Err(cause) => {
+            let _ = cleanup;
+            let _ = account.release(|memory| release_nodes_with_memory(named_graphs, memory));
+            return Err(cause);
+        }
+    };
+    let lowered = lower_statements_in_context(
+        &statements,
+        &named_graphs,
+        collector.sources_mut(),
+        &mut account,
+    );
+    let cleanup = account.release(|memory| {
+        release_statements_with_memory(statements, memory)?;
+        release_nodes_with_memory(named_graphs, memory)
+    });
+    match lowered {
+        Err(cause) => {
+            let _ = cleanup;
+            Err(cause)
+        }
+        Ok(graph) => match cleanup {
+            Ok(()) => Ok(graph),
+            Err(cause) => {
+                let _ = account.release(|memory| release_lowered_graph_rows(graph, memory));
+                Err(cause)
+            }
+        },
+    }
+}
+
+#[expect(
+    clippy::iter_with_drain,
+    reason = "Drain retains the original admitted vector backing until release_vec destroys and refunds it."
+)]
+fn release_nodes_with_memory<A: Admission + ?Sized>(
+    mut nodes: Vec<Node>,
+    memory: &mut Memory<'_, A>,
+) -> Result<(), StorageError> {
+    for node in nodes.drain(..) {
+        release_node_with_memory(node, memory)?;
+    }
+    memory.release_vec(nodes)
+}
+
+#[expect(
+    clippy::iter_with_drain,
+    reason = "Drain retains the original admitted vector backing until release_vec destroys and refunds it."
+)]
+fn release_statements_with_memory<A: Admission + ?Sized>(
+    mut statements: Vec<Statement>,
+    memory: &mut Memory<'_, A>,
+) -> Result<(), StorageError> {
+    for nodes in statements.drain(..) {
+        release_nodes_with_memory(nodes, memory)?;
+    }
+    memory.release_vec(statements)
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
@@ -302,14 +670,17 @@ type Statement = Vec<Node>;
 /// single lexical key (a quoted-triple subject). A named node keys by its BARE IRI
 /// string (no angle brackets, so a SHACL focus node joins directly); a blank node keys
 /// as `_:label`. See [`SpanTable`](super::span::SpanTable) for the convention.
-fn subject_key(node: &Node) -> Option<String> {
-    match node {
-        Node::Iri(iri) => Some(iri.as_str().to_owned()),
-        Node::Bnode(label) => Some(format!("_:{label}")),
+fn subject_key<A: Admission + ?Sized>(
+    node: &Node,
+    memory: &mut Memory<'_, A>,
+) -> Result<Option<String>, StorageError> {
+    Ok(match node {
+        Node::Iri(iri) => Some(memory.string_with_progress(iri.as_str())?),
+        Node::Bnode(label) => Some(memory.format_with_progress(&format_args!("_:{label}"))?),
         // A literal is never a legal subject (validation rejects it) and a quoted-triple
         // subject has no single lexical key — neither is recorded.
         Node::Literal { .. } | Node::Triple(..) => None,
-    }
+    })
 }
 
 /// Inputs at or above this many bytes take the chunk-parallel phase-1 pipeline.
@@ -338,7 +709,7 @@ const PARALLEL_MAX_CHUNK_BYTES: usize = 4 << 20;
 ///
 /// Both paths produce the IDENTICAL statement list: each line is parsed with no
 /// cross-line state, and the parallel path re-joins its chunks in document order, so
-/// the downstream [`build_gts_graph`] interner sees the same statements in the same
+/// the downstream [`build_gts_graph_observed`] interner sees the same statements in the same
 /// order and assigns the same term ids (interning stays the sequential serialization
 /// point). The determinism-proof tests below assert this end to end.
 fn parse_lines<S: SpanCollector>(
@@ -564,7 +935,7 @@ fn parse_lines_parallel_with_chunk_size(
             .checked_add(count_line_terminators(chunk))
             .expect("buffer line count fits u64");
     }
-    // Phase 1: parallel per-chunk tokenize+parse (on wasm32 rayon runs this inline).
+    // Phase 1: parallel per-chunk tokenize+parse (on `wasm32` rayon runs this inline).
     let per_chunk: Vec<Result<Vec<Statement>, RdfDiagnostic>> = chunks
         .par_iter()
         .enumerate()
@@ -590,7 +961,7 @@ fn parse_lines_parallel_with_chunk_size(
 /// Line-oriented like the purrdf-gts parser: blank lines and `#`-comment lines are
 /// skipped, every other line is one statement of 3 (NT) or 3-or-4 (NQ) terms. The
 /// `<<( s p o )>>` quoted-triple TERM is admitted in subject (NQ only) and object
-/// position; IRIREFs are UCHAR-decoded (the test060 fix).
+/// position; IRIREFs are UCHAR-decoded (the `test060` fix).
 fn parse_lines_sequential<S: SpanCollector>(
     text: &str,
     allow_graph: bool,
@@ -610,6 +981,10 @@ fn parse_lines_sequential<S: SpanCollector>(
     // so a lone `#xD` advances by one and a `#xD#xA` pair by two, and neither is guessed
     // at from the byte that happens to follow.
     let mut line_offset = 0usize;
+    // The entry point supplies a fresh position collector for this document.
+    // Keep its one resident recording account across all sequential lines.
+    let mut position_admission = Resident;
+    let mut position_memory = Memory::new(&mut position_admission);
     for line in physical_lines(text) {
         let raw = line.text;
         let Some(nodes) = parse_one_line(raw, allow_graph, lineno, base)? else {
@@ -624,15 +999,18 @@ fn parse_lines_sequential<S: SpanCollector>(
         // Record the subject's source position when tracking is on. `S::ENABLED` is a
         // const, so for `NoSpans` this whole block is dead code (no key is built).
         if S::ENABLED {
-            if let Some(key) = subject_key(&nodes[0]) {
-                collector.record(
+            if let Some(key) = subject_key(&nodes[0], &mut position_memory)? {
+                let recorded = collector.record_with_memory(
                     &key,
                     Position {
                         line: lineno,
                         column: column_in_raw(raw, 0),
                         byte_offset: line_offset,
                     },
+                    &mut position_memory,
                 );
+                let cleanup = position_memory.release_string(key);
+                recorded.and(cleanup)?;
             }
             line_offset += raw.len() + line.terminator;
         }
@@ -1125,14 +1503,57 @@ fn split_lang_direction(
     line_no: u64,
     column: u32,
 ) -> Result<(String, Option<String>), RdfDiagnostic> {
-    if let Some((base, dir)) = raw.rsplit_once("--") {
-        if crate::RdfTextDirection::from_str_token(dir).is_some() && !base.is_empty() {
-            Ok((base.to_owned(), Some(dir.to_owned())))
-        } else {
-            Err(err_at("invalid literal base direction", line_no, column))
-        }
+    split_lang_direction_with_memory(raw, line_no, column, &mut Memory::new(&mut Resident))
+        .map_err(|cause| resident_error(ControlledError::Native(cause)))
+}
+
+fn split_lang_direction_with_memory<A: Admission + ?Sized>(
+    raw: &str,
+    line: u64,
+    column: u32,
+    memory: &mut Memory<'_, A>,
+) -> Result<(String, Option<String>), NativeParseError> {
+    memory.admission_mut().checkpoint(0)?;
+    let split = if !memory.admission().progress_enabled() {
+        raw.rsplit_once("--").map(|(base, _)| base.len())
     } else {
-        Ok((raw.to_owned(), None))
+        let mut end = raw.len();
+        let mut found = None;
+        while end > 1 {
+            let mut start = end.saturating_sub(256);
+            while !raw.is_char_boundary(start) {
+                start += 1;
+            }
+            memory.admission_mut().checkpoint(1)?;
+            if let Some((base, _)) = raw[start..end].rsplit_once("--") {
+                found = Some(start + base.len());
+                break;
+            }
+            if start == 0 {
+                break;
+            }
+            // Preserve a possible delimiter across the extent boundary. The
+            // single overlapped hyphen is ASCII, so both slices remain UTF-8.
+            end = start + usize::from(raw.as_bytes()[start] == b'-');
+        }
+        found
+    };
+    if let Some(split) = split {
+        let (base, dir) = (&raw[..split], &raw[split + 2..]);
+        if crate::RdfTextDirection::from_str_token(dir).is_none() || base.is_empty() {
+            return Err(NativeParseError::Diagnostic(parser_diagnostic_with_memory(
+                &"invalid literal base direction",
+                line,
+                column,
+                memory,
+            )?));
+        }
+        Ok((
+            memory.string_with_progress(base)?,
+            Some(memory.string_with_progress(dir)?),
+        ))
+    } else {
+        Ok((memory.string_with_progress(raw)?, None))
     }
 }
 
@@ -1240,9 +1661,24 @@ fn absolute_iri_by_grammar(
 /// compose rather than conflict. Genuine garbage is still refused on every
 /// path: `@1`, `@-`, `@9-9` and `@en-` are refused from Turtle, TriG,
 /// N-Triples and N-Quads alike.
+struct LanguageTagMessage<'a> {
+    tag: &'a str,
+    error: purrdf_iri::langtag::LanguageTagError,
+}
+impl std::fmt::Display for LanguageTagMessage<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "invalid language tag {:?}: {}",
+            purrdf_lex::text_out::Quoted(self.tag),
+            self.error
+        )
+    }
+}
+
 fn validate_language_tag(tag: &str, line_no: u64, column: u32) -> Result<(), RdfDiagnostic> {
     check_language_tag(tag, |error| {
-        format!("invalid language tag {tag:?}: {error}")
+        LanguageTagMessage { tag, error: *error }.to_string()
     })
     .map_err(|diagnostic| {
         diagnostic.with_location(RdfLocation {
@@ -1326,27 +1762,33 @@ fn validate_statement(nodes: &[Node], line_no: u64, column: u32) -> Result<(), R
 // Turtle / TriG (prefixes, base, collections, BNPL, quoted/reifying triples)
 // ───────────────────────────────────────────────────────────────────────────────
 
+type ParserInitializationRefusal<'ctx, A, C> = (
+    TextError<<C as Progress>::Error>,
+    ParserContext<'ctx, A, C>,
+    BaseScope,
+);
+
 /// A recursive-descent Turtle/TriG parser over the sparql-algebra token stream. It
 /// emits the SAME flat statement list (subject/predicate/object[/graph] `Node`s) the
 /// purrdf-gts Turtle/TriG parser produced before lowering through `from_nquads`'s
 /// `build_gts`, so the resulting [`SerGraph`] is byte-identical.
-struct DocParser<'a, 'c, S: SpanCollector> {
+struct DocParser<'a, 'c, 'ctx, S: SpanCollector, A: Admission = Resident, C: Progress = Unmetered> {
     tokens: Vec<Spanned<'a>>,
     pos: usize,
     /// Declared prefix → its namespace, ALREADY RESOLVED against the base that was in
     /// force when the `@prefix` was read (Turtle §4.4). Resolving at declaration time
     /// rather than at use time is what makes `p:x` denote one IRI for the whole
     /// document even if a later `@base` rebinds.
-    prefixes: crate::FastMap<String, String>,
+    prefixes: OrderedTable<String, String>,
     /// Every prefix a `@prefix` / `PREFIX` directive of THIS document declared, bound
     /// to the resolved namespace its LAST declaration gave it.
     ///
     /// Kept apart from [`Self::prefixes`] because that table is seeded with the
     /// parser's own `rdf:` convenience binding, which the document never declared:
     /// reporting it would hand a consumer a prefix the source text does not contain.
-    /// A `BTreeMap` so the report is sorted by label and so a redeclaration replaces
-    /// the earlier binding rather than appearing twice.
-    declared_prefixes: BTreeMap<String, String>,
+    /// Native ordered storage keeps the report sorted by label, with a
+    /// redeclaration replacing the earlier binding rather than appearing twice.
+    declared_prefixes: OrderedTable<String, String>,
     /// The stack of base IRIs in scope. Empty means no base at all, which is a
     /// first-class state: it is not an error until a relative reference needs one.
     base: BaseScope,
@@ -1367,46 +1809,269 @@ struct DocParser<'a, 'c, S: SpanCollector> {
     /// Opt-in subject-position sink. For `NoSpans` this is a ZST and every use is
     /// dead code under monomorphization.
     collector: &'c mut S,
-    /// Document byte offset of the current top-level statement subject's first token,
-    /// captured when the subject term is parsed and resolved at emit time. Only read
-    /// when `S::ENABLED`.
-    subject_off: usize,
-    /// Newline table over `src`, built lazily on the FIRST position lookup (a recorded
-    /// subject under `S::ENABLED`, or any `loc()` diagnostic) and reused for the rest of
-    /// the parse. A `OnceCell` so the `&self` `loc()` path can memoize it too — otherwise
-    /// a document with many diagnostics-adjacent lookups rebuilds the whole-buffer scan
-    /// per call, which is quadratic in the source length.
-    line_index: std::cell::OnceCell<purrdf_iri::LineIndex>,
+    /// Legacy subject positions are saved before a production advances, so
+    /// generated statements can inherit that same position without rewinding.
+    subject_position: Position,
+    /// The native forward location cursor scans each traversed source extent
+    /// once, including repeated term lookups on one long line.
+    position_cursor: purrdf_iri::PositionCursor<'a>,
+    source: SourceOccurrences,
+    context: ParserContext<'ctx, A, C>,
 }
 
-impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
-    fn new(text: &'a str, base: BaseScope, allow_named_graphs: bool, collector: &'c mut S) -> Self {
-        let mut prefixes = crate::FastMap::default();
-        prefixes.insert("rdf".to_owned(), RDF_NS.to_owned());
-        // These are compile-time constants known to be well-formed absolute IRIs, so a
-        // parse failure here is a programming error in this file, not bad input.
-        let vocab =
-            |iri: &str| purrdf_iri::parse(iri).expect("grammar vocabulary IRI is well-formed");
-        Self {
-            tokens: Vec::new(),
-            pos: 0,
-            prefixes,
-            declared_prefixes: BTreeMap::new(),
+#[cfg(test)]
+impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, '_, S> {
+    fn new(
+        text: &'a str,
+        base: BaseScope,
+        allow_named_graphs: bool,
+        collector: &'c mut S,
+    ) -> Result<Self, RdfDiagnostic> {
+        Self::new_in_context(
+            text,
             base,
-            rdf_type: vocab(RDF_TYPE),
-            rdf_first: vocab(RDF_FIRST),
-            rdf_rest: vocab(RDF_REST),
-            rdf_nil: vocab(RDF_NIL),
-            rdf_reifies: vocab(RDF_REIFIES),
-            bnode_counter: 0,
             allow_named_graphs,
-            statements: Vec::new(),
-            named_graphs: Vec::new(),
-            src: text,
             collector,
-            subject_off: 0,
-            line_index: std::cell::OnceCell::new(),
+            RunContext::new(Resident, Unmetered),
+        )
+        .map_err(|(cause, _context, _base)| resident_error(cause))
+    }
+
+    #[cfg(test)]
+    fn parse(&mut self) -> Result<Vec<Statement>, RdfDiagnostic> {
+        let result = self.parse_controlled().map_err(resident_error);
+        self.collector
+            .finish_sources(std::mem::take(&mut self.source));
+        result
+    }
+}
+
+impl<'a, 'c, 'ctx, S: SpanCollector, A: Admission, C: Progress> DocParser<'a, 'c, 'ctx, S, A, C> {
+    /// The supplied base already belongs to `context` for controlled execution.
+    /// Initialization failures return that same account alongside the original
+    /// failure, after all unpublished constructor locals have been destroyed.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Initialization refusal returns the original context, base and cause without allocating an error carrier."
+    )]
+    fn new_in_context(
+        text: &'a str,
+        base: BaseScope,
+        allow_named_graphs: bool,
+        collector: &'c mut S,
+        context: impl Into<ParserContext<'ctx, A, C>>,
+    ) -> Result<Self, ParserInitializationRefusal<'ctx, A, C>> {
+        let mut context = context.into();
+        let prepared = (|| {
+            context.charge(0)?;
+            let mut prefixes = OrderedTable::default();
+            context.memory(|memory| {
+                let prefix = memory.string_with_progress("rdf")?;
+                let namespace = memory.string_with_progress(RDF_NS)?;
+                insert_prefix_with_memory(&mut prefixes, prefix, namespace, memory)
+            })?;
+            let rdf_type = context.iri(0, 0, |memory| {
+                purrdf_iri::parse_with_memory(RDF_TYPE, memory)
+            })?;
+            let rdf_first = context.iri(0, 0, |memory| {
+                purrdf_iri::parse_with_memory(RDF_FIRST, memory)
+            })?;
+            let rdf_rest = context.iri(0, 0, |memory| {
+                purrdf_iri::parse_with_memory(RDF_REST, memory)
+            })?;
+            let rdf_nil = context.iri(0, 0, |memory| {
+                purrdf_iri::parse_with_memory(RDF_NIL, memory)
+            })?;
+            let rdf_reifies = context.iri(0, 0, |memory| {
+                purrdf_iri::parse_with_memory(RDF_REIFIES, memory)
+            })?;
+            Ok((
+                prefixes,
+                rdf_type,
+                rdf_first,
+                rdf_rest,
+                rdf_nil,
+                rdf_reifies,
+            ))
+        })();
+        match prepared {
+            Err(cause) => Err((cause, context, base)),
+            Ok((prefixes, rdf_type, rdf_first, rdf_rest, rdf_nil, rdf_reifies)) => Ok(Self {
+                tokens: Vec::new(),
+                pos: 0,
+                prefixes,
+                declared_prefixes: OrderedTable::default(),
+                base,
+                rdf_type,
+                rdf_first,
+                rdf_rest,
+                rdf_nil,
+                rdf_reifies,
+                bnode_counter: 0,
+                allow_named_graphs,
+                statements: Vec::new(),
+                named_graphs: Vec::new(),
+                src: text,
+                collector,
+                subject_position: Position {
+                    line: 1,
+                    column: 1,
+                    byte_offset: 0,
+                },
+                position_cursor: purrdf_iri::PositionCursor::new(text),
+                source: SourceOccurrences::default(),
+                context,
+            }),
         }
+    }
+
+    fn release_token_text(&mut self, text: Cow<'_, str>) -> Result<(), TextError<C::Error>> {
+        if let Cow::Owned(text) = text {
+            self.context.release(|memory| memory.release_string(text))?;
+        }
+        Ok(())
+    }
+
+    fn release_node(&mut self, node: DocNode) -> Result<(), TextError<C::Error>> {
+        self.context
+            .release(|memory| release_node_with_memory(node.value, memory))
+    }
+
+    fn previous_end(&self) -> usize {
+        self.pos
+            .checked_sub(1)
+            .and_then(|index| self.tokens.get(index))
+            .map_or_else(|| self.cur_off(), |token| token.end)
+    }
+
+    fn source_origin(
+        &mut self,
+        kind: SourceOriginKind,
+        components: Option<[SourceOriginId; 3]>,
+    ) -> Result<Option<SourceOriginId>, TextError<C::Error>> {
+        if !S::ENABLED {
+            return Ok(None);
+        }
+        let id = SourceOriginId(self.source.origins.len());
+        self.context.memory(|memory| {
+            memory.push(
+                &mut self.source.origins,
+                SourceTermOrigin {
+                    kind,
+                    components,
+                    semantic: None,
+                    native_term: None,
+                },
+            )
+        })?;
+        Ok(Some(id))
+    }
+
+    fn source_reference(
+        &mut self,
+        node: DocNodeRef<'_>,
+    ) -> Result<Option<SourceOriginId>, TextError<C::Error>> {
+        let Some(origin) = node.origin else {
+            return Ok(None);
+        };
+        if !node.inherited {
+            return Ok(Some(origin));
+        }
+        self.inherited_origin(origin).map(Some)
+    }
+
+    fn inherited_origin(
+        &mut self,
+        origin: SourceOriginId,
+    ) -> Result<SourceOriginId, TextError<C::Error>> {
+        let original = self
+            .source
+            .origins
+            .get(origin.0)
+            .ok_or_else(|| {
+                ControlledError::Native(NativeParseError::Storage(StorageError::SizeOverflow))
+            })?
+            .clone();
+        let components = match original.components {
+            Some([s, p, o]) => Some([
+                self.inherited_origin(s)?,
+                self.inherited_origin(p)?,
+                self.inherited_origin(o)?,
+            ]),
+            None => None,
+        };
+        self.source_origin(SourceOriginKind::Inherited { from: origin }, components)?
+            .ok_or_else(|| {
+                ControlledError::Native(NativeParseError::Storage(StorageError::SizeOverflow))
+            })
+    }
+
+    fn written_node(&mut self, value: Node, start: usize) -> Result<DocNode, TextError<C::Error>> {
+        let origin =
+            self.source_origin(SourceOriginKind::Written(start..self.previous_end()), None)?;
+        Ok(DocNode { value, origin })
+    }
+
+    fn generated_node(
+        &mut self,
+        value: Node,
+        rule: SourceRule,
+        anchor: std::ops::Range<usize>,
+        inputs: [Option<SourceOriginId>; 4],
+    ) -> Result<DocNode, TextError<C::Error>> {
+        let origin = self.source_origin(
+            SourceOriginKind::Generated {
+                rule,
+                anchor,
+                inputs,
+            },
+            None,
+        )?;
+        Ok(DocNode { value, origin })
+    }
+
+    fn source_occurrence(
+        &mut self,
+        statement: Option<usize>,
+        role: SourceRole,
+        node: DocNodeRef<'_>,
+    ) -> Result<Option<SourceOriginId>, TextError<C::Error>> {
+        if let Some(origin) = self.source_reference(node)? {
+            self.context.memory(|memory| {
+                memory.push(
+                    &mut self.source.occurrences,
+                    SourceOccurrence {
+                        statement,
+                        role,
+                        origin,
+                    },
+                )
+            })?;
+            return Ok(Some(origin));
+        }
+        Ok(None)
+    }
+
+    fn triple_node(
+        &mut self,
+        s: DocNode,
+        p: DocNode,
+        o: DocNode,
+        kind: SourceOriginKind,
+    ) -> Result<DocNode, TextError<C::Error>> {
+        let components = match (s.origin, p.origin, o.origin) {
+            (Some(s), Some(p), Some(o)) => Some([s, p, o]),
+            _ => None,
+        };
+        let value = self.context.memory(|memory| {
+            Ok(Node::Triple(
+                memory.boxed(s.value)?,
+                memory.boxed(p.value)?,
+                memory.boxed(o.value)?,
+            ))
+        })?;
+        let origin = self.source_origin(kind, components)?;
+        Ok(DocNode { value, origin })
     }
 
     /// Document byte offset of the current token (or the end of the last token past
@@ -1450,9 +2115,11 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
     /// of the name, IRI or literal it sits in (lawful, untouched) or a stray `Word`
     /// refused one layer down as the token it lawfully lexes into, which is not a byte
     /// order mark and is not called one.
-    fn parse(&mut self) -> Result<Vec<Statement>, RdfDiagnostic> {
+    fn parse_controlled(&mut self) -> Result<Vec<Statement>, TextError<C::Error>> {
+        self.context.charge(0)?;
         if self.src.starts_with(BYTE_ORDER_MARK) {
-            return Err(err_at(
+            return Err(parser_error(
+                &mut self.context,
                 "document begins with U+FEFF ZERO WIDTH NO-BREAK SPACE (the UTF-8 byte \
                  order mark, bytes EF BB BF). It is a lawful PN_CHARS_BASE scalar INSIDE \
                  a token, but no production of the Turtle/TriG grammar names a byte order \
@@ -1468,23 +2135,39 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
         // `purrdf:report/shacl/sarif`), matching purrdf-gts leniency.
         // Turtle has no `/` operator, so this is unambiguous in term position;
         // the SPARQL `tokenize` keeps `/` as the property-path operator.
-        self.tokens = tokenize_turtle(self.src).map_err(|e| {
-            let off = e.byte_offset().unwrap_or(0);
-            let p = purrdf_iri::LineIndex::new(self.src).locate(self.src, off);
-            err_at(e.to_string(), p.line, p.column)
-        })?;
+        self.context.charge(0)?;
+        self.tokens = match self.context.tokenize(self.src) {
+            Ok(tokens) => tokens,
+            Err(ControlledError::Native(NativeParseError::Lexical { cause, .. })) => {
+                let off = cause.byte_offset().unwrap_or(0);
+                let position = self.position_at(off)?;
+                return Err(ControlledError::Native(NativeParseError::Lexical {
+                    cause,
+                    line: position.line,
+                    column: position.column,
+                }));
+            }
+            Err(other) => return Err(other),
+        };
         while self.peek().is_some() {
+            self.context.charge(1)?;
             if self.try_directive()? {
                 continue;
             }
             if self.eat_kw("GRAPH") {
                 if !self.allow_named_graphs {
-                    let (l, c) = self.loc();
-                    return Err(err_at("Turtle input cannot contain GRAPH blocks", l, c));
+                    let (l, c) = self.loc()?;
+                    return Err(parser_error(
+                        &mut self.context,
+                        "Turtle input cannot contain GRAPH blocks",
+                        l,
+                        c,
+                    ));
                 }
                 let graph = self.term(None, 0)?;
                 self.expect(&Token::LBrace)?;
-                self.graph_block(Some(&graph))?;
+                self.graph_block(Some(graph.as_ref()))?;
+                self.release_node(graph)?;
                 continue;
             }
             // TriG rule [3] admits a bare `wrappedGraph` — `{ … }` with no label — as a
@@ -1492,33 +2175,45 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
             // before the subject position below.
             if self.at(&Token::LBrace) {
                 if !self.allow_named_graphs {
-                    let (l, c) = self.loc();
-                    return Err(err_at("Turtle input cannot contain graph blocks", l, c));
+                    let (l, c) = self.loc()?;
+                    return Err(parser_error(
+                        &mut self.context,
+                        "Turtle input cannot contain graph blocks",
+                        l,
+                        c,
+                    ));
                 }
                 self.pos += 1;
                 self.graph_block(None)?;
                 continue;
             }
             if S::ENABLED {
-                self.subject_off = self.cur_off();
+                let offset = self.cur_off();
+                self.subject_position = self.position_at(offset)?;
             }
             let first = self.term(None, 0)?;
             if self.eat(&Token::LBrace) {
                 if !self.allow_named_graphs {
-                    let (l, c) = self.loc();
-                    return Err(err_at("Turtle input cannot contain graph blocks", l, c));
+                    let (l, c) = self.loc()?;
+                    return Err(parser_error(
+                        &mut self.context,
+                        "Turtle input cannot contain graph blocks",
+                        l,
+                        c,
+                    ));
                 }
-                self.graph_block(Some(&first))?;
+                self.graph_block(Some(first.as_ref()))?;
             } else {
-                self.statement_after_subject(&first, None)?;
+                self.statement_after_subject(first.as_ref(), None)?;
             }
+            self.release_node(first)?;
         }
         Ok(std::mem::take(&mut self.statements))
     }
 
     /// Consume a `@prefix`/`@base`/`@version` or `PREFIX`/`BASE`/`VERSION` directive
     /// when present. Returns whether one was consumed.
-    fn try_directive(&mut self) -> Result<bool, RdfDiagnostic> {
+    fn try_directive(&mut self) -> Result<bool, TextError<C::Error>> {
         // `@prefix` / `@base` / `@version` lex as a `LangTag` (the `@` form).
         if let Some(Token::LangTag(tag)) = self.peek() {
             match *tag {
@@ -1563,19 +2258,23 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
     /// the raw text and resolving at use time instead — which this parser used to do —
     /// makes `p:x` denote two different IRIs on either side of a later `@base`, so the
     /// resolution happens here, once.
-    fn prefix_directive(&mut self, require_dot: bool) -> Result<(), RdfDiagnostic> {
+    fn prefix_directive(&mut self, require_dot: bool) -> Result<(), TextError<C::Error>> {
         let (prefix, _) = self.expect_prefix_ns()?;
-        let (l, c) = self.loc();
+        let (l, c) = self.loc()?;
         let raw = self.expect_iri_raw()?;
-        let namespace = self
-            .base
-            .resolve(&raw)
-            .map_err(|e| iri_err_at(&e, l, c))?
-            .as_str()
-            .to_owned();
-        self.declared_prefixes
-            .insert(prefix.clone(), namespace.clone());
-        self.prefixes.insert(prefix, namespace);
+        let namespace = self.resolve_iri(&raw, l, c)?.into_text();
+        self.context.release(|memory| memory.release_string(raw))?;
+        self.context.memory(|memory| {
+            let declared_prefix = memory.string_with_progress(&prefix)?;
+            let declared_namespace = memory.string_with_progress(&namespace)?;
+            insert_prefix_with_memory(
+                &mut self.declared_prefixes,
+                declared_prefix,
+                declared_namespace,
+                memory,
+            )?;
+            insert_prefix_with_memory(&mut self.prefixes, prefix, namespace, memory)
+        })?;
         if require_dot {
             self.expect(&Token::Dot)?;
         } else {
@@ -1590,12 +2289,14 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
     /// RFC-3986 §5.1.1) resolves it against the base already in force, so a chain of
     /// directives composes. It is an error only when no base is in scope AND the
     /// directive is relative — there is then nothing to resolve against.
-    fn base_directive(&mut self, require_dot: bool) -> Result<(), RdfDiagnostic> {
-        let (l, c) = self.loc();
+    fn base_directive(&mut self, require_dot: bool) -> Result<(), TextError<C::Error>> {
+        let (l, c) = self.loc()?;
         let raw = self.expect_iri_raw()?;
-        self.base
-            .rebind(&raw, BaseOrigin::Directive { line: l, column: c })
-            .map_err(|e| iri_err_at(&e, l, c))?;
+        self.context.iri(l, c, |memory| {
+            self.base
+                .rebind_with_memory(&raw, BaseOrigin::Directive { line: l, column: c }, memory)
+        })?;
+        self.context.memory(|memory| memory.release_string(raw))?;
         if require_dot {
             self.expect(&Token::Dot)?;
         } else {
@@ -1609,25 +2310,28 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
     /// string here, so the raw span is checked and a long form is rejected (the lexer
     /// collapses both quote styles into one `StringLit`, so the source span is the only
     /// place the distinction survives).
-    fn version_string(&mut self) -> Result<(), RdfDiagnostic> {
+    fn version_string(&mut self) -> Result<(), TextError<C::Error>> {
         let span = self.tokens.get(self.pos).map(|s| (s.start, s.end));
-        let (l, c) = self.loc();
+        let (l, c) = self.loc()?;
         match self.bump() {
-            Some(Token::StringLit(_)) => {
+            Some(Token::StringLit(value)) => {
                 if let Some((start, _)) = span {
                     let raw = &self.src[start..];
                     if raw.starts_with("\"\"\"") || raw.starts_with("'''") {
-                        return Err(err_at(
+                        return Err(parser_error(
+                            &mut self.context,
                             "version directive needs a single-line string, found a triple-quoted string",
                             l,
                             c,
                         ));
                     }
                 }
+                self.release_token_text(value)?;
                 Ok(())
             }
-            other => Err(err_at(
-                format!("version directive needs a string, found {other:?}"),
+            other => Err(parser_error(
+                &mut self.context,
+                format_args!("version directive needs a string, found {other:?}"),
                 l,
                 c,
             )),
@@ -1635,12 +2339,18 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
     }
 
     /// A bare `prefix:` namespace (PNAME_NS); the local part must be empty.
-    fn expect_prefix_ns(&mut self) -> Result<(String, String), RdfDiagnostic> {
-        let (line, col) = self.loc();
+    fn expect_prefix_ns(&mut self) -> Result<(String, String), TextError<C::Error>> {
+        let (line, col) = self.loc()?;
         match self.bump() {
-            Some(Token::PrefixedName(p, l)) if l.is_empty() => Ok((p.to_owned(), l.into_owned())),
-            other => Err(err_at(
-                format!("expected a prefix namespace, found {other:?}"),
+            Some(Token::PrefixedName(p, l)) if l.is_empty() => self.context.memory(|memory| {
+                Ok((
+                    memory.string_with_progress(p)?,
+                    take_text_with_memory(l, memory)?,
+                ))
+            }),
+            other => Err(parser_error(
+                &mut self.context,
+                format_args!("expected a prefix namespace, found {other:?}"),
                 line,
                 col,
             )),
@@ -1649,11 +2359,18 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
 
     /// An IRIREF, returned UNRESOLVED (for `@prefix`/`@base` targets). The lexer has
     /// already UCHAR-decoded it.
-    fn expect_iri_raw(&mut self) -> Result<String, RdfDiagnostic> {
-        let (l, c) = self.loc();
+    fn expect_iri_raw(&mut self) -> Result<String, TextError<C::Error>> {
+        let (l, c) = self.loc()?;
         match self.bump() {
-            Some(Token::Iri(s)) => Ok(s.into_owned()),
-            other => Err(err_at(format!("expected an IRIREF, found {other:?}"), l, c)),
+            Some(Token::Iri(s)) => self
+                .context
+                .memory(|memory| take_text_with_memory(s, memory)),
+            other => Err(parser_error(
+                &mut self.context,
+                format_args!("expected an IRIREF, found {other:?}"),
+                l,
+                c,
+            )),
         }
     }
 
@@ -1667,59 +2384,70 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
     /// [`term`](Self::term) or [`predicate_object_list`](Self::predicate_object_list), and
     /// both of them descend here on entry, so no nesting construct can be reached without
     /// paying a level. The location is the token that would have opened the level too many.
-    fn descend(&self, depth: usize) -> Result<usize, RdfDiagnostic> {
+    fn descend(&mut self, depth: usize) -> Result<usize, TextError<C::Error>> {
         if depth >= MAX_PARSE_NESTING_DEPTH {
-            let (line, column) = self.loc();
-            return Err(nesting_too_deep(line, column));
+            let (line, column) = self.loc()?;
+            return Err(self.context.diagnostic(|memory| {
+                crate::nesting::nesting_too_deep_with_memory(line, column, memory)
+            }));
         }
         Ok(depth + 1)
     }
 
-    fn term(&mut self, graph: Option<&Node>, depth: usize) -> Result<Node, RdfDiagnostic> {
+    fn term(
+        &mut self,
+        graph: Option<DocNodeRef<'_>>,
+        depth: usize,
+    ) -> Result<DocNode, TextError<C::Error>> {
+        let start = self.cur_off();
         let depth = self.descend(depth)?;
-        match self.peek() {
+        let value = match self.peek() {
             Some(Token::TripleOpen) => {
-                // Distinguish the value form `<<( s p o )>>` from the reifying form
-                // `<< s p o [~r] >>` by the immediately-following `(`.
-                if self.peek2() == Some(&Token::LParen) {
+                return if self.peek2() == Some(&Token::LParen) {
                     self.parenthesized_quoted_triple(graph, depth)
                 } else {
                     self.reifying_triple(graph, depth)
-                }
+                };
             }
             Some(Token::Iri(_)) => {
-                let (l, c) = self.loc();
+                let (l, c) = self.loc()?;
                 let Some(Token::Iri(raw)) = self.bump() else {
                     unreachable!()
                 };
-                Ok(Node::Iri(self.resolve_iri(&raw, l, c)?))
+                let iri = self.resolve_iri(&raw, l, c)?;
+                self.release_token_text(raw)?;
+                Node::Iri(iri)
             }
             Some(Token::PrefixedName(_, _)) => {
-                let (l, c) = self.loc();
+                let (l, c) = self.loc()?;
                 let Some(Token::PrefixedName(prefix, local)) = self.bump() else {
                     unreachable!()
                 };
-                self.resolve_prefixed(prefix, &local, l, c)
+                let iri = self.resolve_prefixed(prefix, &local, l, c)?;
+                self.release_token_text(local)?;
+                iri
             }
             Some(Token::BlankNodeLabel(_)) => {
                 let Some(Token::BlankNodeLabel(label)) = self.bump() else {
                     unreachable!()
                 };
-                Ok(Node::Bnode(label.to_owned()))
+                self.context
+                    .memory(|memory| Ok(Node::Bnode(memory.string_with_progress(label)?)))?
             }
             Some(Token::Anon) => {
                 self.pos += 1;
-                Ok(self.next_bnode())
+                return self.next_bnode(
+                    SourceRule::AnonymousBlank,
+                    start..self.previous_end(),
+                    [None; 4],
+                );
             }
-            Some(Token::LBracket) => self.blank_node_property_list(graph, depth),
-            Some(Token::LParen) => self.collection(graph, depth),
-            Some(Token::StringLit(_) | Token::LongStringLit(_)) => self.literal(),
+            Some(Token::LBracket) => return self.blank_node_property_list(graph, depth),
+            Some(Token::LParen) => return self.collection(graph, depth),
+            Some(Token::StringLit(_) | Token::LongStringLit(_)) => self.literal()?,
             Some(Token::Integer(_) | Token::Decimal(_) | Token::Double(_)) => {
-                self.numeric_literal("")
+                self.numeric_literal("")?
             }
-            // A signed numeric literal `+N` / `-N`: the lexer emits the sign as a
-            // separate `Plus`/`Minus` token, so consume it and fold it back into the
-            // lexical form (kept verbatim, e.g. `-200.0`), matching purrdf-gts.
             Some(Token::Plus | Token::Minus)
                 if matches!(
                     self.peek2(),
@@ -1732,28 +2460,35 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
                     self.expect(&Token::Plus)?;
                     "+"
                 };
-                self.numeric_literal(sign)
+                self.numeric_literal(sign)?
             }
             Some(Token::Word(w)) if *w == "true" || *w == "false" => {
                 let Some(Token::Word(value)) = self.bump() else {
                     unreachable!()
                 };
-                Ok(Node::Literal {
-                    value: value.to_owned(),
-                    lang: None,
-                    direction: None,
-                    datatype: Some(XSD_BOOLEAN.to_owned()),
-                })
+                self.context.memory(|memory| {
+                    Ok(Node::Literal {
+                        value: memory.string_with_progress(value)?,
+                        lang: None,
+                        direction: None,
+                        datatype: Some(memory.string_with_progress(XSD_BOOLEAN)?),
+                    })
+                })?
             }
             _ => {
-                let (l, c) = self.loc();
-                Err(err_at(
-                    format!("unexpected token {:?} in Turtle/TriG term", self.peek()),
+                let (l, c) = self.loc()?;
+                return Err(parser_error(
+                    &mut self.context,
+                    format_args!(
+                        "unexpected token {:?} in Turtle/TriG term",
+                        token_at(&self.tokens, self.pos)
+                    ),
                     l,
                     c,
-                ))
+                ));
             }
-        }
+        };
+        self.written_node(value, start)
     }
 
     /// A subject/object inside a triple term. Non-empty `[ … ]` / `( … )` would emit
@@ -1761,13 +2496,14 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
     /// (W3C-conformant); an empty `[]` / `()` is a plain term and is allowed.
     fn quoted_component(
         &mut self,
-        graph: Option<&Node>,
+        graph: Option<DocNodeRef<'_>>,
         depth: usize,
-    ) -> Result<Node, RdfDiagnostic> {
+    ) -> Result<DocNode, TextError<C::Error>> {
         match self.peek() {
             Some(Token::LBracket) => {
-                let (l, c) = self.loc();
-                Err(err_at(
+                let (l, c) = self.loc()?;
+                Err(parser_error(
+                    &mut self.context,
                     "blank-node property list is not allowed inside a quoted triple",
                     l,
                     c,
@@ -1777,8 +2513,9 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
                 if self.peek2() == Some(&Token::RParen) {
                     self.term(graph, depth)
                 } else {
-                    let (l, c) = self.loc();
-                    Err(err_at(
+                    let (l, c) = self.loc()?;
+                    Err(parser_error(
+                        &mut self.context,
                         "RDF collection is not allowed inside a quoted triple",
                         l,
                         c,
@@ -1789,19 +2526,24 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
         }
     }
 
-    fn predicate(&mut self, depth: usize) -> Result<Node, RdfDiagnostic> {
+    fn predicate(&mut self, depth: usize) -> Result<DocNode, TextError<C::Error>> {
         if matches!(self.peek(), Some(Token::Word(w)) if *w == "a") {
+            let start = self.cur_off();
             self.pos += 1;
-            return Ok(Node::Iri(self.rdf_type.clone()));
+            let iri = self
+                .context
+                .memory(|memory| self.rdf_type.clone_with_memory(memory))?;
+            return self.written_node(Node::Iri(iri), start);
         }
         self.term(None, depth)
     }
 
     fn parenthesized_quoted_triple(
         &mut self,
-        graph: Option<&Node>,
+        graph: Option<DocNodeRef<'_>>,
         depth: usize,
-    ) -> Result<Node, RdfDiagnostic> {
+    ) -> Result<DocNode, TextError<C::Error>> {
+        let start = self.cur_off();
         self.expect(&Token::TripleOpen)?;
         self.expect(&Token::LParen)?;
         let s = self.quoted_component(graph, depth)?;
@@ -1809,7 +2551,12 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
         let o = self.quoted_component(graph, depth)?;
         self.expect(&Token::RParen)?;
         self.expect(&Token::TripleClose)?;
-        Ok(Node::Triple(Box::new(s), Box::new(p), Box::new(o)))
+        self.triple_node(
+            s,
+            p,
+            o,
+            SourceOriginKind::Written(start..self.previous_end()),
+        )
     }
 
     /// A triple TERM in `rdf:reifies` object position: `<<( s p o )>>` (canonical) or
@@ -1818,9 +2565,10 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
     /// object of `rdf:reifies` denotes the reified triple itself.
     fn reifies_object_triple_term(
         &mut self,
-        graph: Option<&Node>,
+        graph: Option<DocNodeRef<'_>>,
         depth: usize,
-    ) -> Result<Node, RdfDiagnostic> {
+    ) -> Result<DocNode, TextError<C::Error>> {
+        let start = self.cur_off();
         self.expect(&Token::TripleOpen)?;
         let parenthesized = self.eat(&Token::LParen);
         let s = self.quoted_component(graph, depth)?;
@@ -1830,7 +2578,12 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
             self.expect(&Token::RParen)?;
         }
         self.expect(&Token::TripleClose)?;
-        Ok(Node::Triple(Box::new(s), Box::new(p), Box::new(o)))
+        self.triple_node(
+            s,
+            p,
+            o,
+            SourceOriginKind::Written(start..self.previous_end()),
+        )
     }
 
     /// RDF 1.2 reifying triple `<< s p o ~r? >>` in subject/object position: emits
@@ -1840,9 +2593,14 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
     /// reifiedTriple denotes its reifier, so only the `rdf:reifies` statement is emitted.
     fn reifying_triple(
         &mut self,
-        graph: Option<&Node>,
+        graph: Option<DocNodeRef<'_>>,
         depth: usize,
-    ) -> Result<Node, RdfDiagnostic> {
+    ) -> Result<DocNode, TextError<C::Error>> {
+        let start = self.cur_off();
+        let opening = self
+            .tokens
+            .get(self.pos)
+            .map_or(start..start, |token| token.start..token.end);
         self.expect(&Token::TripleOpen)?;
         let s = self.quoted_component(graph, depth)?;
         let p = self.predicate(depth)?;
@@ -1851,14 +2609,34 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
             if self.at_reifier_id() {
                 self.term(graph, depth)?
             } else {
-                self.next_bnode()
+                self.next_bnode(
+                    SourceRule::Reifier,
+                    opening,
+                    [s.origin, p.origin, o.origin, None],
+                )?
             }
         } else {
-            self.next_bnode()
+            self.next_bnode(
+                SourceRule::Reifier,
+                opening,
+                [s.origin, p.origin, o.origin, None],
+            )?
         };
         self.expect(&Token::TripleClose)?;
-        self.emit_reifies(&reifier, &s, &p, &o, graph);
-        Ok(reifier)
+        let anchor = start..self.previous_end();
+        self.emit_reifies(
+            reifier.as_ref(),
+            s.as_ref(),
+            p.as_ref(),
+            o.as_ref(),
+            graph,
+            anchor.clone(),
+        )?;
+        let inputs = [s.origin, p.origin, o.origin, reifier.origin];
+        self.release_node(s)?;
+        self.release_node(p)?;
+        self.release_node(o)?;
+        self.generated_node(reifier.value, SourceRule::ReifierReference, anchor, inputs)
     }
 
     /// `blankNodePropertyList ::= '[' predicateObjectList ']'` (Turtle 1.2 §6.5),
@@ -1877,17 +2655,23 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
     /// known.
     fn blank_node_property_list(
         &mut self,
-        graph: Option<&Node>,
+        graph: Option<DocNodeRef<'_>>,
         depth: usize,
-    ) -> Result<Node, RdfDiagnostic> {
+    ) -> Result<DocNode, TextError<C::Error>> {
+        let start = self.cur_off();
+        let opening = self
+            .tokens
+            .get(self.pos)
+            .map_or(start..start, |token| token.start..token.end);
         // `[]` lexes as a single `Anon`; `[ … ]` opens with `LBracket`.
         if self.eat(&Token::Anon) {
-            return Ok(self.next_bnode());
+            return self.next_bnode(SourceRule::AnonymousBlank, opening, [None; 4]);
         }
         self.expect(&Token::LBracket)?;
         if self.at(&Token::RBracket) {
-            let (line, column) = self.loc();
-            return Err(err_at(
+            let (line, column) = self.loc()?;
+            return Err(parser_error(
+                &mut self.context,
                 "`[` `]` with nothing between them is not a blank-node property \
                  list (which requires at least one predicate-object pair) and not \
                  an anonymous blank node (`ANON` admits only whitespace between \
@@ -1896,40 +2680,129 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
                 column,
             ));
         }
-        let subject = self.next_bnode();
-        self.predicate_object_list(&subject, graph, depth)?;
+        let subject = self.next_bnode(SourceRule::PropertyListSubject, opening, [None; 4])?;
+        self.predicate_object_list(subject.as_ref(), graph, depth)?;
         self.expect(&Token::RBracket)?;
         Ok(subject)
     }
 
-    fn collection(&mut self, graph: Option<&Node>, depth: usize) -> Result<Node, RdfDiagnostic> {
+    fn collection(
+        &mut self,
+        graph: Option<DocNodeRef<'_>>,
+        depth: usize,
+    ) -> Result<DocNode, TextError<C::Error>> {
+        let start = self.cur_off();
         self.expect(&Token::LParen)?;
         let mut items = Vec::new();
         while !self.eat(&Token::RParen) {
             if self.peek().is_none() {
-                let (l, c) = self.loc();
-                return Err(err_at("unterminated RDF collection", l, c));
+                let (l, c) = self.loc()?;
+                return Err(parser_error(
+                    &mut self.context,
+                    "unterminated RDF collection",
+                    l,
+                    c,
+                ));
             }
-            items.push(self.term(graph, depth)?);
+            let item = self.term(graph, depth)?;
+            self.context
+                .memory(|memory| memory.push(&mut items, item))?;
         }
         // Every cell is minted before any statement is written, so the labels are
         // those of the collection's cells in order whatever the items hold.
-        let cells: Vec<Node> = (0..items.len()).map(|_| self.next_bnode()).collect();
+        let anchor = start..self.previous_end();
+        let mut cells = Vec::new();
+        for (index, item) in items.iter().enumerate() {
+            let cell = self.next_bnode(
+                SourceRule::CollectionCell { index },
+                anchor.clone(),
+                [item.origin, None, None, None],
+            )?;
+            self.context
+                .memory(|memory| memory.push(&mut cells, cell))?;
+        }
         // The three vocabulary nodes are built once per collection, not once per item.
+        let first = self
+            .context
+            .memory(|memory| self.rdf_first.clone_with_memory(memory))?;
+        let rest = self
+            .context
+            .memory(|memory| self.rdf_rest.clone_with_memory(memory))?;
+        let nil = self
+            .context
+            .memory(|memory| self.rdf_nil.clone_with_memory(memory))?;
         let vocab = ListVocab {
-            first: Node::Iri(self.rdf_first.clone()),
-            rest: Node::Iri(self.rdf_rest.clone()),
-            nil: Node::Iri(self.rdf_nil.clone()),
+            first: self.generated_node(
+                Node::Iri(first),
+                SourceRule::CollectionFirst,
+                anchor.clone(),
+                [None; 4],
+            )?,
+            rest: self.generated_node(
+                Node::Iri(rest),
+                SourceRule::CollectionRest,
+                anchor.clone(),
+                [None; 4],
+            )?,
+            nil: self.generated_node(
+                Node::Iri(nil),
+                SourceRule::CollectionNil,
+                anchor,
+                [None; 4],
+            )?,
         };
-        Ok(build_rdf_list(
+        let item_bytes = std::alloc::Layout::array::<DocNode>(items.capacity())
+            .map_err(|_| {
+                ControlledError::Native(NativeParseError::Storage(StorageError::SizeOverflow))
+            })?
+            .size();
+        let parser = std::cell::RefCell::new(self);
+        let result = try_build_rdf_list_with_copy(
             items,
             &vocab,
-            |index| cells[index].clone(),
-            |subject, predicate, object| self.emit(&subject, &predicate, &object, graph),
-        ))
+            |index| {
+                parser
+                    .borrow_mut()
+                    .context
+                    .memory(|memory| clone_doc_node_with_memory(&cells[index], memory))
+            },
+            |node| {
+                parser
+                    .borrow_mut()
+                    .context
+                    .memory(|memory| clone_doc_node_with_memory(node, memory))
+            },
+            |subject, predicate, object| {
+                let mut parser = parser.borrow_mut();
+                parser.emit(subject.as_ref(), predicate.as_ref(), object.as_ref(), graph)?;
+                parser.release_node(subject)?;
+                parser.release_node(predicate)?;
+                parser.release_node(object)
+            },
+        );
+        let parser = parser.into_inner();
+        let cleanup = parser.context.release(|memory| {
+            // The native iterator destroyed the original item-array buffer;
+            // its member payloads were moved into the original emitted rows.
+            memory.release_bytes(item_bytes)?;
+            release_doc_nodes_with_memory(cells, memory)?;
+            release_node_with_memory(vocab.first.value, memory)?;
+            release_node_with_memory(vocab.rest.value, memory)?;
+            release_node_with_memory(vocab.nil.value, memory)
+        });
+        match result {
+            Err(cause) => {
+                let _ = cleanup;
+                Err(cause)
+            }
+            Ok(head) => {
+                cleanup?;
+                Ok(head)
+            }
+        }
     }
 
-    fn literal(&mut self) -> Result<Node, RdfDiagnostic> {
+    fn literal(&mut self) -> Result<Node, TextError<C::Error>> {
         let Some(Token::StringLit(value) | Token::LongStringLit(value)) = self.bump() else {
             unreachable!()
         };
@@ -1938,7 +2811,7 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
         let mut datatype = None;
         match self.peek() {
             Some(Token::LangTag(_)) => {
-                let (l, c) = self.loc();
+                let (l, c) = self.loc()?;
                 let Some(Token::LangTag(raw)) = self.bump() else {
                     unreachable!()
                 };
@@ -1946,7 +2819,9 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
                 // `--dir`) on the literal `lang` field and lowers it to an N-Quads
                 // `@lang` token, so the direction is re-parsed at the `from_nquads`
                 // stage. To match that exactly, split here into lang + direction.
-                let (base, dir) = split_lang_direction(raw, l, c)?;
+                let (base, dir) = self
+                    .context
+                    .native(|memory| split_lang_direction_with_memory(raw, l, c, memory))?;
                 // Turtle / TriG: the one codec profile, which is also what the
                 // N-Triples / N-Quads parser above applies. Its `LANGTAG`
                 // terminal is what accepts the `@en-fr-jura` and `@fr-be-fbcl`
@@ -1954,7 +2829,29 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
                 // what stops the lexer's `[A-Za-z0-9-]+` token shape from being
                 // the entire contract — `@1`, `@-` and `@9-9` used to parse
                 // here. See `validate_language_tag`.
-                validate_language_tag(&base, l, c)?;
+                self.context.native(
+                    |memory| match super::syntax::check_language_tag_with_memory(
+                        &base,
+                        |error| LanguageTagMessage {
+                            tag: &base,
+                            error: *error,
+                        },
+                        memory,
+                    ) {
+                        Ok(()) => Ok(()),
+                        Err(purrdf_core::ir::builder::NativeBuildError::Storage(cause)) => {
+                            Err(NativeParseError::Storage(cause))
+                        }
+                        Err(purrdf_core::ir::builder::NativeBuildError::Diagnostic(mut cause)) => {
+                            cause.location = Some(memory.boxed(RdfLocation {
+                                line: Some(l),
+                                column: Some(c),
+                                ..RdfLocation::default()
+                            })?);
+                            Err(NativeParseError::Diagnostic(cause))
+                        }
+                    },
+                )?;
                 lang = Some(base);
                 direction = dir;
             }
@@ -1965,82 +2862,128 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
             _ => {}
         }
         Ok(Node::Literal {
-            value: value.into_owned(),
+            value: self
+                .context
+                .memory(|memory| take_text_with_memory(value, memory))?,
             lang,
             direction,
             datatype,
         })
     }
 
-    fn datatype_iri(&mut self) -> Result<String, RdfDiagnostic> {
-        let (l, c) = self.loc();
+    fn datatype_iri(&mut self) -> Result<String, TextError<C::Error>> {
+        let (l, c) = self.loc()?;
         match self.bump() {
-            Some(Token::Iri(raw)) => Ok(self.resolve_iri(&raw, l, c)?.as_str().to_owned()),
+            Some(Token::Iri(raw)) => {
+                let iri = self.resolve_iri(&raw, l, c)?.into_text();
+                self.release_token_text(raw)?;
+                Ok(iri)
+            }
             Some(Token::PrefixedName(prefix, local)) => {
-                match self.resolve_prefixed(prefix, &local, l, c)? {
-                    Node::Iri(iri) => Ok(iri.as_str().to_owned()),
+                let iri = self.resolve_prefixed(prefix, &local, l, c)?;
+                self.release_token_text(local)?;
+                match iri {
+                    Node::Iri(iri) => Ok(iri.into_text()),
                     _ => unreachable!("resolve_prefixed yields an IRI node"),
                 }
             }
-            other => Err(err_at(
-                format!("expected a datatype IRI, found {other:?}"),
+            other => Err(parser_error(
+                &mut self.context,
+                format_args!("expected a datatype IRI, found {other:?}"),
                 l,
                 c,
             )),
         }
     }
 
-    fn numeric_literal(&mut self, sign: &str) -> Result<Node, RdfDiagnostic> {
-        let (l, c) = self.loc();
+    fn numeric_literal(&mut self, sign: &str) -> Result<Node, TextError<C::Error>> {
+        let (l, c) = self.loc()?;
         match self.bump() {
-            Some(Token::Integer(lexical)) => Ok(numeric(format!("{sign}{lexical}"), XSD_INTEGER)),
-            Some(Token::Decimal(lexical)) => Ok(numeric(format!("{sign}{lexical}"), XSD_DECIMAL)),
-            Some(Token::Double(lexical)) => Ok(numeric(format!("{sign}{lexical}"), XSD_DOUBLE)),
-            other => Err(err_at(
-                format!("expected a numeric literal, found {other:?}"),
+            Some(Token::Integer(lexical)) => self.numeric_node(sign, lexical, XSD_INTEGER),
+            Some(Token::Decimal(lexical)) => self.numeric_node(sign, lexical, XSD_DECIMAL),
+            Some(Token::Double(lexical)) => self.numeric_node(sign, lexical, XSD_DOUBLE),
+            other => Err(parser_error(
+                &mut self.context,
+                format_args!("expected a numeric literal, found {other:?}"),
                 l,
                 c,
             )),
         }
+    }
+
+    fn numeric_node(
+        &mut self,
+        sign: &str,
+        lexical: &str,
+        datatype: &str,
+    ) -> Result<Node, TextError<C::Error>> {
+        self.context.memory(|memory| {
+            Ok(Node::Literal {
+                value: memory.format_with_progress(&format_args!("{sign}{lexical}"))?,
+                lang: None,
+                direction: None,
+                datatype: Some(memory.string_with_progress(datatype)?),
+            })
+        })
     }
 
     /// A TriG `wrappedGraph` body, the opening `{` already consumed. `graph` is the
     /// block's label, or `None` for the **unlabelled** `{ … }` block, which TriG rule
     /// \[3\] `block ::= triplesOrGraph | wrappedGraph | triples2 | 'GRAPH' …` admits and
     /// which names the *default* graph.
-    fn graph_block(&mut self, graph: Option<&Node>) -> Result<(), RdfDiagnostic> {
+    fn graph_block(&mut self, graph: Option<DocNodeRef<'_>>) -> Result<(), TextError<C::Error>> {
         if let Some(name) = graph
-            && !matches!(name, Node::Iri(_) | Node::Bnode(_))
+            && !matches!(name.value, Node::Iri(_) | Node::Bnode(_))
         {
-            let (l, c) = self.loc();
-            return Err(err_at(
+            let (l, c) = self.loc()?;
+            return Err(parser_error(
+                &mut self.context,
                 "graph block name must be an IRI or blank node",
                 l,
                 c,
             ));
         }
         if let Some(name) = graph {
-            self.named_graphs.push(name.clone());
+            let name = self
+                .context
+                .memory(|memory| clone_node_with_memory(name.value, memory))?;
+            self.context
+                .memory(|memory| memory.push(&mut self.named_graphs, name))?;
         }
+        if let Some(name) = graph
+            && let Some(origin) =
+                self.source_occurrence(None, SourceRole::GraphDeclaration, name)?
+        {
+            self.context
+                .memory(|memory| memory.push(&mut self.source.declarations, origin))?;
+        }
+        let graph = graph.map(DocNodeRef::inherited);
         while !self.eat(&Token::RBrace) {
             if self.peek().is_none() {
-                let (l, c) = self.loc();
-                return Err(err_at("unterminated graph block", l, c));
+                let (l, c) = self.loc()?;
+                return Err(parser_error(
+                    &mut self.context,
+                    "unterminated graph block",
+                    l,
+                    c,
+                ));
             }
             if S::ENABLED {
-                self.subject_off = self.cur_off();
+                let offset = self.cur_off();
+                self.subject_position = self.position_at(offset)?;
             }
             let subject = self.term(graph, 0)?;
-            self.statement_after_subject_in_graph(&subject, graph)?;
+            self.statement_after_subject_in_graph(subject.as_ref(), graph)?;
+            self.release_node(subject)?;
         }
         Ok(())
     }
 
     fn statement_after_subject(
         &mut self,
-        subject: &Node,
-        graph: Option<&Node>,
-    ) -> Result<(), RdfDiagnostic> {
+        subject: DocNodeRef<'_>,
+        graph: Option<DocNodeRef<'_>>,
+    ) -> Result<(), TextError<C::Error>> {
         // A self-asserting subject (reifying triple or blank-node property list) may
         // end immediately at `.`; a plain subject still needs a predicate-object list.
         if !self.at(&Token::Dot) {
@@ -2051,9 +2994,9 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
 
     fn statement_after_subject_in_graph(
         &mut self,
-        subject: &Node,
-        graph: Option<&Node>,
-    ) -> Result<(), RdfDiagnostic> {
+        subject: DocNodeRef<'_>,
+        graph: Option<DocNodeRef<'_>>,
+    ) -> Result<(), TextError<C::Error>> {
         if !(self.at(&Token::Dot) || self.at(&Token::RBrace)) {
             self.predicate_object_list(subject, graph, 0)?;
         }
@@ -2061,8 +3004,9 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
         if self.eat(&Token::Dot) || self.at(&Token::RBrace) {
             Ok(())
         } else {
-            let (l, c) = self.loc();
-            Err(err_at(
+            let (l, c) = self.loc()?;
+            Err(parser_error(
+                &mut self.context,
                 "expected '.' to terminate statement in graph block",
                 l,
                 c,
@@ -2078,38 +3022,53 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
     /// unbounded.
     fn predicate_object_list(
         &mut self,
-        subject: &Node,
-        graph: Option<&Node>,
+        subject: DocNodeRef<'_>,
+        graph: Option<DocNodeRef<'_>>,
         depth: usize,
-    ) -> Result<(), RdfDiagnostic> {
+    ) -> Result<(), TextError<C::Error>> {
         let depth = self.descend(depth)?;
+        let mut subject = subject;
         loop {
             let predicate = self.predicate(depth)?;
+            let mut predicate_ref = predicate.as_ref();
             loop {
                 // The object of `rdf:reifies` is a triple TERM. Parse `<<` here as a
                 // triple term whether or not it carries parens, tolerating purrdf's
                 // legacy non-parenthesized `<< s p o >>` triple-term serialization in
                 // addition to the canonical `<<( s p o )>>` — in EVERY other position a
                 // bare `<< … >>` keeps its W3C reifying-triple meaning (`reifying_triple`).
-                let object = if matches!(&predicate, Node::Iri(p) if p.as_str() == RDF_REIFIES)
+                let object = if matches!(&predicate.value, Node::Iri(p) if p.as_str() == RDF_REIFIES)
                     && self.at(&Token::TripleOpen)
                 {
                     self.reifies_object_triple_term(graph, depth)?
                 } else {
                     self.term(graph, depth)?
                 };
-                self.emit(subject, &predicate, &object, graph);
-                self.maybe_reify_and_annotate(subject, &predicate, &object, graph, depth)?;
+                self.emit(subject, predicate_ref, object.as_ref(), graph)?;
+                self.maybe_reify_and_annotate(
+                    subject,
+                    predicate_ref,
+                    object.as_ref(),
+                    graph,
+                    depth,
+                )?;
+                subject = subject.inherited();
+                self.release_node(object)?;
                 if self.eat(&Token::Comma) {
+                    predicate_ref = predicate.as_ref().inherited();
                     continue;
                 }
                 break;
             }
+            self.release_node(predicate)?;
             if self.eat(&Token::Semicolon) {
                 // A predicateObjectList item after `;` is optional, so a run of `;`
                 // (the doubled/trailing form `; ;`) denotes empty items and emits no
                 // triples. Consume the run, then decide on the first non-`;` token.
-                while self.eat(&Token::Semicolon) {}
+                while self.at(&Token::Semicolon) {
+                    self.context.charge(1)?;
+                    self.pos += 1;
+                }
                 // `AnnotationClose` (`|}`) terminates a trailing `;` inside a
                 // `{| … |}` annotation block.
                 if self.at(&Token::Dot)
@@ -2139,55 +3098,126 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
     /// `~` is `Token::Tilde`; `{|`/`|}` are the `LBrace Pipe` / `Pipe RBrace` pairs.
     fn maybe_reify_and_annotate(
         &mut self,
-        s: &Node,
-        p: &Node,
-        o: &Node,
-        graph: Option<&Node>,
+        s: DocNodeRef<'_>,
+        p: DocNodeRef<'_>,
+        o: DocNodeRef<'_>,
+        graph: Option<DocNodeRef<'_>>,
         depth: usize,
-    ) -> Result<(), RdfDiagnostic> {
-        let mut pending: Option<Node> = None;
+    ) -> Result<(), TextError<C::Error>> {
+        let mut pending: Option<DocNode> = None;
         loop {
+            let start = self.cur_off();
+            let anchor = self
+                .tokens
+                .get(self.pos)
+                .map_or(start..start, |token| token.start..token.end);
             if self.eat(&Token::Tilde) {
                 let reifier = if self.at_reifier_id() {
                     self.term(graph, depth)?
                 } else {
-                    self.next_bnode()
+                    self.next_bnode(
+                        SourceRule::Reifier,
+                        anchor.clone(),
+                        [s.origin, p.origin, o.origin, None],
+                    )?
                 };
-                self.emit_reifies(&reifier, s, p, o, graph);
-                pending = Some(reifier);
+                self.emit_reifies(
+                    reifier.as_ref(),
+                    s.inherited(),
+                    p.inherited(),
+                    o.inherited(),
+                    graph,
+                    anchor,
+                )?;
+                if let Some(previous) = pending.replace(reifier) {
+                    self.release_node(previous)?;
+                }
             } else if self.at(&Token::AnnotationOpen) {
                 self.bump(); // `{|`
                 let reifier = match pending.take() {
                     Some(reifier) => reifier,
                     None => {
-                        let reifier = self.next_bnode();
-                        self.emit_reifies(&reifier, s, p, o, graph);
+                        let reifier = self.next_bnode(
+                            SourceRule::Reifier,
+                            anchor.clone(),
+                            [s.origin, p.origin, o.origin, None],
+                        )?;
+                        self.emit_reifies(
+                            reifier.as_ref(),
+                            s.inherited(),
+                            p.inherited(),
+                            o.inherited(),
+                            graph,
+                            anchor,
+                        )?;
                         reifier
                     }
                 };
-                self.predicate_object_list(&reifier, graph, depth)?;
+                self.predicate_object_list(reifier.as_ref().inherited(), graph, depth)?;
                 self.expect(&Token::AnnotationClose)?; // `|}`
+                self.release_node(reifier)?;
             } else {
                 break;
             }
+        }
+        if let Some(reifier) = pending {
+            self.release_node(reifier)?;
         }
         Ok(())
     }
 
     /// Emit `reifier rdf:reifies <<( s p o )>>` (the triple term is self-reifying via
     /// [`Node::Triple`]), the canonical RDF 1.2 reification triple.
-    fn emit_reifies(&mut self, reifier: &Node, s: &Node, p: &Node, o: &Node, graph: Option<&Node>) {
-        let triple_term = Node::Triple(
-            Box::new(s.clone()),
-            Box::new(p.clone()),
-            Box::new(o.clone()),
-        );
-        self.emit(
-            reifier,
-            &Node::Iri(self.rdf_reifies.clone()),
-            &triple_term,
-            graph,
-        );
+    fn emit_reifies(
+        &mut self,
+        reifier: DocNodeRef<'_>,
+        s: DocNodeRef<'_>,
+        p: DocNodeRef<'_>,
+        o: DocNodeRef<'_>,
+        graph: Option<DocNodeRef<'_>>,
+        anchor: std::ops::Range<usize>,
+    ) -> Result<(), TextError<C::Error>> {
+        let triple_term = self.context.memory(|memory| {
+            let s = clone_node_with_memory(s.value, memory)?;
+            let s = memory.boxed(s)?;
+            let p = clone_node_with_memory(p.value, memory)?;
+            let p = memory.boxed(p)?;
+            let o = clone_node_with_memory(o.value, memory)?;
+            let o = memory.boxed(o)?;
+            Ok(Node::Triple(s, p, o))
+        })?;
+        let components = match (
+            self.source_reference(s)?,
+            self.source_reference(p)?,
+            self.source_reference(o)?,
+        ) {
+            (Some(s), Some(p), Some(o)) => Some([s, p, o]),
+            _ => None,
+        };
+        let origin = self.source_origin(
+            SourceOriginKind::Generated {
+                rule: SourceRule::ReifiedTriple,
+                anchor: anchor.clone(),
+                inputs: [s.origin, p.origin, o.origin, None],
+            },
+            components,
+        )?;
+        let triple_term = DocNode {
+            value: triple_term,
+            origin,
+        };
+        let predicate = self
+            .context
+            .memory(|memory| self.rdf_reifies.clone_with_memory(memory))?;
+        let predicate = self.generated_node(
+            Node::Iri(predicate),
+            SourceRule::ReifiesPredicate,
+            anchor,
+            [s.origin, p.origin, o.origin, reifier.origin],
+        )?;
+        self.emit(reifier, predicate.as_ref(), triple_term.as_ref(), graph)?;
+        self.release_node(predicate)?;
+        self.release_node(triple_term)
     }
 
     /// Whether the next token can begin a reifier identifier (`iri | BlankNode`).
@@ -2200,34 +3230,76 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
         )
     }
 
-    fn emit(&mut self, subject: &Node, predicate: &Node, object: &Node, graph: Option<&Node>) {
-        // Exact-size reservation: three terms plus the optional graph, never regrown.
-        let mut nodes = Vec::with_capacity(3 + usize::from(graph.is_some()));
-        nodes.push(subject.clone());
-        nodes.push(predicate.clone());
-        nodes.push(object.clone());
-        if let Some(graph) = graph {
-            nodes.push(graph.clone());
+    fn emit(
+        &mut self,
+        subject: DocNodeRef<'_>,
+        predicate: DocNodeRef<'_>,
+        object: DocNodeRef<'_>,
+        graph: Option<DocNodeRef<'_>>,
+    ) -> Result<(), TextError<C::Error>> {
+        let nodes = self.context.memory(|memory| {
+            let mut nodes = Vec::new();
+            memory.reserve(&mut nodes, 3 + usize::from(graph.is_some()))?;
+            nodes.push(clone_node_with_memory(subject.value, memory)?);
+            nodes.push(clone_node_with_memory(predicate.value, memory)?);
+            nodes.push(clone_node_with_memory(object.value, memory)?);
+            if let Some(graph) = graph {
+                nodes.push(clone_node_with_memory(graph.value, memory)?);
+            }
+            Ok(nodes)
+        })?;
+        if S::ENABLED {
+            let ordinal = Some(self.statements.len());
+            let roots = [
+                self.source_occurrence(ordinal, SourceRole::Subject, subject)?,
+                self.source_occurrence(ordinal, SourceRole::Predicate, predicate)?,
+                self.source_occurrence(ordinal, SourceRole::Object, object)?,
+                graph
+                    .map(|graph| self.source_occurrence(ordinal, SourceRole::Graph, graph))
+                    .transpose()?
+                    .flatten(),
+            ];
+            self.context.memory(|memory| {
+                memory.push(
+                    &mut self.source.statements,
+                    SourceStatementOrigins { roots, kind: None },
+                )
+            })?;
         }
-        // Record the subject's source position when tracking is on. `S::ENABLED` is a
-        // const, so for `NoSpans` this block (and the lazy `LineIndex`) is dead code.
-        if S::ENABLED
-            && let Some(key) = subject_key(&nodes[0])
-        {
-            let src = self.src;
-            let index = self
-                .line_index
-                .get_or_init(|| purrdf_iri::LineIndex::new(src));
-            let position = index.locate(src, self.subject_off);
-            self.collector.record(&key, position);
+        // Legacy subject positions were saved before the native production
+        // advanced; recording generated statements never rewinds the cursor.
+        if S::ENABLED {
+            let key = self
+                .context
+                .memory(|memory| subject_key(&nodes[0], memory))?;
+            if let Some(key) = key {
+                let position = self.subject_position;
+                let recorded = self
+                    .context
+                    .memory(|memory| self.collector.record_with_memory(&key, position, memory));
+                let cleanup = self.context.release(|memory| memory.release_string(key));
+                recorded.and(cleanup)?;
+            }
         }
-        self.statements.push(nodes);
+        self.context
+            .memory(|memory| memory.push(&mut self.statements, nodes))?;
+        Ok(())
     }
 
-    fn next_bnode(&mut self) -> Node {
+    fn next_bnode(
+        &mut self,
+        rule: SourceRule,
+        anchor: std::ops::Range<usize>,
+        inputs: [Option<SourceOriginId>; 4],
+    ) -> Result<DocNode, TextError<C::Error>> {
         let id = self.bnode_counter;
-        self.bnode_counter += 1;
-        Node::Bnode(deterministic_label(id))
+        self.bnode_counter = id.checked_add(1).ok_or_else(|| {
+            ControlledError::Native(NativeParseError::Storage(StorageError::SizeOverflow))
+        })?;
+        let label = self.context.memory(|memory| {
+            super::ser_model::deterministic_blank_label_with_memory("gts_", id, memory)
+        })?;
+        self.generated_node(Node::Bnode(label), rule, anchor, inputs)
     }
 
     /// Resolve an IRIREF against the base in force — the ONLY constructor of
@@ -2238,10 +3310,15 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
     /// let an unresolved relative IRI reach the frozen IR and be emitted as invalid
     /// N-Triples. With no base and a relative reference this is a hard
     /// `iri-relative-no-base`, located at the offending token.
-    fn resolve_iri(&self, raw: &str, line: u64, column: u32) -> Result<Iri, RdfDiagnostic> {
-        self.base
-            .resolve(raw)
-            .map_err(|e| iri_err_at(&e, line, column))
+    fn resolve_iri(
+        &mut self,
+        raw: &str,
+        line: u64,
+        column: u32,
+    ) -> Result<Iri, TextError<C::Error>> {
+        self.context.iri(line, column, |memory| {
+            self.base.resolve_with_memory(raw, memory)
+        })
     }
 
     /// Resolve a `PrefixedName` against the declared prefixes. The `(line, col)`
@@ -2249,47 +3326,70 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
     /// BEFORE it consumed the token (the token cursor has already advanced by the
     /// time we get here, so `self.loc()` would report the following token).
     fn resolve_prefixed(
-        &self,
+        &mut self,
         prefix: &str,
         local: &str,
         line: u64,
         col: u32,
-    ) -> Result<Node, RdfDiagnostic> {
-        match self.prefixes.get(prefix) {
+    ) -> Result<Node, TextError<C::Error>> {
+        let namespace = self.context.memory(|memory| {
+            self.prefixes.try_get_by(|stored| {
+                purrdf_lex::control::compare_bytes(
+                    prefix.as_bytes(),
+                    stored.as_bytes(),
+                    &mut |units| memory.admission_mut().checkpoint(units),
+                )
+            })
+        })?;
+        match namespace {
             Some(namespace) => {
                 // The namespace was resolved to an absolute IRI when its `@prefix` was
                 // read, so expansion is concatenation — NOT another base resolution,
                 // which would re-resolve against whatever base is in force HERE and make
                 // the same prefixed name mean different things in one document. The
                 // concatenation is still validated: a local part can make it malformed.
-                let expanded = format!("{namespace}{local}");
-                purrdf_iri::parse(&expanded)
-                    .map(Node::Iri)
-                    .map_err(|e| iri_err_at(&e, line, col))
+                self.context.iri(line, col, |memory| {
+                    let expanded =
+                        memory.format_with_progress(&format_args!("{namespace}{local}"))?;
+                    let result = purrdf_iri::parse_with_memory(&expanded, memory);
+                    let cleanup = memory.release_string(expanded);
+                    if result.is_ok() {
+                        cleanup?;
+                    }
+                    result.map(Node::Iri)
+                })
             }
-            None => Err(err_at(format!("unknown prefix {prefix:?}"), line, col)),
+            None => Err(parser_error(
+                &mut self.context,
+                format_args!("unknown prefix {:?}", purrdf_lex::text_out::Quoted(prefix)),
+                line,
+                col,
+            )),
         }
     }
 
     // token cursor helpers
 
-    /// Resolve the current token's document-global 1-based `(line, column)` by
-    /// scanning the full source with the shared [`purrdf_iri::LineIndex`]. The index is
-    /// memoized in `self.line_index` (a `OnceCell`), so the FIRST lookup pays one
-    /// whole-buffer scan and every subsequent lookup is an `O(log lines)` locate — a
-    /// document with many lookups is linear, not quadratic, in the source length.
-    fn loc(&self) -> (u64, u32) {
-        let off = self
-            .tokens
-            .get(self.pos)
-            .map(|s| s.start)
-            .or_else(|| self.tokens.last().map(|s| s.end))
-            .unwrap_or(0);
-        let p = self
-            .line_index
-            .get_or_init(|| purrdf_iri::LineIndex::new(self.src))
-            .locate(self.src, off);
-        (p.line, p.column)
+    fn position_at(&mut self, off: usize) -> Result<Position, TextError<C::Error>> {
+        self.position_cursor
+            .advance(off, &mut |units| self.context.progress.charge(units))
+            .map_err(|cause| match cause {
+                ControlledError::Control(cause) => ControlledError::Control(cause),
+                ControlledError::Native(cause) => {
+                    ControlledError::Native(NativeParseError::Position {
+                        cause,
+                        line: self.position_cursor.line(),
+                    })
+                }
+            })
+    }
+
+    /// Resolve the current token with the native forward cursor. Saved subject
+    /// positions service generated statements without rescanning or rewinding.
+    fn loc(&mut self) -> Result<(u64, u32), TextError<C::Error>> {
+        let off = self.cur_off();
+        let position = self.position_at(off)?;
+        Ok((position.line, position.column))
     }
 
     fn peek(&self) -> Option<&Token<'a>> {
@@ -2330,35 +3430,22 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
         }
     }
 
-    fn expect(&mut self, token: &Token<'a>) -> Result<(), RdfDiagnostic> {
+    fn expect(&mut self, token: &Token<'a>) -> Result<(), TextError<C::Error>> {
         if self.eat(token) {
             Ok(())
         } else {
-            let (l, c) = self.loc();
-            Err(err_at(
-                format!("expected {token:?}, found {:?}", self.peek()),
+            let (l, c) = self.loc()?;
+            Err(parser_error(
+                &mut self.context,
+                format_args!(
+                    "expected {token:?}, found {:?}",
+                    token_at(&self.tokens, self.pos)
+                ),
                 l,
                 c,
             ))
         }
     }
-}
-
-fn numeric(lexical: String, datatype: &str) -> Node {
-    Node::Literal {
-        value: lexical,
-        lang: None,
-        direction: None,
-        datatype: Some(datatype.to_owned()),
-    }
-}
-
-/// A fresh blank-node label, delegating to the first-party
-/// [`deterministic_blank_label`](super::ser_model::deterministic_blank_label): the
-/// `gts_` prefix plus the Crockford Base32 ULID rendering of the zero-timestamp counter,
-/// byte-identical to the prior purrdf-gts `deterministic_label("gts_", id)`.
-fn deterministic_label(id: usize) -> String {
-    super::ser_model::deterministic_blank_label(id)
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
@@ -2369,33 +3456,51 @@ fn deterministic_label(id: usize) -> String {
 /// byte-determinism — term ids come from `terms` push order, never from
 /// hash-iteration order — so the fixed-key `FixedHasher` just keeps SipHash off the hot
 /// interning path (same pattern as `purrdf-core`'s `ir::builder::hash_of`).
-fn hash_atom(
+fn hash_atom<A: Admission + ?Sized>(
     kind: SerTermKind,
     value: &str,
     lang: Option<&str>,
     direction: Option<&str>,
     datatype: Option<usize>,
-) -> u64 {
-    use std::hash::{BuildHasher, Hash, Hasher};
-    let mut hasher = purrdf_core::FastHasher::default().build_hasher();
+    memory: &mut Memory<'_, A>,
+) -> Result<u64, StorageError> {
+    use std::hash::Hasher;
+    let mut hasher = purrdf_hash::fixed::FixedHasher::default();
     let tag: u8 = match kind {
         SerTermKind::Iri => 0,
         SerTermKind::Bnode => 1,
         SerTermKind::Literal => 2,
         SerTermKind::Triple => unreachable!("triple terms are keyed structurally, not as atoms"),
     };
-    tag.hash(&mut hasher);
-    value.hash(&mut hasher);
-    lang.hash(&mut hasher);
-    direction.hash(&mut hasher);
-    datatype.hash(&mut hasher);
-    hasher.finish()
+    memory.admission_mut().checkpoint(1)?;
+    hasher.write_u8(tag);
+    for text in [Some(value), lang, direction] {
+        memory.admission_mut().checkpoint(1)?;
+        hasher.write_u8(u8::from(text.is_some()));
+        if let Some(text) = text {
+            hasher.try_write(text.as_bytes(), &mut |units| {
+                memory.admission_mut().checkpoint(units)
+            })?;
+            memory.admission_mut().checkpoint(1)?;
+            hasher.write_u8(0xff);
+        }
+    }
+    memory.admission_mut().checkpoint(1)?;
+    hasher.write_u8(u8::from(datatype.is_some()));
+    if let Some(datatype) = datatype {
+        memory.admission_mut().checkpoint(1)?;
+        hasher.write_usize(datatype);
+    }
+    Ok(hasher.finish())
 }
 
 /// Re-hash a STORED atom row byte-identically to [`hash_atom`] over the same
 /// components (needed when the hash table resizes). Only atom rows (never
 /// `SerTermKind::Triple`) live in the atoms table, so `value` is always present.
-fn hash_stored_atom(term: &SerTerm) -> u64 {
+fn hash_stored_atom<A: Admission + ?Sized>(
+    term: &SerTerm,
+    memory: &mut Memory<'_, A>,
+) -> Result<u64, StorageError> {
     hash_atom(
         term.kind,
         term.value
@@ -2404,25 +3509,51 @@ fn hash_stored_atom(term: &SerTerm) -> u64 {
         term.lang.as_deref(),
         term.direction.as_deref(),
         term.datatype,
+        memory,
     )
 }
 
 /// Whether a stored atom row equals the borrowed lookup components. Keyed on the
 /// datatype's interned ID rather than its string: equal datatype strings always
 /// intern to the same id (and vice versa), so equality is unchanged.
-fn atom_matches(
+fn atom_matches<A: Admission + ?Sized>(
     term: &SerTerm,
     kind: SerTermKind,
     value: &str,
     lang: Option<&str>,
     direction: Option<&str>,
     datatype: Option<usize>,
-) -> bool {
-    term.kind == kind
-        && term.value.as_deref() == Some(value)
-        && term.lang.as_deref() == lang
-        && term.direction.as_deref() == direction
-        && term.datatype == datatype
+    memory: &mut Memory<'_, A>,
+) -> Result<bool, StorageError> {
+    memory.admission_mut().checkpoint(1)?;
+    if term.kind != kind || term.datatype != datatype {
+        return Ok(false);
+    }
+    for (stored, incoming) in [
+        term.value.as_deref(),
+        term.lang.as_deref(),
+        term.direction.as_deref(),
+    ]
+    .into_iter()
+    .zip([Some(value), lang, direction])
+    {
+        match (stored, incoming) {
+            (None, None) => {}
+            (Some(stored), Some(incoming)) => {
+                if !purrdf_lex::control::compare_bytes(
+                    stored.as_bytes(),
+                    incoming.as_bytes(),
+                    &mut |units| memory.admission_mut().checkpoint(units),
+                )?
+                .is_eq()
+                {
+                    return Ok(false);
+                }
+            }
+            _ => return Ok(false),
+        }
+    }
+    Ok(true)
 }
 
 /// The first-seen-order term interner, reproducing `from_nquads`'s `Interner`
@@ -2436,7 +3567,7 @@ struct Interner {
     /// Index table over the atom rows of `terms` (store-once dedup).
     atoms: purrdf_core::hash::table::HashTable<u32>,
     /// Structural dedup for triple terms; the key is three term ids (no strings).
-    triples: crate::FastMap<SerTriple3, usize>,
+    triples: purrdf_core::hash::table::HashTable<(SerTriple3, usize)>,
     terms: Vec<SerTerm>,
 }
 
@@ -2444,48 +3575,103 @@ impl Interner {
     fn new() -> Self {
         Self {
             atoms: purrdf_core::hash::table::HashTable::new(),
-            triples: crate::FastMap::default(),
+            triples: purrdf_core::hash::table::HashTable::new(),
             terms: Vec::new(),
         }
     }
 
     /// Insert-or-find an atom row by its borrowed components, storing the strings
     /// exactly once (on first sight) in `terms`.
-    fn intern_atom(
+    fn intern_atom<A: Admission + ?Sized>(
         &mut self,
         kind: SerTermKind,
         value: &str,
         lang: Option<&str>,
         direction: Option<&str>,
         datatype: Option<usize>,
-    ) -> usize {
+        memory: &mut Memory<'_, A>,
+    ) -> Result<usize, StorageError> {
         let Self { atoms, terms, .. } = self;
-        let hash = hash_atom(kind, value, lang, direction, datatype);
-        if let Some(&id) = atoms.find(hash, |&i| {
-            atom_matches(&terms[i as usize], kind, value, lang, direction, datatype)
-        }) {
-            return id as usize;
+        let hash = hash_atom(kind, value, lang, direction, datatype, memory)?;
+        if let Some(&id) = atoms.find_with_control(
+            hash,
+            |&i, memory| {
+                atom_matches(
+                    &terms[i as usize],
+                    kind,
+                    value,
+                    lang,
+                    direction,
+                    datatype,
+                    memory,
+                )
+            },
+            memory,
+        )? {
+            return Ok(id as usize);
         }
         let id = terms.len();
-        terms.push(SerTerm {
-            kind,
-            value: Some(value.to_owned()),
-            datatype,
-            lang: lang.map(str::to_owned),
-            direction: direction.map(str::to_owned),
-            reifier: None,
-        });
-        let id32 = u32::try_from(id).expect("term table exceeds u32::MAX entries");
-        atoms.insert_unique(hash, id32, |&i| hash_stored_atom(&terms[i as usize]));
-        id
+        let id32 = u32::try_from(id).map_err(|_| StorageError::SizeOverflow)?;
+        purrdf_core::hash::try_reserve_table_with_memory(
+            atoms,
+            atoms
+                .len()
+                .checked_add(1)
+                .ok_or(StorageError::SizeOverflow)?,
+            |&i, memory| hash_stored_atom(&terms[i as usize], memory),
+            memory,
+        )?;
+        memory.reserve_for_push(terms)?;
+        let term = memory.scope(|memory| {
+            Ok(SerTerm {
+                kind,
+                value: Some(memory.string_with_progress(value)?),
+                datatype,
+                lang: lang
+                    .map(|text| memory.string_with_progress(text))
+                    .transpose()?,
+                direction: direction
+                    .map(|text| memory.string_with_progress(text))
+                    .transpose()?,
+                reifier: None,
+            })
+        })?;
+        terms.push(term);
+        if let Err(refusal) = atoms.try_insert_unique_with_control(
+            hash,
+            id32,
+            |&i, memory| hash_stored_atom(&terms[i as usize], memory),
+            memory,
+        ) {
+            // No intervening operation removes the atom appended above.
+            let term = terms.pop().expect("the unpublished atom was just appended");
+            let bytes = [term.value, term.lang, term.direction]
+                .into_iter()
+                .flatten()
+                .map(|text| {
+                    let bytes = text.capacity();
+                    drop(text);
+                    bytes
+                })
+                .sum();
+            let _ = memory.release_bytes(bytes);
+            return Err(purrdf_core::hash::table_storage_error(&refusal.cause));
+        }
+        Ok(id)
     }
 
-    fn atom(&mut self, node: &Node) -> usize {
+    fn atom<A: Admission + ?Sized>(
+        &mut self,
+        node: &Node,
+        memory: &mut Memory<'_, A>,
+    ) -> Result<usize, StorageError> {
         match node {
             Node::Iri(value) => {
-                self.intern_atom(SerTermKind::Iri, value.as_str(), None, None, None)
+                self.intern_atom(SerTermKind::Iri, value.as_str(), None, None, None, memory)
             }
-            Node::Bnode(value) => self.intern_atom(SerTermKind::Bnode, value, None, None, None),
+            Node::Bnode(value) => {
+                self.intern_atom(SerTermKind::Bnode, value, None, None, None, memory)
+            }
             Node::Literal {
                 value,
                 lang,
@@ -2500,47 +3686,121 @@ impl Interner {
                 // it before pushing the literal too.
                 let datatype_id = datatype
                     .as_deref()
-                    .map(|iri| self.intern_atom(SerTermKind::Iri, iri, None, None, None));
+                    .map(|iri| self.intern_atom(SerTermKind::Iri, iri, None, None, None, memory))
+                    .transpose()?;
                 self.intern_atom(
                     SerTermKind::Literal,
                     value,
                     lang.as_deref(),
                     direction.as_deref(),
                     datatype_id,
+                    memory,
                 )
             }
             Node::Triple(..) => unreachable!("atom() is never called on a triple node"),
         }
     }
 
-    fn node(&mut self, node: &Node, reifiers: &mut Vec<(usize, SerTriple3)>) -> usize {
-        match node {
+    fn node<A: Admission + ?Sized>(
+        &mut self,
+        node: &Node,
+        reifiers: &mut Vec<SerReifierRow>,
+        origin: Option<SourceOriginId>,
+        source: &mut Option<&mut SourceOccurrences>,
+        memory: &mut Memory<'_, A>,
+    ) -> Result<usize, NativeParseError> {
+        let components = source
+            .as_deref()
+            .and_then(|source| source.components(origin));
+        let id = match node {
             Node::Triple(s, p, o) => {
-                let s = self.node(s, reifiers);
-                let p = self.node(p, reifiers);
-                let o = self.node(o, reifiers);
-                if let Some(id) = self.triples.get(&(s, p, o)) {
-                    return *id;
+                let s = self.node(
+                    s,
+                    reifiers,
+                    components.map(|origins| origins[0]),
+                    source,
+                    memory,
+                )?;
+                let p = self.node(
+                    p,
+                    reifiers,
+                    components.map(|origins| origins[1]),
+                    source,
+                    memory,
+                )?;
+                let o = self.node(
+                    o,
+                    reifiers,
+                    components.map(|origins| origins[2]),
+                    source,
+                    memory,
+                )?;
+                let key = (s, p, o);
+                memory.admission_mut().checkpoint(1)?;
+                let hash = purrdf_hash::fixed::hash_one(&key);
+                if let Some(&(_, id)) = self.triples.find_with_control(
+                    hash,
+                    |(stored, _), memory| {
+                        memory.admission_mut().checkpoint(1)?;
+                        Ok(*stored == key)
+                    },
+                    memory,
+                )? {
+                    if let Some(source) = source.as_deref_mut() {
+                        source.bind_native(origin, id, memory)?;
+                    }
+                    return Ok(id);
                 }
                 let id = self.terms.len();
                 // A triple TERM is self-reifying: its reifier is its own id, matching
                 // the purrdf-gts shape so `dataset_from_ser_graph` recognizes the
                 // self-reifier sentinel (an inline quoted-triple object, NOT a statement
                 // reifier).
-                self.terms.push(SerTerm {
-                    kind: SerTermKind::Triple,
-                    value: None,
-                    datatype: None,
-                    lang: None,
-                    direction: None,
-                    reifier: Some(id),
-                });
-                self.triples.insert((s, p, o), id);
-                reifiers.push((id, (s, p, o)));
+                let required = self
+                    .triples
+                    .len()
+                    .checked_add(1)
+                    .ok_or(StorageError::SizeOverflow)?;
+                purrdf_core::hash::try_reserve_table_with_memory(
+                    &mut self.triples,
+                    required,
+                    |(key, _), memory| {
+                        memory.admission_mut().checkpoint(1)?;
+                        Ok(purrdf_hash::fixed::hash_one(key))
+                    },
+                    memory,
+                )?;
+                memory.push(
+                    &mut self.terms,
+                    SerTerm {
+                        kind: SerTermKind::Triple,
+                        value: None,
+                        datatype: None,
+                        lang: None,
+                        direction: None,
+                        reifier: Some(id),
+                    },
+                )?;
+                self.triples
+                    .try_insert_unique_with_control(
+                        hash,
+                        (key, id),
+                        |(key, _), memory| {
+                            memory.admission_mut().checkpoint(1)?;
+                            Ok(purrdf_hash::fixed::hash_one(key))
+                        },
+                        memory,
+                    )
+                    .map_err(|refusal| purrdf_core::hash::table_storage_error(&refusal.cause))?;
+                push_lowering_row(reifiers, (id, (s, p, o), None), memory)?;
                 id
             }
-            _ => self.atom(node),
+            _ => self.atom(node, memory)?,
+        };
+        if let Some(source) = source.as_deref_mut() {
+            source.bind_native(origin, id, memory)?;
         }
+        Ok(id)
     }
 }
 
@@ -2551,7 +3811,7 @@ impl Interner {
 /// carried between iterations (the interner, the reifier table, the quad table) becoming
 /// the struct's fields. Nothing about the lowering changed — the same first-seen
 /// interning, the same statement-order quads, the same encounter-order reifiers, the same
-/// `rdf:reifies` statement-layer shorthand — so [`build_gts_graph`] over a statement
+/// `rdf:reifies` statement-layer shorthand — so [`build_gts_graph_observed`] over a statement
 /// slice and [`LineStreamParser`] over a stream of lines produce the IDENTICAL graph for
 /// the identical statement sequence, by construction rather than by parallel maintenance.
 struct GraphAccumulator {
@@ -2559,15 +3819,12 @@ struct GraphAccumulator {
     /// fixes every term id).
     interner: Interner,
     /// Reifier bindings in encounter order.
-    reifiers: Vec<(usize, SerTriple3)>,
-    /// The statement-reifier bindings already in `reifiers`, so a rebind is found by
-    /// lookup rather than by scanning every binding recorded so far, which made a
-    /// document of `n` reifiers cost `O(n^2)`. A triple term's self-binding (pushed by
-    /// [`Interner::node`]) never needs to be here: its key is a triple term's id, which no
-    /// statement reifier (an IRI or blank node) can share.
-    bound: crate::FastSet<(usize, SerTriple3)>,
+    reifiers: Vec<SerReifierRow>,
+    /// Stable encounter ordinals for explicit reifier bindings. Triple-term
+    /// self-bindings never enter this index. Keys borrow the original row.
+    bound: purrdf_core::hash::table::HashTable<usize>,
     /// Base quads in statement order.
-    quads: Vec<(usize, usize, usize, Option<usize>)>,
+    quads: Vec<SerQuad>,
 }
 
 impl GraphAccumulator {
@@ -2575,37 +3832,125 @@ impl GraphAccumulator {
         Self {
             interner: Interner::new(),
             reifiers: Vec::new(),
-            bound: crate::FastSet::default(),
+            bound: purrdf_core::hash::table::HashTable::new(),
             quads: Vec::new(),
         }
     }
 
     /// Lower ONE statement, in document order.
     fn push(&mut self, nodes: &Statement) -> Result<(), RdfDiagnostic> {
-        let s = &nodes[0];
-        let p = &nodes[1];
-        let o = &nodes[2];
-        let gname = nodes.get(3);
+        // The legacy streaming adapter is resident, but still resumes the
+        // concrete row arrays it already owns before using the same producer.
+        let quads = std::alloc::Layout::array::<SerQuad>(self.quads.capacity())
+            .map_err(|_| StorageError::SizeOverflow)?
+            .size();
+        let reifiers = std::alloc::Layout::array::<SerReifierRow>(self.reifiers.capacity())
+            .map_err(|_| StorageError::SizeOverflow)?
+            .size();
+        let bound = purrdf_core::hash::hash_table_retained_bound(&self.bound)
+            .ok_or(StorageError::SizeOverflow)?;
+        let live = quads
+            .checked_add(reifiers)
+            .and_then(|bytes| bytes.checked_add(bound))
+            .ok_or(StorageError::SizeOverflow)?;
+        let mut resident = Resident;
+        self.push_observed(
+            nodes,
+            [None; 4],
+            None,
+            &mut None,
+            &mut Memory::resume(&mut resident, live),
+        )
+        .map_err(|cause| resident_error(ControlledError::Native(cause)))
+    }
 
-        // `<subject> rdf:reifies <<( s p o )>> .` in the DEFAULT graph is the
-        // statement-layer reifier shorthand: bind the reifier, do NOT emit a base quad.
-        if let (Node::Iri(_) | Node::Bnode(_), Node::Iri(pred_iri), Node::Triple(ts, tp, to), None) =
+    fn push_observed<A: Admission + ?Sized>(
+        &mut self,
+        nodes: &Statement,
+        origins: [Option<SourceOriginId>; 4],
+        statement: Option<usize>,
+        source: &mut Option<&mut SourceOccurrences>,
+        memory: &mut Memory<'_, A>,
+    ) -> Result<(), NativeParseError> {
+        let (s, p, o, gname) = (&nodes[0], &nodes[1], &nodes[2], nodes.get(3));
+        if let (Node::Iri(_) | Node::Bnode(_), Node::Iri(predicate), Node::Triple(ts, tp, to), None) =
             (s, p, o, gname)
-            && pred_iri.as_str() == RDF_REIFIES
+            && predicate.as_str() == RDF_REIFIES
         {
-            let rid = self.interner.atom(s);
-            let ss = self.interner.node(ts, &mut self.reifiers);
-            let pp = self.interner.node(tp, &mut self.reifiers);
-            let oo = self.interner.node(to, &mut self.reifiers);
-            set_reifier(&mut self.reifiers, &mut self.bound, rid, (ss, pp, oo));
+            let rid = self.interner.atom(s, memory)?;
+            let components = source
+                .as_deref()
+                .and_then(|source| source.components(origins[2]));
+            if let Some(source) = source.as_deref_mut() {
+                source.bind_native(origins[0], rid, memory)?;
+            }
+            let ss = self.interner.node(
+                ts,
+                &mut self.reifiers,
+                components.map(|origins| origins[0]),
+                source,
+                memory,
+            )?;
+            let pp = self.interner.node(
+                tp,
+                &mut self.reifiers,
+                components.map(|origins| origins[1]),
+                source,
+                memory,
+            )?;
+            let oo = self.interner.node(
+                to,
+                &mut self.reifiers,
+                components.map(|origins| origins[2]),
+                source,
+                memory,
+            )?;
+            let row = set_reifier(
+                &mut self.reifiers,
+                &mut self.bound,
+                rid,
+                (ss, pp, oo),
+                memory,
+            )?;
+            if let Some(source) = source.as_deref_mut() {
+                source.bind_reference(
+                    origins[1],
+                    SourceSemanticReference::ConstantIri(RDF_REIFIES),
+                    memory,
+                )?;
+                if let Some(components) = components {
+                    source.bind_reference(
+                        origins[2],
+                        SourceSemanticReference::ConstructedTriple(components),
+                        memory,
+                    )?;
+                }
+                if let Some(statement) = statement {
+                    source.associate_row(NativeSourceRow::Reifier(row), statement, memory)?;
+                }
+            }
             return Ok(());
         }
-
-        let sid = self.interner.node(s, &mut self.reifiers);
-        let pid = self.interner.node(p, &mut self.reifiers);
-        let oid = self.interner.node(o, &mut self.reifiers);
-        let gid = gname.map(|node| self.interner.node(node, &mut self.reifiers));
-        self.quads.push((sid, pid, oid, gid));
+        let sid = self
+            .interner
+            .node(s, &mut self.reifiers, origins[0], source, memory)?;
+        let pid = self
+            .interner
+            .node(p, &mut self.reifiers, origins[1], source, memory)?;
+        let oid = self
+            .interner
+            .node(o, &mut self.reifiers, origins[2], source, memory)?;
+        let gid = gname
+            .map(|node| {
+                self.interner
+                    .node(node, &mut self.reifiers, origins[3], source, memory)
+            })
+            .transpose()?;
+        let row = self.quads.len();
+        push_lowering_row(&mut self.quads, (sid, pid, oid, gid), memory)?;
+        if let (Some(source), Some(statement)) = (source.as_deref_mut(), statement) {
+            source.associate_row(NativeSourceRow::Quad(row), statement, memory)?;
+        }
         Ok(())
     }
 
@@ -2619,12 +3964,137 @@ impl GraphAccumulator {
             // shorthand is gated on `None` graph in `push`), so the slot is always
             // `None`. Annotations are left in `quads` here and reclassified by
             // `fold_statement_layer`'s pass 2 (the `annotations` table stays empty).
-            reifiers: self
-                .reifiers
-                .into_iter()
-                .map(|(rid, spo)| (rid, spo, None))
-                .collect(),
+            reifiers: self.reifiers,
             ..Default::default()
+        }
+    }
+
+    /// Dispose the temporary binding index before publishing or abandoning rows.
+    fn release_bound<A: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, A>,
+    ) -> Result<(), StorageError> {
+        let bound = core::mem::take(&mut self.bound);
+        let bytes =
+            purrdf_core::hash::hash_table_retained_bound(&bound).ok_or(StorageError::SizeOverflow);
+        drop(bound);
+        let atoms = core::mem::take(&mut self.interner.atoms);
+        let atom_bytes =
+            purrdf_core::hash::hash_table_retained_bound(&atoms).ok_or(StorageError::SizeOverflow);
+        drop(atoms);
+        let triples = core::mem::take(&mut self.interner.triples);
+        let triple_bytes = purrdf_core::hash::hash_table_retained_bound(&triples)
+            .ok_or(StorageError::SizeOverflow);
+        drop(triples);
+        let bound = memory.release_bytes(bytes?);
+        let atoms = memory.release_bytes(atom_bytes?);
+        let triples = memory.release_bytes(triple_bytes?);
+        bound.and(atoms).and(triples)
+    }
+}
+
+/// Move a fixed-width native row through the original account. Governed
+/// growth copies each row before committing the replacement; refusal leaves
+/// the previous buffer intact and destroys/refunds only the unpublished copy.
+/// Atom/triple indexes and term strings are not governed by this helper.
+fn push_lowering_row<T: Copy, A: Admission + ?Sized>(
+    rows: &mut Vec<T>,
+    value: T,
+    memory: &mut Memory<'_, A>,
+) -> Result<(), StorageError> {
+    memory.admission_mut().checkpoint(0)?;
+    if !memory.admission().progress_enabled() {
+        return memory.push(rows, value);
+    }
+    let required = rows
+        .len()
+        .checked_add(1)
+        .ok_or(StorageError::SizeOverflow)?;
+    if required > rows.capacity() {
+        let capacity = purrdf_lex::allocation::growth_capacity::<T>(rows.capacity(), required)?;
+        let replacement = memory.scope(|memory| {
+            let mut replacement = Vec::new();
+            memory.reserve(&mut replacement, capacity)?;
+            for row in &*rows {
+                memory.admission_mut().checkpoint(1)?;
+                replacement.push(*row);
+            }
+            Ok(replacement)
+        })?;
+        let previous = std::mem::replace(rows, replacement);
+        memory.release_vec(previous)?;
+    }
+    memory.admission_mut().checkpoint(1)?;
+    rows.push(value);
+    Ok(())
+}
+
+/// Destroy all temporary lowering arrays and lexical payloads after their
+/// original consumer has finished reading them.
+pub(super) fn release_lowered_graph_rows<A: Admission + ?Sized>(
+    graph: SerGraph,
+    memory: &mut Memory<'_, A>,
+) -> Result<(), StorageError> {
+    let SerGraph {
+        terms,
+        quads,
+        reifiers,
+        annotations,
+        named_graphs,
+        base,
+    } = graph;
+    let term_bytes = std::alloc::Layout::array::<SerTerm>(terms.capacity())
+        .map_err(|_| StorageError::SizeOverflow)?
+        .size();
+    let term_strings = terms.into_iter().try_fold(term_bytes, |total, term| {
+        [term.value, term.lang, term.direction]
+            .into_iter()
+            .flatten()
+            .try_fold(total, |total, text| {
+                let bytes = text.capacity();
+                drop(text);
+                total.checked_add(bytes).ok_or(StorageError::SizeOverflow)
+            })
+    });
+    drop(base);
+    let quads = memory.release_vec(quads);
+    let reifiers = memory.release_vec(reifiers);
+    let annotations = memory.release_vec(annotations);
+    let named_graphs = memory.release_vec(named_graphs);
+    let term_strings = memory.release_bytes(term_strings?);
+    quads
+        .and(reifiers)
+        .and(annotations)
+        .and(named_graphs)
+        .and(term_strings)
+}
+
+/// Stage one native lowering under the same original parser context. Keeping
+/// its result outside the child callback lets a final publication refusal
+/// destroy/refund the unpublished row buffers before returning the first cause.
+fn lower_statements_in_context<A: Admission, C: Progress>(
+    statements: &[Statement],
+    named_graphs: &[Node],
+    source: Option<&mut SourceOccurrences>,
+    context: &mut RunContext<A, C>,
+) -> Result<SerGraph, TextError<C::Error>> {
+    let mut staged = None;
+    let result = context.native(|memory| {
+        staged = Some(build_gts_graph_observed(
+            statements,
+            named_graphs,
+            source,
+            memory,
+        )?);
+        Ok(())
+    });
+    match result {
+        Ok(()) => Ok(staged.expect("successful lowering staged its original graph")),
+        Err(cause) => {
+            if let Some(graph) = staged {
+                let _ = context.release(|memory| release_lowered_graph_rows(graph, memory));
+            }
+            Err(cause)
         }
     }
 }
@@ -2632,21 +4102,61 @@ impl GraphAccumulator {
 /// Lower the flat statement list into the in-memory [`SerGraph`], reproducing
 /// `from_nquads`'s `build_gts` (the `rdf:reifies` statement-layer shorthand,
 /// first-seen interning, statement-order quads, encounter-order reifiers).
-fn build_gts_graph(
+/// Term text, atom/triple indexes, row buffers, explicit reifier lookup and source
+/// associations use this account. Temporary indexes die before publication.
+fn build_gts_graph_observed<A: Admission + ?Sized>(
     statements: &[Statement],
     named_graphs: &[Node],
-) -> Result<SerGraph, RdfDiagnostic> {
+    source: Option<&mut SourceOccurrences>,
+    memory: &mut Memory<'_, A>,
+) -> Result<SerGraph, NativeParseError> {
+    let mut source = source.filter(|source| source.is_active());
     let mut accumulator = GraphAccumulator::new();
-    for nodes in statements {
-        accumulator.push(nodes)?;
-    }
-    let named_graphs = named_graphs
-        .iter()
-        .map(|name| accumulator.interner.atom(name))
-        .collect();
+    let mut declared = Vec::new();
+    let result: Result<(), NativeParseError> = (|| {
+        for (ordinal, nodes) in statements.iter().enumerate() {
+            memory.admission_mut().checkpoint(1)?;
+            let origins = source
+                .as_deref()
+                .map(|source| source.roots(ordinal))
+                .transpose()?
+                .unwrap_or([None; 4]);
+            accumulator.push_observed(
+                nodes,
+                origins,
+                source.as_ref().map(|_| ordinal),
+                &mut source,
+                memory,
+            )?;
+        }
+        for (ordinal, name) in named_graphs.iter().enumerate() {
+            memory.admission_mut().checkpoint(1)?;
+            let id = accumulator.interner.atom(name, memory)?;
+            if let Some(source) = source.as_deref_mut() {
+                let origin = source.declarations.get(ordinal).copied().ok_or(
+                    SourceAssociationError::MissingDeclaration {
+                        declaration: ordinal,
+                    },
+                )?;
+                source.bind_native(Some(origin), id, memory)?;
+            }
+            push_lowering_row(&mut declared, id, memory)?;
+        }
+        Ok(())
+    })();
+    let index_refund = accumulator
+        .release_bound(memory)
+        .map_err(NativeParseError::Storage);
+    let result = result.and(index_refund);
     let mut graph = accumulator.finish();
-    graph.named_graphs = named_graphs;
-    Ok(graph)
+    graph.named_graphs = declared;
+    match result {
+        Ok(()) => Ok(graph),
+        Err(cause) => {
+            let _ = release_lowered_graph_rows(graph, memory);
+            Err(cause)
+        }
+    }
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
@@ -2740,17 +4250,59 @@ impl LineStreamParser {
 /// is kept. This does not make a quoted-triple TERM ambiguous: a triple term in
 /// this model is SELF-reifying (its binding is keyed by its own term id), so it
 /// never shares a key with a statement reifier.
-///
-/// `bound` holds every binding this has pushed, so the idempotence check is one lookup.
-fn set_reifier(
-    reifiers: &mut Vec<(usize, SerTriple3)>,
-    bound: &mut crate::FastSet<(usize, SerTriple3)>,
+fn set_reifier<A: Admission + ?Sized>(
+    reifiers: &mut Vec<SerReifierRow>,
+    bound: &mut purrdf_core::hash::table::HashTable<usize>,
     rid: usize,
     spo: SerTriple3,
-) {
-    if bound.insert((rid, spo)) {
-        reifiers.push((rid, spo));
+    memory: &mut Memory<'_, A>,
+) -> Result<usize, StorageError> {
+    memory.admission_mut().checkpoint(1)?;
+    let hash = purrdf_hash::fixed::hash_one(&(rid, spo));
+    if let Some(&index) = bound.find_with_control(
+        hash,
+        |&index, _| Ok(reifiers[index].0 == rid && reifiers[index].1 == spo),
+        &mut |units| memory.admission_mut().checkpoint(units),
+    )? {
+        return Ok(index);
     }
+    let required = bound
+        .len()
+        .checked_add(1)
+        .ok_or(StorageError::SizeOverflow)?;
+    purrdf_core::hash::reserve_table_with_memory(
+        bound,
+        required,
+        |&index| purrdf_hash::fixed::hash_one(&(reifiers[index].0, reifiers[index].1)),
+        memory,
+    )?;
+    let index = reifiers.len();
+    push_lowering_row(reifiers, (rid, spo, None), memory)?;
+    if let Err(refusal) = bound.try_insert_unique_with_control(
+        hash,
+        index,
+        |&index, _| {
+            Ok(purrdf_hash::fixed::hash_one(&(
+                reifiers[index].0,
+                reifiers[index].1,
+            )))
+        },
+        &mut |units| memory.admission_mut().checkpoint(units),
+    ) {
+        // This trailing Copy row has not been indexed or associated with any
+        // source occurrence. Its backing allocation stays with the row owner.
+        reifiers.truncate(index);
+        return Err(match refusal.cause {
+            ControlledError::Control(cause) => cause,
+            ControlledError::Native(
+                purrdf_core::hash::table::TryReserveError::CapacityOverflow,
+            ) => StorageError::SizeOverflow,
+            ControlledError::Native(purrdf_core::hash::table::TryReserveError::AllocError {
+                ..
+            }) => StorageError::AllocationFailed,
+        });
+    }
+    Ok(index)
 }
 
 #[cfg(test)]
@@ -2912,8 +4464,12 @@ mod tests {
         .expect("parallel parse");
         assert!(seq == par, "statement lists must be identical");
 
-        let graph_seq = build_gts_graph(&seq, &[]).expect("sequential graph");
-        let graph_par = build_gts_graph(&par, &[]).expect("parallel graph");
+        let mut resident = Resident;
+        let mut memory = Memory::new(&mut resident);
+        let graph_seq =
+            build_gts_graph_observed(&seq, &[], None, &mut memory).expect("sequential graph");
+        let graph_par =
+            build_gts_graph_observed(&par, &[], None, &mut memory).expect("parallel graph");
         assert!(
             graph_seq.terms == graph_par.terms,
             "term tables (first-seen interning order = ids) must be identical"
@@ -3231,6 +4787,7 @@ mod tests {
             ("annotation block", &annotation),
         ] {
             let error = DocParser::new(text, BaseScope::empty(), false, &mut NoSpans)
+                .expect("native parser initialization")
                 .parse()
                 .expect_err(&format!("{name}: a 20 000-deep document must be refused"));
             assert!(
@@ -3263,6 +4820,7 @@ mod tests {
         parse_lines_sequential(&line, false, 1, &BaseScope::empty(), &mut NoSpans)
             .expect("16 nested triple terms");
         DocParser::new(&line, BaseScope::empty(), false, &mut NoSpans)
+            .expect("native parser initialization")
             .parse()
             .expect("16 nested triple terms in Turtle");
 
@@ -3283,6 +4841,7 @@ mod tests {
             ),
         ] {
             DocParser::new(&text, BaseScope::empty(), false, &mut NoSpans)
+                .expect("native parser initialization")
                 .parse()
                 .unwrap_or_else(|error| {
                     panic!("{DEEP}-deep nesting must parse: {}", error.message)
@@ -3525,6 +5084,7 @@ mod tests {
                     ex:s ex:p ex:o .\n\
                     ex:s ex:p nope:o .\n";
         let e = DocParser::new(text, BaseScope::empty(), false, &mut NoSpans)
+            .expect("native parser initialization")
             .parse()
             .expect_err("must fail");
         let loc = e.location.as_ref().expect("has location");
@@ -3544,6 +5104,7 @@ mod tests {
         // The relative IRI `<relative>` begins at column 7 (right after `@base `).
         let text = "@base <relative> .\n";
         let e = DocParser::new(text, BaseScope::empty(), false, &mut NoSpans)
+            .expect("native parser initialization")
             .parse()
             .expect_err("must fail");
         let loc = e.location.as_ref().expect("has location");
@@ -3562,6 +5123,7 @@ mod tests {
         // The `@bad--bad` tag begins at column 32.
         let text = "<http://ex/s> <http://ex/p> \"x\"@bad--bad .\n";
         let e = DocParser::new(text, BaseScope::empty(), false, &mut NoSpans)
+            .expect("native parser initialization")
             .parse()
             .expect_err("must fail");
         let loc = e.location.as_ref().expect("has location");
@@ -3590,9 +5152,28 @@ mod tests {
     fn doc_langtags_are_held_to_the_bounded_terminal_in_both_directions() {
         fn verdict(tag: &str) -> Result<(), RdfDiagnostic> {
             let text = format!("<http://ex/s> <http://ex/p> \"x\"@{tag} .\n");
-            DocParser::new(&text, BaseScope::empty(), false, &mut NoSpans)
+            let resident = DocParser::new(&text, BaseScope::empty(), false, &mut NoSpans)
+                .expect("native parser initialization")
                 .parse()
+                .map(|_| ());
+            let mut spans = NoSpans;
+            let mut controlled = DocParser::new_in_context(
+                &text,
+                BaseScope::empty(),
+                false,
+                &mut spans,
+                RunContext::new(Resident, |_| Ok::<_, core::convert::Infallible>(())),
+            )
+            .unwrap_or_else(|_| panic!("native controlled parser initialization"));
+            let controlled = controlled
+                .parse_controlled()
                 .map(|_| ())
+                .map_err(resident_error);
+            assert_eq!(
+                controlled, resident,
+                "native language verdict/diagnostic parity for {tag:?}"
+            );
+            resident
         }
 
         // NEWLY REFUSED. Turtle took every one of these before: the first five
@@ -3675,6 +5256,13 @@ mod tests {
         ] {
             verdict(accepted).unwrap_or_else(|e| panic!("{accepted:?} must parse: {}", e.message));
         }
+        let private = format!("x-{}", "a".repeat(600));
+        assert!(verdict(&private).is_ok());
+        assert!(verdict(&format!("{private}--ltr")).is_ok());
+        // The last delimiter straddles the reverse bounded scan's first extent.
+        // It remains a direction refusal, beside the accepted direction above.
+        let error = verdict(&format!("en--{}", "x".repeat(255))).unwrap_err();
+        assert!(error.message.contains("invalid literal base direction"));
     }
 
     /// The two literal paths in this file agree on EVERY tag, with no residual
@@ -3701,6 +5289,7 @@ mod tests {
         }
         fn turtle(tag: &str) -> bool {
             DocParser::new(&line(tag), BaseScope::empty(), false, &mut NoSpans)
+                .expect("native parser initialization")
                 .parse()
                 .is_ok()
         }
@@ -3755,6 +5344,7 @@ mod tests {
         // The undeclared `ex:o` begins at column 29.
         let text = "<http://ex/s> <http://ex/p> ex:o .\n";
         let e = DocParser::new(text, BaseScope::empty(), false, &mut NoSpans)
+            .expect("native parser initialization")
             .parse()
             .expect_err("must fail");
         let loc = e.location.as_ref().expect("has location");
@@ -3773,9 +5363,246 @@ mod tests {
     // change alone would have left this half silently wrong, which is why the
     // parser refusal is what closes it.
 
+    /// Native collection temporaries die under the original account; the
+    /// remaining grant covers only constructor state, tokens and emitted rows.
+    #[test]
+    fn native_collection_refunds_temporaries_before_publishing_statements() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        struct Grant(Arc<AtomicUsize>, Arc<AtomicUsize>);
+        impl Admission for Grant {
+            fn resize(&mut self, bytes: usize) -> Result<(), StorageError> {
+                self.0.store(bytes, Ordering::SeqCst);
+                self.1.fetch_max(bytes, Ordering::SeqCst);
+                Ok(())
+            }
+        }
+        let live = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let work = Arc::new(AtomicUsize::new(0));
+        let refuse = Arc::new(AtomicUsize::new(usize::MAX));
+        let events = Arc::clone(&work);
+        let stop = Arc::clone(&refuse);
+        let mut source = RunContext::new(Grant(Arc::clone(&live), Arc::clone(&peak)), move |_| {
+            let at = events.fetch_add(1, Ordering::SeqCst);
+            if at == stop.load(Ordering::SeqCst) {
+                Err(7_u8)
+            } else {
+                Ok(())
+            }
+        })
+        .source(
+            concat!(
+                "<urn:s> <urn:p> (\"a\" \"b\") .\n",
+                "<urn:r> rdf:reifies <<( <urn:s> <urn:p> \"a\" )>> .\n",
+                "<urn:r> rdf:reifies <<( <urn:s> <urn:p> \"a\" )>> .\n",
+                "<urn:s> <urn:q> <<( <urn:s> <urn:p> \"b\" )>> .\n",
+                "<urn:empty> {}\n",
+            )
+            .as_bytes(),
+        )
+        .unwrap_or_else(|_| panic!("source acquisition"));
+        source.with_text(|text, context| {
+            let source_bytes = context.live;
+            assert!(
+                source_bytes >= text.len(),
+                "original source is admitted before parsing"
+            );
+            let mut collector = NoSpans;
+            let mut parser =
+                DocParser::new_in_context(text, BaseScope::empty(), true, &mut collector, context)
+                    .unwrap_or_else(|_| panic!("native parser initialization"));
+            let baseline = parser.context.live;
+            let statements = parser.parse_controlled().unwrap();
+            let mut retained = baseline
+                + std::alloc::Layout::array::<Spanned<'_>>(parser.tokens.capacity())
+                    .unwrap()
+                    .size()
+                + std::alloc::Layout::array::<Statement>(statements.capacity())
+                    .unwrap()
+                    .size();
+            retained += std::alloc::Layout::array::<Node>(parser.named_graphs.capacity())
+                .unwrap()
+                .size();
+            for graph in &parser.named_graphs {
+                retained += node_owned_bytes(graph).unwrap();
+            }
+            for statement in &statements {
+                retained += std::alloc::Layout::array::<Node>(statement.capacity())
+                    .unwrap()
+                    .size();
+                for node in statement {
+                    retained += node_owned_bytes(node).unwrap();
+                }
+            }
+            assert_eq!(parser.context.live, retained);
+            assert_eq!(live.load(Ordering::SeqCst), retained);
+
+            // The original grant retains every lowered row and term payload;
+            // temporary atom/triple indexes are gone before publication.
+            let before = work.load(Ordering::SeqCst);
+            let lowered = lower_statements_in_context(
+                &statements,
+                &parser.named_graphs,
+                None,
+                &mut parser.context,
+            )
+            .expect("native row lowering");
+            let boundaries = work.load(Ordering::SeqCst) - before;
+            let row_bytes = std::alloc::Layout::array::<SerQuad>(lowered.quads.capacity())
+                .unwrap()
+                .size()
+                + std::alloc::Layout::array::<SerReifierRow>(lowered.reifiers.capacity())
+                    .unwrap()
+                    .size()
+                + std::alloc::Layout::array::<usize>(lowered.named_graphs.capacity())
+                    .unwrap()
+                    .size();
+            let term_bytes = std::alloc::Layout::array::<SerTerm>(lowered.terms.capacity())
+                .unwrap()
+                .size()
+                + lowered
+                    .terms
+                    .iter()
+                    .flat_map(|term| [&term.value, &term.lang, &term.direction])
+                    .flatten()
+                    .map(String::capacity)
+                    .sum::<usize>();
+            let annotation_bytes = std::alloc::Layout::array::<
+                super::super::ser_model::SerAnnotationRow,
+            >(lowered.annotations.capacity())
+            .unwrap()
+            .size();
+            assert_eq!(
+                parser.context.live,
+                retained + row_bytes + term_bytes + annotation_bytes
+            );
+            assert_eq!(live.load(Ordering::SeqCst), parser.context.live);
+
+            // The real fold keeps input and pending arrays alive together;
+            // only the governed dataset grant survives successful publication.
+            let fold_baseline = parser.context.live;
+            let before = work.load(Ordering::SeqCst);
+            peak.store(fold_baseline, Ordering::SeqCst);
+            let (dataset, dataset_bytes) =
+                super::super::parse::dataset_from_text_ser_graph_in_context(
+                    &lowered,
+                    None,
+                    &mut parser.context,
+                )
+                .expect("original native fold");
+            let fold_boundaries = work.load(Ordering::SeqCst) - before;
+            type Association = Option<(NativeSourceRow, Option<usize>)>;
+            let input_rows = lowered.quads.len()
+                + lowered
+                    .reifiers
+                    .iter()
+                    .filter(|(id, _, _)| !lowered.is_self_reifier(*id))
+                    .count();
+            let minimum_input = std::alloc::Layout::array::<(
+                super::super::parse::FoldRow,
+                Association,
+            )>(input_rows)
+            .unwrap()
+            .size();
+            let minimum_pending = std::alloc::Layout::array::<(
+                crate::TermId,
+                crate::TermId,
+                crate::TermId,
+                Option<crate::TermId>,
+                Association,
+            )>(lowered.quads.len())
+            .unwrap()
+            .size();
+            assert!(
+                peak.load(Ordering::SeqCst) >= fold_baseline + minimum_input + minimum_pending,
+                "original input and pending buffers overlap under the same grant"
+            );
+            assert_eq!(
+                parser.context.live,
+                fold_baseline + dataset_bytes,
+                "all fold scratch refunds before result publication"
+            );
+            assert!(dataset_bytes > 0);
+            drop(dataset);
+            parser
+                .context
+                .release(|memory| memory.release_bytes(dataset_bytes))
+                .unwrap();
+            assert_eq!(parser.context.live, fold_baseline);
+            for boundary in 0..fold_boundaries {
+                let before = work.load(Ordering::SeqCst);
+                refuse.store(before + boundary, Ordering::SeqCst);
+                let dataset = super::super::parse::dataset_from_text_ser_graph_in_context(
+                    &lowered,
+                    None,
+                    &mut parser.context,
+                );
+                assert!(matches!(dataset, Err(ControlledError::Control(7))));
+                assert_eq!(
+                    work.load(Ordering::SeqCst),
+                    before + boundary + 1,
+                    "fold cleanup never polls after the first refusal"
+                );
+                assert_eq!(
+                    parser.context.live, fold_baseline,
+                    "partial input/pending buffers and unpublished fold result are released"
+                );
+                assert_eq!(live.load(Ordering::SeqCst), fold_baseline);
+                refuse.store(usize::MAX, Ordering::SeqCst);
+            }
+            parser
+                .context
+                .release(|memory| release_lowered_graph_rows(lowered, memory))
+                .unwrap();
+            assert_eq!(
+                parser.context.live, retained,
+                "temporary graph rows refund before payload publication"
+            );
+            for boundary in 0..boundaries {
+                let before = work.load(Ordering::SeqCst);
+                refuse.store(before + boundary, Ordering::SeqCst);
+                let lowered = lower_statements_in_context(
+                    &statements,
+                    &parser.named_graphs,
+                    None,
+                    &mut parser.context,
+                );
+                assert!(matches!(lowered, Err(ControlledError::Control(7))));
+                assert_eq!(
+                    work.load(Ordering::SeqCst),
+                    before + boundary + 1,
+                    "no callback after first refusal"
+                );
+                assert_eq!(
+                    parser.context.live, retained,
+                    "partial and unpublished native rows are destroyed and refunded"
+                );
+                assert_eq!(live.load(Ordering::SeqCst), retained);
+                refuse.store(usize::MAX, Ordering::SeqCst);
+            }
+            drop(statements);
+            drop(parser);
+            assert!(
+                live.load(Ordering::SeqCst) >= source_bytes,
+                "borrowed parser cannot release the source owner's grant"
+            );
+        });
+        assert!(
+            live.load(Ordering::SeqCst) > 0,
+            "source still owns the original guard"
+        );
+        drop(source);
+        assert_eq!(live.load(Ordering::SeqCst), 0);
+    }
+
     /// Parse a Turtle document with no base and no span collection.
     fn turtle(text: &str) -> Result<Vec<Statement>, RdfDiagnostic> {
-        DocParser::new(text, BaseScope::empty(), false, &mut NoSpans).parse()
+        DocParser::new(text, BaseScope::empty(), false, &mut NoSpans)
+            .expect("native parser initialization")
+            .parse()
     }
 
     /// The refusal: a bracket pair emptied only by a comment, in subject and in
@@ -3843,6 +5670,7 @@ mod tests {
         let text = "@prefix ex: <https://example.org/vocab/> .\n\
                     ex:report/shacl/sarif ex:projection/okf ex:report/shacl/sarif .";
         let statements = DocParser::new(text, BaseScope::empty(), false, &mut NoSpans)
+            .expect("native parser initialization")
             .parse()
             .expect("parses");
         assert_eq!(statements.len(), 1);
@@ -3884,6 +5712,7 @@ mod tests {
             false,
             &mut NoSpans,
         )
+        .expect("native parser initialization")
         .parse()
         .expect("parses");
         assert_eq!(statements.len(), 1);
@@ -3914,6 +5743,7 @@ mod tests {
                     :x :p _:y.\n\
                     _:y :q :z .\n";
         let statements = DocParser::new(text, BaseScope::empty(), false, &mut NoSpans)
+            .expect("native parser initialization")
             .parse()
             .expect("parses");
         assert_eq!(statements.len(), 2, "must yield exactly two triples");
@@ -3959,6 +5789,7 @@ mod tests {
         let text = "<https://example.org/s> a <https://example.org/C> ; ; \
                      <https://example.org/p> <https://example.org/o> .";
         let statements = DocParser::new(text, BaseScope::empty(), false, &mut NoSpans)
+            .expect("native parser initialization")
             .parse()
             .expect("parses");
         assert_eq!(statements.len(), 2);
@@ -3971,6 +5802,7 @@ mod tests {
         let text = "<https://example.org/s> <https://example.org/p1> <https://example.org/o1> ; ; ; \
                      <https://example.org/p2> <https://example.org/o2> .";
         let statements = DocParser::new(text, BaseScope::empty(), false, &mut NoSpans)
+            .expect("native parser initialization")
             .parse()
             .expect("parses");
         assert_eq!(statements.len(), 2);
@@ -3982,6 +5814,7 @@ mod tests {
     fn turtle_trailing_doubled_semicolon_emits_no_extra_triple() {
         let text = "<https://example.org/s> <https://example.org/p> <https://example.org/o> ; ; .";
         let statements = DocParser::new(text, BaseScope::empty(), false, &mut NoSpans)
+            .expect("native parser initialization")
             .parse()
             .expect("parses");
         assert_eq!(statements.len(), 1);
@@ -3999,9 +5832,11 @@ mod tests {
                         [ <https://example.org/a> <https://example.org/b> ; ; \
                           <https://example.org/c> <https://example.org/d> ] .";
         let expected = DocParser::new(collapsed, BaseScope::empty(), false, &mut NoSpans)
+            .expect("native parser initialization")
             .parse()
             .expect("collapsed parses");
         let actual = DocParser::new(doubled, BaseScope::empty(), false, &mut NoSpans)
+            .expect("native parser initialization")
             .parse()
             .expect("doubled parses");
         assert_eq!(actual, expected);
@@ -4020,9 +5855,11 @@ mod tests {
                         {| <https://example.org/a> <https://example.org/b> ; ; \
                            <https://example.org/c> <https://example.org/d> |} .";
         let expected = DocParser::new(collapsed, BaseScope::empty(), false, &mut NoSpans)
+            .expect("native parser initialization")
             .parse()
             .expect("collapsed parses");
         let actual = DocParser::new(doubled, BaseScope::empty(), false, &mut NoSpans)
+            .expect("native parser initialization")
             .parse()
             .expect("doubled parses");
         assert_eq!(actual, expected);
@@ -4038,9 +5875,11 @@ mod tests {
         let trailing = "<https://example.org/s> <https://example.org/p> <https://example.org/o> \
                          {| <https://example.org/a> <https://example.org/b> ; |} .";
         let expected = DocParser::new(no_trailing, BaseScope::empty(), false, &mut NoSpans)
+            .expect("native parser initialization")
             .parse()
             .expect("no-trailing parses");
         let actual = DocParser::new(trailing, BaseScope::empty(), false, &mut NoSpans)
+            .expect("native parser initialization")
             .parse()
             .expect("trailing parses");
         assert_eq!(actual, expected);
@@ -4054,6 +5893,7 @@ mod tests {
         let text = "<https://example.org/s> ; <https://example.org/p> <https://example.org/o> .";
         assert!(
             DocParser::new(text, BaseScope::empty(), false, &mut NoSpans)
+                .expect("native parser initialization")
                 .parse()
                 .is_err()
         );
@@ -4066,6 +5906,7 @@ mod tests {
         let text = "<https://example.org/s> ; .";
         assert!(
             DocParser::new(text, BaseScope::empty(), false, &mut NoSpans)
+                .expect("native parser initialization")
                 .parse()
                 .is_err()
         );
@@ -4081,6 +5922,7 @@ mod tests {
                      [ ; <https://example.org/a> <https://example.org/b> ] .";
         assert!(
             DocParser::new(text, BaseScope::empty(), false, &mut NoSpans)
+                .expect("native parser initialization")
                 .parse()
                 .is_err()
         );
@@ -4094,6 +5936,7 @@ mod tests {
                      {| ; <https://example.org/a> <https://example.org/b> |} .";
         assert!(
             DocParser::new(text, BaseScope::empty(), false, &mut NoSpans)
+                .expect("native parser initialization")
                 .parse()
                 .is_err()
         );
@@ -4110,9 +5953,11 @@ mod tests {
         let doubled = "<https://example.org/s> <https://example.org/p> <https://example.org/o> \
                         {| <https://example.org/a> <https://example.org/b> ; ; |} .";
         let expected = DocParser::new(no_trailing, BaseScope::empty(), false, &mut NoSpans)
+            .expect("native parser initialization")
             .parse()
             .expect("no-trailing parses");
         let actual = DocParser::new(doubled, BaseScope::empty(), false, &mut NoSpans)
+            .expect("native parser initialization")
             .parse()
             .expect("doubled parses");
         assert_eq!(actual, expected);
@@ -4258,7 +6103,9 @@ mod tests {
         )
         .expect("a NO-BREAK SPACE in an IRIREF body is `ucschar` and parses");
         assert_eq!(
-            subject_key(&statements[0][0]).as_deref(),
+            subject_key(&statements[0][0], &mut Memory::new(&mut Resident))
+                .expect("resident subject key")
+                .as_deref(),
             Some("urn:ex:a\u{a0}b"),
             "the NO-BREAK SPACE must survive verbatim in the resolved IRI"
         );
@@ -4402,6 +6249,7 @@ mod tests {
             let text = "\u{feff}<urn:ex:s> <urn:ex:p> <urn:ex:o> .\n";
             let diagnostic =
                 DocParser::new(text, BaseScope::empty(), allow_named_graphs, &mut NoSpans)
+                    .expect("native parser initialization")
                     .parse()
                     .expect_err("a byte order mark opens no Turtle/TriG production");
             assert_eq!(located(&diagnostic), (1, 1));
@@ -4420,6 +6268,7 @@ mod tests {
                 allow_named_graphs,
                 &mut NoSpans,
             )
+            .expect("native parser initialization")
             .parse()
             .expect("the same document without the mark is well formed");
             assert_eq!(statements.len(), 1);
@@ -4440,6 +6289,7 @@ mod tests {
             "<urn:ex:s> <urn:ex:p> \"a\u{feff}b\" .\n",
         ] {
             let statements = DocParser::new(text, BaseScope::empty(), false, &mut NoSpans)
+                .expect("native parser initialization")
                 .parse()
                 .unwrap_or_else(|e| panic!("U+FEFF is a lawful name scalar: {}", e.message));
             assert_eq!(statements.len(), 1, "{text:?}");
@@ -4455,8 +6305,11 @@ mod tests {
     /// there could be read in and never written back out.
     #[test]
     fn the_name_head_classes_reach_the_turtle_path() {
-        let parse =
-            |text: &str| DocParser::new(text, BaseScope::empty(), false, &mut NoSpans).parse();
+        let parse = |text: &str| {
+            DocParser::new(text, BaseScope::empty(), false, &mut NoSpans)
+                .expect("native parser initialization")
+                .parse()
+        };
         for label in ["-a", ".a", "\u{300}a", "\u{b7}a"] {
             let text = format!("_:{label} <urn:ex:p> <urn:ex:o> .\n");
             assert!(

@@ -3,7 +3,7 @@
 
 //! Borrowed canonical node encoding shared by owned terms and native summaries.
 
-use purrdf_hash::frame::frame_le_with;
+use purrdf_hash::frame::try_frame_le_with;
 use purrdf_lex::allocation::StorageError;
 
 use super::{BlankScope, RdfTextDirection};
@@ -51,12 +51,27 @@ impl CanonicalNode<'_> {
     /// Emit the canonical encoding as borrowed chunks. A digest consumes these
     /// directly; a byte destination reserves byte_len first and then appends.
     pub(crate) fn visit_bytes(self, output: &mut impl FnMut(&[u8])) {
-        output(&[self.tag()]);
+        let result = self.try_visit_bytes(&mut |bytes| {
+            output(bytes);
+            Ok::<_, core::convert::Infallible>(())
+        });
+        match result {
+            Ok(()) => {}
+            Err(never) => match never {},
+        }
+    }
+
+    /// Emit the original byte law, stopping before every later field on refusal.
+    pub(crate) fn try_visit_bytes<E>(
+        self,
+        output: &mut impl FnMut(&[u8]) -> Result<(), E>,
+    ) -> Result<(), E> {
+        output(&[self.tag()])?;
         match self {
-            Self::Iri(iri) => frame_le_with(iri.as_bytes(), output),
+            Self::Iri(iri) => try_frame_le_with(iri.as_bytes(), output)?,
             Self::Blank { label, scope } => {
-                frame_le_with(label.as_bytes(), output);
-                output(&scope.ordinal().to_le_bytes());
+                try_frame_le_with(label.as_bytes(), &mut *output)?;
+                output(&scope.ordinal().to_le_bytes())?;
             }
             Self::Literal {
                 lexical,
@@ -64,27 +79,28 @@ impl CanonicalNode<'_> {
                 language,
                 direction,
             } => {
-                frame_le_with(lexical.as_bytes(), output);
-                frame_le_with(datatype.as_bytes(), output);
+                try_frame_le_with(lexical.as_bytes(), &mut *output)?;
+                try_frame_le_with(datatype.as_bytes(), &mut *output)?;
                 match language {
-                    None => output(&[0]),
+                    None => output(&[0])?,
                     Some(language) => {
-                        output(&[1]);
-                        frame_le_with(language.as_bytes(), output);
+                        output(&[1])?;
+                        try_frame_le_with(language.as_bytes(), &mut *output)?;
                     }
                 }
                 match direction {
-                    None => output(&[0]),
+                    None => output(&[0])?,
                     Some(direction) => {
-                        output(&[1]);
+                        output(&[1])?;
                         output(&[match direction {
                             RdfTextDirection::Ltr => 0,
                             RdfTextDirection::Rtl => 1,
-                        }]);
+                        }])?;
                     }
                 }
             }
             Self::Triple => {}
         }
+        Ok(())
     }
 }

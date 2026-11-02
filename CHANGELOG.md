@@ -33,6 +33,31 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   use the Core type. This change belongs to the 4.0 major release; upgrade the
   PurRDF crates together.
 
+- **Controlled native RDF parsing:** Turtle and TriG parsing admit caller work
+  and storage before lexical decoding, buffer growth, statement staging,
+  lowering and publication. The retained result owns exact ordered source
+  occurrences and directives; typed refusals expose no partial dataset.
+  Source-directory sealing shares one governed digest sorter across resident
+  and controlled calls. Equal-digest address permutations can change persisted
+  image bytes; rebuild earlier images for 4.0. RDF meaning and value-derived
+  identities remain unchanged.
+
+- **Governed source-row hashing:** canonical source rows stop within bounded
+  BLAKE3 extents through the original admission account. Refused callbacks keep
+  their original errors and grants; only traversal scratch is refunded. Row
+  summaries publish after every identity finishes and population checks pass.
+  Canonical byte encodings, domains, digest order and native identities remain
+  unchanged. This does not yet govern every native freeze operation.
+
+- **Admitted term-fold ownership (breaking Rust API):** native folds require an
+  explicit abandoned-answer disposer and release only their exact scratch
+  buffers. Persistent callback state and admitted errors retain their grants;
+  owning copy adapters clean up partial copies before public error construction.
+  A failed term-release census returns the original value with its refusal.
+  SPARQL results cleanup errors retain original residual containers and primary
+  causes without reporting allocations; their owning error types no longer
+  implement `Clone`.
+
 - **Query-only bottom properties:** native axiom refutations install the same
   empty-role law as ontology parsing. Querying an unmentioned bottom object
   property now preserves its empty extension and native proof origin.

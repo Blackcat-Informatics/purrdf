@@ -113,24 +113,69 @@ impl SourceDirectory {
         mut records: Vec<SourceRecord>,
         memory: &mut Memory<'_, S>,
     ) -> Result<Self, StorageError> {
-        records.sort_unstable_by_key(|record| record.digest);
         let mut checkpoints = Vec::new();
-        let checkpoint_count = records.len() / CHECKPOINT_ROWS;
-        if checkpoint_count != 0 {
-            memory.reserve(&mut checkpoints, checkpoint_count)?;
-            let mut state = Multiset256::default();
-            for (index, record) in records.iter().enumerate() {
-                state
-                    .insert(record.digest)
-                    .map_err(|_| StorageError::SizeOverflow)?;
-                if (index + 1).is_multiple_of(CHECKPOINT_ROWS) {
-                    memory.push(&mut checkpoints, state)?;
+        let prepared = (|| {
+            memory.admission_mut().checkpoint(0)?;
+            // Resident and controlled sealing use the same digest ordering and
+            // equal-digest permutation. Source-local addresses do not define
+            // content order, but both paths must emit the same directory bytes.
+            purrdf_lex::walk::try_sort_unstable_by(&mut records, |left, right| {
+                memory.admission_mut().checkpoint(1)?;
+                Ok::<_, StorageError>(left.digest.cmp(&right.digest))
+            })?;
+            memory.admission_mut().checkpoint(0)?;
+            let checkpoint_count = records.len() / CHECKPOINT_ROWS;
+            if checkpoint_count != 0 {
+                // The empty destination is reserved once at its exact extent;
+                // subsequent publications cannot hide buffer relocation.
+                memory.reserve(&mut checkpoints, checkpoint_count)?;
+                let mut state = Multiset256::default();
+                for (index, record) in records.iter().enumerate() {
+                    memory.admission_mut().checkpoint(1)?;
+                    state
+                        .insert(record.digest)
+                        .map_err(|_| StorageError::SizeOverflow)?;
+                    if (index + 1).is_multiple_of(CHECKPOINT_ROWS) {
+                        memory.push_copy_with_progress(&mut checkpoints, state)?;
+                    }
                 }
             }
+            memory.admission_mut().checkpoint(0)?;
+            Ok::<_, StorageError>(())
+        })();
+        if let Err(cause) = prepared {
+            // Both local owners die before their individual refunds. A refused
+            // refund cannot replace the first failure or prevent the other refund.
+            let _ = memory.release_vec(checkpoints);
+            let _ = memory.release_vec(records);
+            return Err(cause);
         }
+        Self::from_arrays(records, checkpoints, memory)
+    }
+
+    /// Publish both originally admitted buffers, retaining neither on refusal.
+    fn from_arrays<S: Admission + ?Sized>(
+        records: Vec<SourceRecord>,
+        checkpoints: Vec<Multiset256>,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Self, StorageError> {
+        let records = match memory.boxed_slice(records) {
+            Ok(records) => records,
+            Err(cause) => {
+                let _ = memory.release_vec(checkpoints);
+                return Err(cause);
+            }
+        };
+        let checkpoints = match memory.boxed_slice(checkpoints) {
+            Ok(checkpoints) => checkpoints,
+            Err(cause) => {
+                let _ = memory.release_vec(records.into_vec());
+                return Err(cause);
+            }
+        };
         Ok(Self {
-            records: memory.boxed_slice(records)?,
-            checkpoints: memory.boxed_slice(checkpoints)?,
+            records,
+            checkpoints,
         })
     }
 
@@ -139,11 +184,24 @@ impl SourceDirectory {
         memory: &mut Memory<'_, S>,
     ) -> Result<Self, StorageError> {
         let records = memory.collect(self.records.iter().copied())?;
-        let checkpoints = memory.collect(self.checkpoints.iter().copied())?;
-        Ok(Self {
-            records: memory.boxed_slice(records)?,
-            checkpoints: memory.boxed_slice(checkpoints)?,
-        })
+        let checkpoints = match memory.collect(self.checkpoints.iter().copied()) {
+            Ok(checkpoints) => checkpoints,
+            Err(cause) => {
+                let _ = memory.release_vec(records);
+                return Err(cause);
+            }
+        };
+        Self::from_arrays(records, checkpoints, memory)
+    }
+
+    /// Destroy both buffers and attempt their exact original refunds.
+    pub(super) fn release_admitted<S: Admission + ?Sized>(
+        self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), StorageError> {
+        let records = memory.release_vec(self.records.into_vec());
+        let checkpoints = memory.release_vec(self.checkpoints.into_vec());
+        records.and(checkpoints)
     }
 
     fn prefix(&self, end: usize, work: &mut SourceDifferenceWork) -> Multiset256 {

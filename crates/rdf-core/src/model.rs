@@ -171,7 +171,21 @@ impl RdfLiteral {
     /// This borrows the existing IRI or a constant and does not allocate.
     #[must_use]
     pub fn datatype_iri(&self) -> &str {
-        match (&self.language, self.direction, &self.datatype) {
+        Self::datatype_iri_from_parts(
+            self.datatype.as_deref(),
+            self.language.as_deref(),
+            self.direction,
+        )
+    }
+
+    /// The same expanded datatype over a borrowed native literal's fields.
+    #[must_use]
+    pub fn datatype_iri_from_parts<'a>(
+        datatype: Option<&'a str>,
+        language: Option<&str>,
+        direction: Option<RdfTextDirection>,
+    ) -> &'a str {
+        match (language, direction, datatype) {
             (Some(_), direction, _) => Self::language_datatype_iri(direction),
             (None, _, Some(datatype)) => datatype,
             (None, _, None) => XSD_STRING,
