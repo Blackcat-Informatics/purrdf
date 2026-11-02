@@ -193,12 +193,9 @@ pub(super) fn bloom(
         for (lane, salt) in SALT.into_iter().enumerate() {
             let bit = 1u32 << ((hash as u32).wrapping_mul(salt) >> 27);
             let start = block * 32 + lane * 4;
-            let word = u32::from_le_bytes(
-                *bits[start..start + 4]
-                    .first_chunk()
-                    .expect("four-byte Bloom lane"),
-            );
-            bits[start..start + 4].copy_from_slice(&(word | bit).to_le_bytes());
+            let word = purrdf_core::bytes::read_u32_le(&bits, start).expect("four-byte Bloom lane");
+            purrdf_core::bytes::put_u32_le(&mut bits, start, word | bit)
+                .expect("four-byte Bloom lane");
         }
     }
     let mut out = CompactWriter::root(|writer| {
