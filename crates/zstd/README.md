@@ -11,9 +11,14 @@ training and scalar, SSE2, BMI2, AVX2, NEON, SVE and wasm SIMD kernels. Target
 predicates and native CPU detection select supported kernels. There are no
 Cargo features or optional semantic configurations.
 
-Native decoder errors retain their original fields and causes. Borrowed
+Native decoder and dictionary authoring errors retain their original fields and causes. Borrowed
 `purrdf_hash::error::StructuredError` inspection exposes them without rendering
 or cloning diagnostic buffers.
+
+The existing dictionary APIs return `dictionary::Error`, retaining original
+source/output I/O owners, generated entropy causes and buffers, count tables,
+header bounds and actual training parameters. I/O inspection uses the shared
+borrowed standard-error view, including typed caller causes carried by `io_error`.
 
 See [PROVENANCE.md](PROVENANCE.md) for the imported source identity and local
 changes, and the package's `NOTICE` file for upstream attribution.

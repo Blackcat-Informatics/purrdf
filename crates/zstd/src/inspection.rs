@@ -10,32 +10,6 @@
 
 use purrdf_hash::error::{ErrorValue, ErrorVisitor, StructuredError};
 
-fn visit_io<'a>(
-    visitor: &mut dyn ErrorVisitor<'a>,
-    name: Option<&'static str>,
-    cause: &'a std::io::Error,
-) {
-    visitor.begin_record(name, "std-io");
-    visitor.begin_record(Some("kind"), "std-io-kind");
-    visitor.value(
-        Some("name"),
-        purrdf_hash::error::io_error_kind_name(cause.kind())
-            .map_or(ErrorValue::Absent, ErrorValue::Code),
-    );
-    visitor.value(
-        Some("native_discriminant"),
-        ErrorValue::Unsigned(cause.kind() as u128),
-    );
-    visitor.end_record();
-    visitor.value(
-        Some("raw_os_error"),
-        cause.raw_os_error().map_or(ErrorValue::Absent, |code| {
-            ErrorValue::Signed(i128::from(code))
-        }),
-    );
-    visitor.end_record();
-}
-
 impl StructuredError for crate::decoding::errors::FrameDescriptorError {
     purrdf_hash::error_visit! {
     InvalidFrameContentSizeFlag { got } => "zstd-frame-descriptor-invalid-frame-content-size-flag" {
@@ -75,7 +49,7 @@ impl StructuredError for crate::decoding::errors::ReadFrameHeaderError {
         match self {
             Self::MagicNumberReadError(cause) => {
                 visitor.variant("zstd-read-frame-header-magic-number-read-error");
-                visit_io(visitor, Some("cause"), cause);
+                visitor.value(Some("cause"), ErrorValue::Cause(cause));
             }
             Self::BadMagicNumber(cause) => {
                 visitor.variant("zstd-read-frame-header-bad-magic-number");
@@ -86,7 +60,7 @@ impl StructuredError for crate::decoding::errors::ReadFrameHeaderError {
             }
             Self::FrameDescriptorReadError(cause) => {
                 visitor.variant("zstd-read-frame-header-frame-descriptor-read-error");
-                visit_io(visitor, Some("cause"), cause);
+                visitor.value(Some("cause"), ErrorValue::Cause(cause));
             }
             Self::InvalidFrameDescriptor(cause) => {
                 visitor.variant("zstd-read-frame-header-invalid-frame-descriptor");
@@ -94,15 +68,15 @@ impl StructuredError for crate::decoding::errors::ReadFrameHeaderError {
             }
             Self::WindowDescriptorReadError(cause) => {
                 visitor.variant("zstd-read-frame-header-window-descriptor-read-error");
-                visit_io(visitor, Some("cause"), cause);
+                visitor.value(Some("cause"), ErrorValue::Cause(cause));
             }
             Self::DictionaryIdReadError(cause) => {
                 visitor.variant("zstd-read-frame-header-dictionary-id-read-error");
-                visit_io(visitor, Some("cause"), cause);
+                visitor.value(Some("cause"), ErrorValue::Cause(cause));
             }
             Self::FrameContentSizeReadError(cause) => {
                 visitor.variant("zstd-read-frame-header-frame-content-size-read-error");
-                visit_io(visitor, Some("cause"), cause);
+                visitor.value(Some("cause"), ErrorValue::Cause(cause));
             }
             Self::SkipFrame {
                 magic_number,
@@ -124,7 +98,7 @@ impl StructuredError for crate::decoding::errors::BlockHeaderReadError {
         match self {
             Self::ReadError(cause) => {
                 visitor.variant("zstd-block-header-read-read-error");
-                visit_io(visitor, Some("cause"), cause);
+                visitor.value(Some("cause"), ErrorValue::Cause(cause));
             }
             Self::FoundReservedBlock => {
                 visitor.variant("zstd-block-header-read-found-reserved-block");
@@ -162,7 +136,7 @@ impl StructuredError for crate::decoding::errors::DecompressBlockError {
         match self {
             Self::BlockContentReadError(cause) => {
                 visitor.variant("zstd-decompress-block-block-content-read-error");
-                visit_io(visitor, Some("cause"), cause);
+                visitor.value(Some("cause"), ErrorValue::Cause(cause));
             }
             Self::MalformedSectionHeader {
                 expected_len,
@@ -214,7 +188,7 @@ impl StructuredError for crate::decoding::errors::DecodeBlockContentError {
             Self::ReadError { step, source } => {
                 visitor.variant("zstd-decode-block-content-read-error");
                 visitor.value(Some("step"), ErrorValue::Record(step));
-                visit_io(visitor, Some("source"), source);
+                visitor.value(Some("source"), ErrorValue::Cause(source));
             }
             Self::DecompressBlockError(cause) => {
                 visitor.variant("zstd-decode-block-content-decompress-block-error");
@@ -312,7 +286,7 @@ impl StructuredError for crate::decoding::errors::FrameDecoderError {
             }
             Self::FailedToReadChecksum(cause) => {
                 visitor.variant("zstd-frame-decoder-failed-to-read-checksum");
-                visit_io(visitor, Some("cause"), cause);
+                visitor.value(Some("cause"), ErrorValue::Cause(cause));
             }
             Self::NotYetInitialized => {
                 visitor.variant("zstd-frame-decoder-not-yet-initialized");
@@ -323,7 +297,7 @@ impl StructuredError for crate::decoding::errors::FrameDecoderError {
             }
             Self::FailedToDrainDecodebuffer(cause) => {
                 visitor.variant("zstd-frame-decoder-failed-to-drain-decodebuffer");
-                visit_io(visitor, Some("cause"), cause);
+                visitor.value(Some("cause"), ErrorValue::Cause(cause));
             }
             Self::FailedToSkipFrame => {
                 visitor.variant("zstd-frame-decoder-failed-to-skip-frame");

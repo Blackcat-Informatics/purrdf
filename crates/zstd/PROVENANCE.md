@@ -26,6 +26,18 @@ Compiler qualification fixes, inert statement removal and imported API lint
 annotations adapt the code to workspace gates. Imported API documentation and
 Debug omissions remain scoped to the inherited source files.
 
+Dictionary authoring now returns typed native refusals instead of constructing
+string-bearing I/O errors. Original generated Huffman causes and buffers, FSE
+counts, header bounds and selected training parameters remain owned by the
+refusal. Source/output I/O errors move unchanged through the existing APIs, and
+their inspection uses the hash root's borrowed standard-error implementation.
+Training choices and previously successful dictionary bytes are unchanged.
+Dictionary Huffman descriptions are checked before writing. An unwritable table
+is deterministically rebalanced by doubling its bounded statistics with the first
+symbol, then checked again; a remaining failure retains those actual statistics.
+This repairs the uniform full-alphabet weight description that previously
+panicked instead of reaching dictionary finalization or the native FSE refusal.
+
 Dictionary identities call the workspace's FNV implementation. Native chunk
 access preserves the original byte widths and offsets. Constructor and error
 conversion wrappers use the shared hash and lexical macros. Encoder history,

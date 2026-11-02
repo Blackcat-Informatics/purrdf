@@ -459,6 +459,26 @@ inspection; no downstream registry patch or formatted cause is needed.
 restoring a thread-local generator never affected dictionary bytes. The unused
 legacy COVER and reservoir APIs are omitted from the local codec provider.
 
+The four dictionary authoring APIs in `purrdf_zstd::dictionary` now return
+`dictionary::Error` directly. It retains original I/O and Huffman causes,
+entropy counts, size/header operands and actual tuned training parameters.
+GTS `DictError::Authoring` and `DictError::Decode` retain those original provider
+and dictionary-decoder owners in place of `External.message`. Inspect their
+borrowed `cause` fields or standard error sources. `DictError` no longer has
+`Clone`, whole-error equality or `detail()`; `Display` preserves its human text.
+Dictionary training choices, canonical corpus ordering and previously successful
+bytes are unchanged. Unwritable Huffman descriptions, including uniform full
+alphabets, now receive bounded deterministic rebalancing before serialization
+instead of panicking. A remaining unrepresentable table retains its actual
+statistics in `dictionary::Error::UnrepresentableHuffman`.
+
+The shared error visitor now also inspects `std::io::Error` by borrowing the
+original kind, OS code and any typed cause supplied through `io_error`. Raw
+opaque messages remain absent from that view; explicit `Display` still uses the
+original owner. `IoFailure` retains its existing captured-message presentation
+API. Use the typed bridge for custom causes whose native fields must cross an
+I/O boundary without formatting.
+
 `purrdf_gts::codec::CodecFailure` now owns native Zstandard causes instead of
 rendered strings. Dictionary refusals distinguish `ZstdDecodeDictionary` from
 `ZstdEncodeDictionary`; `ZstdAllocation` carries the original `TryReserveError`
