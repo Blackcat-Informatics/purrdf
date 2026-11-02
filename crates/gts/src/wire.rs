@@ -75,6 +75,15 @@ pub fn digest_str(data: &[u8]) -> String {
     digest_label(&blake3_256(data))
 }
 
+/// The same blob identity over original borrowed byte-string chunks.
+pub fn digest_chunks<'a>(chunks: impl IntoIterator<Item = &'a [u8]>) -> String {
+    let mut hasher = purrdf_hash::blake3::Hasher::new();
+    for chunk in chunks {
+        hasher.update(chunk);
+    }
+    digest_label(hasher.finalize().as_bytes())
+}
+
 /// The `blake3:<hex>` spelling of a BLAKE3 digest already computed: the
 /// scheme, then the digest's lowercase base16. The one place a GTS content
 /// identifier is spelt.

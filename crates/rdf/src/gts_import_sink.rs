@@ -90,6 +90,11 @@ fn segment_scope(segment_index: u64) -> Result<BlankScope, RdfDiagnostic> {
 }
 
 impl ResolvedSink for SinkImporter<'_> {
+    fn frame_scratch(
+        &mut self,
+    ) -> Option<std::io::Result<Box<dyn purrdf_lex::cbor::ReplayStorage>>> {
+        self.blobs.as_mut().and_then(BlobCollector::frame_scratch)
+    }
     type Id = TermId;
     type Error = RdfDiagnostic;
 

@@ -85,6 +85,12 @@ type ResolvedComponents<S> = (
 /// context). Non-RDF events pass through with no-op defaults so a target that
 /// only cares about triples need not implement them.
 pub trait ResolvedSink {
+    /// Caller-owned replay storage for transformed RDF frames, when supported.
+    fn frame_scratch(
+        &mut self,
+    ) -> Option<std::io::Result<Box<dyn purrdf_lex::cbor::ReplayStorage>>> {
+        None
+    }
     /// The target's resolved-term identifier. `Copy` so the resolver can cache
     /// it in its per-segment remap without cloning.
     type Id: Copy;
@@ -599,6 +605,14 @@ impl<S: ResolvedSink> SegmentResolver<S> {
 }
 
 impl<S: ResolvedSink> StreamingSink for SegmentResolver<S> {
+    fn frame_scratch(
+        &mut self,
+    ) -> Option<std::io::Result<Box<dyn purrdf_lex::cbor::ReplayStorage>>> {
+        if self.error.is_some() {
+            return Some(Err(std::io::Error::other("segment sink already failed")));
+        }
+        self.sink.frame_scratch()
+    }
     fn frame(&mut self, ctx: FrameContext<'_>) {
         if self.error.is_some() {
             return;

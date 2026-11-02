@@ -12,6 +12,9 @@ use std::borrow::Cow;
 mod error;
 pub use error::{CodecError, CodecFailure, CodecUnavailable};
 
+mod stream;
+pub use stream::decode_chain_reader;
+
 use purrdf_zstd::decoding::{ContentChecksum, FrameDecoder, errors::FrameDecoderError};
 use purrdf_zstd::encoding::{
     CompressionLevel, FrameCompressor, MatchGeneratorDriver, compress_to_vec,

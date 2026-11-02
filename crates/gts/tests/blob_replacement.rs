@@ -28,7 +28,7 @@ impl StreamingSink for Sink {
     fn blob_payload(&mut self, payload: BlobPayload<'_>) {
         self.0.push(Event {
             segment: payload.segment_index,
-            bytes: payload.bytes.unwrap().to_vec(),
+            bytes: payload.bytes.chunks().unwrap().flatten().copied().collect(),
             media_type: payload.metadata.and_then(media_type).map(str::to_owned),
             declared: payload.metadata_declared,
         });

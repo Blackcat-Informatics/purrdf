@@ -29,6 +29,13 @@ pub enum ValueRef<'a> {
 }
 
 impl<'a> ValueRef<'a> {
+    /// Borrow byte-string chunks without joining indefinite encodings.
+    pub fn byte_chunks(self) -> Option<super::ByteChunks<'a>> {
+        match self {
+            Self::Owned(value) => value.as_bytes().map(super::ByteChunks::from_slice),
+            Self::Encoded(value) => value.byte_chunks(),
+        }
+    }
     /// Borrow an owned value or decode only this source-backed item.
     ///
     /// # Errors

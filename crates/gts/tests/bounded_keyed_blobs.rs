@@ -43,8 +43,15 @@ impl StreamingSink for Sink {
             payload.codecs.is_empty(),
             "eager decoding must complete first"
         );
-        self.payloads
-            .push(payload.bytes.expect("decoded payload").to_vec());
+        self.payloads.push(
+            payload
+                .bytes
+                .chunks()
+                .expect("decoded payload")
+                .flatten()
+                .copied()
+                .collect(),
+        );
     }
 }
 

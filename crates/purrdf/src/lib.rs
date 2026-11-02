@@ -149,7 +149,8 @@ pub use purrdf_lex::error;
 
 pub mod gts_columnar;
 pub use gts_columnar::{
-    GtsBlobExportReport, GtsColumnarError, GtsColumnarSource, prepare_gts_columnar,
+    GtsBlobExportReport, GtsColumnarError, GtsColumnarSource, GtsStagedColumnarSource,
+    prepare_gts_columnar, prepare_gts_columnar_to,
 };
 
 pub mod profile;
