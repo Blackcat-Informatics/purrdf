@@ -204,8 +204,9 @@ fn remove_index_suffix<T: Hash>(values: &[T], table: &mut HashTable<u32>, from: 
     }
 }
 
-// Admit the row before constructing an implicit dependency, and publish the row
-// only after that dependency succeeds. A duplicate needs neither operation.
+// Settle the provisional row insertion before constructing its implicit
+// dependency. The occupied entry removes that row infallibly if the dependency
+// refuses; no fallible work follows dependency success. A duplicate needs neither.
 fn store_once_with_dependency<T: Hash + Eq, S: Admission + ?Sized>(
     vec: &mut Vec<T>,
     table: &mut HashTable<u32>,
@@ -240,9 +241,8 @@ fn store_once_with_dependency<T: Hash + Eq, S: Admission + ?Sized>(
         },
         memory,
     )?;
-    dependency(memory)?;
     vec.push(value);
-    if let Err(refusal) = table.try_insert_unique_with_control(
+    let entry = match table.try_insert_unique_with_control(
         hash,
         i,
         |&i, memory| {
@@ -251,8 +251,16 @@ fn store_once_with_dependency<T: Hash + Eq, S: Admission + ?Sized>(
         },
         memory,
     ) {
+        Ok(entry) => entry,
+        Err(refusal) => {
+            vec.pop();
+            return Err(crate::hash::table_storage_error(&refusal.cause));
+        }
+    };
+    if let Err(cause) = dependency(memory) {
+        entry.remove();
         vec.pop();
-        return Err(crate::hash::table_storage_error(&refusal.cause));
+        return Err(cause);
     }
     Ok(i)
 }
@@ -5472,6 +5480,94 @@ mod native_graph_birth_tests {
         assert_eq!(builder.reifiers.len(), 1);
         assert_eq!(builder.term_count(), count + 1);
         assert_eq!(memory.admitted_bytes(), bytes);
+
+        struct StopGrant {
+            storage: Grant,
+            remaining: usize,
+            stopped: bool,
+        }
+        impl Admission for StopGrant {
+            fn progress_enabled(&self) -> bool {
+                true
+            }
+            fn checkpoint(&mut self, _: u64) -> Result<(), StorageError> {
+                assert!(!self.stopped, "no progress after the first refusal");
+                if self.remaining == 0 {
+                    self.stopped = true;
+                    Err(StorageError::AdmissionFailed)
+                } else {
+                    self.remaining -= 1;
+                    Ok(())
+                }
+            }
+            fn resize(&mut self, next: usize) -> Result<(), StorageError> {
+                assert!(!self.stopped || next <= self.storage.live);
+                self.storage.resize(next)
+            }
+        }
+
+        // Refuse every progress boundary, including the row-index insertion
+        // that previously followed a successful implicit predicate mint.
+        let parent = 37;
+        let mut completed = false;
+        for allowed in 0..512 {
+            let mut builder = RdfDatasetBuilder::new();
+            builder.reserve_for_replay(20, 1024, 0).unwrap();
+            let s = builder.intern_iri("urn:s").unwrap();
+            let p = builder.intern_iri("urn:p").unwrap();
+            let triple = builder.intern_triple(s, p, s).unwrap();
+            let count = builder.term_count();
+            let text = builder.interner.arena.clone();
+            let bytes = parent + builder.native_buffer_bytes().unwrap();
+            let mut grant = StopGrant {
+                storage: Grant {
+                    live: bytes,
+                    limit: usize::MAX,
+                    peak: bytes,
+                },
+                remaining: allowed,
+                stopped: false,
+            };
+            let mut memory = Memory::resume(&mut grant, bytes);
+            let result = builder.push_reifier_in_graph_with_memory(s, triple, None, &mut memory);
+            if let Err(cause) = result {
+                assert_eq!(cause, StorageError::AdmissionFailed);
+                assert_eq!(builder.term_count(), count);
+                assert_eq!(builder.interner.arena, text);
+                assert_eq!(builder.interner.index.len(), count);
+                assert!(builder.reifies_predicate.is_none());
+                assert_eq!(builder.reifiers, []);
+                assert!(builder.reifier_index.is_empty());
+                assert_eq!(
+                    memory.admitted_bytes(),
+                    parent + builder.native_buffer_bytes().unwrap()
+                );
+                let grant = memory.admission_mut();
+                grant.stopped = false;
+                grant.remaining = usize::MAX;
+                builder
+                    .push_reifier_in_graph_with_memory(s, triple, None, &mut memory)
+                    .unwrap();
+            } else {
+                completed = true;
+                assert!(allowed > 5, "the sweep reached the complete native path");
+            }
+            memory.admission_mut().remaining = usize::MAX;
+            assert_eq!(builder.reifies_predicate.unwrap().index(), count);
+            assert_eq!(builder.reifiers, [(s, triple, None)]);
+            let next = builder
+                .intern_iri_with_memory("urn:next", &mut memory)
+                .unwrap();
+            assert_eq!(next.index(), count + 1);
+            assert_eq!(
+                memory.admitted_bytes(),
+                parent + builder.native_buffer_bytes().unwrap()
+            );
+            if completed {
+                break;
+            }
+        }
+        assert!(completed, "the complete insertion remains admitted");
     }
 
     #[test]
