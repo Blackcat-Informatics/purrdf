@@ -1,6 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
+#![expect(
+    clippy::result_large_err,
+    reason = "Certificate errors retain the original compaction refusal inline; propagating that owner must not allocate a failure-only box."
+)]
+
 //! GTS streamable-compaction certificates (GTS-SPEC §10.1/§10.2).
 //!
 //! A [`CompactionCertificate`] is the correctness-critical proof that a
@@ -26,6 +31,9 @@
 //! CBOR round-trips so a certificate can be carried and replayed independent
 //! of this crate's in-memory shape.
 
+mod error;
+pub use error::{CertificateCborError, CertificateFieldType, CertifyError};
+
 use purrdf_lex::cbor::{Integer, Value};
 
 use purrdf_gts::compact::{self, CompactionParams, DictPlan, PackagingSigner};
@@ -37,61 +45,7 @@ use purrdf_gts::wire;
 
 use crate::gts::dataset_from_gts_graph;
 use crate::gts_core::diagnostics_to_error;
-use crate::{CanonError, CanonHash, RdfDiagnostic, try_canonical_sha256_view};
-
-/// Errors from certificate authoring, verification, and (de)serialization.
-#[derive(Debug)]
-#[non_exhaustive]
-pub enum CertifyError {
-    /// The compaction pipeline refused the input (`purrdf_gts::compact::CompactRefusedError`).
-    Refused(String),
-    /// The GTS→dataset bridge, or a fold, reported a diagnostic.
-    Dataset(RdfDiagnostic),
-    /// The original canonicalization source/profile/search-control refusal.
-    CanonRefused(CanonError),
-    /// The certificate's canonical CBOR encoding is malformed.
-    Cbor(String),
-    /// An internal invariant was violated (e.g. a freshly authored
-    /// compaction's post refold digest disagreeing with the pre digest it was
-    /// authored from — a compaction-authoring bug, never a caller error).
-    Invariant(String),
-}
-
-impl std::fmt::Display for CertifyError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Refused(msg) => write!(f, "compaction refused: {msg}"),
-            Self::Dataset(diag) => write!(f, "GTS dataset bridge failed: {diag}"),
-            Self::CanonRefused(err) => write!(f, "compaction verification failed: {err}"),
-            Self::Cbor(msg) => write!(f, "compaction certificate CBOR error: {msg}"),
-            Self::Invariant(msg) => {
-                write!(f, "compaction certificate invariant violated: {msg}")
-            }
-        }
-    }
-}
-
-impl std::error::Error for CertifyError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Dataset(diag) => Some(diag),
-            Self::CanonRefused(err) => Some(err),
-            Self::Refused(_) | Self::Cbor(_) | Self::Invariant(_) => None,
-        }
-    }
-}
-
-impl From<RdfDiagnostic> for CertifyError {
-    fn from(diag: RdfDiagnostic) -> Self {
-        Self::Dataset(diag)
-    }
-}
-
-impl From<compact::CompactRefusedError> for CertifyError {
-    fn from(err: compact::CompactRefusedError) -> Self {
-        Self::Refused(err.to_string())
-    }
-}
+use crate::{CanonHash, try_canonical_sha256_view};
 
 // ---------------------------------------------------------------------------
 // Part 1 — content projection + refold digest
@@ -667,32 +621,55 @@ pub struct CompactionCertificate {
     pub packaging_kids: Vec<String>,
 }
 
-fn text_field(entries: &[(Value, Value)], key: &str) -> Result<String, CertifyError> {
-    match wire::map_get(entries, key) {
-        Some(Value::Text(text)) => Ok(text.clone()),
-        Some(_) => Err(CertifyError::Cbor(format!("{key:?} must be a text string"))),
-        None => Err(CertifyError::Cbor(format!(
-            "certificate CBOR missing {key:?}"
-        ))),
-    }
+fn take_field(
+    entries: &mut [(Value, Value)],
+    field: &'static str,
+) -> Result<Value, CertificateCborError> {
+    // Keep first textual-key lookup and entry order, including duplicate and
+    // unknown keys. Taking only the value preserves the original refusal owner.
+    entries
+        .iter_mut()
+        .find(|(candidate, _)| candidate.as_text() == Some(field))
+        .map(|(_, value)| value.take())
+        .ok_or(CertificateCborError::MissingField { field })
 }
 
-fn text_array_field(entries: &[(Value, Value)], key: &str) -> Result<Vec<String>, CertifyError> {
-    match wire::map_get(entries, key) {
-        Some(Value::Array(items)) => items
-            .iter()
-            .map(|item| match item {
-                Value::Text(text) => Ok(text.clone()),
-                _ => Err(CertifyError::Cbor(format!(
-                    "{key:?} must be an array of text strings"
-                ))),
-            })
-            .collect(),
-        Some(_) => Err(CertifyError::Cbor(format!("{key:?} must be an array"))),
-        None => Err(CertifyError::Cbor(format!(
-            "certificate CBOR missing {key:?}"
-        ))),
-    }
+fn text_field(
+    entries: &mut [(Value, Value)],
+    field: &'static str,
+) -> Result<String, CertificateCborError> {
+    take_field(entries, field)?
+        .into_text()
+        .map_err(|actual| CertificateCborError::FieldType {
+            field,
+            expected: CertificateFieldType::Text,
+            actual,
+        })
+}
+
+fn text_array_field(
+    entries: &mut [(Value, Value)],
+    field: &'static str,
+) -> Result<Vec<String>, CertificateCborError> {
+    let items = take_field(entries, field)?.into_array().map_err(|actual| {
+        CertificateCborError::FieldType {
+            field,
+            expected: CertificateFieldType::Array,
+            actual,
+        }
+    })?;
+    items
+        .into_iter()
+        .enumerate()
+        .map(|(index, item)| {
+            item.into_text()
+                .map_err(|actual| CertificateCborError::ArrayElementType {
+                    field,
+                    index,
+                    actual,
+                })
+        })
+        .collect()
 }
 
 impl CompactionCertificate {
@@ -742,17 +719,15 @@ impl CompactionCertificate {
     /// missing/misshapes a required field.
     pub fn from_canonical_cbor(bytes: &[u8]) -> Result<Self, CertifyError> {
         let value = purrdf_lex::cbor::decode(bytes, purrdf_lex::cbor::Limits::DEFAULT)
-            .map_err(|err| CertifyError::Cbor(format!("cannot parse certificate CBOR: {err}")))?;
-        let Ok(entries) = value.into_map() else {
-            return Err(CertifyError::Cbor(
-                "certificate CBOR root must be a map".to_string(),
-            ));
-        };
+            .map_err(CertificateCborError::Decode)?;
+        let mut entries = value
+            .into_map()
+            .map_err(|actual| CertificateCborError::RootType { actual })?;
         Ok(Self {
-            pre_refold_digest: text_field(&entries, FIELD_PRE)?,
-            post_refold_digest: text_field(&entries, FIELD_POST)?,
-            detached_sig_roots: text_array_field(&entries, FIELD_ROOTS)?,
-            packaging_kids: text_array_field(&entries, FIELD_KIDS)?,
+            pre_refold_digest: text_field(&mut entries, FIELD_PRE)?,
+            post_refold_digest: text_field(&mut entries, FIELD_POST)?,
+            detached_sig_roots: text_array_field(&mut entries, FIELD_ROOTS)?,
+            packaging_kids: text_array_field(&mut entries, FIELD_KIDS)?,
         })
     }
 }
@@ -868,9 +843,10 @@ pub fn compact_and_certify<S: PackagingSigner>(
     }
     let post_digest = refold_digest(&post_fold, control)?;
     if post_digest != digest {
-        return Err(CertifyError::Invariant(format!(
-            "compaction changed the content-refold digest: pre={digest} post={post_digest}"
-        )));
+        return Err(CertifyError::Invariant {
+            pre_refold_digest: digest,
+            post_refold_digest: post_digest,
+        });
     }
 
     let detached_sig_roots =

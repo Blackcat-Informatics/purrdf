@@ -479,6 +479,15 @@ original owner. `IoFailure` retains its existing captured-message presentation
 API. Use the typed bridge for custom causes whose native fields must cross an
 I/O boundary without formatting.
 
+Compaction certificates now expose every `CertifyError` through the same borrowed
+visitor. `Refused` retains the original `CompactRefusedError`; `Cbor` retains a
+`CertificateCborError` with the original decoder or a typed certificate-shape
+reason. Inspect its field, expected shape, original CBOR value and zero-based
+array index where applicable. Standard error sources retain the native causes.
+`Invariant` now holds named `pre_refold_digest` and `post_refold_digest` operands.
+Certificate parsing keeps its first-match field behavior and accepted CBOR
+forms. Successful certificate bytes and human messages are unchanged.
+
 `purrdf_gts::codec::CodecFailure` now owns native Zstandard causes instead of
 rendered strings. Dictionary refusals distinguish `ZstdDecodeDictionary` from
 `ZstdEncodeDictionary`; `ZstdAllocation` carries the original `TryReserveError`
