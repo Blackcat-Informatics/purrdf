@@ -41,11 +41,7 @@ use super::{
     VizValueRef, VizVocabularyMapping,
 };
 
-impl From<DecodeError> for VizError {
-    fn from(error: DecodeError) -> Self {
-        Self::Decode(error.to_string())
-    }
-}
+purrdf_lex::variant_from!(VizError { Decode(DecodeError) });
 
 /// An identifier newtype is its string.
 macro_rules! viz_identifier_json {
@@ -842,6 +838,9 @@ purrdf_lex::json_record!(VizSvgDocument as "struct VizSvgDocument" {
 mod tests {
     use super::*;
     use crate::viz::VizTextDirection;
+    use purrdf_alloc_probe::CurrentThreadWindow;
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::{Capture, Event};
 
     #[test]
     fn variants_spell_their_camel_case_names() {
@@ -885,10 +884,50 @@ mod tests {
         json.as_object_mut().expect("object").remove("focus");
         assert_eq!(VizSpec::from_json(&json), Ok(spec));
         // A member the form does not declare is refused, naming it.
-        let mut extra = json.clone();
-        extra.as_object_mut().expect("object").insert("extra", 1_u8);
-        let error = VizSpec::from_json(&extra).expect_err("undeclared member");
+        let error = {
+            let mut extra = json.clone();
+            extra.as_object_mut().expect("object").insert("extra", 1_u8);
+            VizSpec::from_json(&extra).expect_err("undeclared member")
+        };
         assert!(error.to_string().starts_with("unknown field `extra`"));
+        let original_message = error.message().as_ptr();
+        let outer_events = Vec::with_capacity(32);
+        let native_events = Vec::with_capacity(32);
+        let reason_events = Vec::with_capacity(128);
+        let window = CurrentThreadWindow::open();
+        let error = VizError::from(error);
+        let native = std::error::Error::source(&error)
+            .unwrap()
+            .downcast_ref::<DecodeError>()
+            .unwrap();
+        let outer = Capture::read_with_buffer(&error, outer_events);
+        let record = Capture::read_with_buffer(native, native_events);
+        let ErrorValue::Cause(reason) = record.field("cause") else {
+            panic!("original record reason")
+        };
+        let reason = Capture::read_with_buffer(reason, reason_events);
+        let measured = window.close();
+        assert_eq!((measured.allocations, measured.requested_bytes), (0, 0));
+        assert_eq!(native.message().as_ptr(), original_message);
+        assert_eq!(outer.code, "rdf-viz-json-decode");
+        assert_eq!(record.code, "json-record-decode");
+        assert!(matches!(record.field("pointer"), ErrorValue::Text("")));
+        assert!(matches!(
+            record.field("external_message"),
+            ErrorValue::Absent
+        ));
+        assert_eq!(reason.code, "json-record-unknown-field");
+        assert!(matches!(reason.field("field"), ErrorValue::Text("extra")));
+        for expected in ["mode", "focus"] {
+            assert!(reason.events.iter().any(|event| matches!(
+                event, Event::Value(None, ErrorValue::Text(name)) if *name == expected
+            )));
+        }
+        assert!(
+            error
+                .to_string()
+                .starts_with("visualization JSON: unknown field `extra`")
+        );
         // A repeated member is refused; the single spelling beside it reads.
         let text = purrdf_lex::json::write_compact(&json);
         let repeated = text.replacen('{', r#"{"mode":"table","#, 1);
