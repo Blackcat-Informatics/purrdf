@@ -5,7 +5,13 @@
 //! and refold-digest equivalence, `verify_compaction`, `compose`, and the
 //! certifying authoring wrapper `compact_and_certify`.
 
+use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
 use purrdf_core::FastMap;
+use purrdf_hash::error::ErrorValue;
+use purrdf_testkit::error_capture::Capture;
+
+#[global_allocator]
+static GLOBAL: CountingAllocator = CountingAllocator;
 
 use purrdf_gts::compact::{DictPlan, DictStrategy, detached_signature_proof};
 use purrdf_gts::fixture::{fixed_key, object_literal};
@@ -18,8 +24,8 @@ use purrdf_gts::writer::{Writer, term_to_wire};
 use purrdf_lex::cbor::Value;
 use purrdf_rdf::CanonError;
 use purrdf_rdf::gts_certify::{
-    CertifyError, CompactionCertificate, compact_and_certify, compose, effective_digest,
-    refold_digest, verify_compaction,
+    CertificateCborError, CertifyError, CompactionCertificate, compact_and_certify, compose,
+    effective_digest, refold_digest, verify_compaction,
 };
 
 const TIMESTAMP: &str = "2026-01-01T00:00:00Z";
@@ -827,14 +833,173 @@ fn certificate_cbor_with_trailing_bytes_is_refused_and_the_exact_item_is_accepte
     trailing.push(0x00);
     let refused = CompactionCertificate::from_canonical_cbor(&trailing)
         .expect_err("a byte after the certificate item is not the canonical form");
+    let fields = Capture::read(&refused);
+    let decoder = fields.child("cause").child("cause");
+    assert_eq!(decoder.code, "cbor-document");
+    assert_eq!(decoder.child("kind").code, "cbor-trailing-data");
     assert!(
-        matches!(refused, CertifyError::Cbor(ref message) if message.contains("cannot parse certificate CBOR")),
-        "trailing bytes are a CBOR parse refusal: {refused:?}"
+        matches!(decoder.field("offset"), ErrorValue::ByteCount(n) if n == exact.len() as u128)
+    );
+    assert!(
+        std::error::Error::source(&refused)
+            .unwrap()
+            .source()
+            .unwrap()
+            .is::<purrdf_lex::cbor::DecodeError>()
     );
 
     let accepted = CompactionCertificate::from_canonical_cbor(&exact)
         .expect("the exact item, with nothing after it, parses");
     assert_eq!(accepted, cert);
+}
+
+#[test]
+fn certificate_refusals_keep_original_values_causes_and_field_priority() {
+    let entries = || -> Vec<(Value, Value)> {
+        vec![
+            ("post_refold_digest".into(), "post".into()),
+            ("packaging_kids".into(), Value::Array(vec![])),
+            ("detached_sig_roots".into(), Value::Array(vec![])),
+            ("pre_refold_digest".into(), "pre".into()),
+        ]
+    };
+    let mut text = entries();
+    text[0].1 = u64::MAX.into();
+    text[3].1 = u64::MAX.into();
+    text.push(("pre_refold_digest".into(), "later valid duplicate".into()));
+    let mut array = entries();
+    array[1].1 = Value::Null;
+    let mut element = entries();
+    element[1].1 = Value::Null;
+    element[2].1 = Value::Array(vec![
+        "kept".into(),
+        Value::Bytes(vec![0, 255, 128]),
+        false.into(),
+    ]);
+    for (value, code, field, actual_code) in [
+        (
+            Value::from(u64::MAX),
+            "rdf-certificate-cbor-root-type",
+            None,
+            Some("cbor-integer"),
+        ),
+        (
+            Value::Map(vec![("post_refold_digest".into(), false.into())]),
+            "rdf-certificate-cbor-missing-field",
+            Some("pre_refold_digest"),
+            None,
+        ),
+        (
+            Value::Map(text),
+            "rdf-certificate-cbor-field-type",
+            Some("pre_refold_digest"),
+            Some("cbor-integer"),
+        ),
+        (
+            Value::Map(array),
+            "rdf-certificate-cbor-field-type",
+            Some("packaging_kids"),
+            Some("cbor-null"),
+        ),
+        (
+            Value::Map(element),
+            "rdf-certificate-cbor-array-element-type",
+            Some("detached_sig_roots"),
+            Some("cbor-bytes"),
+        ),
+    ] {
+        let error = {
+            let bytes = wire::encode(&value);
+            CompactionCertificate::from_canonical_cbor(&bytes).unwrap_err()
+        };
+        drop(value);
+        let original = std::error::Error::source(&error)
+            .unwrap()
+            .downcast_ref::<CertificateCborError>()
+            .unwrap();
+        let outer_events = Vec::with_capacity(32);
+        let events = Vec::with_capacity(32);
+        let actual_events = Vec::with_capacity(32);
+        let window = CurrentThreadWindow::open();
+        let outer = Capture::read_with_buffer(&error, outer_events);
+        let fields = Capture::read_with_buffer(original, events);
+        let actual = actual_code.map(|_| {
+            let ErrorValue::Record(value) = fields.field("actual") else {
+                panic!("original CBOR value")
+            };
+            Capture::read_with_buffer(value, actual_events)
+        });
+        let measured = window.close();
+        assert_eq!((measured.allocations, measured.requested_bytes), (0, 0));
+        assert_eq!(outer.code, "rdf-certificate-cbor");
+        assert_eq!(fields.code, code);
+        if let Some(field) = field {
+            assert!(matches!(fields.field("field"), ErrorValue::Code(actual) if actual == field));
+        }
+        if let Some(actual) = actual {
+            assert_eq!(Some(actual.code), actual_code);
+            match actual.code {
+                "cbor-integer" => assert!(
+                    matches!(actual.field("value"), ErrorValue::Signed(n) if n == i128::from(u64::MAX))
+                ),
+                "cbor-bytes" => {
+                    assert!(matches!(
+                        actual.field("value"),
+                        ErrorValue::Bytes([0, 255, 128])
+                    ));
+                    assert!(matches!(fields.field("index"), ErrorValue::Unsigned(1)));
+                }
+                "cbor-null" => assert!(matches!(
+                    fields.field("expected"),
+                    ErrorValue::Code("array")
+                )),
+                _ => panic!("unexpected retained value"),
+            }
+        }
+    }
+    // Arbitrary text digests, ignored keys and later duplicate keys stay accepted.
+    let mut valid = entries();
+    valid.push(("pre_refold_digest".into(), false.into()));
+    valid.push((u64::MAX.into(), Value::Null));
+    valid.push(("unknown".into(), Value::Null));
+    let accepted =
+        CompactionCertificate::from_canonical_cbor(&wire::encode(&Value::Map(valid))).unwrap();
+    assert_eq!(accepted.pre_refold_digest, "pre");
+    assert_eq!(accepted.post_refold_digest, "post");
+
+    let error = {
+        let source = source_with_content(1, "author", 1, None);
+        let timestamp = String::from("2026-01-01T00:00:00+01:00");
+        compact_and_certify(
+            &source,
+            DictPlan::undicted(),
+            &timestamp,
+            false,
+            (fixed_key(7), "pack".to_string()),
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap_err()
+    };
+    let fields = Capture::read(&error);
+    assert_eq!(fields.code, "rdf-certificate-compaction-refused");
+    let cause = fields.child("cause");
+    assert_eq!(cause.code, "gts-compact-timestamp");
+    assert!(matches!(
+        cause.field("actual"),
+        ErrorValue::Text("2026-01-01T00:00:00+01:00")
+    ));
+    assert!(matches!(
+        cause.child("cause").field("minutes"),
+        ErrorValue::Signed(60)
+    ));
+    assert!(
+        std::error::Error::source(&error)
+            .unwrap()
+            .is::<purrdf_gts::compact::CompactRefusedError>()
+    );
 }
 
 // ---------------------------------------------------------------------------
