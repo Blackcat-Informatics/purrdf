@@ -35,12 +35,14 @@ use purrdf_lex::term_syntax;
 
 use crate::{QuadIds, RdfDataset, RdfTextDirection, TermRef, TermValue};
 
+mod error;
 mod json;
 mod layout;
 mod presentation;
 mod scene;
 mod svg;
 
+pub use error::VizError;
 pub use layout::*;
 pub use presentation::*;
 pub use scene::*;
@@ -642,91 +644,6 @@ pub enum VizElementKind {
     /// Visible heading identifying the complete RDF detail panel.
     DetailHeading,
 }
-
-/// Visualization projection errors.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum VizError {
-    /// The requested projection exceeds explicit size limits.
-    TooLarge {
-        /// Limit name.
-        limit: &'static str,
-        /// Actual count.
-        actual: usize,
-        /// Allowed count.
-        allowed: usize,
-    },
-    /// A spec references an unknown role predicate.
-    UnknownRolePredicate(String),
-    /// A spec contains an invalid vocabulary mapping.
-    InvalidVocabulary(String),
-    /// A visualization specification is internally inconsistent.
-    InvalidSpec(String),
-    /// A graph-like input contains an invalid predicate.
-    InvalidPredicate(String),
-    /// A focus selector does not match any projected term or statement.
-    UnknownFocus(String),
-    /// A focus selector matches more than one projected entity.
-    AmbiguousFocus(String),
-    /// A deterministic identity hash collided with a different structural key.
-    IdCollision(String),
-    /// A renderer-neutral scene is structurally invalid.
-    Scene(String),
-    /// Deterministic layout could not satisfy its structural invariants.
-    Layout(String),
-    /// Serialization failed.
-    Serialize(String),
-    /// A JSON value is not the JSON form of the visualization type read from it.
-    Decode(String),
-    /// A caller-owned presentation instruction is invalid or unsupported.
-    Presentation(VizPresentationError),
-}
-
-impl fmt::Display for VizError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::TooLarge {
-                limit,
-                actual,
-                allowed,
-            } => write!(
-                f,
-                "visualization {limit} limit exceeded: {actual} > {allowed}"
-            ),
-            Self::UnknownRolePredicate(iri) => {
-                write!(f, "visualization role predicate {iri:?} is not present")
-            }
-            Self::InvalidVocabulary(message) => f.write_str(message),
-            Self::InvalidSpec(message) => f.write_str(message),
-            Self::InvalidPredicate(predicate) => {
-                write!(f, "visualization predicate {predicate:?} is not an IRI")
-            }
-            Self::UnknownFocus(focus) => {
-                write!(
-                    f,
-                    "visualization focus {focus:?} does not match the projection"
-                )
-            }
-            Self::AmbiguousFocus(focus) => {
-                write!(f, "visualization focus {focus:?} is ambiguous")
-            }
-            Self::IdCollision(id) => {
-                write!(f, "visualization structural identity collision for {id}")
-            }
-            Self::Scene(message) => f.write_str(message),
-            Self::Layout(message) => f.write_str(message),
-            Self::Serialize(message) => f.write_str(message),
-            Self::Decode(message) => write!(f, "visualization JSON: {message}"),
-            Self::Presentation(error) => write!(
-                f,
-                "visualization presentation {:?} at {}: {}",
-                error.issue, error.instruction, error.message
-            ),
-        }
-    }
-}
-
-impl std::error::Error for VizError {}
 
 /// Project a dataset into the renderer-neutral Statement Incidence Model.
 ///

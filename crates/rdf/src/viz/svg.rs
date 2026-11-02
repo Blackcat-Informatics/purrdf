@@ -1117,17 +1117,17 @@ fn mode_name(mode: VizMode) -> &'static str {
 
 fn xml_attribute(value: &str) -> Result<std::borrow::Cow<'_, str>, VizError> {
     purrdf_core::xml_escape::escape(value, purrdf_core::xml_escape::Context::Attribute)
-        .map_err(|error| VizError::Serialize(error.to_string()))
+        .map_err(VizError::Serialize)
 }
 
 fn escape_xml_attr(value: &str, out: &mut String) -> Result<(), VizError> {
     purrdf_core::xml_escape::push(value, purrdf_core::xml_escape::Context::Attribute, out)
-        .map_err(|error| VizError::Serialize(error.to_string()))
+        .map_err(VizError::Serialize)
 }
 
 fn escape_xml_text(value: &str, out: &mut String) -> Result<(), VizError> {
     purrdf_core::xml_escape::push(value, purrdf_core::xml_escape::Context::Text, out)
-        .map_err(|error| VizError::Serialize(error.to_string()))
+        .map_err(VizError::Serialize)
 }
 
 const SVG_STYLE: &str = r"
@@ -1179,7 +1179,10 @@ text{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spa
 #[cfg(test)]
 mod tests {
     use super::*;
+    use purrdf_alloc_probe::CurrentThreadWindow;
+    use purrdf_hash::error::ErrorValue;
     use purrdf_lex::json::record::FromJson;
+    use purrdf_testkit::error_capture::Capture;
     use std::collections::BTreeSet;
 
     const EX: &str = "https://example.org/";
@@ -1310,8 +1313,31 @@ mod tests {
             xml.descendants()
                 .any(|node| node.attribute("data-scene-id") == Some(value))
         );
-        document.export.schema_version = "\u{FFFF}".to_owned();
-        assert!(render_export_svg(&document.export, &VizSvgOptions::default()).is_err());
+        document.export.schema_version = "é\u{FFFF}".to_owned();
+        let error = render_export_svg(&document.export, &VizSvgOptions::default())
+            .expect_err("invalid XML attribute character");
+        drop(document);
+        let native = std::error::Error::source(&error)
+            .unwrap()
+            .downcast_ref::<purrdf_core::xml_escape::InvalidXmlChar>()
+            .unwrap();
+        let outer_events = Vec::with_capacity(32);
+        let native_events = Vec::with_capacity(32);
+        let window = CurrentThreadWindow::open();
+        let outer = Capture::read_with_buffer(&error, outer_events);
+        let fields = Capture::read_with_buffer(native, native_events);
+        let measured = window.close();
+        assert_eq!((measured.allocations, measured.requested_bytes), (0, 0));
+        assert_eq!(outer.code, "rdf-viz-xml");
+        assert_eq!(fields.code, "xml-invalid-character");
+        assert!(matches!(
+            fields.field("byte_offset"),
+            ErrorValue::ByteCount(2)
+        ));
+        assert!(matches!(
+            fields.field("character"),
+            ErrorValue::Character('\u{FFFF}')
+        ));
     }
 
     #[test]
@@ -1330,9 +1356,21 @@ mod tests {
         );
         assert!(!document.svg.contains('\r'));
         for character in ['\0', '\u{1F}', '\u{FFFE}', '\u{FFFF}'] {
-            options.svg.title = format!("title{character}");
-            let error = render_graph_input_svg(&input(true), &VizSpec::default(), &options)
-                .expect_err("invalid XML character");
+            let error = {
+                let mut invalid = VizRenderOptions::default();
+                invalid.svg.title = format!("é🐈{character}");
+                render_graph_input_svg(&input(true), &VizSpec::default(), &invalid)
+                    .expect_err("invalid XML character")
+            };
+            let fields = Capture::read(&error).child("cause");
+            assert_eq!(fields.code, "xml-invalid-character");
+            assert!(matches!(
+                fields.field("byte_offset"),
+                ErrorValue::ByteCount(6)
+            ));
+            assert!(
+                matches!(fields.field("character"), ErrorValue::Character(actual) if actual == character)
+            );
             assert!(
                 error
                     .to_string()

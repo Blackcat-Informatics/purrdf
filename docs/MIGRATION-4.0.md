@@ -501,6 +501,23 @@ Freeze failures previously returned as `ColumnarError::Storage` now also return
 `Reconstruction(RdfDiagnostic)`. Update `Storage` matches for freeze failures to
 handle `Reconstruction` and inspect its diagnostic's `storage_error()` instead.
 
+## Visualization codec refusals
+
+`purrdf_rdf::viz::VizError::Serialize` now retains the original
+`xml_escape::InvalidXmlChar`; `Decode` retains the original
+`purrdf_lex::json::record::DecodeError`. Inspect their borrowed causes for the
+Unicode scalar and relative byte offset, or private JSON pointer, reason,
+found/expected values and nested reader/storage causes. Standard error sources
+borrow those same owners. Clone and equality operate on the native fields.
+
+Every visualization-error variant reports its currently stored fields through
+the shared visitor. The existing `VizPresentationError` also supplies its own
+unchanged human presentation, standard error interface and structured issue,
+instruction and message. Remaining text/message payloads keep their current
+contents; inspection does not reconstruct operands already rendered by their
+producers. Parsing, escaping, successful SVG/JSON bytes and human messages are
+unchanged.
+
 ## Explicit capacity limits
 
 `purrdf_shapes::srl::infer_until` and `infer_triples_until` accept a borrowed
