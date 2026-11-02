@@ -533,6 +533,29 @@ reports their existing human heading as text. Human messages, validation order,
 accepted repeated identical mappings, successful projections and export bytes
 are unchanged.
 
+## Visualization predicate and term-kind refusals
+
+`purrdf_rdf::viz::VizError::InvalidPredicate` now owns a `VizPredicateError`.
+Its five reasons retain the original non-IRI predicate, non-triple reification
+object or triple value rejected at an ordinary-term boundary. Already owned
+values move into the reason; dataset boundaries capture their semantic value
+through the existing native conversion.
+
+Quad predicate reasons also retain a sealed `VizResolvedPredicate`. Its
+`actual()` borrows the dataset-independent `TermValue`; structured inspection
+reports that native term and the original shallow datatype/component IDs.
+Source predicate IDs and component IDs are reported as dataset-local,
+zero-based dense indices, never cross-dataset value identities.
+
+Standard sources borrow the typed reason. The shared visitor exposes term
+data through the existing native `Term` protocol, without formatting or
+allocating during inspection. Construction does not render or cache a key.
+Explicit display retains the original canonical-key, shallow native-debug
+or static-reason spelling and quoted-predicate wrapper. Clone, equality and
+drop use the native term home. Rejection order, graph filtering, successful
+projection/export behavior and the nominal IRI-kind check are unchanged;
+this boundary does not add IRI grammar parsing or normalization.
+
 ## Explicit capacity limits
 
 `purrdf_shapes::srl::infer_until` and `infer_triples_until` accept a borrowed

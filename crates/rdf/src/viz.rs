@@ -38,6 +38,7 @@ use crate::{QuadIds, RdfDataset, RdfTextDirection, TermRef, TermValue};
 mod error;
 mod json;
 mod layout;
+mod predicate_error;
 mod presentation;
 mod scene;
 mod spec_error;
@@ -45,6 +46,7 @@ mod svg;
 
 pub use error::VizError;
 pub use layout::*;
+pub use predicate_error::{VizPredicateError, VizResolvedPredicate};
 pub use presentation::*;
 pub use scene::*;
 pub use spec_error::{VizSpecError, VizVocabularyError};
@@ -667,14 +669,7 @@ pub fn project_dataset(dataset: &RdfDataset, spec: &VizSpec) -> Result<VizProjec
         )?;
     }
     for (reifier, predicate, object, graph) in dataset.annotations_with_graph() {
-        let predicate_iri = match dataset.resolve(predicate) {
-            TermRef::Iri(iri) => iri.to_owned(),
-            _ => {
-                return Err(VizError::InvalidPredicate(term_key(
-                    &dataset.term_value(predicate),
-                )));
-            }
-        };
+        let predicate_iri = annotation_predicate_iri(dataset, predicate)?;
         builder.add_annotation(
             dataset.term_value(reifier),
             &predicate_iri,
@@ -807,7 +802,12 @@ impl<'a> ProjectionBuilder<'a> {
         let subject = dataset.term_value(quad.s);
         let predicate = match dataset.resolve(quad.p) {
             TermRef::Iri(iri) => iri.to_owned(),
-            other => return Err(VizError::InvalidPredicate(format!("{other:?}"))),
+            _ => {
+                return Err(VizError::InvalidPredicate(VizPredicateError::DatasetQuad {
+                    predicate_id: quad.p,
+                    actual: VizResolvedPredicate::capture(dataset, quad.p),
+                }));
+            }
         };
         let object = dataset.term_value(quad.o);
         let graph = quad.g.map(|g| dataset.term_value(g));
@@ -868,7 +868,7 @@ impl<'a> ProjectionBuilder<'a> {
         self.add_term_role(&reifier_id, VizRole::Reifier);
         let TermValue::Triple { s, p, o } = triple else {
             return Err(VizError::InvalidPredicate(
-                "rdf:reifies object must be a triple term".to_owned(),
+                VizPredicateError::ReifiesObjectNotTriple { actual: triple },
             ));
         };
         let predicate = predicate_iri(p.into_inner())?;
@@ -1613,10 +1613,28 @@ fn incoming_reference_counts<'a>(
     counts
 }
 
+/// Check the actual annotation boundary without weakening frozen dataset validity.
+fn annotation_predicate_iri(
+    dataset: &RdfDataset,
+    predicate: purrdf_core::TermId,
+) -> Result<String, VizError> {
+    match dataset.resolve(predicate) {
+        TermRef::Iri(iri) => Ok(iri.to_owned()),
+        _ => Err(VizError::InvalidPredicate(
+            VizPredicateError::DatasetAnnotation {
+                predicate_id: predicate,
+                actual: dataset.term_value(predicate),
+            },
+        )),
+    }
+}
+
 fn predicate_iri(value: TermValue) -> Result<String, VizError> {
     match value {
         TermValue::Iri(iri) => Ok(iri),
-        other => Err(VizError::InvalidPredicate(term_key(&other))),
+        other => Err(VizError::InvalidPredicate(VizPredicateError::ExpectedIri {
+            actual: other,
+        })),
     }
 }
 
@@ -1638,8 +1656,8 @@ fn viz_term_value(value: TermValue) -> Result<VizTermValue, VizError> {
             language,
             direction,
         }),
-        TermValue::Triple { .. } => Err(VizError::InvalidPredicate(
-            "triple terms are represented as statements, not ordinary terms".to_owned(),
+        actual @ TermValue::Triple { .. } => Err(VizError::InvalidPredicate(
+            VizPredicateError::TripleAsOrdinaryTerm { actual },
         )),
     }
 }
@@ -1896,6 +1914,279 @@ mod tests {
         let row = &projection.table.rows[0];
         assert_eq!(row.reifier_count, 1);
         assert_eq!(row.annotation_count, 2);
+    }
+
+    /// Defensive dataset predicates retain both semantic values and the native
+    /// shallow IDs needed to reproduce their original presentation after drop.
+    #[test]
+    fn dataset_predicate_refusals_retain_values_and_shallow_ids() {
+        use purrdf_alloc_probe::CurrentThreadWindow;
+        use purrdf_core::BlankScope;
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_iri(&format!("{EX}s")).unwrap();
+        let p = b.intern_iri(KNOWS).unwrap();
+        let blank = b.intern_blank("node", BlankScope(u32::MAX)).unwrap();
+        let literal = b
+            .intern_literal(RdfLiteral {
+                lexical_form: "مرحبا\n\"x\"".to_owned(),
+                datatype: None,
+                language: Some("ar".to_owned()),
+                direction: Some(RdfTextDirection::Rtl),
+            })
+            .unwrap();
+        let triple = b.intern_triple(s, p, literal).unwrap();
+        for o in [blank, literal, triple] {
+            b.push_quad(s, p, o, None).unwrap();
+        }
+        let dataset = b.freeze().expect("valid frozen dataset");
+        let TermRef::Literal { datatype, .. } = dataset.resolve(literal) else {
+            panic!("literal fixture")
+        };
+        let spec = VizSpec::default();
+        assert!(project_dataset(&dataset, &spec).is_ok());
+        assert_eq!(annotation_predicate_iri(&dataset, p).unwrap(), KNOWS);
+        let cases = [
+            (blank, vec![]),
+            (literal, vec![("datatype_index", datatype.index())]),
+            (
+                triple,
+                vec![
+                    ("subject_index", s.index()),
+                    ("predicate_index", p.index()),
+                    ("object_index", literal.index()),
+                ],
+            ),
+        ];
+        let mut refusals = Vec::new();
+        for (predicate, expected_ids) in cases {
+            let expected = dataset.term_value(predicate);
+            let original_ref = format!("{:?}", dataset.resolve(predicate));
+            let message = format!("visualization predicate {original_ref:?} is not an IRI");
+            let error = ProjectionBuilder::new(&spec)
+                .add_dataset_quad(
+                    &dataset,
+                    QuadIds {
+                        s,
+                        p: predicate,
+                        o: s,
+                        g: None,
+                    },
+                )
+                .expect_err("non-IRI predicate");
+            refusals.push((predicate, expected, expected_ids, message, error));
+        }
+        let annotation_value = dataset.term_value(literal);
+        let annotation_key = term_key(&annotation_value);
+        let annotation = annotation_predicate_iri(&dataset, literal).unwrap_err();
+        drop(dataset);
+
+        for (predicate, expected, expected_ids, message, error) in refusals {
+            assert_eq!(error.to_string(), message);
+            let cause = std::error::Error::source(&error)
+                .unwrap()
+                .downcast_ref::<VizPredicateError>()
+                .unwrap();
+            let VizPredicateError::DatasetQuad {
+                predicate_id,
+                actual,
+            } = cause
+            else {
+                panic!("original quad predicate cause")
+            };
+            assert_eq!(*predicate_id, predicate);
+            assert_eq!(actual.actual(), &expected);
+            let buffers = std::array::from_fn::<_, 5, _>(|_| Vec::with_capacity(32));
+            let [
+                outer_events,
+                cause_events,
+                snapshot_events,
+                ids_events,
+                term_events,
+            ] = buffers;
+            let window = CurrentThreadWindow::open();
+            let outer = Capture::read_with_buffer(&error, outer_events);
+            let ErrorValue::Cause(cause) = outer.field("cause") else {
+                panic!("native cause")
+            };
+            let native = Capture::read_with_buffer(cause, cause_events);
+            let ErrorValue::Record(snapshot) = native.field("actual") else {
+                panic!("snapshot")
+            };
+            let snapshot = Capture::read_with_buffer(snapshot, snapshot_events);
+            let ErrorValue::Record(ids) = snapshot.field("ids") else {
+                panic!("native IDs")
+            };
+            let ids = Capture::read_with_buffer(ids, ids_events);
+            let ErrorValue::Term(term) = snapshot.field("actual") else {
+                panic!("native term")
+            };
+            let term = Capture::read_with_buffer(term, term_events);
+            let measured = window.close();
+            assert_eq!((measured.allocations, measured.requested_bytes), (0, 0));
+            assert_eq!(native.code, "rdf-viz-quad-predicate");
+            assert!(
+                matches!(native.field("predicate_index"), ErrorValue::Unsigned(index)
+                if index == predicate.index() as u128)
+            );
+            for (name, index) in expected_ids {
+                assert!(
+                    matches!(ids.field(name), ErrorValue::Unsigned(actual) if actual == index as u128)
+                );
+            }
+            match expected {
+                TermValue::Blank { .. } => {
+                    assert!(matches!(term.field("label"), ErrorValue::Text("node")));
+                    assert!(
+                        matches!(term.field("scope"), ErrorValue::Unsigned(value) if value == u128::from(u32::MAX))
+                    );
+                }
+                TermValue::Literal { .. } => {
+                    assert!(matches!(
+                        term.field("lexical_form"),
+                        ErrorValue::Text("مرحبا\n\"x\"")
+                    ));
+                    assert!(matches!(term.field("language"), ErrorValue::Text("ar")));
+                    assert!(matches!(term.field("direction"), ErrorValue::Code("rtl")));
+                }
+                TermValue::Triple { .. } => {
+                    let ErrorValue::Term(object) = term.field("object") else {
+                        panic!("owned child")
+                    };
+                    assert!(matches!(
+                        Capture::read(object).field("lexical_form"),
+                        ErrorValue::Text("مرحبا\n\"x\"")
+                    ));
+                }
+                TermValue::Iri(_) => panic!("non-IRI fixtures"),
+            }
+        }
+        assert_eq!(
+            annotation.to_string(),
+            format!("visualization predicate {annotation_key:?} is not an IRI")
+        );
+        let cause = std::error::Error::source(&annotation)
+            .unwrap()
+            .downcast_ref::<VizPredicateError>()
+            .unwrap();
+        assert!(
+            matches!(cause, VizPredicateError::DatasetAnnotation { predicate_id, actual }
+            if *predicate_id == literal && *actual == annotation_value)
+        );
+        assert_eq!(Capture::read(cause).code, "rdf-viz-annotation-predicate");
+    }
+
+    /// Owned kind refusals move the original value without rendering a key;
+    /// graph filtering and reifier admission still precede object-kind checks.
+    #[test]
+    fn owned_predicate_refusals_move_values_without_rendering() {
+        use purrdf_alloc_probe::CurrentThreadWindow;
+        use purrdf_core::BlankScope;
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+
+        let actual = TermValue::Blank {
+            label: "é猫".to_owned(),
+            scope: BlankScope(u32::MAX),
+        };
+        let TermValue::Blank { label, .. } = &actual else {
+            panic!("blank fixture")
+        };
+        let original_label = label.as_ptr();
+        let key = term_key(&actual);
+        let [outer_events, cause_events, term_events] =
+            std::array::from_fn::<_, 3, _>(|_| Vec::with_capacity(32));
+        let window = CurrentThreadWindow::open();
+        let error = predicate_iri(actual).unwrap_err();
+        let outer = Capture::read_with_buffer(&error, outer_events);
+        let ErrorValue::Cause(cause) = outer.field("cause") else {
+            panic!("native cause")
+        };
+        let cause = Capture::read_with_buffer(cause, cause_events);
+        let ErrorValue::Term(term) = cause.field("actual") else {
+            panic!("native owner")
+        };
+        let term = Capture::read_with_buffer(term, term_events);
+        let measured = window.close();
+        assert_eq!((measured.allocations, measured.requested_bytes), (0, 0));
+        assert_eq!(cause.code, "rdf-viz-predicate-not-iri");
+        assert!(
+            matches!(term.field("scope"), ErrorValue::Unsigned(scope) if scope == u128::from(u32::MAX))
+        );
+        let VizError::InvalidPredicate(VizPredicateError::ExpectedIri {
+            actual: TermValue::Blank { label, .. },
+        }) = &error
+        else {
+            panic!("retained original blank")
+        };
+        assert_eq!(label.as_ptr(), original_label);
+        assert_eq!(
+            error.to_string(),
+            format!("visualization predicate {key:?} is not an IRI")
+        );
+        assert_eq!(
+            predicate_iri(TermValue::Iri(" no grammar parse ".to_owned())).unwrap(),
+            " no grammar parse "
+        );
+
+        let triple = TermValue::Triple {
+            s: TermBox::new(iri("s")),
+            p: TermBox::new(iri("p")),
+            o: TermBox::new(iri("o")),
+        };
+        let expected = triple.clone();
+        let window = CurrentThreadWindow::open();
+        let ordinary = viz_term_value(triple).unwrap_err();
+        let measured = window.close();
+        assert_eq!((measured.allocations, measured.requested_bytes), (0, 0));
+        assert!(
+            matches!(&ordinary, VizError::InvalidPredicate(VizPredicateError::TripleAsOrdinaryTerm { actual }) if *actual == expected)
+        );
+        assert_eq!(
+            ordinary.to_string(),
+            "visualization predicate \"triple terms are represented as statements, not ordinary terms\" is not an IRI"
+        );
+        assert_eq!(
+            Capture::read(&ordinary).child("cause").code,
+            "rdf-viz-triple-as-ordinary-term"
+        );
+
+        let spec = VizSpec::default();
+        let object = iri("not-a-triple");
+        let expected = object.clone();
+        let mut builder = ProjectionBuilder::new(&spec);
+        let reifies = builder.add_reifier(iri("claim"), object, None).unwrap_err();
+        drop(builder);
+        assert!(
+            matches!(&reifies, VizError::InvalidPredicate(VizPredicateError::ReifiesObjectNotTriple { actual }) if *actual == expected)
+        );
+        assert_eq!(
+            reifies.to_string(),
+            "visualization predicate \"rdf:reifies object must be a triple term\" is not an IRI"
+        );
+        assert_eq!(
+            Capture::read(&reifies).child("cause").code,
+            "rdf-viz-reifies-object-not-triple"
+        );
+        let filtered = VizSpec {
+            graph_policy: VizGraphPolicy::Include(vec!["other".to_owned()]),
+            ..VizSpec::default()
+        };
+        assert!(
+            ProjectionBuilder::new(&filtered)
+                .add_reifier(iri("claim"), iri("not-a-triple"), None)
+                .is_ok()
+        );
+        let limited = VizSpec {
+            max_terms: 0,
+            ..VizSpec::default()
+        };
+        assert!(matches!(
+            ProjectionBuilder::new(&limited).add_reifier(iri("claim"), iri("not-a-triple"), None),
+            Err(VizError::TooLarge { .. })
+        ));
     }
 
     #[test]
