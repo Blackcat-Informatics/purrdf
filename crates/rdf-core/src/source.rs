@@ -72,7 +72,7 @@ impl SourceRowRef<'_> {
                 |bytes, memory| row.term(bytes, memory),
                 memory,
             )
-            .map_err(source_visit_error)?;
+            .map_err(|error| source_visit_error(&error))?;
         }
         row.finish(memory)
     }
@@ -236,7 +236,7 @@ impl LiteralSourceRow<'_> {
                 |bytes, memory| row.term(bytes, memory),
                 memory,
             )
-            .map_err(source_visit_error)?;
+            .map_err(|error| source_visit_error(&error))?;
         }
         CanonicalNode::Literal {
             lexical: self.lexical,
@@ -270,7 +270,7 @@ impl SourceRowHasher {
                     |bytes, memory| row.graph(bytes, memory),
                     memory,
                 )
-                .map_err(source_visit_error)?;
+                .map_err(|error| source_visit_error(&error))?;
         }
         Ok(row)
     }
@@ -349,8 +349,8 @@ pub(crate) fn source_hash_finalize<const BUFFER: usize, S: Admission + ?Sized>(
     Ok(*digest.as_bytes())
 }
 
-pub(crate) fn source_visit_error(error: OwnedTermFoldError<StorageError>) -> StorageError {
+pub(crate) fn source_visit_error(error: &OwnedTermFoldError<StorageError>) -> StorageError {
     match error {
-        OwnedTermFoldError::Storage(error) | OwnedTermFoldError::Visitor(error) => error,
+        OwnedTermFoldError::Storage(error) | OwnedTermFoldError::Visitor(error) => *error,
     }
 }

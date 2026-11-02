@@ -740,6 +740,10 @@ impl<'a, S: Admission + ?Sized> Memory<'a, S> {
                     self.reserve(&mut replacement, values.len())?;
                     if progress {
                         let count = values.len();
+                        #[expect(
+                            clippy::iter_with_drain,
+                            reason = "Drain retains the original Vec allocation until release_vec destroys and refunds it through the same account."
+                        )]
                         let mut pending = values.drain(..);
                         for _ in 0..count {
                             self.storage.checkpoint(1)?;
@@ -1458,9 +1462,8 @@ mod original_scope_regressions {
         memory.admission_mut().scope_floor = parent_bytes;
         let overflow_padding = usize::MAX - parent_bytes;
         memory.add_bytes(overflow_padding).unwrap();
-        let (original, cause) = match memory.boxed_retaining(DropWitness(&destroyed)) {
-            Err(failure) => failure,
-            Ok(_) => panic!("the checked box layout must overflow"),
+        let Err((original, cause)) = memory.boxed_retaining(DropWitness(&destroyed)) else {
+            panic!("the checked box layout must overflow");
         };
         assert_eq!(cause, StorageError::SizeOverflow);
         assert!(

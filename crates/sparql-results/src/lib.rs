@@ -1,6 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 #![forbid(unsafe_code)]
+#![expect(
+    clippy::result_large_err,
+    reason = "The shared Error::JsonRelease retains original containers and causes inline under their original grants; propagating an allocation refusal must not allocate a new error carrier."
+)]
 #![doc(
     html_logo_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
 )]

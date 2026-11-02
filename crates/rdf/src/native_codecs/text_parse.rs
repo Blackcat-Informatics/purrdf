@@ -631,6 +631,10 @@ pub(super) fn document_graph_in_context<S: SpanCollector, A: Admission, C: Progr
     }
 }
 
+#[expect(
+    clippy::iter_with_drain,
+    reason = "Drain retains the original admitted vector backing until release_vec destroys and refunds it."
+)]
 fn release_nodes_with_memory<A: Admission + ?Sized>(
     mut nodes: Vec<Node>,
     memory: &mut Memory<'_, A>,
@@ -641,6 +645,10 @@ fn release_nodes_with_memory<A: Admission + ?Sized>(
     memory.release_vec(nodes)
 }
 
+#[expect(
+    clippy::iter_with_drain,
+    reason = "Drain retains the original admitted vector backing until release_vec destroys and refunds it."
+)]
 fn release_statements_with_memory<A: Admission + ?Sized>(
     mut statements: Vec<Statement>,
     memory: &mut Memory<'_, A>,
@@ -1754,6 +1762,12 @@ fn validate_statement(nodes: &[Node], line_no: u64, column: u32) -> Result<(), R
 // Turtle / TriG (prefixes, base, collections, BNPL, quoted/reifying triples)
 // ───────────────────────────────────────────────────────────────────────────────
 
+type ParserInitializationRefusal<'ctx, A, C> = (
+    TextError<<C as Progress>::Error>,
+    ParserContext<'ctx, A, C>,
+    BaseScope,
+);
+
 /// A recursive-descent Turtle/TriG parser over the sparql-algebra token stream. It
 /// emits the SAME flat statement list (subject/predicate/object[/graph] `Node`s) the
 /// purrdf-gts Turtle/TriG parser produced before lowering through `from_nquads`'s
@@ -1805,8 +1819,8 @@ struct DocParser<'a, 'c, 'ctx, S: SpanCollector, A: Admission = Resident, C: Pro
     context: ParserContext<'ctx, A, C>,
 }
 
-impl<'a, 'c, 'ctx, S: SpanCollector> DocParser<'a, 'c, 'ctx, S> {
-    #[cfg(test)]
+#[cfg(test)]
+impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, '_, S> {
     fn new(
         text: &'a str,
         base: BaseScope,
@@ -1836,13 +1850,17 @@ impl<'a, 'c, 'ctx, S: SpanCollector, A: Admission, C: Progress> DocParser<'a, 'c
     /// The supplied base already belongs to `context` for controlled execution.
     /// Initialization failures return that same account alongside the original
     /// failure, after all unpublished constructor locals have been destroyed.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Initialization refusal returns the original context, base and cause without allocating an error carrier."
+    )]
     fn new_in_context(
         text: &'a str,
         base: BaseScope,
         allow_named_graphs: bool,
         collector: &'c mut S,
         context: impl Into<ParserContext<'ctx, A, C>>,
-    ) -> Result<Self, (TextError<C::Error>, ParserContext<'ctx, A, C>, BaseScope)> {
+    ) -> Result<Self, ParserInitializationRefusal<'ctx, A, C>> {
         let mut context = context.into();
         let prepared = (|| {
             context.charge(0)?;
@@ -1923,7 +1941,7 @@ impl<'a, 'c, 'ctx, S: SpanCollector, A: Admission, C: Progress> DocParser<'a, 'c
         self.pos
             .checked_sub(1)
             .and_then(|index| self.tokens.get(index))
-            .map_or(self.cur_off(), |token| token.end)
+            .map_or_else(|| self.cur_off(), |token| token.end)
     }
 
     fn source_origin(
@@ -2593,14 +2611,14 @@ impl<'a, 'c, 'ctx, S: SpanCollector, A: Admission, C: Progress> DocParser<'a, 'c
             } else {
                 self.next_bnode(
                     SourceRule::Reifier,
-                    opening.clone(),
+                    opening,
                     [s.origin, p.origin, o.origin, None],
                 )?
             }
         } else {
             self.next_bnode(
                 SourceRule::Reifier,
-                opening.clone(),
+                opening,
                 [s.origin, p.origin, o.origin, None],
             )?
         };
@@ -2932,13 +2950,12 @@ impl<'a, 'c, 'ctx, S: SpanCollector, A: Admission, C: Progress> DocParser<'a, 'c
             self.context
                 .memory(|memory| memory.push(&mut self.named_graphs, name))?;
         }
-        if let Some(name) = graph {
-            if let Some(origin) =
+        if let Some(name) = graph
+            && let Some(origin) =
                 self.source_occurrence(None, SourceRole::GraphDeclaration, name)?
-            {
-                self.context
-                    .memory(|memory| memory.push(&mut self.source.declarations, origin))?;
-            }
+        {
+            self.context
+                .memory(|memory| memory.push(&mut self.source.declarations, origin))?;
         }
         let graph = graph.map(DocNodeRef::inherited);
         while !self.eat(&Token::RBrace) {
@@ -3110,7 +3127,7 @@ impl<'a, 'c, 'ctx, S: SpanCollector, A: Admission, C: Progress> DocParser<'a, 'c
                     p.inherited(),
                     o.inherited(),
                     graph,
-                    anchor.clone(),
+                    anchor,
                 )?;
                 if let Some(previous) = pending.replace(reifier) {
                     self.release_node(previous)?;
@@ -3131,7 +3148,7 @@ impl<'a, 'c, 'ctx, S: SpanCollector, A: Admission, C: Progress> DocParser<'a, 'c
                             p.inherited(),
                             o.inherited(),
                             graph,
-                            anchor.clone(),
+                            anchor,
                         )?;
                         reifier
                     }
@@ -3638,7 +3655,7 @@ impl Interner {
                 })
                 .sum();
             let _ = memory.release_bytes(bytes);
-            return Err(purrdf_core::hash::table_storage_error(refusal.cause));
+            return Err(purrdf_core::hash::table_storage_error(&refusal.cause));
         }
         Ok(id)
     }
@@ -3774,7 +3791,7 @@ impl Interner {
                         },
                         memory,
                     )
-                    .map_err(|refusal| purrdf_core::hash::table_storage_error(refusal.cause))?;
+                    .map_err(|refusal| purrdf_core::hash::table_storage_error(&refusal.cause))?;
                 push_lowering_row(reifiers, (id, (s, p, o), None), memory)?;
                 id
             }

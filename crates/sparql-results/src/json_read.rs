@@ -497,6 +497,10 @@ pub fn from_json(bytes: &[u8]) -> Result<ParsedSolutions, Error> {
 
 /// The original result shape refusal or physical producer failure.
 #[derive(Debug, PartialEq, Eq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "The shared error retains original JSON owners inline without allocating after refusal."
+)]
 pub enum ReadError {
     /// JSON syntax or SPARQL result shape, preserving its original native cause.
     Lexical(Error),
@@ -658,8 +662,10 @@ fn scan_variables<S: Admission + ?Sized>(
             .take()
             .ok_or_else(|| fmt_with_memory(ReadShape::Head, memory))
     })();
-    let mut pending = JsonRelease::default();
-    pending.strings = variables;
+    let pending = JsonRelease {
+        strings: variables,
+        ..JsonRelease::default()
+    };
     if let Err(cause) = reader.release_with_memory(memory) {
         return retain_plain_result(
             pending,
@@ -1004,6 +1010,10 @@ fn select_document<S: Admission + ?Sized>(
 }
 
 /// The `results.bindings` array as [`select_document`] found it.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "The shared error retains original JSON owners inline without allocating after refusal."
+)]
 enum Bindings {
     /// Decoded where it stood: its rows, or its first row's refusal.
     Decoded(Shaped<Vec<BindingRow>>),
@@ -1128,8 +1138,8 @@ fn string_items<S: Admission + ?Sized>(
 
 /// A `results` value: its `bindings` array, decoded when `variables` are
 /// known and checked otherwise, or the refusal it earns.
-fn read_results<'a, S: Admission + ?Sized>(
-    reader: &mut Reader<'a>,
+fn read_results<S: Admission + ?Sized>(
+    reader: &mut Reader<'_>,
     variables: Option<&[String]>,
     scratch: &mut RowScratch,
     memory: &mut Memory<'_, S>,
@@ -1195,8 +1205,8 @@ fn read_results<'a, S: Admission + ?Sized>(
 
 /// A `bindings` array, the cursor on its `[`: every row, or the first row's
 /// refusal once the rest of the array is checked.
-fn binding_rows<'a, S: Admission + ?Sized>(
-    reader: &mut Reader<'a>,
+fn binding_rows<S: Admission + ?Sized>(
+    reader: &mut Reader<'_>,
     variables: &[String],
     scratch: &mut RowScratch,
     memory: &mut Memory<'_, S>,
@@ -1267,8 +1277,8 @@ struct RowScratch {
 ///
 /// A cell is the FIRST member named after its variable; a later member of the
 /// same name, like every member no variable names, is checked and not decoded.
-fn binding_row<'a, S: Admission + ?Sized>(
-    reader: &mut Reader<'a>,
+fn binding_row<S: Admission + ?Sized>(
+    reader: &mut Reader<'_>,
     variables: &[String],
     scratch: &mut RowScratch,
     memory: &mut Memory<'_, S>,
@@ -1467,6 +1477,10 @@ impl Member {
 
 /// A binding object's `value` member.
 #[derive(Debug, PartialEq, Eq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "The shared error retains original JSON owners inline without allocating after refusal."
+)]
 enum BindingValue {
     /// A string: an IRI, a label or a lexical form.
     String(Lexical),
@@ -1698,8 +1712,8 @@ fn take_binding_text(value: &mut Option<BindingValue>) -> String {
 
 /// A member's value, the cursor on it: the string it holds, or
 /// [`Member::Other`] once a value of another kind has been checked.
-fn string_member<'a, S: Admission + ?Sized>(
-    reader: &mut Reader<'a>,
+fn string_member<S: Admission + ?Sized>(
+    reader: &mut Reader<'_>,
     memory: &mut Memory<'_, S>,
 ) -> Result<Member, Error> {
     if reader.peek_kind() == Some(Kind::String) {
@@ -1736,8 +1750,8 @@ fn string_member<'a, S: Admission + ?Sized>(
 /// come in any order, so each object is read whole before it is judged: a
 /// `value` object is read as a triple term's components before the `type` that
 /// says whether it is one may have been seen.
-fn binding<'a, S: Admission + ?Sized>(
-    reader: &mut Reader<'a>,
+fn binding<S: Admission + ?Sized>(
+    reader: &mut Reader<'_>,
     open: &mut Vec<Open>,
     memory: &mut Memory<'_, S>,
 ) -> Step<TermValue> {
@@ -2405,8 +2419,10 @@ fn head_variables<S: Admission + ?Sized>(
         }
         Ok(variables.take().unwrap_or_default())
     })();
-    let mut pending = JsonRelease::default();
-    pending.strings = variables;
+    let pending = JsonRelease {
+        strings: variables,
+        ..JsonRelease::default()
+    };
     finish_plain(
         pending,
         result,

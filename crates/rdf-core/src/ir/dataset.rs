@@ -1090,7 +1090,7 @@ impl RdfDataset {
                     .try_visit_canonical_bytes(graph, &mut pending, memory, |bytes, memory| {
                         crate::source::source_hash_update(&mut hash, bytes, memory)
                     })
-                    .map_err(crate::source::source_visit_error)?;
+                    .map_err(|error| crate::source::source_visit_error(&error))?;
                 graphs
                     .insert(crate::source::source_hash_finalize(&hash, memory)?)
                     .map_err(|_| purrdf_lex::allocation::StorageError::SizeOverflow)?;

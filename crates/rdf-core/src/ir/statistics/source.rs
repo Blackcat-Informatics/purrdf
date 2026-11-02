@@ -71,14 +71,14 @@ impl SourceSummary {
                 .try_visit_canonical_bytes(graph, pending, memory, |bytes, memory| {
                     row.graph(bytes, memory)
                 })
-                .map_err(source_visit_error)?;
+                .map_err(|error| source_visit_error(&error))?;
         }
         for term in [quad.s, quad.p, quad.o] {
             dictionary
                 .try_visit_canonical_bytes(term, pending, memory, |bytes, memory| {
                     row.term(bytes, memory)
                 })
-                .map_err(source_visit_error)?;
+                .map_err(|error| source_visit_error(&error))?;
         }
         let hashes = row.finish(memory)?;
         // Each record hash is one bounded fixed-size operation, including its

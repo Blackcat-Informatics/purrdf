@@ -63,7 +63,7 @@ pub(crate) struct NoSpans;
 
 impl SpanCollector for NoSpans {
     const ENABLED: bool = false;
-    #[inline(always)]
+    #[inline]
     fn record_with_memory<A: Admission + ?Sized>(
         &mut self,
         _subject_key: &str,
@@ -122,7 +122,7 @@ impl SpanCollector for SpanTable {
                         subject_key.as_bytes(),
                         &mut |units| memory.admission_mut().checkpoint(units),
                     )
-                    .map(|order| order.is_eq())
+                    .map(core::cmp::Ordering::is_eq)
                 },
                 memory,
             )?
@@ -164,7 +164,7 @@ impl SpanCollector for SpanTable {
                     },
                     memory,
                 )
-                .map_err(|refusal| purrdf_core::hash::table_storage_error(refusal.cause))?;
+                .map_err(|refusal| purrdf_core::hash::table_storage_error(&refusal.cause))?;
         }
         Ok(())
     }

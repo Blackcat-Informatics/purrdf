@@ -102,7 +102,7 @@ where
         builder,
         rows.into_iter().map(|row| (row, ())),
         &memory,
-        |_, _, _| Ok(()),
+        |(), _, _| Ok(()),
     )
     .map_err(|cause| resident_error(ControlledError::Native(cause)))
 }
@@ -185,7 +185,7 @@ where
                                 account,
                             )
                             .map_err(|refusal| {
-                                purrdf_core::hash::table_storage_error(refusal.cause)
+                                purrdf_core::hash::table_storage_error(&refusal.cause)
                             })?;
                     }
                 }
@@ -216,6 +216,10 @@ where
 
         // Pass 2: graph-local annotations and ordinary quads keep their original
         // pending order. Drain retains the backing owner through every refusal.
+        #[expect(
+            clippy::iter_with_drain,
+            reason = "The original admitted vector backing remains live until release_vec refunds its allocation."
+        )]
         for (subject, predicate, object, graph, association) in pending.drain(..) {
             memory.borrow_mut().admission_mut().checkpoint(1)?;
             let is_annotation = {
@@ -445,7 +449,7 @@ pub fn parse_dataset_reporting_failure(
         // this is the one leg that also reads back the document's prefix map, which the
         // codec seam (shared with formats that have no `@prefix`) does not carry. UTF-8
         // is only required by the text tokenizer, so it is validated here.
-        parse_text_retained(bytes, format, base_iri, options)
+        parse_text_retained(bytes, format, base_iri, *options)
             .map_err(|failure| {
                 ParseFailure::before_parsing(failure.into_resident_error(), base_iri)
             })?
@@ -507,7 +511,7 @@ fn parse_text_retained<'a>(
     bytes: &'a [u8],
     format: NativeRdfFormat,
     base_iri: Option<&str>,
-    options: &ParseOptions,
+    options: ParseOptions,
 ) -> Result<RetainedParse<'a, Resident, Unmetered>, SourceFailure<'a, Resident, Unmetered>> {
     if matches!(format, NativeRdfFormat::Turtle | NativeRdfFormat::TriG) {
         return parse_turtle_retained(
@@ -601,6 +605,10 @@ fn parse_text_retained<'a>(
 /// Every unsupported format, native parse failure, physical storage refusal or
 /// caller progress failure returns a [`ParseRefusal`] with the full original
 /// input and unchanged typed cause. Refusal exposes no partial dataset.
+#[expect(
+    clippy::result_large_err,
+    reason = "Refusal returns the original parser payloads and admission owner inline without allocating after refusal."
+)]
 pub fn parse_dataset_controlled<'a, A: Admission, C: Progress>(
     bytes: &'a [u8],
     format: NativeRdfFormat,
@@ -612,7 +620,7 @@ pub fn parse_dataset_controlled<'a, A: Admission, C: Progress>(
         bytes,
         format,
         base_iri,
-        &ParseOptions {
+        ParseOptions {
             track_source_spans: true,
         },
         RunContext::new(admission, progress),
@@ -626,7 +634,7 @@ fn parse_turtle_retained<'a, A: Admission, C: Progress>(
     bytes: &'a [u8],
     format: NativeRdfFormat,
     base_iri: Option<&str>,
-    options: &ParseOptions,
+    options: ParseOptions,
     context: RunContext<A, C>,
 ) -> Result<RetainedParse<'a, A, C>, SourceFailure<'a, A, C>> {
     if !matches!(format, NativeRdfFormat::Turtle | NativeRdfFormat::TriG) {
@@ -1148,22 +1156,22 @@ fn dataset_from_ser_graph_with_memory<S: Admission + ?Sized>(
             )?;
         }
 
+        #[expect(
+            clippy::iter_with_drain,
+            reason = "The original admitted rows backing remains live until release_vec refunds its allocation."
+        )]
         fold_statement_layer_observed(
             &mut builder,
             rows.drain(..),
             &mapping_memory,
             |association, kind, terms| {
-                if let Some((row, native_object)) = association {
-                    if let Some(source) = interner.source.borrow_mut().as_deref_mut() {
-                        if let (Some(native), Some(term)) = (native_object, terms[2]) {
-                            source.bind_final_native(
-                                native,
-                                term,
-                                &mut mapping_memory.borrow_mut(),
-                            )?;
-                        }
-                        source.bind_row(row, kind, terms, &mut mapping_memory.borrow_mut())?;
+                if let Some((row, native_object)) = association
+                    && let Some(source) = interner.source.borrow_mut().as_deref_mut()
+                {
+                    if let (Some(native), Some(term)) = (native_object, terms[2]) {
+                        source.bind_final_native(native, term, &mut mapping_memory.borrow_mut())?;
                     }
+                    source.bind_row(row, kind, terms, &mut mapping_memory.borrow_mut())?;
                 }
                 Ok(())
             },
@@ -1472,7 +1480,7 @@ impl<S: Admission + ?Sized> SerInterner<'_, '_, '_, '_, S> {
         purrdf_lex::control::compare_bytes(value.as_bytes(), expected.as_bytes(), &mut |units| {
             memory.admission_mut().checkpoint(units)
         })
-        .map(|order| order.is_eq())
+        .map(core::cmp::Ordering::is_eq)
         .map_err(NativeParseError::Storage)
     }
 }
@@ -1694,9 +1702,8 @@ mod tests {
                 },
             )
             .source(input.as_bytes());
-            let failure = match result {
-                Err(failure) => failure,
-                Ok(_) => panic!("selected callback must refuse"),
+            let Err(failure) = result else {
+                panic!("selected callback must refuse")
             };
             assert!(core::ptr::eq(failure.input(), input.as_bytes()));
             assert!(
@@ -1708,17 +1715,15 @@ mod tests {
             assert_eq!(calls, fail_at + 1, "no callback after the first refusal");
         }
         let live = Arc::new(AtomicUsize::new(0));
-        let failure = match RunContext::new(
+        let Err(failure) = RunContext::new(
             Grant {
                 live: Arc::clone(&live),
                 limit: 256,
             },
             |_| Ok::<_, Stop>(()),
         )
-        .source(input.as_bytes())
-        {
-            Err(failure) => failure,
-            Ok(_) => panic!("source admission must be refused"),
+        .source(input.as_bytes()) else {
+            panic!("source admission must be refused")
         };
         assert!(core::ptr::eq(failure.input(), input.as_bytes()));
         assert!(matches!(
@@ -1744,9 +1749,8 @@ mod tests {
                     Err(Stop(0))
                 },
             );
-            let failure = match result {
-                Err(failure) => failure,
-                Ok(_) => panic!("unsupported input cannot succeed"),
+            let Err(failure) = result else {
+                panic!("unsupported input cannot succeed")
             };
             assert!(core::ptr::eq(failure.input(), input));
             assert!(matches!(
@@ -1988,7 +1992,7 @@ mod tests {
                 text.as_bytes(),
                 classify(media).expect("native media"),
                 None,
-                &ParseOptions {
+                ParseOptions {
                     track_source_spans: true,
                 },
             )
@@ -2006,7 +2010,7 @@ mod tests {
                     ));
                     assert!(view.reserve_owned_workspace(bytes).is_none());
                 }
-                assert_eq!(view.term_count(), plain.term_count() as u64);
+                assert_eq!(view.term_count(), plain.term_count());
                 assert!(
                     view.quads().eq(plain.quads()),
                     "identical native term IDs and quads"
@@ -2165,7 +2169,7 @@ mod tests {
                 origin = source.origin(*from).unwrap();
             }
             if let super::super::SourceOriginKind::Generated { rule, anchor, .. } = origin.kind() {
-                assert!(!text[anchor.clone()].is_empty());
+                assert_ne!(&text[anchor.clone()], "");
                 generated_cell |=
                     matches!(rule, super::super::SourceRule::CollectionCell { index: 0 });
             }

@@ -406,15 +406,15 @@ impl SourceOccurrences {
                 .origins
                 .get_mut(origin.0)
                 .ok_or(SourceAssociationError::MissingOrigin { origin })?;
-            if let Some(SourceSemanticReference::Term(previous)) = record.semantic {
-                if previous != term {
-                    return Err(SourceAssociationError::ConflictingSemantic {
-                        origin,
-                        previous: SourceSemanticReference::Term(previous),
-                        incoming: SourceSemanticReference::Term(term),
-                    }
-                    .into());
+            if let Some(SourceSemanticReference::Term(previous)) = record.semantic
+                && previous != term
+            {
+                return Err(SourceAssociationError::ConflictingSemantic {
+                    origin,
+                    previous: SourceSemanticReference::Term(previous),
+                    incoming: SourceSemanticReference::Term(term),
                 }
+                .into());
             }
             record.semantic = Some(SourceSemanticReference::Term(term));
             let inherited = match record.kind {

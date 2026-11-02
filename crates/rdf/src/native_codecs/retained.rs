@@ -131,6 +131,10 @@ pub struct ParseRefusal<'a, A: Admission, C: Progress> {
     owner: RefusalOwner<'a, A, C>,
 }
 
+#[expect(
+    clippy::large_enum_variant,
+    reason = "The original parsed payloads and admission owner must survive refusal without a new allocation."
+)]
 enum RefusalOwner<'a, A: Admission, C: Progress> {
     Source(SourceFailure<'a, A, C>),
     Parsed(RetainedParse<'a, A, C>),
@@ -145,6 +149,10 @@ impl<'a, A: Admission, C: Progress> ParseRefusal<'a, A, C> {
         }
     }
 
+    #[expect(
+        clippy::result_large_err,
+        reason = "Refusal retains the original parsed payloads and account inline without allocating after refusal."
+    )]
     pub(super) fn classify(
         owner: RetainedParse<'a, A, C>,
     ) -> Result<RetainedParse<'a, A, C>, Self> {
@@ -192,7 +200,7 @@ impl<'a, A: Admission, C: Progress> ParseRefusal<'a, A, C> {
         };
         parsed
             .into_iter()
-            .flat_map(|owner| owner.document_prefixes())
+            .flat_map(RetainedParse::document_prefixes)
     }
 }
 
@@ -300,7 +308,7 @@ impl From<Infallible> for BorrowedReadError {
 
 /// There is no successful workspace permit to construct or detach from this
 /// inspection facade, even for a zero-byte query preflight.
-enum NoWorkspace {}
+struct NoWorkspace(Infallible);
 
 impl WorkspaceReservation for NoWorkspace {
     type Error = BorrowedReadError;

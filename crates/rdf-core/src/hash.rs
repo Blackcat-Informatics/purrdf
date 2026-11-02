@@ -420,7 +420,7 @@ pub fn try_reserve_table_with_memory<T, S: Admission + ?Sized>(
     memory.add_bytes(next)?;
     let reserved = table
         .try_reserve_with_control(additional, &mut hash, memory)
-        .map_err(table_storage_error);
+        .map_err(|cause| table_storage_error(&cause));
     if let Err(cause) = reserved {
         // The native failed replacement has died. Hash callbacks may retain
         // additional original-account state, so refund only this exact layout.
@@ -433,10 +433,10 @@ pub fn try_reserve_table_with_memory<T, S: Admission + ?Sized>(
 
 /// Preserve a native table's physical or original admission refusal.
 pub fn table_storage_error(
-    cause: purrdf_lex::control::ControlledError<table::TryReserveError, StorageError>,
+    cause: &purrdf_lex::control::ControlledError<table::TryReserveError, StorageError>,
 ) -> StorageError {
     match cause {
-        purrdf_lex::control::ControlledError::Control(cause) => cause,
+        purrdf_lex::control::ControlledError::Control(cause) => *cause,
         purrdf_lex::control::ControlledError::Native(table::TryReserveError::CapacityOverflow) => {
             StorageError::SizeOverflow
         }
@@ -691,7 +691,7 @@ mod tests {
         );
         match result {
             Err(purrdf_lex::control::ControlledError::Control(Stop(marker))) => {
-                assert_eq!(core::ptr::from_ref(marker.as_ref()), identity)
+                assert_eq!(core::ptr::from_ref(marker.as_ref()), identity);
             }
             _ => panic!("original caller error must survive native hashing"),
         }

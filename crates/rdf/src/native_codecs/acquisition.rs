@@ -88,10 +88,10 @@ impl purrdf_hash::error::StructuredError for NativeParseError {
         Composite(cause) => "native-parse-composite" { "cause" => Cause(cause) },
         UnsupportedFormat(format) => "native-parse-unsupported-format" { "format" => Code(format.media_type()) },
         Base { cause } => "native-parse-base" { "cause" => Cause(cause) },
-        Utf8 { cause, offset } => "native-parse-utf8" { "cause" => Cause(cause), "offset" => ByteCount(*offset as u128) },
-        Position { cause, line } => "native-parse-position" { "cause" => Cause(cause), "line" => Unsigned(*line as u128) },
-        Iri { cause, line, column } => "native-parse-iri" { "cause" => Cause(cause), "line" => Unsigned(*line as u128), "column" => Unsigned(*column as u128) },
-        Lexical { cause, line, column } => "native-parse-lexical" { "cause" => Cause(cause), "line" => Unsigned(*line as u128), "column" => Unsigned(*column as u128) },
+        Utf8 { cause, offset } => "native-parse-utf8" { "cause" => Cause(cause), "offset" => ByteCount(u128::from(*offset)) },
+        Position { cause, line } => "native-parse-position" { "cause" => Cause(cause), "line" => Unsigned(u128::from(*line)) },
+        Iri { cause, line, column } => "native-parse-iri" { "cause" => Cause(cause), "line" => Unsigned(u128::from(*line)), "column" => Unsigned(u128::from(*column)) },
+        Lexical { cause, line, column } => "native-parse-lexical" { "cause" => Cause(cause), "line" => Unsigned(u128::from(*line)), "column" => Unsigned(u128::from(*column)) },
     }
 }
 
@@ -176,6 +176,10 @@ impl<'a, A: Admission, C: Progress> SourceFailure<'a, A, C> {
     }
 
     #[cfg(test)]
+    #[expect(
+        clippy::used_underscore_binding,
+        reason = "The original context is retained solely as the production lifetime owner; this test probe inspects its grant."
+    )]
     pub(crate) fn admitted_bytes(&self) -> usize {
         self._context.live
     }
@@ -346,10 +350,10 @@ impl<A: Admission, C: Progress> RunContext<A, C> {
     /// scalar at an extent boundary stays in the original input for the next
     /// extent. No replacement text, separate Unicode grammar or unchecked
     /// reconstruction is involved.
-    pub(crate) fn source<'a>(
+    pub(crate) fn source(
         mut self,
-        input: &'a [u8],
-    ) -> Result<SourceRun<'a, A, C>, SourceFailure<'a, A, C>> {
+        input: &[u8],
+    ) -> Result<SourceRun<'_, A, C>, SourceFailure<'_, A, C>> {
         if !C::ENABLED {
             return match std::str::from_utf8(input) {
                 Ok(text) => Ok(SourceRun {

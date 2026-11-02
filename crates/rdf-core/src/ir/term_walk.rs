@@ -631,7 +631,11 @@ trait FoldBuffers<N, T> {
     fn reserve_answers(&mut self, answers: &mut Vec<T>, required: usize)
     -> Result<(), Self::Error>;
     fn push_answer(&mut self, answers: &mut Vec<T>, answer: T) -> Result<(), (Self::Error, T)>;
-    fn answer_growth(&self, answers: &Vec<T>) -> Result<Option<(usize, usize)>, Self::Error>;
+    fn answer_growth(
+        &self,
+        length: usize,
+        capacity: usize,
+    ) -> Result<Option<(usize, usize)>, Self::Error>;
     fn checkpoint(&mut self, units: u64) -> Result<(), Self::Error>;
     fn release_answer_bytes(&mut self, bytes: usize) -> Result<(), Self::Error>;
     fn finish(
@@ -667,7 +671,11 @@ impl<N, T> FoldBuffers<N, T> for ResidentFold {
         answers.push(answer);
         Ok(())
     }
-    fn answer_growth(&self, _answers: &Vec<T>) -> Result<Option<(usize, usize)>, Self::Error> {
+    fn answer_growth(
+        &self,
+        _length: usize,
+        _capacity: usize,
+    ) -> Result<Option<(usize, usize)>, Self::Error> {
         Ok(None)
     }
     fn checkpoint(&mut self, _units: u64) -> Result<(), Self::Error> {
@@ -752,22 +760,25 @@ impl<N: Copy, T, S: purrdf_lex::allocation::Admission + ?Sized> FoldBuffers<N, T
         answers.push(answer);
         Ok(())
     }
-    fn answer_growth(&self, answers: &Vec<T>) -> Result<Option<(usize, usize)>, Self::Error> {
+    fn answer_growth(
+        &self,
+        length: usize,
+        capacity: usize,
+    ) -> Result<Option<(usize, usize)>, Self::Error> {
         if !self.memory.admission().progress_enabled() {
             return Ok(None);
         }
-        let required = answers
-            .len()
+        let required = length
             .checked_add(1)
             .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?;
-        if required <= answers.capacity() {
+        if required <= capacity {
             return Ok(None);
         }
-        let capacity = purrdf_lex::allocation::growth_capacity::<T>(answers.capacity(), required)?;
-        let previous = core::alloc::Layout::array::<T>(answers.capacity())
+        let next_capacity = purrdf_lex::allocation::growth_capacity::<T>(capacity, required)?;
+        let previous = core::alloc::Layout::array::<T>(capacity)
             .map_err(|_| purrdf_lex::allocation::StorageError::SizeOverflow)?
             .size();
-        Ok(Some((capacity, previous)))
+        Ok(Some((next_capacity, previous)))
     }
     fn checkpoint(&mut self, units: u64) -> Result<(), Self::Error> {
         if self.memory.admission().progress_enabled() {
@@ -804,7 +815,7 @@ fn push_buffered_answer<N, C: ?Sized, T, B: FoldBuffers<N, T>>(
     buffers: &mut B,
     discard_answer: &mut impl FnMut(&mut C, T, &mut B),
 ) -> Result<(), (B::Error, T)> {
-    let growth = match buffers.answer_growth(answers) {
+    let growth = match buffers.answer_growth(answers.len(), answers.capacity()) {
         Ok(growth) => growth,
         Err(cause) => return Err((cause, answer)),
     };
@@ -1019,6 +1030,10 @@ pub fn try_fold_nested_with_memory<
 /// # Errors
 /// Returns the first backing read, callback or physical failure; no whole-view
 /// maximum or dictionary census is needed to copy a supported term.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Five typed callbacks keep leaf, triple, read, disposal and storage roles distinct alongside the view, term and original memory account."
+)]
 pub fn try_fold_term_with_memory<
     D: DatasetView + ?Sized,
     T,
@@ -1053,6 +1068,10 @@ pub fn try_fold_term_with_memory<
     )
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Five typed callbacks keep leaf, triple, read, disposal and storage roles distinct alongside the view, term and original memory account."
+)]
 pub(crate) fn try_fold_term_with_memory_inner<
     D: DatasetView + ?Sized,
     T,

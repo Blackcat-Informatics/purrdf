@@ -424,9 +424,8 @@ impl StatisticsBuilder {
                             1
                         }) {
                             let mut found = None;
-                            for index in kinds..self.kinds.len() {
+                            for (index, value) in self.kinds.iter().enumerate().skip(kinds) {
                                 memory.admission_mut().checkpoint(1)?;
-                                let value = &self.kinds[index];
                                 if value.kind == kind && value.datatype == datatype {
                                     found = Some(index);
                                     break;
@@ -1111,8 +1110,9 @@ impl<I: StatisticsId> LocalStatistics<I> {
         let cleanup = keys_released
             .and(ids_released)
             .and(frequencies_released)
-            .and(kinds_released);
-        if let Err(cause) = prepared.and(cleanup.map_err(StatisticsMergeError::Storage)) {
+            .and(kinds_released)
+            .map_err(StatisticsMergeError::Storage);
+        if let Err(cause) = prepared.and(cleanup) {
             let _ = builder.release_admitted(memory);
             return Err(cause);
         }

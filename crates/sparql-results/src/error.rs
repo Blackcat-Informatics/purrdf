@@ -22,8 +22,15 @@ pub use crate::json_read::JsonRelease;
 pub use read::{ReadReason, ReadRefusal, ReadShape, ReadToken};
 
 /// Errors produced while serializing a SPARQL result.
+///
+/// JSON cleanup refusals retain simultaneous residual owners inline so returning
+/// the original allocations and causes requires no allocation after refusal.
 #[derive(Debug, PartialEq, Eq)]
 #[non_exhaustive]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "JsonRelease retains simultaneous original owners inline without allocating after a cleanup refusal."
+)]
 pub enum Error {
     /// The chosen result format cannot represent this result form.
     UnsupportedResult {

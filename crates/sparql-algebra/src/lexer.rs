@@ -555,8 +555,8 @@ struct Lexer<'a, 'm> {
     storage: Option<&'m mut dyn LexerStorage>,
 }
 
-impl<'a, 'm> Lexer<'a, 'm> {
-    #[cfg(test)]
+#[cfg(test)]
+impl<'a> Lexer<'a, '_> {
     fn new(src: &'a str) -> Self {
         Self {
             src,

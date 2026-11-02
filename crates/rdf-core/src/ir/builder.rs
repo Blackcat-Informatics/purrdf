@@ -252,7 +252,7 @@ fn store_once_with_dependency<T: Hash + Eq, S: Admission + ?Sized>(
         memory,
     ) {
         vec.pop();
-        return Err(crate::hash::table_storage_error(refusal.cause));
+        return Err(crate::hash::table_storage_error(&refusal.cause));
     }
     Ok(i)
 }
@@ -357,7 +357,7 @@ fn term_eq_with_memory<S: Admission + ?Sized>(
         purrdf_lex::control::compare_bytes(left.as_bytes(), right.as_bytes(), &mut |units| {
             memory.admission_mut().checkpoint(units)
         })
-        .map(|order| order.is_eq())
+        .map(core::cmp::Ordering::is_eq)
     };
     Ok(match (term, lookup) {
         (InternedTerm::Iri(r), TermLookup::Iri(s)) => equal(arena_str(arena, *r), s)?,
@@ -685,7 +685,7 @@ impl Interner {
                     memory,
                 )
                 .map(|_| ())
-                .map_err(|refusal| crate::hash::table_storage_error(refusal.cause))?;
+                .map_err(|refusal| crate::hash::table_storage_error(&refusal.cause))?;
             Ok(id)
         })();
         if result.is_err() {

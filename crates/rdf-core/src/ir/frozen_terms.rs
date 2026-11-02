@@ -147,7 +147,7 @@ impl FrozenTerms {
                     self.try_visit_canonical_bytes(id, &mut pending, memory, |bytes, memory| {
                         crate::source::source_hash_update(&mut hash, bytes, memory)
                     })
-                    .map_err(crate::source::source_visit_error)?;
+                    .map_err(|error| crate::source::source_visit_error(&error))?;
                 }
             }
             memory.release_vec(pending)?;
@@ -217,7 +217,7 @@ impl FrozenTerms {
                         iri.as_bytes(),
                         &mut |units| memory.admission_mut().checkpoint(units),
                     )
-                    .map(|order| order.is_eq())
+                    .map(core::cmp::Ordering::is_eq)
                 },
                 memory,
             )?
