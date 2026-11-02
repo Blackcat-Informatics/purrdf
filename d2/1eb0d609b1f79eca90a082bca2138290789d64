@@ -1,0 +1,19 @@
+ghprsq structured squash audit metadata
+
+parent_hashes: 9def6f37613b1b196f804d5f5e390ccddae90db5
+
+GhpRsq-Schema: 1
+GhpRsq-Merge-Style: structured-squash
+GhpRsq-GitHub-Repo: Blackcat-Informatics/purrdf
+GhpRsq-GitHub-Pull-Request: 948
+GhpRsq-GitHub-PR-URL: https://github.com/Blackcat-Informatics/purrdf/pull/948
+GhpRsq-Base-Ref: main
+GhpRsq-Base-OID: d99271ccd06315b0fc0ce57491a224d4880c1393
+GhpRsq-Head-Ref: paudley/945-optimize-native-rust-parquet-export
+GhpRsq-Head-OID: 9def6f37613b1b196f804d5f5e390ccddae90db5
+GhpRsq-Result-Tree: 322376e6646724de476675e146cccd2d514feff0
+GhpRsq-Result-Commit: d21eb0d609b1f79eca90a082bca2138290789d64
+GhpRsq-Parent-Hashes: 9def6f37613b1b196f804d5f5e390ccddae90db5
+GhpRsq-Squash-Notes-SHA256: 2473600e1e98bed5641c6a9843b22bd5bdc205d395ce968fb7a56b7e385c851e
+GhpRsq-Defect-Class: none
+GhpRsq-Stage-Evidence: none
