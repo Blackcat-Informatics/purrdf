@@ -9,7 +9,9 @@ use purrdf_core::xml_escape::InvalidXmlChar;
 use purrdf_hash::error::StructuredError;
 use purrdf_lex::json::record::DecodeError;
 
-use super::{VizPresentationError, VizPresentationIssue, VizSpecError, VizVocabularyError};
+use super::{
+    VizPredicateError, VizPresentationError, VizPresentationIssue, VizSpecError, VizVocabularyError,
+};
 
 /// Visualization projection errors.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,7 +33,7 @@ pub enum VizError {
     /// A visualization specification is internally inconsistent.
     InvalidSpec(VizSpecError),
     /// A graph-like input contains an invalid predicate.
-    InvalidPredicate(String),
+    InvalidPredicate(VizPredicateError),
     /// A focus selector does not match any projected term or statement.
     UnknownFocus(String),
     /// A focus selector matches more than one projected entity.
@@ -67,9 +69,7 @@ impl fmt::Display for VizError {
             Self::InvalidVocabulary(cause) => cause.fmt(f),
             Self::InvalidSpec(cause) => cause.fmt(f),
             Self::Scene(message) | Self::Layout(message) => f.write_str(message),
-            Self::InvalidPredicate(predicate) => {
-                write!(f, "visualization predicate {predicate:?} is not an IRI")
-            }
+            Self::InvalidPredicate(cause) => cause.fmt(f),
             Self::UnknownFocus(focus) => {
                 write!(
                     f,
@@ -91,6 +91,7 @@ purrdf_hash::error_sources!(
     VizError,
     InvalidVocabulary,
     InvalidSpec,
+    InvalidPredicate,
     Serialize,
     Decode,
     Presentation
@@ -105,7 +106,7 @@ impl StructuredError for VizError {
         UnknownRolePredicate(predicate) => "rdf-viz-unknown-role-predicate" { "predicate" => Text(predicate) },
         InvalidVocabulary(cause) => "rdf-viz-invalid-vocabulary" { "cause" => Cause(cause) },
         InvalidSpec(cause) => "rdf-viz-invalid-specification" { "cause" => Cause(cause) },
-        InvalidPredicate(predicate) => "rdf-viz-invalid-predicate" { "predicate" => Text(predicate) },
+        InvalidPredicate(cause) => "rdf-viz-invalid-predicate" { "cause" => Cause(cause) },
         UnknownFocus(focus) => "rdf-viz-unknown-focus" { "focus" => Text(focus) },
         AmbiguousFocus(focus) => "rdf-viz-ambiguous-focus" { "focus" => Text(focus) },
         IdCollision(identity) => "rdf-viz-identity-collision" { "identity" => Text(identity) },
