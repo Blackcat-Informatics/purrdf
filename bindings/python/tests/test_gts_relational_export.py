@@ -321,7 +321,7 @@ def test_native_parquet_matches_every_canonical_cell(
     for table, path in zip(TABLES, files, strict=True):
         from pathlib import Path
 
-        assert pq.read_table(path).equals(pq.read_table(io.BytesIO(native[f"{table}.parquet"])))
+        assert pq.read_table(path).equals(pq.read_table(io.BytesIO(native[f"{table}.parquet"])), check_metadata=True)
         decoded = pq.read_table(path)
         assert decoded.schema.metadata[b"purrdf.columnar.schema-version"] == b"1"
         assert decoded.schema.names == [column[0] for column in rows["schema"][table]]
@@ -402,7 +402,7 @@ def test_verified_inline_blob_payloads_survive_canonical_parquet(
         data, str(tmp_path / vector), blob_limits="unbounded"
     ).paths
     blob_path = Path(files[TABLES.index("blobs")])
-    assert pq.read_table(blob_path).equals(pq.read_table(io.BytesIO(native["blobs.parquet"])))
+    assert pq.read_table(blob_path).equals(pq.read_table(io.BytesIO(native["blobs.parquet"])), check_metadata=True)
     decoded = pq.read_table(blob_path).to_pydict()
     assert list(zip(decoded["digest"], decoded["bytes"], strict=True)) == [
         tuple(row) for row in rows["blobs"]

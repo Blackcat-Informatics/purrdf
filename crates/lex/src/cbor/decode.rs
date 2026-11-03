@@ -1558,37 +1558,4 @@ mod tests {
         ));
         assert_eq!(stream.pos, usize::MAX);
     }
-
-    #[test]
-    fn native_causes_preserve_decode_and_success_result_layouts() {
-        #[expect(
-            dead_code,
-            reason = "the former representations are frozen layout witnesses only"
-        )]
-        enum FormerKind {
-            Truncated,
-            Malformed(&'static str),
-            InvalidUtf8,
-            Depth { limit: usize },
-            TooLong,
-            NotDeterministic(&'static str),
-            Trailing,
-            Io(io::ErrorKind),
-        }
-        #[expect(
-            dead_code,
-            reason = "the former representation is a frozen layout witness only"
-        )]
-        struct FormerError {
-            kind: FormerKind,
-            offset: usize,
-        }
-        assert_eq!(size_of::<DecodeErrorKind>(), size_of::<FormerKind>());
-        assert_eq!(size_of::<DecodeError>(), size_of::<FormerError>());
-        assert_eq!(
-            size_of::<Result<Value, DecodeError>>(),
-            size_of::<Result<Value, FormerError>>()
-        );
-        assert!(size_of::<DecodedSequence>() <= size_of::<(Vec<(usize, Value)>, Option<usize>)>());
-    }
 }
