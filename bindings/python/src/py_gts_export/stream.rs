@@ -286,7 +286,15 @@ fn gts_columnar_staged_from_bytes<'py>(
 }
 
 pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
-    module.add_function(wrap_pyfunction!(gts_columnar_stream_to, module)?)?;
-    module.add_function(wrap_pyfunction!(gts_columnar_staged_from_bytes, module)?)?;
+    // PyO3's public registration appends even underscored names to `__all__`.
+    // These callbacks belong to the host implementation, so set attributes only.
+    module.setattr(
+        "_gts_columnar_stream_to",
+        wrap_pyfunction!(gts_columnar_stream_to, module)?,
+    )?;
+    module.setattr(
+        "_gts_columnar_staged_from_bytes",
+        wrap_pyfunction!(gts_columnar_staged_from_bytes, module)?,
+    )?;
     Ok(())
 }
