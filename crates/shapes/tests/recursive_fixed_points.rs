@@ -1132,7 +1132,7 @@ fn named_conformance_keeps_original_reports_through_product_restore() {
             purrdf_shapes::model::sh::NODE_BY_EXPRESSION_CONSTRAINT_COMPONENT,
         ),
         (
-            ":S a sh:NodeShape ; sh:nodeByExpression [ shnex:concat ( ( :T :T ) [ sh:union ( :T [ shnex:if [ shnex:exists sh:this ] ; shnex:then :T ; shnex:else :Missing ] ) ] ) ] . :T a sh:NodeShape ; sh:nodeByExpression :S .",
+            ":S a sh:NodeShape ; sh:nodeByExpression [ shnex:concat ( ( :T :T ) [ sh:union ( :T [ shnex:if [ shnex:exists sh:this ] ; shnex:then :T ; shnex:else :Untaken ] ) ] ) ] . :T a sh:NodeShape ; sh:nodeByExpression :S . :Untaken a sh:NodeShape ; sh:nodeKind sh:Literal .",
             false,
             purrdf_shapes::model::sh::NODE_BY_EXPRESSION_CONSTRAINT_COMPONENT,
         ),
@@ -1711,7 +1711,7 @@ fn computed_conformance_targets_preserve_lazy_shape_errors() {
     for (producer, error) in [
         ("[]", None),
         (
-            "[ shnex:if true ; shnex:then :Missing ; shnex:else :T ]",
+            "[ shnex:if true ; shnex:then 1 ; shnex:else :T ]",
             Some("is not a shape of this shapes graph"),
         ),
     ] {
@@ -1741,6 +1741,24 @@ fn computed_conformance_targets_preserve_lazy_shape_errors() {
             }
         }
     }
+    let missing_named = format!(
+        "{PREFIXES} :S a sh:NodeShape ; sh:nodeByExpression [ shnex:if true ; shnex:then :T ; shnex:else :Missing ] . :T a sh:NodeShape ."
+    );
+    let refused = parse_shapes_with_options(
+        &missing_named,
+        None,
+        None,
+        None,
+        &ShapesImports::new(),
+        &options(RecursionSemantics::Gfp),
+    )
+    .unwrap_err();
+    assert!(
+        refused
+            .to_string()
+            .contains("names <http://example.org/Missing>, which is not a shape"),
+        "untaken named outputs retain their existing load-time check: {refused}"
+    );
 }
 
 /// Structural admission inspects untaken branches and ordering keys before

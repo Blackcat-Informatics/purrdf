@@ -163,8 +163,9 @@ complete output proof remain outside the admitted surface.
 outputs in the original index. Each value node must conform to every selected
 shape through the active fixed point; duplicate shapes are judged once and an
 empty output imposes no conformance checks. Every possible original target adds
-a positive dependency before cycle admission. Selected missing shapes retain
-the ordinary runtime failure, while untaken branches remain lazy. Reports keep
+a positive dependency before cycle admission. Invalid selected outputs retain
+the ordinary runtime failure, while untaken branches remain lazy. Existing checks
+for explicitly named shapes still apply. Reports keep
 the original node or property focus, value, path and constraint metadata.
 
 A `sh:targetWhere :Target` can use the same explicit selection when its operand

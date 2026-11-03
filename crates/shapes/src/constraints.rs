@@ -4312,7 +4312,6 @@ fn eval_constraint<'a, S: ResultSink>(
             let sev = source.severity_over(csev.as_ref());
             let msg = source.messages_over(cmsg);
             let mut guard = crate::expression::RecursionGuard::with_depth(depth);
-            let next_depth = depth.saturating_add(1);
             for value_node in value_nodes {
                 // The conformance re-entry and the report boundary both read the
                 // value node's own representation, so it is resolved ONCE here and
@@ -4380,7 +4379,7 @@ fn eval_constraint<'a, S: ResultSink>(
                             )
                         })?;
                         let conforms =
-                            conforms_with_id_depth(store, &judged, shape_plan, next_depth)
+                            conforms_memoized(context, shape_plan, &judged)
                                 .map_err(|error| error.context(&format!(
                                     "sh:nodeByExpression constraint on shape {source_shape}: "
                                 )))?;

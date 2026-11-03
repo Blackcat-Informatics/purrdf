@@ -682,7 +682,8 @@ and other computations without a complete output proof remain unqualified.
 Every value node is checked against each selected shape in the active fixed
 point, duplicates are judged once, and an empty output adds no checks. Its
 positive dependency edges participate in admission without an implicit mode;
-selected missing shapes keep their ordinary lazy runtime failure.
+invalid selected outputs keep their ordinary lazy runtime failure. Existing
+checks for explicitly named shapes still apply.
 Original function bodies, conformance-dependent focus expressions and general
 expression callbacks remain outside this proved surface.
 `PreparationRefusal::UnqualifiedRecursion` retains the original definition,
