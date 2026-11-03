@@ -5,6 +5,7 @@ use super::{
     Account, Admission, CompileError, CompiledGlob, Mode, Range, StorageError, SyntaxReason, Token,
 };
 use super::{CompiledGlobSet, SetCompileError};
+use super::{execute::Prefix, set::Program};
 use purrdf_lex::allocation::Memory;
 
 #[derive(Default)]
@@ -143,15 +144,17 @@ pub(super) fn compile_set_iter<'a, S: Admission>(
         parse(source, mode, &mut counts)
             .map_err(|cause| SetCompileError::Pattern { index, cause })?;
     }
-    let mut ends = Vec::new();
+    let mut programs = Vec::new();
     let mut tokens = Vec::new();
     let mut ranges = Vec::new();
     {
         let mut memory = Memory::new(&mut account.0);
-        memory.reserve(&mut ends, sources.len())?;
+        memory.reserve(&mut programs, sources.len())?;
         memory.reserve(&mut tokens, counts.tokens)?;
         memory.reserve(&mut ranges, counts.ranges)?;
+        let mut previous_start = 0;
         for (index, source) in sources.enumerate() {
+            let start = tokens.len();
             parse(
                 source,
                 mode,
@@ -162,17 +165,38 @@ pub(super) fn compile_set_iter<'a, S: Admission>(
             )
             .map_err(|cause| SetCompileError::Pattern { index, cause })?;
             // The source slice length was admitted before construction.
-            ends.push(tokens.len());
+            let shared = common_prefix(&tokens[previous_start..start], &tokens[start..]);
+            programs.push(Program {
+                end: tokens.len(),
+                shared,
+            });
+            previous_start = start;
         }
         normalize(&mut tokens, &mut ranges);
     }
     Ok(CompiledGlobSet {
         tokens,
         ranges,
-        ends,
+        programs,
         mode,
         _account: account,
     })
+}
+
+fn common_prefix(previous: &[Token], current: &[Token]) -> Prefix {
+    let mut shared = Prefix::default();
+    for (previous, current) in previous.iter().zip(current) {
+        let ch = match (previous, current) {
+            (Token::Literal(left), Token::Literal(right)) if left == right => *left,
+            (Token::Separator, Token::Separator) => '/',
+            _ => break,
+        };
+        // Each token consumes one scalar from either source pattern. Both
+        // counts are bounded by that pattern's addressable source extent.
+        shared.tokens += 1;
+        shared.bytes += ch.len_utf8();
+    }
+    shared
 }
 
 fn normalize(tokens: &mut [Token], ranges: &mut [Range]) {

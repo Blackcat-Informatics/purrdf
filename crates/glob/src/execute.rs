@@ -36,6 +36,14 @@ struct Retry {
     input: usize,
 }
 
+/// Successfully checked leading deterministic tokens and their input extent.
+/// Once a wildcard or class is visited this evidence never follows retries.
+#[derive(Debug, Clone, Copy, Default)]
+pub(super) struct Prefix {
+    pub(super) tokens: usize,
+    pub(super) bytes: usize,
+}
+
 pub(super) fn absent(limit: u64) -> Result<MatchReport, MatchError> {
     let mut meter = Meter::new(limit);
     meter.tick(0)?;
@@ -59,17 +67,35 @@ pub(super) fn matches_metered(
     input: &str,
     meter: &mut Meter,
 ) -> Result<MatchReport, MatchError> {
-    let mut token = 0;
-    let mut at = 0;
+    resume_metered(tokens, ranges, mode, input, Prefix::default(), meter)
+        .map(|(matched, _)| meter.report(matched))
+}
+
+/// Resume only after a proved leading literal run, before either retry exists.
+pub(super) fn resume_metered(
+    tokens: &[Token],
+    ranges: &[Range],
+    mode: Mode,
+    input: &str,
+    mut prefix: Prefix,
+    meter: &mut Meter,
+) -> Result<(bool, Prefix), MatchError> {
+    let mut token = prefix.tokens;
+    let mut at = prefix.bytes;
+    let mut leading = true;
     let mut star: Option<Retry> = None;
     let mut directories: Option<Retry> = None;
     loop {
         meter.tick(at)?;
+        leading &= matches!(
+            tokens.get(token),
+            Some(Token::Literal(_) | Token::Separator)
+        );
         let ch = input[at..].chars().next();
         let accepted = match tokens.get(token) {
-            None if ch.is_none() => return Ok(meter.report(true)),
+            None if ch.is_none() => return Ok((true, prefix)),
             None => false,
-            Some(Token::Tail) => return Ok(meter.report(true)),
+            Some(Token::Tail) => return Ok((true, prefix)),
             Some(Token::Directories) => {
                 token += 1;
                 directories = Some(Retry { token, input: at });
@@ -106,6 +132,12 @@ pub(super) fn matches_metered(
             // Only Literal, Separator, Any and Class can accept here; each
             // requires `ch` to be Some. Other token arms return or continue.
             at += ch.expect("an accepted scalar token has input").len_utf8();
+            if leading {
+                prefix = Prefix {
+                    tokens: token,
+                    bytes: at,
+                };
+            }
             continue;
         }
         if let Some(retry) = star.as_mut()
@@ -137,6 +169,6 @@ pub(super) fn matches_metered(
                 continue;
             }
         }
-        return Ok(meter.report(false));
+        return Ok((false, prefix));
     }
 }

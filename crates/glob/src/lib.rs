@@ -16,7 +16,7 @@ pub use set::{CompiledGlobSet, SetCompileError, SetMatchError, SetMatchReport};
 pub use purrdf_lex::allocation::{Admission, Resident, StorageError};
 
 /// The exact language and execution law implemented by this crate.
-pub const LANGUAGE_VERSION: &str = "purrdf-glob-v1";
+pub const LANGUAGE_VERSION: &str = "purrdf-glob-v2";
 
 /// Whether slashes are ordinary text or path-component boundaries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
