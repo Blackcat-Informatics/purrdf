@@ -1448,26 +1448,27 @@ fn validate_scene(scene: &VizScene) -> Result<(), VizError> {
         .map(|edge| (edge.id.as_str(), edge))
         .collect::<BTreeMap<_, _>>();
     if nodes.len() != scene.nodes.len() || edges.len() != scene.edges.len() {
-        return Err(VizError::Scene(
-            "visualization scene contains duplicate node or edge ids".to_owned(),
-        ));
+        return Err(VizError::Scene(VizSceneError::DuplicateIds {
+            nodes: scene.nodes.len(),
+            unique_nodes: nodes.len(),
+            edges: scene.edges.len(),
+            unique_edges: edges.len(),
+        }));
     }
     for edge in &scene.edges {
         validate_endpoint(&edge.source, &nodes, &edges)?;
         validate_endpoint(&edge.target, &nodes, &edges)?;
         if edge.bindings.is_empty() {
-            return Err(VizError::Scene(format!(
-                "visualization scene edge {} has no semantic binding",
-                edge.id
-            )));
+            return Err(VizError::Scene(VizSceneError::UnboundEdge {
+                edge: edge.id.clone(),
+            }));
         }
     }
     for node in &scene.nodes {
         if node.bindings.is_empty() {
-            return Err(VizError::Scene(format!(
-                "visualization scene node {} has no semantic binding",
-                node.id
-            )));
+            return Err(VizError::Scene(VizSceneError::UnboundNode {
+                node: node.id.clone(),
+            }));
         }
     }
     Ok(())
@@ -1481,26 +1482,28 @@ fn validate_endpoint(
     match endpoint {
         VizEndpoint::NodePort { node, port } => {
             let Some(target) = nodes.get(node.as_str()) else {
-                return Err(VizError::Scene(format!(
-                    "visualization endpoint references missing node {node}"
-                )));
+                return Err(VizError::Scene(VizSceneError::MissingNode {
+                    endpoint: endpoint.clone(),
+                }));
             };
             if !target.ports.iter().any(|candidate| candidate.id == *port) {
-                return Err(VizError::Scene(format!(
-                    "visualization endpoint references missing port {node}.{port}"
-                )));
+                return Err(VizError::Scene(VizSceneError::MissingPort {
+                    endpoint: endpoint.clone(),
+                    ports: target.ports.clone(),
+                }));
             }
         }
         VizEndpoint::EdgeAnchor { edge, anchor } => {
             let Some(target) = edges.get(edge.as_str()) else {
-                return Err(VizError::Scene(format!(
-                    "visualization endpoint references missing edge {edge}"
-                )));
+                return Err(VizError::Scene(VizSceneError::MissingEdge {
+                    endpoint: endpoint.clone(),
+                }));
             };
             if target.anchor.as_ref().map(|value| &value.id) != Some(anchor) {
-                return Err(VizError::Scene(format!(
-                    "visualization endpoint references missing anchor {edge}.{anchor}"
-                )));
+                return Err(VizError::Scene(VizSceneError::MissingAnchor {
+                    endpoint: endpoint.clone(),
+                    actual_anchor: target.anchor.as_ref().map(|value| value.id.clone()),
+                }));
             }
         }
     }
@@ -1551,6 +1554,197 @@ mod tests {
                 },
                 graph_name: Some(iri("provenance")),
             }],
+        }
+    }
+
+    /// Native scene refusals survive scene disposal with original comparison
+    /// evidence, validation priority and allocation-free borrowed inspection.
+    #[test]
+    fn scene_refusals_retain_original_validation_evidence() {
+        use purrdf_alloc_probe::CurrentThreadWindow;
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::{Capture, Event};
+
+        let (_, healthy) =
+            project_graph_input_scene(&semantic_input(true), &VizSpec::default()).unwrap();
+        validate_scene(&healthy).unwrap();
+        let node = healthy.nodes[0].clone();
+        let edge = healthy.edges[0].clone();
+        let counts = (healthy.nodes.len(), healthy.edges.len());
+        let mut errors = Vec::new();
+        for case in [
+            "duplicate-nodes",
+            "duplicate-edges",
+            "unbound-edge",
+            "unbound-node",
+            "missing-node",
+            "missing-port",
+            "missing-edge",
+            "wrong-anchor",
+            "no-anchor",
+        ] {
+            let mut scene = healthy.clone();
+            match case {
+                "duplicate-nodes" => scene.nodes.push(node.clone()),
+                "duplicate-edges" => scene.edges.push(edge.clone()),
+                "unbound-edge" => {
+                    scene.edges[0].bindings.clear();
+                    scene.nodes[0].bindings.clear();
+                }
+                "unbound-node" => scene.nodes[0].bindings.clear(),
+                "missing-node" => {
+                    scene.edges[0].source = node_endpoint("absent-node", "absent-port")
+                }
+                "missing-port" => scene.edges[0].source = node_endpoint(&node.id, "absent-port"),
+                "missing-edge" => {
+                    scene.edges[0].source = VizEndpoint::EdgeAnchor {
+                        edge: "absent-edge".to_owned(),
+                        anchor: "absent-anchor".to_owned(),
+                    }
+                }
+                "wrong-anchor" | "no-anchor" => {
+                    scene.edges[0].source = VizEndpoint::EdgeAnchor {
+                        edge: edge.id.clone(),
+                        anchor: "absent-anchor".to_owned(),
+                    };
+                    if case == "no-anchor" {
+                        scene.edges[0].anchor = None;
+                    }
+                }
+                _ => unreachable!(),
+            }
+            if case.starts_with("duplicate") {
+                scene.edges[0].source = node_endpoint("absent-node", "absent-port");
+            } else if case.contains("anchor") || case.starts_with("missing") {
+                scene.edges[0].target = node_endpoint("later-absent-node", "absent-port");
+                scene.edges[0].bindings.clear();
+            }
+            errors.push((case, validate_scene(&scene).unwrap_err()));
+        }
+        drop(healthy);
+
+        for (case, error) in errors {
+            let cause = std::error::Error::source(&error)
+                .unwrap()
+                .downcast_ref::<VizSceneError>()
+                .unwrap();
+            let expected_message = match (case, cause) {
+                (
+                    "duplicate-nodes" | "duplicate-edges",
+                    VizSceneError::DuplicateIds {
+                        nodes,
+                        unique_nodes,
+                        edges,
+                        unique_edges,
+                    },
+                ) => {
+                    assert_eq!((*unique_nodes, *unique_edges), counts);
+                    assert_eq!(*nodes, counts.0 + usize::from(case == "duplicate-nodes"));
+                    assert_eq!(*edges, counts.1 + usize::from(case == "duplicate-edges"));
+                    "visualization scene contains duplicate node or edge ids".to_owned()
+                }
+                ("unbound-edge", VizSceneError::UnboundEdge { edge: actual }) => {
+                    assert_eq!(actual, &edge.id);
+                    format!(
+                        "visualization scene edge {} has no semantic binding",
+                        edge.id
+                    )
+                }
+                ("unbound-node", VizSceneError::UnboundNode { node: actual }) => {
+                    assert_eq!(actual, &node.id);
+                    format!(
+                        "visualization scene node {} has no semantic binding",
+                        node.id
+                    )
+                }
+                ("missing-node", VizSceneError::MissingNode { endpoint }) => {
+                    assert_eq!(endpoint, &node_endpoint("absent-node", "absent-port"));
+                    "visualization endpoint references missing node absent-node".to_owned()
+                }
+                ("missing-port", VizSceneError::MissingPort { endpoint, ports }) => {
+                    assert_eq!(endpoint, &node_endpoint(&node.id, "absent-port"));
+                    assert_eq!(ports, &node.ports);
+                    format!(
+                        "visualization endpoint references missing port {}.absent-port",
+                        node.id
+                    )
+                }
+                ("missing-edge", VizSceneError::MissingEdge { endpoint }) => {
+                    assert_eq!(
+                        endpoint,
+                        &VizEndpoint::EdgeAnchor {
+                            edge: "absent-edge".to_owned(),
+                            anchor: "absent-anchor".to_owned(),
+                        }
+                    );
+                    "visualization endpoint references missing edge absent-edge".to_owned()
+                }
+                (
+                    "wrong-anchor" | "no-anchor",
+                    VizSceneError::MissingAnchor {
+                        endpoint,
+                        actual_anchor,
+                    },
+                ) => {
+                    assert_eq!(
+                        endpoint,
+                        &VizEndpoint::EdgeAnchor {
+                            edge: edge.id.clone(),
+                            anchor: "absent-anchor".to_owned(),
+                        }
+                    );
+                    assert_eq!(
+                        actual_anchor.as_deref(),
+                        if case == "no-anchor" {
+                            None
+                        } else {
+                            Some(edge.anchor.as_ref().unwrap().id.as_str())
+                        }
+                    );
+                    format!(
+                        "visualization endpoint references missing anchor {}.absent-anchor",
+                        edge.id
+                    )
+                }
+                _ => panic!("wrong refusal for {case}: {cause:?}"),
+            };
+            assert_eq!(error.to_string(), expected_message);
+            let outer_events = Vec::with_capacity(8);
+            let native_events = Vec::with_capacity(32);
+            let window = CurrentThreadWindow::open();
+            let outer = Capture::read_with_buffer(&error, outer_events);
+            let native = Capture::read_with_buffer(cause, native_events);
+            let measured = window.close();
+            assert_eq!((measured.allocations, measured.requested_bytes), (0, 0));
+            assert_eq!(outer.code, "rdf-viz-scene");
+            assert!(matches!(outer.field("cause"), ErrorValue::Cause(_)));
+            for event in &native.events {
+                if let Event::Value(_, ErrorValue::Record(record)) = event {
+                    let events = Vec::with_capacity(8);
+                    let window = CurrentThreadWindow::open();
+                    let fields = Capture::read_with_buffer(*record, events);
+                    let measured = window.close();
+                    assert_eq!((measured.allocations, measured.requested_bytes), (0, 0));
+                    assert!(!fields.events.is_empty());
+                }
+            }
+            if case == "missing-port" {
+                assert!(matches!(native.events.as_slice(), [
+                    Event::Value(Some("endpoint"), ErrorValue::Record(_)),
+                    Event::BeginList(Some("ports"), count), .., Event::EndList,
+                ] if *count == node.ports.len()));
+                let ports = native.records("ports");
+                for (record, port) in ports.iter().zip(&node.ports) {
+                    assert!(matches!(record.field("id"), ErrorValue::Text(id) if id == port.id));
+                    assert!(matches!(record.field("kind"), ErrorValue::Code(_)));
+                }
+            }
+            if case == "no-anchor" {
+                assert!(matches!(native.field("actual_anchor"), ErrorValue::Absent));
+            } else if case == "wrong-anchor" {
+                assert!(matches!(native.field("actual_anchor"), ErrorValue::Text(id)
+                    if id == edge.anchor.as_ref().unwrap().id));
+            }
         }
     }
 

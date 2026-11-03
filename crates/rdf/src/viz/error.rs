@@ -10,8 +10,8 @@ use purrdf_hash::error::{ErrorValue, StructuredError};
 use purrdf_lex::json::record::DecodeError;
 
 use super::{
-    VizPredicateError, VizPresentationError, VizPresentationIssue, VizSpecError, VizStatementId,
-    VizTermId, VizVocabularyError,
+    VizPredicateError, VizPresentationError, VizPresentationIssue, VizSceneError, VizSpecError,
+    VizStatementId, VizTermId, VizVocabularyError,
 };
 
 /// The original sorted candidate identities for an ambiguous focus selector.
@@ -105,7 +105,7 @@ pub enum VizError {
     /// A deterministic identity hash collided with a different structural key.
     IdCollision(VizIdentityCollision),
     /// A renderer-neutral scene is structurally invalid.
-    Scene(String),
+    Scene(VizSceneError),
     /// Deterministic layout could not satisfy its structural invariants.
     Layout(String),
     /// Original XML character refusal from SVG serialization.
@@ -132,7 +132,8 @@ impl fmt::Display for VizError {
             }
             Self::InvalidVocabulary(cause) => cause.fmt(f),
             Self::InvalidSpec(cause) => cause.fmt(f),
-            Self::Scene(message) | Self::Layout(message) => f.write_str(message),
+            Self::Scene(cause) => cause.fmt(f),
+            Self::Layout(message) => f.write_str(message),
             Self::InvalidPredicate(cause) => cause.fmt(f),
             Self::UnknownFocus(focus) => {
                 write!(
@@ -156,6 +157,7 @@ purrdf_hash::error_sources!(
     InvalidPredicate,
     AmbiguousFocus,
     IdCollision,
+    Scene,
     Serialize,
     Decode,
     Presentation
@@ -174,7 +176,7 @@ impl StructuredError for VizError {
         UnknownFocus(focus) => "rdf-viz-unknown-focus" { "focus" => Text(focus) },
         AmbiguousFocus(cause) => "rdf-viz-ambiguous-focus" { "cause" => Cause(cause) },
         IdCollision(cause) => "rdf-viz-identity-collision" { "cause" => Cause(cause) },
-        Scene(message) => "rdf-viz-scene" { "message" => Message(message) },
+        Scene(cause) => "rdf-viz-scene" { "cause" => Cause(cause) },
         Layout(message) => "rdf-viz-layout" { "message" => Message(message) },
         Serialize(cause) => "rdf-viz-xml" { "cause" => Cause(cause) },
         Decode(cause) => "rdf-viz-json-decode" { "cause" => Cause(cause) },
