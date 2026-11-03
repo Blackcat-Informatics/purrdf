@@ -21,6 +21,27 @@ static GLOBAL: CountingAllocator = CountingAllocator;
 #[path = "support/rational_float_factory.rs"]
 mod rational_float_factory;
 
+#[path = "support/rational_reciprocal.rs"]
+mod rational_reciprocal;
+
+/// Retain reciprocal results while measuring required native operand owners.
+fn rational_reciprocal_preserves_values_and_reports_allocations() {
+    for category in rational_reciprocal::CATEGORIES {
+        let fixture =
+            rational_reciprocal::Fixture::new(category, rational_float_factory::OPERATIONS);
+        let mut outputs = Vec::with_capacity(rational_float_factory::OPERATIONS);
+        let ((), allocation) = measured(|| fixture.run(&mut outputs));
+        fixture.validate(&outputs);
+        if category != "wide" {
+            assert_eq!(allocation.allocations, 0);
+        }
+        println!(
+            "reciprocal {category} operations={} {allocation:?}",
+            outputs.len()
+        );
+    }
+}
+
 /// Keep every canonical factory result alive while measuring its native owners.
 fn rational_float_factory_preserves_values_and_reports_allocations() {
     for category in rational_float_factory::CATEGORIES {
@@ -1688,6 +1709,7 @@ fn canonical_decimal_reserves_one_exact_output_destination() {
 }
 
 purrdf_testkit::harness_main!(
+    rational_reciprocal_preserves_values_and_reports_allocations,
     rational_float_factory_preserves_values_and_reports_allocations,
     admitted_datetime_copy_keeps_exact_values_and_shares_published_limbs,
     admitted_datetime_refusal_precedes_any_copy_allocation,

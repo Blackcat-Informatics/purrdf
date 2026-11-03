@@ -223,6 +223,15 @@ prop_test! {
         prop_assert!(oracle_rational(&(&x + &y)).value_eq(&ox.add(&oy)));
         prop_assert!(oracle_rational(&(&x - &y)).value_eq(&ox.sub(&oy)));
         prop_assert!(oracle_rational(&(&x * &y)).value_eq(&ox.mul(&oy)));
+        match (x.recip(), Oracle::from_i128(1).div(&ox)) {
+            (Ok(inverse), Some(expected)) => {
+                prop_assert!(oracle_rational(&inverse).value_eq(&expected));
+                prop_assert!(!inverse.denominator().is_negative() && !inverse.denominator().is_zero());
+                prop_assert_eq!(inverse.numerator().gcd(inverse.denominator()), Integer::ONE, "canonical reciprocal");
+            }
+            (Err(ExactError::DivisionByZero), None) => {}
+            (got, expected) => prop_assert!(false, "{:?} vs {:?}", got, expected.is_some()),
+        }
         match (x.checked_div(&y), ox.div(&oy)) {
             (Ok(q), Some(expected)) => prop_assert!(oracle_rational(&q).value_eq(&expected)),
             (Err(ExactError::DivisionByZero), None) => {}
@@ -426,6 +435,14 @@ fn division_by_zero_is_refused_and_a_unit_divisor_is_not() {
     assert_eq!(Rational::from_str("0/1"), Ok(Rational::ZERO));
     assert_eq!(Rational::ZERO.recip(), Err(ExactError::DivisionByZero));
     assert_eq!(Rational::ONE.recip(), Ok(Rational::ONE));
+    let negative = Rational::from_str("-3/7").expect("negative rational");
+    assert_eq!(negative.recip(), Ok(Rational::from_str("-7/3").unwrap()));
+    for denominator in [Integer::ONE, Integer::from_i128(3)] {
+        let minimum = Rational::new(Integer::from_i128(i128::MIN), denominator.clone()).unwrap();
+        let inverse = minimum.recip().expect("nonzero minimum coefficient");
+        assert_eq!(inverse.numerator(), &-denominator);
+        assert_eq!(inverse.denominator(), &Integer::from(2_i128).pow(127));
+    }
     assert_eq!(
         Rational::ONE.checked_div(&Rational::ZERO),
         Err(ExactError::DivisionByZero)
