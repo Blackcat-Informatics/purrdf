@@ -34,6 +34,13 @@ One aggregate work allowance covers the complete result. Matching allocates
 nothing; the caller supplies one index slot per pattern. On refusal, no completed
 report is returned and workspace contents are scratch.
 
+Adjacent patterns reuse verified leading literal characters and path separators
+through the same matcher. Wildcards and classes stop sharing; their retry states
+remain independent. The `purrdf-glob-v2` work law charges one unit for each cached
+prefix decision, so set work and exported RDF work can decrease without changing
+matching indices. RDF descriptions must name this new language identity; their
+description schema remains `purrdf-glob-rdf-v1`.
+
 The CLI requires an explicit mode, surface and work allowance:
 
 ```sh

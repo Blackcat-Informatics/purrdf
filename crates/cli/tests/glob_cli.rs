@@ -97,13 +97,13 @@ fn explicit_surfaces_decide_and_refusals_publish_no_answer() {
 fn ordered_pattern_sets_publish_all_indices_only_after_complete_success() {
     let command = [
         "glob-set",
-        "a",
+        "猫βxy",
         "--pattern",
-        "**",
+        "猫βxy",
         "--pattern",
-        "z",
+        "猫βxy",
         "--pattern",
-        "**",
+        "猫",
         "--mode",
         "path",
         "--surface",
@@ -111,14 +111,14 @@ fn ordered_pattern_sets_publish_all_indices_only_after_complete_success() {
         "--max-work",
     ];
     let mut args = command.to_vec();
-    args.push("3");
+    args.push("9");
     let matched = run(&args);
     assert!(matched.status.success(), "{}", stderr(&matched));
     assert_eq!(
         stdout_utf8(&matched),
-        "matches 2\nindex 0\nindex 2\nwork 3\n"
+        "matches 2\nindex 0\nindex 1\nwork 9\n"
     );
-    *args.last_mut().unwrap() = "2";
+    *args.last_mut().unwrap() = "8";
     let refused = run(&args);
     assert_eq!(refused.status.code(), Some(1));
     assert_eq!(refused.stdout, [] as [u8; 0]);
@@ -187,7 +187,7 @@ fn rdf_plans_publish_duplicate_memberships_in_both_codecs_and_nothing_on_refusal
          <https://example.org/plan> a v:description_type ;
          v:version \"{}\" ; v:language \"{}\" ; v:mode \"text\" ;
          v:surface \"literal\" ; v:patterns (<https://example.org/pattern> <https://example.org/pattern>) .
-         <https://example.org/pattern> a v:pattern_type ; v:source \"猫*\" .",
+         <https://example.org/pattern> a v:pattern_type ; v:source \"猫語*\" .",
         purrdf::glob::rdf::DESCRIPTION_VERSION, purrdf::glob::LANGUAGE_VERSION,
     );
     let input = "<https://example.org/subject> <https://example.org/property> \"猫語\"@ja--rtl .";
@@ -261,6 +261,18 @@ fn rdf_plans_publish_duplicate_memberships_in_both_codecs_and_nothing_on_refusal
             .collect();
         assert_eq!(memberships.len(), 2);
         assert_ne!(memberships[0], memberships[1]);
+        let work = output.term_id_by_iri("https://example.org/v/work").unwrap();
+        let work = output
+            .quads_for_pattern(Some(evaluation), Some(work), None, GraphMatch::Default)
+            .next()
+            .unwrap()
+            .o;
+        // Two adjacent occurrences share their two verified literal scalars:
+        // the second decision replaces those two dispatches with one cache unit.
+        assert!(matches!(
+            output.as_ref().resolve(work),
+            TermRef::Literal { lexical: "7", .. }
+        ));
         for membership in memberships {
             assert!(matches!(
                 output.as_ref().resolve(membership),
@@ -564,6 +576,10 @@ ex:datum ex:value {input} .
         for (forged, reason) in [
             (
                 text.replace(DESCRIPTION_VERSION, "purrdf-glob-rdf-v0"),
+                "incompatible-version",
+            ),
+            (
+                text.replace(purrdf::glob::LANGUAGE_VERSION, "purrdf-glob-v1"),
                 "incompatible-version",
             ),
             (

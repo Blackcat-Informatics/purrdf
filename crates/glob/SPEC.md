@@ -3,7 +3,7 @@
 
 # Compiled glob language
 
-`purrdf-glob-v1` matches an entire UTF-8 surface, case-sensitively and without
+`purrdf-glob-v2` matches an entire UTF-8 surface, case-sensitively and without
 normalization. `?` consumes one Unicode scalar; `*` consumes zero or more.
 Brackets contain scalar members and inclusive scalar ranges. Leading `!` or `^`
 negates a class. A first or final hyphen is literal. Backslash quotes exactly the
@@ -63,7 +63,10 @@ source index in order, rather than a chosen winner or a deduplicated pattern.
 An empty set returns no indices and consumes no work.
 
 Compilation validates every pattern before allocating flat token, range and
-program-boundary arrays under one initially empty admission account. A pattern
+program-descriptor arrays under one initially empty admission account. Each
+descriptor includes its token boundary and the token count and UTF-8 byte extent
+of its common leading literal run with the preceding source occurrence. Literal
+characters and path separators can share; every wildcard and class ends the run. A pattern
 failure retains its original index and compiler cause; combined storage failure
 retains its native cause without inventing a responsible pattern. Arrays die
 before their account is refunded. No source text or separately owned single-pattern
@@ -72,15 +75,32 @@ plans are retained. Storage grows linearly with total pattern size and count.
 The caller supplies an index workspace with at least one slot per source pattern.
 Insufficient workspace refuses before execution. Matching allocates nothing and
 uses constant internal workspace beyond that caller-owned output. Patterns execute
-in source order through the same matcher, with one shared work meter: successful
-work is the sum of individual decisions. An absent IRI component costs one negative
+in source order through the same matcher, with one shared work meter. Each call
+retains only the preceding program's verified leading literal progress, frozen
+before the first wildcard or class. A whole-pattern failure after that point
+does not invalidate its verified prefix. A failure inside the common run rejects
+the next program; otherwise execution resumes at its common run's token and byte
+positions with empty retry checkpoints over the original input.
+
+Each cached prefix decision costs one unit before reuse: a cached failure uses
+the original mismatch byte offset, and a successful reuse uses the common run's
+ending byte offset. Remaining token dispatches, predicates and retries use the
+single-pattern work law above. Programs without a shared literal prefix execute
+normally. Every source occurrence therefore costs at least one unit. Successful
+set work can be less than the sum of individual decisions. An absent IRI component costs one negative
 selection per pattern. Exhaustion retains the responsible pattern index, original
 input offset, aggregate consumed work and original aggregate allowance. No report
 is returned on refusal; workspace contents then remain scratch, not a partial answer.
 The immutable set can be reused after any execution refusal.
 
-Programs occupy flat storage and execute individually. No transition sharing,
-asymptotic speedup or linear-time matching guarantee is claimed.
+Programs occupy flat storage and share only adjacent leading literal decisions.
+No wildcard state, non-adjacent transition sharing, throughput improvement or
+linear-time matching guarantee is claimed.
+
+Version 2 retains the version 1 matching language and single-pattern work law.
+Its set execution law changes deterministic work totals and exact refusal points.
+RDF-authored plans require the new language identity; exported work integers can
+decrease when adjacent source occurrences share literal progress.
 
 ## RDF-authored plans
 
@@ -98,7 +118,7 @@ No other outgoing field or named-graph field is accepted on a plan or pattern.
 | --- | --- |
 | `rdf:type` | The caller's `description_type` IRI |
 | `version` | String `purrdf-glob-rdf-v1` |
-| `language` | String `purrdf-glob-v1` |
+| `language` | String `purrdf-glob-v2` |
 | `mode` | String `text` or `path` |
 | `surface` | String `literal`, `iri`, `iri-scheme`, `iri-authority`, `iri-path`, `iri-query` or `iri-fragment` |
 | `patterns` | A finite, well-formed RDF collection of pattern resources |

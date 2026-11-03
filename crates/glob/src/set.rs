@@ -104,13 +104,19 @@ pub struct SetMatchReport<'a> {
     pub work: u64,
 }
 
+#[derive(Debug)]
+pub(super) struct Program {
+    pub(super) end: usize,
+    pub(super) shared: execute::Prefix,
+}
+
 /// Immutable ordered programs under one physical admission account.
 #[derive(Debug)]
 pub struct CompiledGlobSet<S: Admission = Resident> {
     // Payloads die before their account, including on unwind.
     pub(super) tokens: Vec<Token>,
     pub(super) ranges: Vec<Range>,
-    pub(super) ends: Vec<usize>,
+    pub(super) programs: Vec<Program>,
     pub(super) mode: Mode,
     pub(super) _account: Account<S>,
 }
@@ -172,25 +178,41 @@ impl<S: Admission> CompiledGlobSet<S> {
         max_work: u64,
         workspace: &'a mut [usize],
     ) -> Result<SetMatchReport<'a>, SetMatchError> {
-        if workspace.len() < self.ends.len() {
+        if workspace.len() < self.programs.len() {
             return Err(SetMatchError::Workspace {
-                required: self.ends.len(),
+                required: self.programs.len(),
                 provided: workspace.len(),
             });
         }
         let mut meter = execute::Meter::new(max_work);
         let mut start = 0;
         let mut matched = 0;
-        for (index, &end) in self.ends.iter().enumerate() {
+        let mut previous = execute::Prefix::default();
+        for (index, program) in self.programs.iter().enumerate() {
+            let end = program.end;
             let result = if let Some(text) = lexical {
-                execute::matches_metered(
-                    &self.tokens[start..end],
-                    &self.ranges,
-                    self.mode,
-                    text,
-                    &mut meter,
-                )
-                .map(|report| report.matched)
+                (|| {
+                    let shared = program.shared;
+                    if shared.tokens != 0 {
+                        if previous.tokens < shared.tokens {
+                            // The previous program failed before the common run
+                            // ended. No wildcard had been visited at that point.
+                            meter.tick(previous.bytes)?;
+                            return Ok(false);
+                        }
+                        meter.tick(shared.bytes)?;
+                    }
+                    let (matched, prefix) = execute::resume_metered(
+                        &self.tokens[start..end],
+                        &self.ranges,
+                        self.mode,
+                        text,
+                        shared,
+                        &mut meter,
+                    )?;
+                    previous = prefix;
+                    Ok(matched)
+                })()
             } else {
                 meter.tick(0).map(|()| false)
             }

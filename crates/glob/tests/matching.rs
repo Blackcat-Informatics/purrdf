@@ -352,14 +352,49 @@ fn greedy_checkpoints_agree_with_finite_denotation() {
 
 fn ordered_sets_agree_with_individual_patterns_and_iri_surfaces() {
     use purrdf_glob::CompiledGlobSet;
-    let patterns = ["", "**/a*b/c", "**", "[α-ω]*", "**/a*b/c", "?"];
+    let patterns = [
+        "",
+        "**/a*b/c",
+        "**",
+        "[α-ω]*",
+        "**/a*b/c",
+        "?",
+        "猫β/a*b/c",
+        "猫β/a*b/d",
+        "猫β/",
+        "猫β/**/a*b/c",
+        "猫β/a?",
+        "猫β/[a-z]*",
+        "猫β/a*b/c",
+        "猫β/a*b/c",
+        r"猫β\/a*",
+        "猫β/no",
+        "猫β",
+        "猫β",
+        "猫",
+        "猫γ",
+    ];
     for mode in [Mode::Text, Mode::Path] {
         let set = CompiledGlobSet::compile(&patterns, mode).unwrap();
         let singles: Vec<_> = patterns
             .iter()
             .map(|pattern| CompiledGlob::compile(pattern, mode).unwrap())
             .collect();
-        for input in ["", "猫", "β猫", "axxx/y/ab/c", "a/b", "/a/%2F"] {
+        for input in [
+            "",
+            "猫",
+            "β猫",
+            "axxx/y/ab/c",
+            "a/b",
+            "/a/%2F",
+            "猫β/axxx/y/ab/c",
+            "猫β/ab/c",
+            "猫β/ab/d",
+            "猫β/",
+            "猫β",
+            "猫γ",
+            "犬",
+        ] {
             let reports: Vec<_> = singles
                 .iter()
                 .map(|glob| glob.match_literal(input, u64::MAX).unwrap())
@@ -369,13 +404,10 @@ fn ordered_sets_agree_with_individual_patterns_and_iri_surfaces() {
                 .enumerate()
                 .filter_map(|(index, report)| report.matched.then_some(index))
                 .collect();
-            let mut workspace = [usize::MAX; 6];
+            let mut workspace = [usize::MAX; 20];
             let report = set.match_literal(input, u64::MAX, &mut workspace).unwrap();
             assert_eq!(report.indices, expected, "{mode:?} {input:?}");
-            assert_eq!(
-                report.work,
-                reports.iter().map(|report| report.work).sum::<u64>()
-            );
+            assert!(report.work <= reports.iter().map(|report| report.work).sum::<u64>());
         }
         for text in [
             "https://example.org/a/%2F?x=#",
@@ -400,15 +432,12 @@ fn ordered_sets_agree_with_individual_patterns_and_iri_surfaces() {
                     .enumerate()
                     .filter_map(|(index, report)| report.matched.then_some(index))
                     .collect();
-                let mut workspace = [0; 6];
+                let mut workspace = [0; 20];
                 let report = set
                     .match_iri(&iri, component, u64::MAX, &mut workspace)
                     .unwrap();
                 assert_eq!(report.indices, expected, "{mode:?} {text} {component:?}");
-                assert_eq!(
-                    report.work,
-                    reports.iter().map(|report| report.work).sum::<u64>()
-                );
+                assert!(report.work <= reports.iter().map(|report| report.work).sum::<u64>());
             }
         }
     }
@@ -483,6 +512,37 @@ fn set_refusals_preserve_pattern_index_original_cause_and_exact_limits() {
         inspected.child("cause").field("limit"),
         ErrorValue::Unsigned(2)
     ));
+
+    // The first mismatch rejects the next two common prefixes. Shorter
+    // prefixes must still restart at their own original UTF-8 boundary.
+    let shared =
+        CompiledGlobSet::compile(&["猫βxy", "猫βxz", "猫βx", "猫β", "猫"], Mode::Text).unwrap();
+    let mut workspace = [0; 5];
+    for (limit, index, offset) in [(3, 1, 5), (4, 2, 5), (5, 3, 5), (8, 4, 3)] {
+        assert_eq!(
+            shared
+                .match_literal("猫βw", limit, &mut workspace)
+                .unwrap_err(),
+            SetMatchError::Pattern {
+                index,
+                cause: MatchError::WorkExceeded {
+                    consumed: limit,
+                    limit,
+                    offset,
+                }
+            },
+        );
+    }
+    let report = shared.match_literal("猫βw", 9, &mut workspace).unwrap();
+    assert_eq!(report.indices, []);
+    assert_eq!(report.work, 9);
+    assert_eq!(
+        shared
+            .match_literal("猫βxy", 100, &mut workspace)
+            .unwrap()
+            .indices,
+        [0]
+    );
 
     let absent = purrdf_iri::parse("a").unwrap();
     let set = CompiledGlobSet::compile(&["*", "?", ""], Mode::Text).unwrap();
@@ -601,6 +661,40 @@ fn set_admission_refunds_and_measured_growth_keep_matching_allocation_free() {
         println!(
             "glob set growth: patterns={count} work={} compilation_allocations={} compilation_bytes={} matching_allocations={}",
             report.work, allocation.allocations, allocation.requested_bytes, matching.allocations
+        );
+    }
+    let mut previous_saved = 0;
+    for scalars in [1, 8, 64, 512] {
+        let prefix = "猫".repeat(scalars);
+        let patterns = [
+            format!("{prefix}/**/a*b/c"),
+            format!("{prefix}/**/a*b/d"),
+            format!("{prefix}/**/a*b/c"),
+        ];
+        let input = format!("{prefix}/axxx/y/ab/c");
+        let set = CompiledGlobSet::compile(&patterns, Mode::Path).unwrap();
+        let individual_work: u64 = patterns
+            .iter()
+            .map(|pattern| {
+                CompiledGlob::compile(pattern, Mode::Path)
+                    .unwrap()
+                    .match_literal(&input, u64::MAX)
+                    .unwrap()
+                    .work
+            })
+            .sum();
+        let mut workspace = [0; 3];
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let report = set.match_literal(&input, u64::MAX, &mut workspace).unwrap();
+        let matching = window.close();
+        assert_eq!(report.indices, [0, 2]);
+        assert_eq!(matching.allocations, 0);
+        let saved = individual_work - report.work;
+        assert!(saved > previous_saved);
+        previous_saved = saved;
+        println!(
+            "glob literal prefix: scalars={scalars} individual_work={individual_work} set_work={} matching_allocations={}",
+            report.work, matching.allocations
         );
     }
 }

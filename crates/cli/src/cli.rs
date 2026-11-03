@@ -409,7 +409,7 @@ pub(crate) enum Command {
     },
     /// Match one complete literal or explicitly selected IRI surface.
     Glob {
-        /// Unicode pattern in the purrdf-glob-v1 language.
+        /// Unicode pattern in the purrdf-glob-v2 language.
         pattern: String,
         /// Verbatim literal value or IRI reference.
         value: String,
