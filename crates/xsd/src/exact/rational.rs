@@ -275,12 +275,11 @@ impl Rational {
     }
 
     fn ratio_bits(&self, format: &super::binary::Format) -> u64 {
-        round_ratio(
-            self.is_negative(),
-            &self.numerator.abs().to_bigint(),
-            &self.denominator.to_bigint(),
-            format,
-        )
+        self.numerator.with_bigint(|numerator| {
+            self.denominator.with_bigint(|denominator| {
+                round_ratio(self.is_negative(), numerator, denominator, format)
+            })
+        })
     }
 
     /// The exact value an [`XsdValue`] holds on the integer or decimal branch;

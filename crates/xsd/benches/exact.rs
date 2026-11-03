@@ -52,6 +52,9 @@ mod rational_float_factory;
 #[path = "../tests/support/rational_reciprocal.rs"]
 mod rational_reciprocal;
 
+#[path = "../tests/support/rational_float_rounding.rs"]
+mod rational_float_rounding;
+
 /// Operations per small-path routine.
 const SMALL_OPS: usize = 1024;
 
@@ -438,6 +441,42 @@ fn bench_fine_products(c: &mut Bench) {
 enum OperationFixture {
     Float(rational_float_factory::Fixture),
     Reciprocal(rational_reciprocal::Fixture),
+    Rounding(rational_float_rounding::Fixture),
+}
+
+struct OperationOutputs {
+    rationals: Vec<Rational>,
+    bits: Vec<u64>,
+}
+
+impl OperationOutputs {
+    fn new(operation: &str) -> Self {
+        let capacity = rational_float_factory::OPERATIONS;
+        if operation == "rounding" {
+            Self {
+                rationals: Vec::new(),
+                bits: Vec::with_capacity(capacity),
+            }
+        } else {
+            Self {
+                rationals: Vec::with_capacity(capacity),
+                bits: Vec::new(),
+            }
+        }
+    }
+
+    fn clear(&mut self) {
+        self.rationals.clear();
+        self.bits.clear();
+    }
+
+    fn len(&self) -> usize {
+        self.rationals.len() + self.bits.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.rationals.is_empty() && self.bits.is_empty()
+    }
 }
 
 impl OperationFixture {
@@ -448,21 +487,27 @@ impl OperationFixture {
                 category,
                 rational_float_factory::OPERATIONS,
             )),
+            "rounding" => Self::Rounding(rational_float_rounding::Fixture::new(
+                category,
+                rational_float_factory::OPERATIONS,
+            )),
             _ => panic!("unknown exact operation: {operation}"),
         }
     }
 
-    fn run(&self, outputs: &mut Vec<Rational>) {
+    fn run(&self, outputs: &mut OperationOutputs) {
         match self {
-            Self::Float(fixture) => fixture.run(outputs),
-            Self::Reciprocal(fixture) => fixture.run(outputs),
+            Self::Float(fixture) => fixture.run(&mut outputs.rationals),
+            Self::Reciprocal(fixture) => fixture.run(&mut outputs.rationals),
+            Self::Rounding(fixture) => fixture.run(&mut outputs.bits),
         }
     }
 
-    fn validate(&self, outputs: &[Rational]) {
+    fn validate(&self, outputs: &OperationOutputs) {
         match self {
-            Self::Float(fixture) => fixture.validate(outputs),
-            Self::Reciprocal(fixture) => fixture.validate(outputs),
+            Self::Float(fixture) => fixture.validate(&outputs.rationals),
+            Self::Reciprocal(fixture) => fixture.validate(&outputs.rationals),
+            Self::Rounding(fixture) => fixture.validate(&outputs.bits),
         }
     }
 }
@@ -471,6 +516,7 @@ fn operation_categories(operation: &str) -> [&'static str; 3] {
     match operation {
         "float" => rational_float_factory::CATEGORIES,
         "reciprocal" => rational_reciprocal::CATEGORIES,
+        "rounding" => rational_float_rounding::CATEGORIES,
         _ => panic!("unknown exact operation: {operation}"),
     }
 }
@@ -479,6 +525,7 @@ fn bench_exact_operations(c: &mut Bench) {
     for (operation, group_name) in [
         ("float", "xsd_exact_float_factory"),
         ("reciprocal", "xsd_exact_reciprocal"),
+        ("rounding", "xsd_exact_rational_rounding"),
     ] {
         let mut group = c.benchmark_group(group_name);
         group.throughput(Throughput::Elements(
@@ -486,7 +533,7 @@ fn bench_exact_operations(c: &mut Bench) {
         ));
         for category in operation_categories(operation) {
             let fixture = OperationFixture::new(operation, category);
-            let mut outputs = Vec::with_capacity(rational_float_factory::OPERATIONS);
+            let mut outputs = OperationOutputs::new(operation);
             group.bench_function(category, |b| {
                 b.iter(|| {
                     outputs.clear();
@@ -509,10 +556,11 @@ fn operation_sample(operation: &str, category: &str) {
     let empty_fixture = match operation {
         "float" => "integral",
         "reciprocal" => "positive_compact",
+        "rounding" => "compact",
         _ => panic!("unknown exact operation: {operation}"),
     };
     let fixture = OperationFixture::new(operation, if empty { empty_fixture } else { category });
-    let mut outputs = Vec::with_capacity(rational_float_factory::OPERATIONS);
+    let mut outputs = OperationOutputs::new(operation);
     for _ in 0..3 {
         fixture.run(&mut outputs);
         fixture.validate(&outputs);
@@ -532,8 +580,11 @@ fn operation_sample(operation: &str, category: &str) {
         fixture.validate(&outputs);
     }
     // Every result survives counter close and is saved in the raw sample log.
-    for (index, value) in outputs.iter().enumerate() {
+    for (index, value) in outputs.rationals.iter().enumerate() {
         println!("{index} {value}");
+    }
+    for (index, bits) in outputs.bits.iter().enumerate() {
+        println!("{index} {bits:016x}");
     }
     println!("validated category={category} outputs={}", outputs.len());
 }
@@ -591,6 +642,11 @@ fn main() -> std::process::ExitCode {
             Some("--reciprocal-instructions") => {
                 assert_eq!(args.len(), 2, "collection requires a new report directory");
                 collect_operation("reciprocal", std::path::Path::new(&args[1]));
+                return std::process::ExitCode::SUCCESS;
+            }
+            Some("--rounding-instructions") => {
+                assert_eq!(args.len(), 2, "collection requires a new report directory");
+                collect_operation("rounding", std::path::Path::new(&args[1]));
                 return std::process::ExitCode::SUCCESS;
             }
             _ => {}
