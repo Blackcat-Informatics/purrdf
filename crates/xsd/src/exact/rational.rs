@@ -206,7 +206,22 @@ impl Rational {
     ///
     /// [`ExactError::DivisionByZero`] for zero.
     pub fn recip(&self) -> Result<Self, ExactError> {
-        Self::new(self.denominator.clone(), self.numerator.clone())
+        if self.is_zero() {
+            return Err(ExactError::DivisionByZero);
+        }
+        // Swapping coprime operands preserves their gcd. Only a negative
+        // numerator needs sign normalization to keep the new denominator positive.
+        Ok(if self.is_negative() {
+            Self {
+                numerator: -&self.denominator,
+                denominator: -&self.numerator,
+            }
+        } else {
+            Self {
+                numerator: self.denominator.clone(),
+                denominator: self.numerator.clone(),
+            }
+        })
     }
 
     /// `self ÷ rhs`, exactly.

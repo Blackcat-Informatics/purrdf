@@ -42,12 +42,15 @@ use std::str::FromStr;
 use purrdf_testkit::bench::{Bench, Throughput, bench_group, black_box};
 use purrdf_testkit::rng::splitmix64_next;
 use purrdf_xsd::bigint::BigInt;
-use purrdf_xsd::exact::{Decimal, DivisionPolicy, Integer, Rounding};
+use purrdf_xsd::exact::{Decimal, DivisionPolicy, Integer, Rational, Rounding};
 use purrdf_xsd::numeric::parse_decimal;
 use purrdf_xsd::{XsdDatatype, XsdValue, numeric_add, numeric_div, numeric_mul};
 
 #[path = "../tests/support/rational_float_factory.rs"]
 mod rational_float_factory;
+
+#[path = "../tests/support/rational_reciprocal.rs"]
+mod rational_reciprocal;
 
 /// Operations per small-path routine.
 const SMALL_OPS: usize = 1024;
@@ -432,33 +435,83 @@ fn bench_fine_products(c: &mut Bench) {
     group.finish();
 }
 
-fn bench_float_factory(c: &mut Bench) {
-    let mut group = c.benchmark_group("xsd_exact_float_factory");
-    group.throughput(Throughput::Elements(
-        rational_float_factory::OPERATIONS as u64,
-    ));
-    for category in rational_float_factory::CATEGORIES {
-        let fixture = rational_float_factory::Fixture::new(category);
-        let mut outputs = Vec::with_capacity(rational_float_factory::OPERATIONS);
-        group.bench_function(category, |b| {
-            b.iter(|| {
-                outputs.clear();
-                fixture.run(&mut outputs);
-            });
-        });
-        // Filtering can leave this row unexecuted.
-        if !outputs.is_empty() {
-            fixture.validate(&outputs);
+enum OperationFixture {
+    Float(rational_float_factory::Fixture),
+    Reciprocal(rational_reciprocal::Fixture),
+}
+
+impl OperationFixture {
+    fn new(operation: &str, category: &str) -> Self {
+        match operation {
+            "float" => Self::Float(rational_float_factory::Fixture::new(category)),
+            "reciprocal" => Self::Reciprocal(rational_reciprocal::Fixture::new(
+                category,
+                rational_float_factory::OPERATIONS,
+            )),
+            _ => panic!("unknown exact operation: {operation}"),
         }
     }
-    group.finish();
+
+    fn run(&self, outputs: &mut Vec<Rational>) {
+        match self {
+            Self::Float(fixture) => fixture.run(outputs),
+            Self::Reciprocal(fixture) => fixture.run(outputs),
+        }
+    }
+
+    fn validate(&self, outputs: &[Rational]) {
+        match self {
+            Self::Float(fixture) => fixture.validate(outputs),
+            Self::Reciprocal(fixture) => fixture.validate(outputs),
+        }
+    }
+}
+
+fn operation_categories(operation: &str) -> [&'static str; 3] {
+    match operation {
+        "float" => rational_float_factory::CATEGORIES,
+        "reciprocal" => rational_reciprocal::CATEGORIES,
+        _ => panic!("unknown exact operation: {operation}"),
+    }
+}
+
+fn bench_exact_operations(c: &mut Bench) {
+    for (operation, group_name) in [
+        ("float", "xsd_exact_float_factory"),
+        ("reciprocal", "xsd_exact_reciprocal"),
+    ] {
+        let mut group = c.benchmark_group(group_name);
+        group.throughput(Throughput::Elements(
+            rational_float_factory::OPERATIONS as u64,
+        ));
+        for category in operation_categories(operation) {
+            let fixture = OperationFixture::new(operation, category);
+            let mut outputs = Vec::with_capacity(rational_float_factory::OPERATIONS);
+            group.bench_function(category, |b| {
+                b.iter(|| {
+                    outputs.clear();
+                    fixture.run(&mut outputs);
+                });
+            });
+            // Filtering can leave this row unexecuted.
+            if !outputs.is_empty() {
+                fixture.validate(&outputs);
+            }
+        }
+        group.finish();
+    }
 }
 
 #[cfg(target_os = "linux")]
-fn float_factory_sample(category: &str) {
+fn operation_sample(operation: &str, category: &str) {
     use purrdf_testkit::bench::counter::{CounterCommand, CounterControl};
     let empty = category == "empty";
-    let fixture = rational_float_factory::Fixture::new(if empty { "integral" } else { category });
+    let empty_fixture = match operation {
+        "float" => "integral",
+        "reciprocal" => "positive_compact",
+        _ => panic!("unknown exact operation: {operation}"),
+    };
+    let fixture = OperationFixture::new(operation, if empty { empty_fixture } else { category });
     let mut outputs = Vec::with_capacity(rational_float_factory::OPERATIONS);
     for _ in 0..3 {
         fixture.run(&mut outputs);
@@ -486,16 +539,20 @@ fn float_factory_sample(category: &str) {
 }
 
 #[cfg(target_os = "linux")]
-fn collect_float_factory(directory: &std::path::Path) {
+fn collect_operation(operation: &str, directory: &std::path::Path) {
     use purrdf_testkit::bench::counter::collect_instructions;
     std::fs::create_dir(directory).expect("new instruction report directory");
     let executable = std::env::current_exe().expect("benchmark executable");
-    for category in ["empty", "fractional", "integral", "extreme"] {
+    for category in std::iter::once("empty").chain(operation_categories(operation)) {
         for sample in 0..10 {
             let raw = directory.join(format!("{category}-{sample}"));
             let count = collect_instructions(
                 &executable,
-                &["--float-factory-sample".into(), category.into()],
+                &[
+                    "--operation-sample".into(),
+                    operation.into(),
+                    category.into(),
+                ],
                 &raw,
             )
             .expect("complete instruction sample; inspect retained raw receipts on failure");
@@ -510,7 +567,7 @@ bench_group!(
     bench_growth,
     bench_karatsuba,
     bench_fine_products,
-    bench_float_factory
+    bench_exact_operations
 );
 
 fn main() -> std::process::ExitCode {
@@ -521,14 +578,19 @@ fn main() -> std::process::ExitCode {
             .filter(|arg| arg != "--bench")
             .collect();
         match args.first().map(String::as_str) {
-            Some("--float-factory-sample") => {
-                assert_eq!(args.len(), 2, "sample requires a category");
-                float_factory_sample(&args[1]);
+            Some("--operation-sample") => {
+                assert_eq!(args.len(), 3, "sample requires an operation and category");
+                operation_sample(&args[1], &args[2]);
                 return std::process::ExitCode::SUCCESS;
             }
             Some("--float-factory-instructions") => {
                 assert_eq!(args.len(), 2, "collection requires a new report directory");
-                collect_float_factory(std::path::Path::new(&args[1]));
+                collect_operation("float", std::path::Path::new(&args[1]));
+                return std::process::ExitCode::SUCCESS;
+            }
+            Some("--reciprocal-instructions") => {
+                assert_eq!(args.len(), 2, "collection requires a new report directory");
+                collect_operation("reciprocal", std::path::Path::new(&args[1]));
                 return std::process::ExitCode::SUCCESS;
             }
             _ => {}

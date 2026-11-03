@@ -231,6 +231,42 @@ workload sample, with no subtraction. Extreme inputs' requested bytes fell from
 both stayed at 1,081,344. Integral inputs retained and requested 98,304 bytes per
 batch; fractional inputs required no heap allocation.
 
+The `xsd_exact_reciprocal/{positive_compact,negative_minimum,wide}` rows use
+the same acknowledged sample, collection and retained-output protocol for
+`Rational::recip`. Each row repeats sixteen canonical nonzero inputs for 8,192
+calls. Positive compact inputs include the inverse-flattening value
+`298257223563/1000000000`; negative inputs include the minimum signed 128-bit
+coefficient. Wide inputs use signed operands around powers of two at exponents
+256 and 1,024, including integer and unit-numerator neighbours. Expected canonical
+results come from the unchanged checked rational constructor before the window opens.
+Reciprocal collection selects these rows separately from the float factory.
+
+```bash
+cargo bench -p purrdf-xsd --bench exact -- --reciprocal-instructions "$PWD/target/reciprocal-before"
+cargo test --release -p purrdf-xsd --test exact_governance rational_reciprocal_preserves_values_and_reports_allocations -- --exact --nocapture
+```
+
+These counts measure the reciprocal operation. They establish no whole-query
+or end-to-end geographic speedup.
+
+On native x86-64 Linux with `rustc 1.101.0-nightly` and the release-derived bench
+profile, ten fresh-process samples per row gave these median instructions per
+call. The before operation recomputed GCD after swapping canonical operands;
+the after operation preserves their existing coprimality and normalizes the sign
+through the existing integer operation. Allocation counts come from the separate
+release case with all 8,192 results retained.
+
+| Reciprocal inputs | Instructions/call before | After | Allocations/batch before | After |
+| --- | ---: | ---: | ---: | ---: |
+| Positive compact | 402.9313 | 91.0549 | 0 | 0 |
+| Negative/minimum | 612.9933 | 236.4924 | 0 | 0 |
+| Wide | 123,303.4618 | 681.5124 | 38,912 | 12,288 |
+
+The largest empty control was 520 instructions, below 0.070% of the smallest
+workload sample, without subtraction. Wide inputs' requested bytes fell from
+3,309,568 to 1,048,576 per batch; retained bytes stayed at 1,048,576 and peak
+working bytes fell from 1,048,712 to 1,048,576.
+
 The small decimal parse/render rows include canonical text's reservation of its
 complete prepared length. The public allocation control
 `canonical_decimal_reserves_one_exact_output_destination` in
