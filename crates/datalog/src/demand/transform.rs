@@ -588,8 +588,7 @@ where
         internal,
         constants.into_iter().collect(),
         unit,
-        fresh.authored,
-        fresh.generated,
+        (fresh.authored, fresh.generated),
     ));
     let executable =
         crate::seminaive::compile_demand(transformed, projection).map_err(DemandError::Compile)?;

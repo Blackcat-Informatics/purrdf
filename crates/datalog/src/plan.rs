@@ -297,7 +297,7 @@ impl DependencyGraph {
             while let Some((symbol, ())) = names.pop_first() {
                 let label = symbol.label();
                 let mut stored = String::new();
-                memory.push_str(&mut stored, &label)?;
+                memory.push_str(&mut stored, label)?;
                 predicates.push(stored);
                 keys.push(symbol);
             }

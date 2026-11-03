@@ -366,8 +366,8 @@ where
                     .and_then(|iri| self.plan.shadows.get(iri))
                     .filter(|_| canonical == Some(original));
                 let name = construct_in(memory, &mut self.retired_bytes, |memory| {
-                    if self.candidate == 0 && fixed.is_some() {
-                        memory.format(&format_args!("<{}>", fixed.expect("checked fixed name")))
+                    if let (0, Some(fixed)) = (self.candidate, fixed) {
+                        memory.format(&format_args!("<{fixed}>"))
                     } else {
                         let digest = purrdf_hash::blake3::hash(surface.as_bytes());
                         memory.format(&format_args!(
@@ -757,8 +757,7 @@ impl Plan {
         internal: BTreeSet<String>,
         constants: Vec<ClauseTerm>,
         unit: String,
-        authored_variables: BTreeSet<String>,
-        generated_variables: BTreeSet<String>,
+        (authored_variables, generated_variables): (BTreeSet<String>, BTreeSet<String>),
     ) -> Self {
         Self {
             map_surface: map.as_ref().map(|map| format!("<{map}>")),

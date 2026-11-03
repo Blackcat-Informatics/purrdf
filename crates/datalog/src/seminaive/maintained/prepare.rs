@@ -182,7 +182,7 @@ where
                         .state
                         .projection
                         .as_ref()
-                        .map_or(Ok(1), |projection| projection.input_scan_work())
+                        .map_or(Ok(1), crate::demand::projection::Runtime::input_scan_work)
                         .map_err(storage_error)?;
                     if !self.allow_unit(cost, &mut allow) {
                         return Ok(false);

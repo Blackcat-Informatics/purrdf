@@ -1013,10 +1013,7 @@ fn unsupported_programs<const N: usize>(
         assert!(captured.child("reason").code.starts_with("datalog-demand-"));
         assert_eq!(control.writes.load(Ordering::Relaxed), 0);
     }
-    for goal in [atom("0", "reach", "?y").into_negated()]
-        .into_iter()
-        .chain(extra_goals)
-    {
+    for goal in std::iter::once(atom("0", "reach", "?y").into_negated()).chain(extra_goals) {
         assert!(matches!(
             evaluate_demanded(
                 &[],

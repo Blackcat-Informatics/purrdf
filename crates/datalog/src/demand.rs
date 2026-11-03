@@ -8,9 +8,10 @@
 //! original atoms and final goal retain constants and repeated-variable equality.
 //! The transformed clauses run through the ordinary compiler and semi-naive engine.
 //!
-//! Preparation uses resident allocation, just like [`compile`]. Evaluation uses
-//! the caller's limits and stop signal. Work and budget reports count the transformed
-//! program, including its internal demand facts, and all original input facts.
+//! Preparation uses resident allocation, just like [`crate::seminaive::compile`].
+//! Evaluation uses the caller's limits and stop signal. Work and budget reports
+//! count the transformed program, including its internal demand facts, and all
+//! original input facts.
 //! The retained partial closure is private: it is complete only for the requested goal.
 
 mod maintained;

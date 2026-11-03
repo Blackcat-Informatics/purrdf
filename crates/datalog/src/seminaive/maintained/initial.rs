@@ -126,14 +126,12 @@ where
                                         }
                                     }
                                 }
-                            } else {
-                                if !frame
-                                    .metadata
-                                    .resume(&mut state.rel, memory, |cost| meter.allow(cost))
-                                    .map_err(native_error)?
-                                {
-                                    return meter.paused(state.report());
-                                }
+                            } else if !frame
+                                .metadata
+                                .resume(&mut state.rel, memory, |cost| meter.allow(cost))
+                                .map_err(native_error)?
+                            {
+                                return meter.paused(state.report());
                             }
                             check_budget(state)?;
                             frame.phase = Phase::Weights;
