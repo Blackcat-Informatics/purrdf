@@ -1947,7 +1947,16 @@ where
         &mut self,
         terms: [DictionaryTerm<'_, D::Id>; N],
     ) -> Result<[D::Id; N], DictionaryError<D::Error>> {
-        self.interner.with_interned(terms, |_, ids| Ok(ids))
+        self.intern_terms_checked(terms, |_, ids| Ok(ids))
+    }
+
+    /// Mint only when the original dictionary transaction validates its result.
+    pub(crate) fn intern_terms_checked<T>(
+        &mut self,
+        terms: [DictionaryTerm<'_, D::Id>; N],
+        validate: impl FnOnce(&D, [D::Id; N]) -> Result<T, DictionaryError<D::Error>>,
+    ) -> Result<T, DictionaryError<D::Error>> {
+        self.interner.with_interned(terms, validate)
     }
 
     /// Construct new native metadata before transferring it to supplemental ownership.

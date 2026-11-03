@@ -1,11 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Positive demand queries over the original native transaction owner.
+//! Demand queries over the original native signed transaction owner.
 
-use super::{
-    Arity, DemandError, GoalMatch, PreparedDemand, RelationStore, StoreShape, Unsupported,
-};
+use super::{Arity, DemandError, GoalMatch, PreparedDemand, RelationStore, StoreShape};
 use crate::dictionary::{DictionaryTerm, TermDictionary, TermIdentity};
 use crate::guard::NoGuards;
 use crate::maintenance::ChangeBatch;
@@ -16,7 +14,7 @@ use crate::seminaive::{
 use crate::stop::StopSignal;
 use purrdf_lex::allocation::{Admission, Resident};
 
-/// A maintained positive query whose private transformed model is never exposed.
+/// A maintained demand query whose private transformed model is never exposed.
 ///
 /// Borrows the prepared executable and preserves the original dictionary, signed
 /// transaction, admission and opaque watermark through native pause/resume.
@@ -38,7 +36,7 @@ pub struct MaintainedDemand<
 /// Complete net goal-membership changes at the original host position.
 ///
 /// The selected vector uses resident allocation. Original IDs retain their
-/// meaning through the borrow of the maintained owner; generated facts are absent.
+/// meaning through the borrow of the maintained owner; private predicates are absent.
 #[derive(Debug)]
 pub struct DemandDelta<'a, M, I: TermIdentity, const N: usize = 3> {
     watermark: &'a M,
@@ -67,12 +65,12 @@ impl<const N: usize> PreparedDemand<N>
 where
     Arity<N>: StoreShape<N>,
 {
-    /// Maintain this positive query with resident native metadata storage.
+    /// Maintain this query with resident native metadata storage.
     /// Initialization is resumed through [`MaintainedDemand::resume_until`].
     ///
     /// # Errors
-    /// Refuses stratified artifacts and incompatible original dictionaries before
-    /// execution, preserving original dictionary and native initialization failures.
+    /// Refuses incompatible original dictionaries before execution, preserving
+    /// original dictionary and native initialization failures.
     pub fn maintain<M, S: Admission, D: TermDictionary>(
         &self,
         edb: RelationStore<D, N>,
@@ -82,7 +80,7 @@ where
         self.maintain_in(edb, context, options, Resident)
     }
 
-    /// Maintain this positive query under an original supplemental storage grant.
+    /// Maintain this query under an original supplemental storage grant.
     /// The returned owner borrows this prepared artifact and owns the input store.
     ///
     /// # Errors
@@ -94,12 +92,6 @@ where
         options: EvalOptions,
         admission: A,
     ) -> Result<MaintainedDemand<'_, M, S, D, N, A>, DemandError<D::Error>> {
-        if !self.shadows.is_empty() {
-            return Err(DemandError::Unsupported {
-                rule: None,
-                reason: Unsupported::MaintenanceNegation,
-            });
-        }
         self.check_compatibility(edb.interner())?;
         let inner = Maintained::new_in(
             &self.executable,
@@ -177,8 +169,12 @@ where
     /// # Errors
     /// Preserves native readiness and original lookup/read failures, even for no rows.
     pub fn answers(&self) -> Result<Vec<[D::Id; N]>, MaintenanceError<D::Error>> {
-        super::answers(self.inner.facts()?, &self.prepared.goal)
-            .map_err(|error| MaintenanceError::Failed(EvalError::Source(error)))
+        super::answers(
+            self.inner.facts()?,
+            &self.prepared.goal,
+            self.inner.demand_projection(),
+        )
+        .map_err(|error| MaintenanceError::Failed(EvalError::Source(error)))
     }
 
     /// Select the last completed transaction's exact goal-membership delta.
@@ -198,9 +194,14 @@ where
             .iter()
             .copied()
             .filter(|(row, _)| {
-                matcher
-                    .as_ref()
-                    .is_some_and(|matcher| matcher.matches(*row))
+                (!self.prepared.goal.predicate().is_var()
+                    || self
+                        .inner
+                        .demand_projection()
+                        .is_some_and(|projection| projection.original(row[1])))
+                    && matcher
+                        .as_ref()
+                        .is_some_and(|matcher| matcher.matches(*row))
             })
             .collect();
         dictionary

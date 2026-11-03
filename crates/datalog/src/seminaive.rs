@@ -126,12 +126,12 @@ use crate::guard::{Guard, GuardCall, GuardEvaluator, GuardSite, Negation, NoGuar
 use crate::id::{RowId, TermId};
 use crate::paths::shortest_path;
 use purrdf_core::{SmallVec, smallvec};
-use purrdf_lex::allocation::StorageError;
+use purrdf_lex::allocation::{Admission, Memory, Resident, StorageError};
 
 pub use crate::plan::Executable;
 use crate::plan::{
     AtomOperator, AtomShape, CyclicPlan, JoinGroup, POSITION_OBJECT, POSITION_SUBJECT, Parsed,
-    PositionPlan, RulePlan, predicate_symbol,
+    PositionPlan, RulePlan,
 };
 use crate::stop::{StopSignal, is_stopped};
 use crate::store::{
@@ -887,6 +887,18 @@ impl<'s> StepGovernor<'s> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum EvalError<E = core::convert::Infallible> {
+    /// The original dictionary violated private input identity ownership.
+    DemandInput {
+        /// The exact violated projection invariant.
+        reason: String,
+    },
+    /// Generated predicate-family metadata has no structural relational proof.
+    DemandScope {
+        /// Transformed rule whose provenance is invalid.
+        rule: usize,
+        /// The exact failed scope invariant.
+        reason: String,
+    },
     /// The original failure of the caller-owned dictionary or its pinned source.
     Source(E),
     /// An immutable-base body probe requires the ordered evaluation contract.
@@ -1055,6 +1067,8 @@ impl<E> EvalError<E> {
         convert: impl FnOnce(E) -> Result<F, R>,
     ) -> Result<EvalError<F>, R> {
         Ok(match self {
+            Self::DemandInput { reason } => EvalError::DemandInput { reason },
+            Self::DemandScope { rule, reason } => EvalError::DemandScope { rule, reason },
             Self::Source(error) => EvalError::Source(convert(error)?),
             Self::BaseReadRequiresSchedule { rule } => EvalError::BaseReadRequiresSchedule { rule },
             Self::MissingBase { rule } => EvalError::MissingBase { rule },
@@ -1117,6 +1131,8 @@ impl<E> EvalError<E> {
 impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError for EvalError<E> {
     purrdf_hash::error_visit! {
         Source(cause) => "datalog-eval-source" { "cause" => Cause(cause) },
+        DemandInput { reason } => "datalog-eval-demand-input" { "reason" => Text(reason) },
+        DemandScope { rule, reason } => "datalog-eval-demand-scope" { "rule" => Unsigned(*rule as u128), "reason" => Text(reason) },
         BaseReadRequiresSchedule { rule } => "datalog-eval-base-requires-schedule" { "rule" => Unsigned(*rule as u128) },
         MissingBase { rule } => "datalog-eval-missing-base" { "rule" => Unsigned(*rule as u128) },
         Storage(cause) => "datalog-eval-storage" { "cause" => Cause(cause) },
@@ -1240,6 +1256,10 @@ impl<E: fmt::Display> fmt::Display for EvalError<E> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Source(error) => error.fmt(f),
+            Self::DemandInput { reason } => write!(f, "invalid demand input projection: {reason}"),
+            Self::DemandScope { rule, reason } => {
+                write!(f, "invalid demand predicate scope at rule {rule}: {reason}")
+            }
             Self::BaseReadRequiresSchedule { rule } => write!(
                 f,
                 "rule {rule} reads immutable base facts and requires ordered evaluation"
@@ -1503,6 +1523,7 @@ where
     budget: BudgetReport,
     /// Stable semantic counts and plan-dependent candidate work.
     work: WorkReport,
+    pub(crate) projection: Option<Arc<crate::demand::projection::Runtime<D::Id, N>>>,
 }
 
 impl<D: TermDictionary, const N: usize> Evaluation<D, N>
@@ -1571,6 +1592,26 @@ pub fn compile<const N: usize>(rules: Vec<DlClause<N>>) -> Result<Executable<N>,
 where
     Arity<N>: StoreShape<N>,
 {
+    compile_projected(rules, None)
+}
+
+pub(crate) fn compile_demand<const N: usize>(
+    rules: Vec<DlClause<N>>,
+    projection: Arc<crate::demand::projection::Plan>,
+) -> Result<Executable<N>, EvalError>
+where
+    Arity<N>: StoreShape<N>,
+{
+    compile_projected(rules, Some(projection))
+}
+
+fn compile_projected<const N: usize>(
+    rules: Vec<DlClause<N>>,
+    projection: Option<Arc<crate::demand::projection::Plan>>,
+) -> Result<Executable<N>, EvalError>
+where
+    Arity<N>: StoreShape<N>,
+{
     // Decide the fragment before stratification and safety: neither check supplies
     // semantics for witnesses, branching or inconsistency.
     for (index, rule) in rules.iter().enumerate() {
@@ -1596,21 +1637,18 @@ where
     // fundamental of the remaining two defects: an unstratifiable program has no least
     // model to be safe with respect to, so reporting a per-rule safety violation instead
     // would point at a symptom.
-    if crate::plan::stratify(&rules).is_none() {
-        return Err(negative_cycle(&rules));
+    let mut parsed = Parsed::new(rules).expect("every head form was established on the same rules");
+    if let Some(projection) = projection {
+        parsed = parsed.with_demand_projection(projection)?;
     }
+    let stratified = parsed.try_stratify()?;
 
     // Range restriction ranges over all FOUR positions: a head that writes a variable
     // predicate or a variable graph needs that variable bound by the positive body just as
     // much as a head subject does, and a positive body atom binds all four of its own.
-    check_range_restricted(&rules)?;
+    check_range_restricted(stratified.clauses())?;
 
-    Ok(Parsed::new(rules)
-        .expect("every head form was just established to be Datalog on the same rules")
-        .stratify()
-        .expect("stratifiability was just established on the same rules")
-        .plan()
-        .into_executable())
+    Ok(stratified.plan().into_executable())
 }
 
 /// Refuse a rule whose head carries a variable nothing in its body binds.
@@ -1660,45 +1698,38 @@ where
 /// Panics if no negative edge lies in a cycle. This is called only after
 /// [`crate::plan::stratify`] has already proven the program non-stratifiable, and that is
 /// exactly the condition, so reaching it would be a contradiction in the stratifier.
-fn negative_cycle<const N: usize>(rules: &[DlClause<N>]) -> EvalError
-where
-    Arity<N>: StoreShape<N>,
-{
+pub(crate) fn negative_cycle_graph(graph: &crate::plan::DependencyGraph) -> EvalError {
     // head -> {body}: "head depends on body", in a fixed lexical order, built from the
     // SAME edge set `crate::plan::stratify` decided over — including the coupling edges a
     // variable predicate position adds. Searching a smaller graph than the decision was
     // taken over could fail to find the cycle the stratifier proved exists.
-    let (_, edges) = crate::plan::dependency_edges(rules);
-    let mut depends: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for (head, body, _negative) in &edges {
+    let mut depends: BTreeMap<crate::plan::PredicateKey, BTreeSet<crate::plan::PredicateKey>> =
+        BTreeMap::new();
+    for edge in &graph.edges {
+        let head = &graph.keys[edge.head];
+        let body = &graph.keys[edge.body];
         depends
             .entry(head.clone())
             .or_default()
             .insert(body.clone());
     }
 
-    for rule in rules {
-        for head in rule.head_atoms() {
-            let head_symbol = predicate_symbol(head);
-            let negated_atoms = rule
-                .body()
-                .iter()
-                .filter(|atom| atom.is_negated())
-                .chain(rule.negations().iter().flat_map(Negation::atoms));
-            for atom in negated_atoms {
-                let negated = predicate_symbol(atom);
-                let Some(path) = shortest_path(&depends, &negated, &head_symbol) else {
-                    continue;
-                };
-                let mut cycle = vec![head_symbol.clone()];
-                cycle.extend(path);
-                return EvalError::NonStratifiable {
-                    head: head_symbol,
-                    negated,
-                    cycle,
-                };
-            }
-        }
+    for edge in graph.edges.iter().filter(|edge| edge.negative) {
+        let head_symbol = graph.keys[edge.head].clone();
+        let negated = graph.keys[edge.body].clone();
+        let Some(path) = shortest_path(&depends, &negated, &head_symbol) else {
+            continue;
+        };
+        let mut cycle = vec![head_symbol.clone()];
+        cycle.extend(path);
+        return EvalError::NonStratifiable {
+            head: head_symbol.label().to_owned(),
+            negated: negated.label().to_owned(),
+            cycle: cycle
+                .into_iter()
+                .map(|key| key.label().to_owned())
+                .collect(),
+        };
     }
     unreachable!("a non-stratifiable program has a negative edge inside a dependency cycle")
 }
@@ -3389,9 +3420,9 @@ where
     Arity<N>: StoreShape<N>,
 {
     /// Retain native proof cells through their original supplemental admission.
-    fn copy_in<A: purrdf_lex::allocation::Admission + ?Sized>(
+    fn copy_in<A: Admission + ?Sized>(
         &self,
-        memory: &mut purrdf_lex::allocation::Memory<'_, A>,
+        memory: &mut Memory<'_, A>,
     ) -> Result<Self, StorageError> {
         Ok(Self {
             rule: self.rule,
@@ -4448,6 +4479,7 @@ where
     input_terms: u64,
     /// The rules that generated a term in the latest term-generating round.
     generating_rules: BTreeSet<usize>,
+    pub(crate) projection: Option<crate::demand::projection::Runtime<D::Id, N>>,
 }
 
 impl<D: TermDictionary, const N: usize> FixpointState<D, N>
@@ -4490,7 +4522,73 @@ where
             stated: BudgetReport::stated_limits(&options),
             input_terms,
             generating_rules: BTreeSet::new(),
+            projection: None,
         }
+    }
+
+    pub(super) fn attach_projection(&mut self, exe: &Executable<N>) {
+        if let Some(domains) = &exe.domains {
+            if !domains.projection.needs_projection() {
+                return;
+            }
+            self.projection = Some(crate::demand::projection::Runtime::new(
+                domains.projection.clone(),
+                &self.rel,
+            ));
+            self.depth.clear();
+            if self.native.is_none() {
+                self.native = Some(maintained::Supports::native_heights());
+            }
+        }
+    }
+
+    pub(super) fn predicate_matches(
+        &self,
+        key: &crate::plan::PredicateKey,
+        id: D::Id,
+    ) -> Result<bool, D::Error> {
+        if let Some(surface) = &key.surface {
+            return self
+                .rel
+                .interner()
+                .lookup_term(surface)
+                .map(|found| found == Some(id));
+        }
+        Ok(match key.family {
+            crate::plan::PredicateFamily::All => true,
+            crate::plan::PredicateFamily::Original => self
+                .projection
+                .as_ref()
+                .is_some_and(|projection| projection.original(id)),
+            crate::plan::PredicateFamily::Shadow => self
+                .projection
+                .as_ref()
+                .is_some_and(|projection| projection.shadow_source(id).is_some()),
+            crate::plan::PredicateFamily::Internal => false,
+        })
+    }
+
+    pub(super) fn project_in<A: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, A>,
+        allow: impl FnMut(usize) -> bool,
+    ) -> Result<crate::demand::projection::Progress, EvalError<D::Error>> {
+        use crate::demand::projection::Progress;
+        let Some(projection) = self.projection.as_mut() else {
+            return Ok(Progress::Complete);
+        };
+        let progress = projection
+            .resume(&mut self.rel, memory, allow)
+            .map_err(crate::demand::projection::Error::into_eval)?;
+        if let Progress::Inserted(row) = progress {
+            self.seed_height(row);
+            self.input_facts = self
+                .input_facts
+                .checked_add(1)
+                .expect("retained store rows fit u64");
+        }
+        check_budget(self)?;
+        Ok(progress)
     }
 
     pub(super) fn account_native_memory(&mut self, before: usize, after: usize) {
@@ -4710,11 +4808,8 @@ where
 /// The evidence is retained with the result; query-local ids never escape their
 /// dictionary, and a physical failure returns no completed model.
 #[derive(Debug)]
-pub struct EvidencedEvaluation<
-    S: purrdf_lex::allocation::Admission,
-    D: TermDictionary = TermInterner,
-    const N: usize = 4,
-> where
+pub struct EvidencedEvaluation<S: Admission, D: TermDictionary = TermInterner, const N: usize = 4>
+where
     Arity<N>: StoreShape<N>,
 {
     /// The ordinary deterministic fact and preferred-provenance result.
@@ -4731,7 +4826,7 @@ pub struct EvidencedEvaluation<
 ///
 /// # Errors
 /// Returns the original execution failure or native evidence refusal.
-pub fn evaluate_evidenced<S: purrdf_lex::allocation::Admission, D: TermDictionary, const N: usize>(
+pub fn evaluate_evidenced<S: Admission, D: TermDictionary, const N: usize>(
     exe: &Executable<N>,
     edb: RelationStore<D, N>,
     options: &EvalOptions,
@@ -4805,7 +4900,30 @@ where
     }
     edb.interner().check_read().map_err(EvalError::Source)?;
     let mut state = FixpointState::seeded(edb, options);
+    state.attach_projection(exe);
     check_budget(&state)?;
+    {
+        let mut resident = Resident;
+        let mut memory = Memory::new(&mut resident);
+        let projected = (|| {
+            loop {
+                match state.project_in(&mut memory, |_| !is_stopped(run.stop))? {
+                    crate::demand::projection::Progress::Complete => break,
+                    crate::demand::projection::Progress::Inserted(_) => {}
+                    crate::demand::projection::Progress::Advanced => {}
+                    crate::demand::projection::Progress::Paused => {
+                        return Err(EvalError::Stopped {
+                            report: state.report(),
+                        });
+                    }
+                }
+            }
+            Ok(())
+        })();
+        state.account_native_memory(0, memory.admitted_bytes());
+        projected?;
+        check_budget(&state)?;
+    }
 
     for stratum in 0..exe.stratum_count() {
         if exe.stratum_is_empty(stratum) {
@@ -4846,6 +4964,7 @@ where
             facts: self.rel,
             derivations: (self.derivation_mode == DerivationMode::Record)
                 .then_some(self.derivations),
+            projection: self.projection.map(Arc::new),
         }
     }
 }

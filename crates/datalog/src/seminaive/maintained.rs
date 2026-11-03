@@ -756,8 +756,12 @@ fn validate_input_names<D: TermDictionary, const N: usize>(
     dictionary: &D,
     terms: [DictionaryTerm<'_, D::Id>; N],
     names: &[String],
-) -> Result<(), MaintenanceError<D::Error>> {
-    if names.is_empty() {
+    projection: Option<&crate::demand::projection::Runtime<D::Id, N>>,
+) -> Result<(), MaintenanceError<D::Error>>
+where
+    Arity<N>: StoreShape<N>,
+{
+    if names.is_empty() && projection.is_none() {
         return Ok(());
     }
     for term in terms {
@@ -765,7 +769,10 @@ fn validate_input_names<D: TermDictionary, const N: usize>(
             .lexical(dictionary)
             .map_err(|error| MaintenanceError::Failed(EvalError::Source(error)))?;
         let surface = lexical.as_ref();
-        if surface
+        if projection.is_some_and(|projection| {
+            projection.private_surface(surface)
+                || matches!(term, DictionaryTerm::Id(id) if projection.private_id(id))
+        }) || surface
             .strip_prefix('<')
             .and_then(|iri| iri.strip_suffix('>'))
             .is_some_and(|iri| {
@@ -1004,17 +1011,13 @@ where
                 });
             }
             let mut affected = pending.altered.contains(&predicate);
-            for (index, symbol) in self.impacts.predicates.iter().enumerate() {
+            for (index, symbol) in self.impacts.keys.iter().enumerate() {
                 if !pending.reached[index] {
                     continue;
                 }
-                if symbol == crate::plan::ANY_PREDICATE
-                    || state
-                        .rel
-                        .interner()
-                        .lookup_term(symbol)
-                        .map_err(|error| MaintenanceError::Failed(EvalError::Source(error)))?
-                        == Some(predicate)
+                if state
+                    .predicate_matches(symbol, predicate)
+                    .map_err(|error| MaintenanceError::Failed(EvalError::Source(error)))?
                 {
                     affected = true;
                     break;
@@ -1084,7 +1087,12 @@ where
             .state
             .as_mut()
             .expect("maintenance retains its model");
-        validate_input_names(state.rel.interner(), terms, self.reserved_input_names)?;
+        validate_input_names(
+            state.rel.interner(),
+            terms,
+            self.reserved_input_names,
+            state.projection.as_ref(),
+        )?;
         let before = self.storage.live();
         let reserved = self.storage.with_memory(|memory| {
             state
@@ -1107,6 +1115,15 @@ where
             }
         }
         Ok(ids)
+    }
+
+    pub(crate) fn demand_projection(
+        &self,
+    ) -> Option<&crate::demand::projection::Runtime<D::Id, N>> {
+        self.session
+            .state
+            .as_ref()
+            .and_then(|state| state.projection.as_ref())
     }
 
     /// Borrow all current chosen proofs without projecting a lexical witness table.
@@ -1295,7 +1312,7 @@ where
             state: self
                 .session
                 .state
-                .as_ref()
+                .as_mut()
                 .expect("preparation retains its original model"),
         };
         let before = self.storage.live();
@@ -1347,7 +1364,12 @@ where
                             .checked_add(rejected.reject())
                             .expect("rejected preparation fits its original grant");
                     }
-                    MaintenanceError::Failed(EvalError::Storage(_)) => {}
+                    MaintenanceError::Failed(
+                        EvalError::Storage(_)
+                        | EvalError::BudgetExhausted { .. }
+                        | EvalError::TermLimitExceeded { .. }
+                        | EvalError::Stopped { .. },
+                    ) => {}
                     MaintenanceError::Failed(failure) => self.failure = Some(failure.clone()),
                     _ => {}
                 }
@@ -1444,6 +1466,12 @@ where
         if let Some(error) = &self.failure {
             return Err(MaintenanceError::Failed(error.clone()));
         }
+        let options = options.with_derivation_mode(super::DerivationMode::ModelOnly);
+        if let Some(state) = self.session.state.as_mut() {
+            state.limits = Limits::of(&options, state.input_terms);
+            state.stated = super::BudgetReport::stated_limits(&options);
+            state.execution = options.round_execution();
+        }
         if self.preparing.is_some() {
             match self.prepare_until(limit, stop) {
                 Ok(PreparationProgress::Ready) => {}
@@ -1465,7 +1493,12 @@ where
                         needed,
                     });
                 }
-                Err(MaintenanceError::Failed(error @ EvalError::Storage(_))) => {
+                Err(MaintenanceError::Failed(
+                    error @ (EvalError::Storage(_)
+                    | EvalError::BudgetExhausted { .. }
+                    | EvalError::TermLimitExceeded { .. }
+                    | EvalError::Stopped { .. }),
+                )) => {
                     return Ok(ResumeProgress::Paused(error));
                 }
                 Err(error) => return Err(error),
@@ -1487,7 +1520,6 @@ where
             }
             return Ok(ResumeProgress::Complete);
         }
-        let options = options.with_derivation_mode(super::DerivationMode::ModelOnly);
         if !self.prepared {
             return self.resume_initial(options, limit, stop);
         }

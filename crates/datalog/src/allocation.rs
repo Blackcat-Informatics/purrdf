@@ -6,6 +6,23 @@
 use purrdf_core::FastMap;
 use purrdf_lex::allocation::{Admission, Memory, OrderedTable, StorageError};
 
+/// Retain one operation's work credit across factories that can pause.
+/// A retry still polls the original stop authority without charging twice.
+pub(crate) fn allow_unit(
+    admitted: &mut bool,
+    cost: usize,
+    allow: &mut impl FnMut(usize) -> bool,
+) -> bool {
+    if *admitted {
+        return allow(0);
+    }
+    if !allow(cost) {
+        return false;
+    }
+    *admitted = true;
+    true
+}
+
 /// The body owns only newly constructed local payloads; failed locals die
 /// before their original refund. Preserve a refused refund as exact debt.
 pub(crate) fn construct_in<T, A: Admission + ?Sized>(
