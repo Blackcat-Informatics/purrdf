@@ -160,10 +160,10 @@ pub use native_quads::{
     flat_dataset_from_quads_declaring, flat_rdf_quads, flat_rdf_quads_from_dataset,
 };
 pub use projections::{
-    CROISSANT_ARTIFACT, CROISSANT_PROFILE, CROISSANT_ROLES, CSVW_TERMS_PROFILE,
-    ConstructViewConfig, ConstructViewProjection, CroissantConfig, CroissantRole,
-    CroissantVocabulary, CsvwAction, CsvwAnnotations, CsvwCell, CsvwColumn, CsvwConfig,
-    CsvwContext, CsvwDatatype, CsvwDatatypeFormat, CsvwDialect, CsvwExactProjection,
+    CANONICAL_TERM_JSON_LAW_ID, CROISSANT_ARTIFACT, CROISSANT_PROFILE, CROISSANT_ROLES,
+    CSVW_TERMS_PROFILE, ConstructViewConfig, ConstructViewProjection, CroissantConfig,
+    CroissantRole, CroissantVocabulary, CsvwAction, CsvwAnnotations, CsvwCell, CsvwColumn,
+    CsvwConfig, CsvwContext, CsvwDatatype, CsvwDatatypeFormat, CsvwDialect, CsvwExactProjection,
     CsvwExactReadOutcome, CsvwForeignKey, CsvwInheritedProperties, CsvwInput, CsvwMappedTableGroup,
     CsvwMode, CsvwNaturalLanguage, CsvwNumericFormat, CsvwRdfTableMapping, CsvwReadOutcome,
     CsvwReference, CsvwRow, CsvwSchema, CsvwTable, CsvwTableDirection, CsvwTableGroup,

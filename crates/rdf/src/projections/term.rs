@@ -19,6 +19,21 @@ use purrdf_iri::vocab::rdf::LANG_STRING as RDF_LANG_STRING;
 /// Portable RDF 1.2 literal base direction: the one RDF 1.2 base-direction type.
 pub type ProjectionDirection = RdfTextDirection;
 
+/// Encoding-law identity for [`ProjectionTerm::to_canonical_json`].
+///
+/// Persist this identity beside dictionaries keyed by canonical term JSON and
+/// compare it before reusing their keys after an upgrade. A different identity
+/// requires migration or re-derivation of those keys. The identity is out of
+/// band: it is not embedded in the JSON and does not identify an individual term.
+///
+/// Change this identity whenever any successfully encoded term's canonical bytes
+/// change, including tags, member names/order, explicit nulls, string escaping,
+/// and literal, blank-scope or nested-triple representation. This includes changes
+/// inherited from the shared JSON writer. Byte-preserving refactors and unrelated
+/// crate version changes retain the same identity. Frozen fixtures are bound to
+/// each named law; a new law requires a deliberate fixture revision.
+pub const CANONICAL_TERM_JSON_LAW_ID: &str = "purrdf-canonical-term-json-v1";
+
 /// Dataset-independent, serialization-stable RDF 1.2 term identity.
 ///
 /// Unlike `TermId`, this value is safe to persist in a projection artifact. It
@@ -343,6 +358,11 @@ impl ProjectionTerm {
 
     /// Write this term as its canonical tagged JSON bytes.
     ///
+    /// [`CANONICAL_TERM_JSON_LAW_ID`] names this encoding law. Any change to the
+    /// emitted bytes of any admitted term requires a new law identity, including
+    /// a change inherited from shared JSON escaping. Persist and compare that
+    /// identity alongside dictionary keys; it is not added to these bytes.
+    ///
     /// # Errors
     ///
     /// Returns a typed term or resource-limit error for an invalid value, or a syntax
@@ -353,6 +373,9 @@ impl ProjectionTerm {
     }
 
     /// Parse and validate canonical tagged JSON bytes.
+    ///
+    /// The canonical spelling is governed by [`CANONICAL_TERM_JSON_LAW_ID`], the
+    /// same out-of-band identity as [`Self::to_canonical_json`].
     ///
     /// # Errors
     ///
@@ -583,6 +606,7 @@ mod tests {
     use purrdf_core::{RdfDatasetBuilder, RdfLiteral};
 
     use super::*;
+    use crate::CANONICAL_TERM_JSON_LAW_ID;
     use purrdf_core::TermBox;
 
     fn limits() -> ProjectionLimits {
@@ -590,10 +614,22 @@ mod tests {
     }
 
     #[test]
-    fn nested_directional_term_round_trips_view_json_and_value() {
+    fn canonical_term_json_law_pins_bytes_and_round_trips_view_and_value() {
         let mut builder = RdfDatasetBuilder::new();
         let s = builder.intern_iri("http://example.org/s").unwrap();
         let p = builder.intern_iri("http://example.org/p").unwrap();
+        let blank = builder.intern_blank("b", BlankScope(u32::MAX)).unwrap();
+        let plain = builder
+            .intern_literal(RdfLiteral::simple("\n\"\\é"))
+            .unwrap();
+        let language = builder
+            .intern_literal(RdfLiteral {
+                lexical_form: "hello".to_owned(),
+                datatype: None,
+                language: Some("en".to_owned()),
+                direction: None,
+            })
+            .unwrap();
         let o = builder
             .intern_literal(RdfLiteral {
                 lexical_form: "marhaba".to_owned(),
@@ -603,17 +639,57 @@ mod tests {
             })
             .unwrap();
         let triple = builder.intern_triple(s, p, o).unwrap();
+        let ltr = builder
+            .intern_literal(RdfLiteral {
+                lexical_form: "hello".to_owned(),
+                datatype: None,
+                language: Some("en".to_owned()),
+                direction: Some(RdfTextDirection::Ltr),
+            })
+            .unwrap();
+        let typed = builder
+            .intern_literal(RdfLiteral {
+                lexical_form: "01".to_owned(),
+                datatype: Some(purrdf_xsd::datatype::XSD_INTEGER.to_owned()),
+                language: None,
+                direction: None,
+            })
+            .unwrap();
+        let nested = builder.intern_triple(blank, p, triple).unwrap();
         let dataset = builder.freeze().expect("freeze");
 
-        let term = ProjectionTerm::from_view(&dataset, triple, limits()).expect("project");
-        let json = term.to_canonical_json(limits()).expect("JSON");
-        let reparsed = ProjectionTerm::from_canonical_json(&json, limits()).expect("parse");
-        assert_eq!(reparsed, term);
-        let value = term.to_term_value(limits()).expect("kernel value");
+        // Each named law owns its frozen bytes; a new identity must explicitly
+        // select a new fixture contract rather than silently inheriting this one.
         assert_eq!(
-            ProjectionTerm::from_term_value(&value, limits()).expect("carrier value"),
-            term
+            CANONICAL_TERM_JSON_LAW_ID, "purrdf-canonical-term-json-v1",
+            "a new canonical term JSON law needs its own frozen fixtures"
         );
+        let expected = [
+            r#"{"kind":"iri","value":"http://example.org/s"}"#,
+            r#"{"kind":"blank","label":"b","scope":4294967295}"#,
+            r#"{"kind":"literal","lexical":"\n\"\\é","datatype":"http://www.w3.org/2001/XMLSchema#string","language":null,"direction":null}"#,
+            r#"{"kind":"literal","lexical":"hello","datatype":"http://www.w3.org/1999/02/22-rdf-syntax-ns#langString","language":"en","direction":null}"#,
+            r#"{"kind":"literal","lexical":"marhaba","datatype":"http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString","language":"ar","direction":"rtl"}"#,
+            r#"{"kind":"literal","lexical":"hello","datatype":"http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString","language":"en","direction":"ltr"}"#,
+            r#"{"kind":"literal","lexical":"01","datatype":"http://www.w3.org/2001/XMLSchema#integer","language":null,"direction":null}"#,
+            r#"{"kind":"triple","subject":{"kind":"iri","value":"http://example.org/s"},"predicate":{"kind":"iri","value":"http://example.org/p"},"object":{"kind":"literal","lexical":"marhaba","datatype":"http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString","language":"ar","direction":"rtl"}}"#,
+            r#"{"kind":"triple","subject":{"kind":"blank","label":"b","scope":4294967295},"predicate":{"kind":"iri","value":"http://example.org/p"},"object":{"kind":"triple","subject":{"kind":"iri","value":"http://example.org/s"},"predicate":{"kind":"iri","value":"http://example.org/p"},"object":{"kind":"literal","lexical":"marhaba","datatype":"http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString","language":"ar","direction":"rtl"}}}"#,
+        ];
+        for (id, expected) in [s, blank, plain, language, o, ltr, typed, triple, nested]
+            .into_iter()
+            .zip(expected)
+        {
+            let term = ProjectionTerm::from_view(&dataset, id, limits()).expect("project");
+            let json = term.to_canonical_json(limits()).expect("JSON");
+            assert_eq!(json, expected.as_bytes());
+            let reparsed = ProjectionTerm::from_canonical_json(&json, limits()).expect("parse");
+            assert_eq!(reparsed, term);
+            let value = term.to_term_value(limits()).expect("kernel value");
+            assert_eq!(
+                ProjectionTerm::from_term_value(&value, limits()).expect("carrier value"),
+                term
+            );
+        }
     }
 
     /// A REFUSAL IS A CLAIM TOO.

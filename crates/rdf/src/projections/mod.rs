@@ -141,7 +141,7 @@ pub use skos::{
     SkosClassRoles, SkosConfig, SkosDocumentationRoles, SkosGraphSelection, SkosLabelRoles,
     SkosProjection, SkosRelationRoles, SkosSourceRoles, SkosTargetRoles, project_skos,
 };
-pub use term::{ProjectionDirection, ProjectionTerm};
+pub use term::{CANONICAL_TERM_JSON_LAW_ID, ProjectionDirection, ProjectionTerm};
 // Crate-internal: the one language-tag judgement shared by the projection term
 // builder and `VoidStaticValue`'s caller-config constructor.
 pub(crate) use term::validate_language_tag;
