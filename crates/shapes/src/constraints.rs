@@ -4311,8 +4311,17 @@ fn eval_constraint<'a, S: ResultSink>(
         } => {
             let sev = source.severity_over(csev.as_ref());
             let msg = source.messages_over(cmsg);
+            // An active proved relation answers without recursive traversal.
+            // Runtime-resolved ordinary checks retain the monotone depth bound.
+            let shape_context = if context.fixed.is_some() {
+                context
+            } else {
+                ValidationContext {
+                    depth: depth.saturating_add(1),
+                    ..context
+                }
+            };
             let mut guard = crate::expression::RecursionGuard::with_depth(depth);
-            let next_depth = depth.saturating_add(1);
             for value_node in value_nodes {
                 // The conformance re-entry and the report boundary both read the
                 // value node's own representation, so it is resolved ONCE here and
@@ -4380,7 +4389,7 @@ fn eval_constraint<'a, S: ResultSink>(
                             )
                         })?;
                         let conforms =
-                            conforms_with_id_depth(store, &judged, shape_plan, next_depth)
+                            conforms_memoized(shape_context, shape_plan, &judged)
                                 .map_err(|error| error.context(&format!(
                                     "sh:nodeByExpression constraint on shape {source_shape}: "
                                 )))?;
@@ -6052,6 +6061,37 @@ mod tests {
                 "ex:{local}: the diagnostic must name the produced node, got {error}"
             );
         }
+
+        // An ordinary dynamic shape check consumes one re-entry depth. Its
+        // adjacent admitted request still reaches the real target constraint.
+        let lowering = OneShotLowering::of(
+            &data,
+            shape_named("Computed"),
+            &crate::engine::ValidationOptions::default(),
+        )
+        .unwrap();
+        let plan = lowering.plan().unwrap();
+        let focus = FocusNode::resolve(data.core_view(), &ex("good"));
+        let limit = crate::expression::MAX_RECURSION_DEPTH;
+        assert!(
+            validate_shape_with_depth(&data, &focus, None, plan, limit - 1, None)
+                .unwrap()
+                .is_empty()
+        );
+        let error = validate_shape_with_depth(&data, &focus, None, plan, limit, None).unwrap_err();
+        assert!(
+            matches!(
+                error,
+                crate::error::ShapesError::Processor(
+                    crate::error::ProcessorFailure::ValidationDepth {
+                        depth,
+                        limit: actual_limit,
+                        ..
+                    }
+                ) if depth == limit + 1 && actual_limit == limit
+            ),
+            "{error:?}"
+        );
     }
 
     #[test]

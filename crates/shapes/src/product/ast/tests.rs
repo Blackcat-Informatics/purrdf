@@ -616,7 +616,7 @@ fn decoding_refuses_a_definition_owning_its_own_index_before_filling_cells() {
     let shapes = crate::engine::parse_shapes(
         "@prefix sh: <http://www.w3.org/ns/shacl#> .
          <http://example.org/Root> a sh:NodeShape;
-           sh:nodeByExpression <http://example.org/Root> .",
+           sh:nodeKind sh:IRI .",
         None,
     )
     .unwrap();

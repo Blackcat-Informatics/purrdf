@@ -708,6 +708,12 @@ original shape contributes a positive dependency. The actual selection retains
 ordinary lazy evaluation, singleton requirements and missing-shape failures;
 an empty focus skips the shape operand entirely. Path-derived shape operands
 and other computations without a complete output proof remain unqualified.
+`sh:nodeByExpression` uses the same finite-output proof and original index.
+Every value node is checked against each selected shape in the active fixed
+point, duplicates are judged once, and an empty output adds no checks. Its
+positive dependency edges participate in admission without an implicit mode;
+invalid selected outputs keep their ordinary lazy runtime failure. Existing
+checks for explicitly named shapes still apply.
 Original function bodies, conformance-dependent focus expressions and general
 expression callbacks remain outside this proved surface.
 `PreparationRefusal::UnqualifiedRecursion` retains the original definition,
