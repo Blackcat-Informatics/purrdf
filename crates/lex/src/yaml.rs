@@ -8,7 +8,7 @@
 //! Its borrowed [`SyntaxDocument`] carries a byte identity and explicit input,
 //! live allocation, occurrence and depth bounds. [`SyntaxDocument::to_core`]
 //! projects through the same parser and eager builder as [`read_with`].
-//! [`emit_scalar`] shares the native quoting and escape bodies with [`write`],
+//! [`emit_scalar`] shares the native quoting and escape bodies with [`write`](fn@write),
 //! reports the actual safe style, and admits its complete measured output before
 //! writing. Layout-policy consumers can use it without a local scalar encoder.
 //!

@@ -808,7 +808,7 @@ impl purrdf_hash::error::StructuredError for EmitError {
 purrdf_hash::error_sources!(EmitError, Storage);
 
 /// Emit one string scalar through the same quoting/escaping bodies as
-/// [`write`], reporting the actual safe style. Output is measured without
+/// [`write`](fn@write), reporting the actual safe style. Output is measured without
 /// allocation, then its complete buffer is admitted before writing.
 ///
 /// # Errors
