@@ -9,6 +9,7 @@ use super::{
     Tasks, TermDictionary, TermIdentity, WorkList, flush_retired_bytes, push_task, reclaim,
     reserve_array_in, reserve_index_in, reserve_work_in, row_for,
 };
+use crate::plan::PredicateFamily;
 use purrdf_lex::walk::HeapSortFrame;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -62,6 +63,7 @@ where
     deleted_bytes: usize,
     roots: WorkList<(RowId, [I; N]), 8>,
     altered: RowSet<I>,
+    altered_families: [bool; 4],
     reached: Vec<bool>,
     absence: Vec<bool>,
     pub(super) tasks: Tasks<I, N>,
@@ -92,6 +94,7 @@ where
             deleted_bytes: 0,
             roots: WorkList::new(),
             altered: RowSet::default(),
+            altered_families: [false; 4],
             reached: Vec::new(),
             absence: Vec::new(),
             tasks: Tasks::default(),
@@ -284,6 +287,13 @@ where
                     let old = inputs.weights.get(&terms).copied().unwrap_or(0);
                     if (old == 0) != (weight == 0) {
                         self.altered.insert(terms[1]);
+                        self.altered_families[PredicateFamily::All as usize] = true;
+                        if let Some(projection) = &inputs.state.projection {
+                            self.altered_families[PredicateFamily::Original as usize] |=
+                                projection.original(terms[1]);
+                            self.altered_families[PredicateFamily::Shadow as usize] |=
+                                projection.shadow_source(terms[1]).is_some();
+                        }
                         if let Some(row) = row_for(rel, terms).map_err(source_error)? {
                             if weight == 0 {
                                 reserve_work_in(
@@ -379,14 +389,19 @@ where
                     if !crate::allocation::allow_unit(&mut self.unit_admitted, 1, &mut allow) {
                         return Ok(false);
                     }
-                    let mut reached = false;
-                    for id in &self.altered {
-                        reached |= inputs
-                            .state
-                            .predicate_matches(predicate, *id)
-                            .map_err(source_error)?;
-                    }
-                    self.reached[self.cursor] = reached;
+                    self.reached[self.cursor] = if let Some(surface) = &predicate.surface {
+                        dictionary
+                            .lookup_term(surface)
+                            .map_err(source_error)?
+                            .is_some_and(|id| self.altered.contains(&id))
+                    } else {
+                        assert_ne!(
+                            predicate.family,
+                            PredicateFamily::Internal,
+                            "an internal wildcard cannot be certified"
+                        );
+                        self.altered_families[predicate.family as usize]
+                    };
                     self.cursor += 1;
                 }
                 Phase::ReachEdges => {
