@@ -267,6 +267,44 @@ workload sample, without subtraction. Wide inputs' requested bytes fell from
 3,309,568 to 1,048,576 per batch; retained bytes stayed at 1,048,576 and peak
 working bytes fell from 1,048,712 to 1,048,576.
 
+The `xsd_exact_rational_rounding/{compact,wide_normal,boundary}` rows measure
+public `Rational::to_f64` calls through the same shared counter runner. Each row
+repeats sixteen canonical inputs for 8,192 calls. Compact inputs include zero,
+signs and the minimum signed 128-bit coefficient. Wide normal ratios use operands
+around powers of two at exponents 256 and 1,024. Signed boundary inputs cover
+nearest-even halfway values, the subnormal grid, the normal boundary, the largest
+finite value and overflow. The independent rational oracle supplies every expected
+output bit pattern before measurement.
+
+The complete scalar outputs remain in a preallocated bit buffer until counter
+close and validation, then are written to the raw sample log. That buffer's
+allocation is outside the window. Retained window payload is therefore zero;
+the shared rounding kernel still allocates its required working destinations.
+
+```bash
+cargo bench -p purrdf-xsd --bench exact -- --rounding-instructions "$PWD/target/rounding-before"
+cargo test --release -p purrdf-xsd --test exact_governance rational_float_rounding_preserves_bits_and_reports_allocations -- --exact --nocapture
+```
+
+On native x86-64 Linux with `rustc 1.101.0-nightly` and the release-derived bench
+profile, ten fresh-process samples per row gave these median instructions per
+call. The before conversion materialized outer absolute and binary-integer
+copies; the after conversion borrows the original operands into the same rounding
+body. Allocation counts come from the separate release case.
+
+| Conversion inputs | Instructions/call before | After | Allocations/batch before | After |
+| --- | ---: | ---: | ---: | ---: |
+| Compact | 666.6810 | 590.1801 | 0 | 0 |
+| Wide normal | 7,800.3068 | 7,163.8167 | 86,016 | 61,440 |
+| Boundary | 5,005.0573 | 4,778.6845 | 52,224 | 43,008 |
+
+The largest empty control was 407 instructions, below 0.009% of the smallest
+workload sample, without subtraction. Wide normal inputs' requested bytes fell
+from 7,340,032 to 5,308,416 per batch, and peak working bytes from 1,200 to 800.
+Boundary inputs' requested bytes fell from 6,930,432 to 5,718,016 and peak working
+bytes from 896 to 680. These counts establish no whole-query or geographic
+performance result; `to_f32` shares the production body but is not measured here.
+
 The small decimal parse/render rows include canonical text's reservation of its
 complete prepared length. The public allocation control
 `canonical_decimal_reserves_one_exact_output_destination` in

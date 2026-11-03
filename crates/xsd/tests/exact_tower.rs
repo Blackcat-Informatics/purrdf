@@ -218,6 +218,11 @@ prop_test! {
         let (x, y) = (Rational::from_str(&a).expect("valid"), Rational::from_str(&b).expect("valid"));
         let (ox, oy) = (oracle_rational_lexical(&a), oracle_rational_lexical(&b));
         prop_assert!(oracle_rational(&x).value_eq(&ox));
+        // Canonical rational zero folds the oracle's lexical negative zero.
+        let zero = Oracle::from_i128(0);
+        let rounded = if ox.is_zero() { &zero } else { &ox };
+        prop_assert_eq!(x.to_f64().to_bits(), rounded.to_f64().to_bits());
+        prop_assert_eq!(x.to_f32().to_bits(), rounded.to_f32().to_bits());
         prop_assert!(!x.denominator().is_negative() && !x.denominator().is_zero());
         prop_assert_eq!(x.numerator().gcd(x.denominator()), Integer::ONE, "reduced");
         prop_assert!(oracle_rational(&(&x + &y)).value_eq(&ox.add(&oy)));
@@ -627,6 +632,7 @@ fn non_finite_sources_are_refused_and_finite_extremes_are_not() {
     ] {
         let decimal = Decimal::from_f64(accepted).expect("finite");
         let rational = Rational::from_f64(accepted).expect("finite");
+        assert_eq!(rational.to_f64().to_bits(), (accepted + 0.0).to_bits());
         assert!(oracle_rational(&rational).value_eq(&Oracle::from_f64(accepted)));
         assert_eq!(rational, Rational::from_decimal(&decimal));
         if accepted == 0.0 {
@@ -662,8 +668,27 @@ fn non_finite_sources_are_refused_and_finite_extremes_are_not() {
         f32::MIN,
     ] {
         let rational = Rational::from_f32(accepted).expect("finite");
+        assert_eq!(rational.to_f32().to_bits(), (accepted + 0.0).to_bits());
         assert!(oracle_rational(&rational).value_eq(&Oracle::from_f32(accepted)));
     }
+    let halfway_single = Rational::from_str("16777217/16777216").unwrap();
+    assert_eq!(halfway_single.to_f32().to_bits(), 1.0_f32.to_bits());
+    assert_eq!((-halfway_single).to_f32().to_bits(), (-1.0_f32).to_bits());
+    let halfway_double = Rational::from_str("9007199254740993/9007199254740992").unwrap();
+    assert_eq!(halfway_double.to_f64().to_bits(), 1.0_f64.to_bits());
+    assert_eq!((-halfway_double).to_f64().to_bits(), (-1.0_f64).to_bits());
+    let negative_half_single =
+        Rational::new(-Integer::ONE, Integer::from(2_i128).pow(150)).unwrap();
+    assert_eq!(
+        negative_half_single.to_f32().to_bits(),
+        (-0.0_f32).to_bits()
+    );
+    let negative_half_double =
+        Rational::new(-Integer::ONE, Integer::from(2_i128).pow(1075)).unwrap();
+    assert_eq!(
+        negative_half_double.to_f64().to_bits(),
+        (-0.0_f64).to_bits()
+    );
     assert_eq!(
         Decimal::from_f32(0.1).expect("finite").to_string(),
         "0.100000001490116119384765625"

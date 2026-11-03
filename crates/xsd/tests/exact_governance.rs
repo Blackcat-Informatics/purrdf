@@ -24,6 +24,25 @@ mod rational_float_factory;
 #[path = "support/rational_reciprocal.rs"]
 mod rational_reciprocal;
 
+#[path = "support/rational_float_rounding.rs"]
+mod rational_float_rounding;
+
+/// Count the public conversion while retaining only its complete scalar results.
+fn rational_float_rounding_preserves_bits_and_reports_allocations() {
+    for category in rational_float_rounding::CATEGORIES {
+        let fixture =
+            rational_float_rounding::Fixture::new(category, rational_float_factory::OPERATIONS);
+        let mut outputs = Vec::with_capacity(rational_float_factory::OPERATIONS);
+        let ((), allocation) = measured(|| fixture.run(&mut outputs));
+        fixture.validate(&outputs);
+        assert_eq!(allocation.retained_bytes, 0);
+        println!(
+            "rounding {category} operations={} {allocation:?}",
+            outputs.len()
+        );
+    }
+}
+
 /// Retain reciprocal results while measuring required native operand owners.
 fn rational_reciprocal_preserves_values_and_reports_allocations() {
     for category in rational_reciprocal::CATEGORIES {
@@ -1709,6 +1728,7 @@ fn canonical_decimal_reserves_one_exact_output_destination() {
 }
 
 purrdf_testkit::harness_main!(
+    rational_float_rounding_preserves_bits_and_reports_allocations,
     rational_reciprocal_preserves_values_and_reports_allocations,
     rational_float_factory_preserves_values_and_reports_allocations,
     admitted_datetime_copy_keeps_exact_values_and_shares_published_limbs,
