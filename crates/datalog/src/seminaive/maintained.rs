@@ -421,6 +421,11 @@ pub enum MaintenanceError<E = core::convert::Infallible> {
         /// Exact resulting weight before narrowing.
         weight: i128,
     },
+    /// Host input refers to a term reserved by the prepared transformation.
+    ReservedInputTerm {
+        /// Original conflicting lexical spelling.
+        term: String,
+    },
     /// The cumulative transaction work allowance refused its next native step.
     /// The original transaction remains pending and can resume with a larger allowance.
     WorkLimit {
@@ -447,6 +452,9 @@ impl<E: fmt::Display> fmt::Display for MaintenanceError<E> {
                 out,
                 "asserted multiplicity {weight} is outside 0..=i64::MAX"
             ),
+            Self::ReservedInputTerm { term } => {
+                write!(out, "host input uses reserved transformation term {term}")
+            }
             Self::Session(error) => error.fmt(out),
             Self::WorkLimit {
                 limit,
@@ -478,6 +486,7 @@ impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
         InitialIncomplete => "datalog-maintenance-initial-incomplete" {},
         Busy => "datalog-maintenance-busy" {},
         Multiplicity { weight } => "datalog-maintenance-multiplicity" { "weight" => Signed(*weight) },
+        ReservedInputTerm { term } => "datalog-maintenance-reserved-input-term" { "term" => Text(term) },
         WorkLimit { limit, consumed, needed } => "datalog-maintenance-work" {
             "limit" => Unsigned(*limit), "consumed" => Unsigned(*consumed), "needed" => Unsigned(*needed)
         },
@@ -732,6 +741,7 @@ pub struct Maintained<
     prepared: bool,
     initial: initial::Frame<D, N>,
     initial_work: u128,
+    reserved_input_names: &'r [String],
     // Rust destroys fields in declaration order. The original grant must outlive
     // the session, every pending frame, the result and their dependent payloads.
     storage: storage::Storage<A>,
@@ -741,6 +751,38 @@ pub(super) type ReleaseTerm<D> = fn(
     &mut D,
     <D as TermDictionary>::Id,
 ) -> Result<(), DictionaryError<<D as TermDictionary>::Error>>;
+
+fn validate_input_names<D: TermDictionary, const N: usize>(
+    dictionary: &D,
+    terms: [DictionaryTerm<'_, D::Id>; N],
+    names: &[String],
+) -> Result<(), MaintenanceError<D::Error>> {
+    if names.is_empty() {
+        return Ok(());
+    }
+    for term in terms {
+        let lexical = term
+            .lexical(dictionary)
+            .map_err(|error| MaintenanceError::Failed(EvalError::Source(error)))?;
+        let surface = lexical.as_ref();
+        if surface
+            .strip_prefix('<')
+            .and_then(|iri| iri.strip_suffix('>'))
+            .is_some_and(|iri| {
+                names
+                    .binary_search_by(|name| name.as_str().cmp(iri))
+                    .is_ok()
+            })
+        {
+            return Err(MaintenanceError::ReservedInputTerm {
+                term: surface.to_owned(),
+            });
+        }
+    }
+    dictionary
+        .check_read()
+        .map_err(|error| MaintenanceError::Failed(EvalError::Source(error)))
+}
 
 impl<M, S: Admission, D: TermDictionary, const N: usize, A: Admission> fmt::Debug
     for Maintained<'_, M, S, D, N, A>
@@ -851,6 +893,7 @@ where
             prepared: false,
             initial: initial::Frame::default(),
             initial_work: 0,
+            reserved_input_names: &[],
             storage,
         })
     }
@@ -1041,6 +1084,7 @@ where
             .state
             .as_mut()
             .expect("maintenance retains its model");
+        validate_input_names(state.rel.interner(), terms, self.reserved_input_names)?;
         let before = self.storage.live();
         let reserved = self.storage.with_memory(|memory| {
             state
@@ -1191,6 +1235,12 @@ where
         Ok(())
     }
 
+    /// Prepared transformations keep their private names out of host input.
+    pub(crate) fn with_reserved_input_names(mut self, names: &'r [String]) -> Self {
+        self.reserved_input_names = names;
+        self
+    }
+
     /// Metadata work admitted for the current or most recently prepared batch.
     pub const fn preparation_work(&self) -> u128 {
         self.preparation_work
@@ -1241,6 +1291,7 @@ where
             levels: self.levels,
             weights: &mut self.weights,
             weights_bytes: &mut self.weights_bytes,
+            reserved_input_names: self.reserved_input_names,
             state: self
                 .session
                 .state
@@ -1288,7 +1339,8 @@ where
             }),
             Err(error) => {
                 match &error {
-                    MaintenanceError::Multiplicity { .. } => {
+                    MaintenanceError::Multiplicity { .. }
+                    | MaintenanceError::ReservedInputTerm { .. } => {
                         let rejected = self.preparing.take().expect("rejected original batch");
                         self.retired_bytes = self
                             .retired_bytes
