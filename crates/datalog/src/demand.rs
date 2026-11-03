@@ -13,7 +13,9 @@
 //! program, including its internal demand facts, and all original input facts.
 //! The retained partial closure is private: it is complete only for the requested goal.
 
+mod maintained;
 mod stratified;
+pub use maintained::{DemandDelta, DemandDeltaResult, MaintainedDemand};
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -39,6 +41,8 @@ pub enum Unsupported {
     Guard,
     /// The requested goal must be positive.
     Negation,
+    /// Incremental demand maintenance currently admits positive programs only.
+    MaintenanceNegation,
     /// Immutable base reads belong to the scheduled evaluator.
     BaseRead,
     /// Every predicate must be a fixed IRI.
@@ -52,6 +56,7 @@ impl purrdf_hash::error::StructuredError for Unsupported {
         Head(form) => "datalog-demand-unsupported-head" { "form" => Record(form) },
         Guard => "datalog-demand-unsupported-guard" {},
         Negation => "datalog-demand-unsupported-negation" {},
+        MaintenanceNegation => "datalog-demand-unsupported-maintenance-negation" {},
         BaseRead => "datalog-demand-unsupported-base-read" {},
         Predicate => "datalog-demand-unsupported-predicate" {},
         UnboundVariable(variable) => "datalog-demand-unbound-variable" { "variable" => Text(variable) },
@@ -261,9 +266,12 @@ where
         return stratified::prepare(rules, goal, dictionary);
     }
     let descriptors = descriptors(rules, goal);
-    let names = names(&descriptors, rules, goal, dictionary, 0)?;
+    let mut names = names(&descriptors, rules, goal, dictionary, 0)?;
     let transformed = transform(rules, goal, &descriptors, &names);
     let executable = compile(transformed).map_err(DemandError::Compile)?;
+    // Ordinals are already embedded in the executable. Runtime namespace checks
+    // use the same inventory as an exact logarithmic lexical index.
+    names.sort_unstable();
     Ok(PreparedDemand {
         executable,
         goal: goal.clone(),
@@ -304,41 +312,74 @@ where
     /// # Errors
     /// Preserves dictionary lookup and read failures, including an empty answer.
     pub fn answers(&self) -> Result<Vec<[D::Id; N]>, D::Error> {
-        let dictionary = self.dictionary();
+        answers(self.evaluation.facts(), &self.goal)
+    }
+}
+
+struct GoalMatch<'a, I, const N: usize> {
+    terms: [&'a ClauseTerm; N],
+    constants: [Option<I>; N],
+}
+
+impl<'a, I: crate::dictionary::TermIdentity, const N: usize> GoalMatch<'a, I, N> {
+    fn new<D: TermDictionary<Id = I>>(
+        dictionary: &D,
+        goal: &'a ClauseAtom<N>,
+    ) -> Result<Option<Self>, D::Error> {
         dictionary.check_read()?;
-        let terms = self.goal.terms();
+        let terms = goal.terms();
         let mut constants = [None; N];
         for (at, term) in terms.iter().enumerate() {
             if let Some(surface) = term.surface() {
                 let Some(id) = dictionary.lookup_term(&surface)? else {
                     dictionary.check_read()?;
-                    return Ok(Vec::new());
+                    return Ok(None);
                 };
                 constants[at] = Some(id);
             }
         }
-        let mut answers = Vec::new();
-        for partition in self.evaluation.facts().partitions_for(constants) {
-            let bound = match (constants[0], constants[2]) {
-                (Some(subject), Some(object)) => Bound::Both(subject, object),
-                (Some(subject), None) => Bound::Subject(subject),
-                (None, Some(object)) => Bound::Object(object),
-                (None, None) => Bound::Any,
-            };
-            let mut rows = partition.select(bound);
-            while let Some((subject, object, _)) = rows.next() {
-                let row = partition.row(subject, object);
-                if terms.iter().enumerate().all(|(at, term)| {
-                    !term.is_var()
-                        || (0..at).all(|before| terms[before] != *term || row[before] == row[at])
-                }) {
-                    answers.push(row);
-                }
+        dictionary.check_read()?;
+        Ok(Some(Self { terms, constants }))
+    }
+
+    fn matches(&self, row: [I; N]) -> bool {
+        self.terms.iter().enumerate().all(|(at, term)| {
+            self.constants[at].is_none_or(|id| row[at] == id)
+                && (!term.is_var()
+                    || (0..at).all(|before| self.terms[before] != *term || row[before] == row[at]))
+        })
+    }
+}
+
+fn answers<D: TermDictionary, const N: usize>(
+    facts: &RelationStore<D, N>,
+    goal: &ClauseAtom<N>,
+) -> Result<Vec<[D::Id; N]>, D::Error>
+where
+    Arity<N>: StoreShape<N>,
+{
+    let dictionary = facts.interner();
+    let Some(matcher) = GoalMatch::new(dictionary, goal)? else {
+        return Ok(Vec::new());
+    };
+    let mut answers = Vec::new();
+    for partition in facts.partitions_for(matcher.constants) {
+        let bound = match (matcher.constants[0], matcher.constants[2]) {
+            (Some(subject), Some(object)) => Bound::Both(subject, object),
+            (Some(subject), None) => Bound::Subject(subject),
+            (None, Some(object)) => Bound::Object(object),
+            (None, None) => Bound::Any,
+        };
+        let mut rows = partition.select(bound);
+        while let Some((subject, object, _)) = rows.next() {
+            let row = partition.row(subject, object);
+            if matcher.matches(row) {
+                answers.push(row);
             }
         }
-        dictionary.check_read()?;
-        Ok(answers)
     }
+    dictionary.check_read()?;
+    Ok(answers)
 }
 
 /// Answer one positive, fixed-predicate triple or quad goal with demand propagation.

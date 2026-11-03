@@ -843,6 +843,14 @@ fn budgets_and_cancellation_return_no_partial_answer_owner() {
     });
 }
 
+#[derive(Debug)]
+struct Stopped;
+impl purrdf_datalog::stop::StopSignal for Stopped {
+    fn stopped(&self) -> bool {
+        true
+    }
+}
+
 fn governed<const N: usize>(
     rules: &[DlClause<N>],
     goal: &ClauseAtom<N>,
@@ -860,13 +868,6 @@ fn governed<const N: usize>(
             Err(DemandError::Evaluation(EvalError::BudgetExhausted { .. }))
         ));
     }
-    #[derive(Debug)]
-    struct Stopped;
-    impl purrdf_datalog::stop::StopSignal for Stopped {
-        fn stopped(&self) -> bool {
-            true
-        }
-    }
     let stopped = Stopped;
     assert!(matches!(
         evaluate_demanded(
@@ -882,3 +883,6 @@ fn governed<const N: usize>(
 
 #[path = "demand/stratified.rs"]
 mod stratified;
+
+#[path = "demand/maintained.rs"]
+mod maintained;

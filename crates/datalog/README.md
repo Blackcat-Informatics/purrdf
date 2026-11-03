@@ -65,6 +65,22 @@ is needed. Prepare again against the same source to choose a fresh namespace
 and accept the legitimate input. Execution checks compatibility again; a prepared artifact
 does not reserve caller vocabulary or claim snapshot continuity.
 
+For a positive fixed-predicate triple or quad program, `prepared.maintain` creates
+a `MaintainedDemand` borrowing that artifact and owning the original source.
+`maintain_in` also accepts supplemental native storage admission. Resume initial
+evaluation with `resume_until`; then admit input terms, construct an original
+signed `ChangeBatch`, call `begin`, and resume that transaction. The native engine
+retains its original watermark and admission through work, storage and stop pauses.
+`answers` and `delta` publish only complete matching goal rows and net membership
+changes. The transformed model stays private. Output vectors use resident storage.
+
+Generated transformation names are refused in every host-input position, by
+spelling or existing ID. A namespace refusal during transaction preparation leaves
+the preceding complete answers, delta and applied watermark available. All term
+positions are checked before `admit_terms` can intern any fresh spelling.
+Maintained demand currently refuses prepared stratified programs explicitly;
+their existing reusable complete evaluation remains available.
+
 ## Design commitments
 
 `seminaive::Maintained` owns a materialized model across signed base transactions.

@@ -46,6 +46,7 @@ where
     pub(super) levels: &'a [usize],
     pub(super) weights: &'a mut FastMap<[D::Id; N], i64>,
     pub(super) weights_bytes: &'a mut usize,
+    pub(super) reserved_input_names: &'a [String],
     pub(super) state: &'a FixpointState<D, N>,
 }
 
@@ -178,6 +179,11 @@ where
                     if !self.allow_unit(1, &mut allow) {
                         return Ok(false);
                     }
+                    super::validate_input_names(
+                        dictionary,
+                        terms.map(DictionaryTerm::Id),
+                        inputs.reserved_input_names,
+                    )?;
                     let weight = i128::from(inputs.weights.get(&terms).copied().unwrap_or(0))
                         + i128::from(delta);
                     if !(0..=i128::from(i64::MAX)).contains(&weight) {

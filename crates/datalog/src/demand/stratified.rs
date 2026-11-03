@@ -41,7 +41,7 @@ where
                 .expect("validation admitted every predicate as an IRI")
         })
         .collect();
-    let names = names(&descriptors, rules, goal, dictionary, predicates.len())?;
+    let mut names = names(&descriptors, rules, goal, dictionary, predicates.len())?;
     let shadows: BTreeMap<_, _> = predicates
         .into_iter()
         .map(str::to_owned)
@@ -51,6 +51,7 @@ where
     // Also compile the transformed program before seeding; neither source mutation
     // nor an executable is a substitute for native stratification.
     let executable = compile(transformed).map_err(DemandError::Compile)?;
+    names.sort_unstable();
     Ok(PreparedDemand {
         executable,
         goal: goal.clone(),

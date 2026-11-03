@@ -4,7 +4,7 @@
 use super::*;
 use purrdf_datalog::guard::Negation;
 
-fn input<const N: usize>(atoms: &[ClauseAtom<N>]) -> Store<N>
+pub(super) fn input<const N: usize>(atoms: &[ClauseAtom<N>]) -> Store<N>
 where
     Arity<N>: StoreShape<N>,
 {
