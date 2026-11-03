@@ -252,10 +252,12 @@ where
                         .resume(
                             &mut self.changes,
                             |(a, _), (b, _)| {
-                                dictionary.compare_rows(
-                                    &a.map(DictionaryTerm::Id),
-                                    &b.map(DictionaryTerm::Id),
-                                )
+                                dictionary
+                                    .compare_rows(
+                                        &a.map(DictionaryTerm::Id),
+                                        &b.map(DictionaryTerm::Id),
+                                    )
+                                    .map(|order| order.then_with(|| a.cmp(b)))
                             },
                             || allow(1),
                         )
@@ -460,9 +462,11 @@ where
                 }
                 Phase::ClosureVisit => {
                     let cost = if inputs.state.projection.is_some() {
-                        self.changes
-                            .len()
-                            .checked_add(1)
+                        let depth = usize::try_from(self.changes.len().bit_width())
+                            .map_err(|_| storage_error(StorageError::SizeOverflow))?;
+                        depth
+                            .checked_mul(2)
+                            .and_then(|probes| probes.checked_add(1))
                             .ok_or_else(|| storage_error(StorageError::SizeOverflow))?
                     } else {
                         1
@@ -493,11 +497,22 @@ where
                             )
                             .expect("every original batch multiplicity was validated")
                         });
-                    let weight = if source_terms == terms {
-                        self.changes
-                            .iter()
-                            .find(|(ids, _)| *ids == terms)
-                            .map_or(weight, |(_, weight)| *weight)
+                    let weight = if inputs.state.projection.is_some() && source_terms == terms {
+                        let range =
+                            purrdf_lex::walk::try_equal_range_by(&self.changes, |(ids, _)| {
+                                dictionary
+                                    .compare_rows(
+                                        &ids.map(DictionaryTerm::Id),
+                                        &terms.map(DictionaryTerm::Id),
+                                    )
+                                    .map(|order| order.then_with(|| ids.cmp(&terms)))
+                            })
+                            .map_err(source_error)?;
+                        if range.is_empty() {
+                            weight
+                        } else {
+                            self.changes[range.start].1
+                        }
                     } else {
                         weight
                     };

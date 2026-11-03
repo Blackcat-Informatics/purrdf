@@ -37,7 +37,6 @@ struct Member<I> {
     references: usize,
     pinned: bool,
     target: Option<I>,
-    name: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -63,6 +62,7 @@ where
     metadata: crate::store::MetadataPreparation<I, N>,
     members: OrderedTable<I, Member<I>>,
     inverse: OrderedTable<I, I>,
+    private_names: OrderedTable<String, ()>,
     internal_ids: OrderedTable<I, ()>,
     internal_cursor: usize,
     order: Vec<I>,
@@ -153,6 +153,7 @@ where
             metadata: crate::store::MetadataPreparation::default(),
             members: OrderedTable::default(),
             inverse: OrderedTable::default(),
+            private_names: OrderedTable::default(),
             order: Vec::new(),
             internal_ids: OrderedTable::default(),
             internal_cursor: 0,
@@ -214,19 +215,12 @@ where
             .references = references;
     }
     pub(crate) fn private_surface(&self, surface: &str) -> bool {
-        self.order.iter().any(|id| {
-            self.members
-                .get(id)
-                .and_then(|member| member.name.as_deref())
-                == Some(surface)
-        })
+        self.private_names
+            .get_by(|stored| surface.cmp(stored.as_str()))
+            .is_some()
     }
     pub(crate) fn input_scan_work(&self) -> Result<usize, StorageError> {
-        self.order
-            .len()
-            .checked_mul(N)
-            .and_then(|work| work.checked_add(1))
-            .ok_or(StorageError::SizeOverflow)
+        N.checked_add(1).ok_or(StorageError::SizeOverflow)
     }
     fn fixed_original<D: TermDictionary<Id = I>>(
         &self,
@@ -309,7 +303,6 @@ where
                     references: 0,
                     pinned: false,
                     target: None,
-                    name: None,
                 },
                 memory,
             )?;
@@ -350,6 +343,7 @@ where
             }
             reserve_ordered_in(&mut self.members, memory, &mut self.retired_bytes)?;
             reserve_ordered_in(&mut self.inverse, memory, &mut self.retired_bytes)?;
+            reserve_ordered_in(&mut self.private_names, memory, &mut self.retired_bytes)?;
             if self.pending_name.is_none() {
                 let lexical = rel
                     .interner()
@@ -381,6 +375,15 @@ where
                 self.pending_name = Some(name);
             }
             let name = self.pending_name.as_deref().expect("retained candidate");
+            if self.private_surface(name) {
+                self.candidate = self
+                    .candidate
+                    .checked_add(1)
+                    .ok_or(StorageError::SizeOverflow)?;
+                self.complete_unit();
+                self.release_name(memory)?;
+                continue;
+            }
             if self.pending_target.is_none() {
                 if let Some(existing) = rel
                     .interner()
@@ -445,12 +448,17 @@ where
                 continue;
             }
             self.inverse.insert(target, original, memory)?;
+            let previous = self.private_names.insert(
+                self.pending_name.take().expect("minted private name"),
+                (),
+                memory,
+            )?;
+            assert!(previous.is_none(), "a minted private name has one owner");
             let member = self
                 .members
                 .get_mut(&original)
                 .expect("original identity retained");
             member.target = Some(target);
-            member.name = self.pending_name.take();
             self.pending_target = None;
             self.candidate = 0;
             self.complete_unit();
