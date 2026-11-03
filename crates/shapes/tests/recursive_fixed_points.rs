@@ -979,7 +979,11 @@ paper_cases! {
 fn recursive_work_limits_are_typed_before_a_partial_report() {
     let dataset = parse_turtle_to_dataset(&format!("{PREFIXES} :a :p :a ."), None).unwrap();
     let data = ShaclData::new(Arc::clone(&dataset), dataset, None);
-    for body in [EXISTENTIAL_SELF, NAMED_CONFORMANCE_SELF] {
+    for body in [
+        EXISTENTIAL_SELF,
+        NAMED_CONFORMANCE_SELF,
+        ":S a sh:NodeShape ; sh:nodeByExpression :S .",
+    ] {
         let source = format!("{PREFIXES} {body} :S sh:targetNode :a .");
         for semantics in [RecursionSemantics::Lfp, RecursionSemantics::Gfp] {
             for (max_pairs, max_iterations, expected) in [
@@ -1069,7 +1073,7 @@ fn direct_conformance_and_reports_take_explicit_recursion() {
 }
 
 /// The expression asks the original target through every native consumer. Its
-/// false report remains an expression violation at the original source/focus;
+/// false report retains its native constraint component and original source/focus;
 /// restoring a product must retain the request and the same report bytes.
 #[test]
 fn named_conformance_keeps_original_reports_through_product_restore() {
@@ -1086,31 +1090,51 @@ fn named_conformance_keeps_original_reports_through_product_restore() {
     let fresh_dataset =
         parse_turtle_to_dataset(&format!("{PREFIXES} :a :fresh :other ."), None).unwrap();
     let fresh_data = ShaclData::new(Arc::clone(&fresh_dataset), Arc::clone(&fresh_dataset), None);
-    for (source, reads_p) in [
-        (NAMED_CONFORMANCE_SELF, false),
+    for (source, reads_p, component) in [
+        (
+            NAMED_CONFORMANCE_SELF,
+            false,
+            purrdf_shapes::model::sh::EXPRESSION_CONSTRAINT_COMPONENT,
+        ),
         (
             ":S a sh:NodeShape ; sh:expression [ shnex:conformsToShape ( sh:this [ shnex:if true ; shnex:then :S ; shnex:else :Missing ] ) ] .",
             false,
+            purrdf_shapes::model::sh::EXPRESSION_CONSTRAINT_COMPONENT,
         ),
         (
             ":S a sh:NodeShape ; sh:expression [ shnex:conformsToShape ( [ shnex:pathValues :p ] [ shnex:if true ; shnex:then :T ; shnex:else :Missing ] ) ] . :T a sh:NodeShape ; sh:node :T ; sh:hasValue :b ; sh:property [ sh:path :p ; sh:minCount 1 ] .",
             true,
+            purrdf_shapes::model::sh::EXPRESSION_CONSTRAINT_COMPONENT,
         ),
         (
             ":S a sh:NodeShape ; sh:expression [ shnex:conformsToShape ( [ shnex:pathValues :p ] _:t ) ] . _:t sh:expression [ shnex:conformsToShape ( sh:this _:t ) ] ; sh:hasValue :b ; sh:property [ sh:path :p ; sh:minCount 1 ] .",
             true,
+            purrdf_shapes::model::sh::EXPRESSION_CONSTRAINT_COMPONENT,
         ),
         (
             ":S a sh:NodeShape ; sh:expression [ shnex:conformsToShape ( [ shnex:var \"value\" ] _:t ) ] . _:t sh:expression [ shnex:conformsToShape ( sh:this _:t ) ] ; sh:property [ sh:path :p ; sh:minCount 1 ] .",
             true,
+            purrdf_shapes::model::sh::EXPRESSION_CONSTRAINT_COMPONENT,
         ),
         (
             ":S a sh:NodeShape ; sh:expression [ shnex:conformsToShape ( sh:this _:t ) ] . _:t sh:expression [ shnex:conformsToShape ( sh:this _:t ) ] ; sh:property [ sh:path :p ; sh:minCount 1 ] .",
             true,
+            purrdf_shapes::model::sh::EXPRESSION_CONSTRAINT_COMPONENT,
         ),
         (
             ":S a sh:NodeShape ; sh:expression [ shnex:conformsToShape ( sh:this _:t ) ] . _:t sh:expression [ shnex:conformsToShape ( sh:this :S ) ] ; sh:property [ sh:path :p ; sh:minCount 1 ] .",
             true,
+            purrdf_shapes::model::sh::EXPRESSION_CONSTRAINT_COMPONENT,
+        ),
+        (
+            ":S a sh:NodeShape ; sh:nodeByExpression :S .",
+            false,
+            purrdf_shapes::model::sh::NODE_BY_EXPRESSION_CONSTRAINT_COMPONENT,
+        ),
+        (
+            ":S a sh:NodeShape ; sh:nodeByExpression [ shnex:concat ( ( :T :T ) [ sh:union ( :T [ shnex:if [ shnex:exists sh:this ] ; shnex:then :T ; shnex:else :Missing ] ) ] ) ] . :T a sh:NodeShape ; sh:nodeByExpression :S .",
+            false,
+            purrdf_shapes::model::sh::NODE_BY_EXPRESSION_CONSTRAINT_COMPONENT,
         ),
     ] {
         let unselected = parse_shapes_with_options(
@@ -1144,6 +1168,20 @@ fn named_conformance_keeps_original_reports_through_product_restore() {
                     .unwrap(),
                 expected
             );
+            if component == purrdf_shapes::model::sh::NODE_BY_EXPRESSION_CONSTRAINT_COMPONENT {
+                let foreign = NamedNode::from("http://example.org/foreign").into_term();
+                assert_eq!(
+                    conforms_with_recursion(
+                        &data,
+                        &foreign,
+                        &root,
+                        request.recursion.as_ref().unwrap()
+                    )
+                    .unwrap(),
+                    expected,
+                    "a foreign value uses the same finite shape outputs"
+                );
+            }
             let direct = validate_shape_with_recursion(
                 &data,
                 &focus,
@@ -1158,10 +1196,7 @@ fn named_conformance_keeps_original_reports_through_product_restore() {
                 assert_eq!(result.source_shape, id);
                 assert_eq!(result.focus_node, focus);
                 assert_eq!(result.value.as_ref(), Some(&focus));
-                assert_eq!(
-                    result.source_constraint_component.as_str(),
-                    purrdf_shapes::model::sh::EXPRESSION_CONSTRAINT_COMPONENT
-                );
+                assert_eq!(result.source_constraint_component.as_str(), component);
             }
             let expected_bytes = validate_with(&data, &shapes)
                 .unwrap()
@@ -1278,13 +1313,20 @@ fn named_conformance_charges_callback_pairs_to_the_active_run() {
         :T a sh:NodeShape ; sh:expression [ shnex:conformsToShape ( sh:this :S ) ] .");
     let dataset = parse_turtle_to_dataset(&format!("{PREFIXES} :a :p :a ."), None).unwrap();
     let data = ShaclData::new(Arc::clone(&dataset), dataset, None);
-    for (target, focus) in [
-        (":T", "sh:this"),
-        ("_:t", "sh:this"),
-        (":T", ":a"),
-        ("_:t", "[ shnex:pathValues :p ]"),
+    for (target, focus, native_constraint) in [
+        (":T", "sh:this", false),
+        ("_:t", "sh:this", false),
+        (":T", ":a", false),
+        ("_:t", "[ shnex:pathValues :p ]", false),
+        (":T", "sh:this", true),
     ] {
-        let source = source.replace(":T", target).replace("sh:this", focus);
+        let source = if native_constraint {
+            format!(
+                "{PREFIXES} :S a sh:NodeShape ; sh:targetNode :a ; sh:nodeByExpression :T . :T a sh:NodeShape ; sh:nodeByExpression :S ."
+            )
+        } else {
+            source.replace(":T", target).replace("sh:this", focus)
+        };
         for semantics in [RecursionSemantics::Lfp, RecursionSemantics::Gfp] {
             let no_rounds = ValidationOptions::default().with_recursion(RecursionOptions {
                 semantics,
@@ -1574,6 +1616,33 @@ fn pure_conformance_focus_keeps_property_results_and_cardinality() {
                 .contains("node argument must yield at most one node, got 2"),
             "{error}"
         );
+        let shapes = parse_shapes_with_options(
+            &format!("{PREFIXES} :S a sh:NodeShape ; sh:targetNode :a ; sh:property [ sh:path :p ; sh:nodeByExpression [ shnex:concat ( :T :T ) ; sh:message \"selected shape\" ] ] . :T a sh:NodeShape ; sh:nodeByExpression :T ; sh:hasValue :b ."),
+            None, None, None, &ShapesImports::new(), &options(semantics),
+        ).unwrap();
+        let dataset = parse_turtle_to_dataset(&format!("{PREFIXES} :a :p :b ."), None).unwrap();
+        let data = ShaclData::new(Arc::clone(&dataset), dataset, None);
+        let report = validate_with(&data, &shapes).unwrap();
+        let expected = semantics == RecursionSemantics::Gfp;
+        assert_eq!(report.conforms, expected);
+        assert_eq!(
+            report.results.len(),
+            usize::from(!expected),
+            "duplicate output shapes are judged once"
+        );
+        if let Some(result) = report.results.first() {
+            assert_eq!(result.focus_node, a);
+            assert_eq!(result.value.as_ref(), Some(&b));
+            assert_eq!(
+                result.result_path.as_ref(),
+                Some(&NamedNode::from("http://example.org/p").into_term())
+            );
+            assert_eq!(
+                result.source_constraint_component.as_str(),
+                purrdf_shapes::model::sh::NODE_BY_EXPRESSION_CONSTRAINT_COMPONENT
+            );
+            assert_eq!(result.messages[0].value(), "selected shape");
+        }
     }
 }
 
@@ -1635,6 +1704,39 @@ fn computed_conformance_targets_preserve_lazy_shape_errors() {
                     actual.unwrap().conforms,
                     node == "sh:this" && semantics == RecursionSemantics::Gfp,
                     "{shape}"
+                );
+            }
+        }
+    }
+    for (producer, error) in [
+        ("[]", None),
+        (
+            "[ shnex:if true ; shnex:then :Missing ; shnex:else :T ]",
+            Some("is not a shape of this shapes graph"),
+        ),
+    ] {
+        let source = format!(
+            "{PREFIXES} :S a sh:NodeShape ; sh:targetNode :a ; sh:nodeByExpression {producer} . :T a sh:NodeShape ."
+        );
+        for semantics in [RecursionSemantics::Lfp, RecursionSemantics::Gfp] {
+            let shapes = parse_shapes_with_options(
+                &source,
+                None,
+                None,
+                None,
+                &ShapesImports::new(),
+                &options(semantics),
+            )
+            .unwrap();
+            let dataset = parse_turtle_to_dataset(&format!("{PREFIXES} :a :p :a ."), None).unwrap();
+            let data = ShaclData::new(Arc::clone(&dataset), dataset, None);
+            let actual = validate_with(&data, &shapes);
+            if let Some(expected) = error {
+                assert!(actual.unwrap_err().to_string().contains(expected));
+            } else {
+                assert!(
+                    actual.unwrap().conforms,
+                    "no produced shapes is vacuously conforming"
                 );
             }
         }
@@ -2590,7 +2692,7 @@ fn selected_entries_refuse_unproved_original_scopes() {
             false,
         ),
         (
-            "sh:nodeByExpression :T",
+            "sh:nodeByExpression [ shnex:pathValues :p ]",
             purrdf_shapes::model::sh::NODE_BY_EXPRESSION,
             true,
         ),

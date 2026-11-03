@@ -123,29 +123,40 @@ pub(crate) fn original_conformance<'a>(
     let NodeExpr::ConformsToShape { node, shape } = expression else {
         return Ok(None);
     };
-    if !pure_focus(node)? {
+    if !pure_focus(node, 2)? {
         return Ok(None);
     }
     let proved = match shape {
         ShapeArg::Named(shape) => original_reference(shape, owner).is_some(),
-        ShapeArg::Computed { expr, shapes } => {
-            owner.is_some_and(|owner| Weak::ptr_eq(shapes, &Arc::downgrade(&owner.index)))
-                && pure_focus(expr)?
-                && crate::expression::named_outputs::visit_terms(expr, |_| {
-                    Ok::<(), crate::error::ShapesError>(())
-                })?
-        }
+        ShapeArg::Computed { expr, shapes } => original_shape_outputs(expr, shapes, owner, 2)?,
     };
     Ok(proved.then_some(shape))
 }
 
+/// Every possible shape output is enumerated without inspecting conformance,
+/// and is looked up in this original model's index when selected at runtime.
+pub(crate) fn original_shape_outputs(
+    expression: &NodeExpr,
+    index: &ShapeIndexRef,
+    owner: Option<&Arc<ModelOwner>>,
+    depth: u32,
+) -> Result<bool, crate::error::ShapesError> {
+    Ok(
+        owner.is_some_and(|owner| Weak::ptr_eq(index, &Arc::downgrade(&owner.index)))
+            && pure_focus(expression, depth)?
+            && crate::expression::named_outputs::visit_terms(expression, |_| {
+                Ok::<(), crate::error::ShapesError>(())
+            })?,
+    )
+}
+
 /// Check every child, independently of which branch a particular focus takes.
-/// Depth includes the enclosing conformance expression, just as evaluation does.
-fn pure_focus(expression: &NodeExpr) -> Result<bool, crate::error::ShapesError> {
+/// The starting depth includes any enclosing conformance expression.
+fn pure_focus(expression: &NodeExpr, depth: u32) -> Result<bool, crate::error::ShapesError> {
     let mut resident = Resident;
     let mut memory = Memory::new(&mut resident);
     let mut pending: WorkList<(&NodeExpr, u32), 8> = WorkList::new();
-    pending.try_push_admitted((expression, 2), &mut memory)?;
+    pending.try_push_admitted((expression, depth), &mut memory)?;
     while let Some((expression, depth)) = pending.pop() {
         if depth > crate::expression::MAX_NODE_EXPR_DEPTH {
             return Err(crate::error::ProcessorFailure::ExpressionDepth {

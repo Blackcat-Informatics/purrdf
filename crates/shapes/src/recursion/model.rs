@@ -690,6 +690,19 @@ impl<'a> ModelWalk<'a, WalkError> for Builder<'a> {
         result
     }
     fn constraint(&mut self, constraint: &'a Constraint) -> Result<(), WalkError> {
+        if let Constraint::NodeByExpression { expr, shapes, .. } = constraint
+            && super::closed::original_shape_outputs(expr, shapes, self.owner, 1)
+                .map_err(WalkError::Shape)?
+        {
+            return self
+                .indexed_targets(
+                    expr,
+                    shapes,
+                    sh::NODE_BY_EXPRESSION,
+                    RecursionPolarity::Positive,
+                )
+                .map(|_| ());
+        }
         if let Constraint::Expression { expr, .. } = constraint
             && let Some(target) =
                 super::closed::original_conformance(expr, self.owner).map_err(WalkError::Shape)?
