@@ -181,6 +181,56 @@ simply not narrated here:
   setup-subtracted estimate that still includes differences in harness work.
   Use acknowledged in-workload counter windows for acceptance comparisons.
 
+The exact benchmark's `xsd_exact_float_factory/{fractional,integral,extreme}`
+rows exercise the public `Rational::from_f64` factory. Each row constructs
+8,192 results from sixteen fixed inputs. Across the fixtures, these include
+positive binary exponents, both zero signs and the subnormal/normal boundaries.
+Expected canonical values
+come through the exact decimal constructor outside measurement. The elapsed-time
+rows include destruction of the previous iteration's outputs. Native instruction
+windows exclude destruction: an empty output vector is reserved beforehand and
+every result remains alive until counter close, full comparison and output to
+the raw sample log. Three guarded warm-up calls precede each window.
+
+On Linux, the following command collects ten fresh-process instruction samples
+for each row and an empty control using the shared acknowledged counter protocol.
+The report directory must be new and absolute. Raw counters, coverage metadata
+and complete result logs remain in its sample directories; counts are not reduced
+by subtracting the empty control. The separate allocation command uses the same
+fixtures and retention boundary under the counting allocator, which is absent
+from the instruction executable.
+
+```bash
+cargo bench -p purrdf-xsd --bench exact -- --float-factory-instructions "$PWD/target/float-factory-before"
+cargo test --release -p purrdf-xsd --test exact_governance rational_float_factory_preserves_values_and_reports_allocations -- --exact --nocapture
+```
+
+Keep the benchmark source, fixtures and compilation profile identical between
+the before and after measurements. These factory counts establish no query or
+geographic performance result; geographic callers already use the canonical
+binary constructor.
+
+On native x86-64 Linux with `rustc 1.101.0-nightly`, the release-derived bench
+profile and ten fresh-process instruction samples per row gave the following
+medians. The before factory reduced dyadic fractions with GCD; the after factory
+uses the canonical binary constructor, which keeps denominator one directly for
+integral values. Allocation counts come from the separate release allocation
+case, with all 8,192 outputs retained in both measurements.
+The allocation window covers factory payloads; fixture data and the output
+vector's storage are prepared beforehand.
+
+| Fixture | Instructions/value before | After | Allocations/batch before | After |
+| --- | ---: | ---: | ---: | ---: |
+| Fractional | 768.5547 | 632.0552 | 0 | 0 |
+| Integral | 601.6075 | 584.6097 | 2,048 | 2,048 |
+| Extreme | 4,138.3177 | 763.5034 | 15,360 | 8,192 |
+
+The largest empty control was 552 instructions, below 0.012% of the smallest
+workload sample, with no subtraction. Extreme inputs' requested bytes fell from
+2,048,000 to 1,081,344 per batch; their retained bytes and peak working bytes
+both stayed at 1,081,344. Integral inputs retained and requested 98,304 bytes per
+batch; fractional inputs required no heap allocation.
+
 The small decimal parse/render rows include canonical text's reservation of its
 complete prepared length. The public allocation control
 `canonical_decimal_reserves_one_exact_output_destination` in

@@ -18,6 +18,28 @@ use std::hint::black_box;
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
 
+#[path = "support/rational_float_factory.rs"]
+mod rational_float_factory;
+
+/// Keep every canonical factory result alive while measuring its native owners.
+fn rational_float_factory_preserves_values_and_reports_allocations() {
+    for category in rational_float_factory::CATEGORIES {
+        let fixture = rational_float_factory::Fixture::new(category);
+        let mut outputs = Vec::with_capacity(rational_float_factory::OPERATIONS);
+        let ((), allocation) = measured(|| fixture.run(&mut outputs));
+        fixture.validate(&outputs);
+        if category == "fractional" {
+            // These coefficients and denominators fit the compact Integer owner.
+            assert_eq!(allocation.allocations, 0);
+            assert_eq!(allocation.retained_bytes, 0);
+        }
+        println!(
+            "float_factory {category} operations={} {allocation:?}",
+            outputs.len()
+        );
+    }
+}
+
 /// Bytes every estimate may be off by in absolute terms: the handful of small
 /// vectors an operation allocates whatever its size.
 const SLACK: i64 = 4096;
@@ -1666,6 +1688,7 @@ fn canonical_decimal_reserves_one_exact_output_destination() {
 }
 
 purrdf_testkit::harness_main!(
+    rational_float_factory_preserves_values_and_reports_allocations,
     admitted_datetime_copy_keeps_exact_values_and_shares_published_limbs,
     admitted_datetime_refusal_precedes_any_copy_allocation,
     full_native_parser_preserves_all_value_families_and_original_heap_owners,

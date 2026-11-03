@@ -39,12 +39,15 @@
 
 use std::str::FromStr;
 
-use purrdf_testkit::bench::{Bench, Throughput, bench_group, bench_main, black_box};
+use purrdf_testkit::bench::{Bench, Throughput, bench_group, black_box};
 use purrdf_testkit::rng::splitmix64_next;
 use purrdf_xsd::bigint::BigInt;
 use purrdf_xsd::exact::{Decimal, DivisionPolicy, Integer, Rounding};
 use purrdf_xsd::numeric::parse_decimal;
 use purrdf_xsd::{XsdDatatype, XsdValue, numeric_add, numeric_div, numeric_mul};
+
+#[path = "../tests/support/rational_float_factory.rs"]
+mod rational_float_factory;
 
 /// Operations per small-path routine.
 const SMALL_OPS: usize = 1024;
@@ -429,11 +432,107 @@ fn bench_fine_products(c: &mut Bench) {
     group.finish();
 }
 
+fn bench_float_factory(c: &mut Bench) {
+    let mut group = c.benchmark_group("xsd_exact_float_factory");
+    group.throughput(Throughput::Elements(
+        rational_float_factory::OPERATIONS as u64,
+    ));
+    for category in rational_float_factory::CATEGORIES {
+        let fixture = rational_float_factory::Fixture::new(category);
+        let mut outputs = Vec::with_capacity(rational_float_factory::OPERATIONS);
+        group.bench_function(category, |b| {
+            b.iter(|| {
+                outputs.clear();
+                fixture.run(&mut outputs);
+            });
+        });
+        // Filtering can leave this row unexecuted.
+        if !outputs.is_empty() {
+            fixture.validate(&outputs);
+        }
+    }
+    group.finish();
+}
+
+#[cfg(target_os = "linux")]
+fn float_factory_sample(category: &str) {
+    use purrdf_testkit::bench::counter::{CounterCommand, CounterControl};
+    let empty = category == "empty";
+    let fixture = rational_float_factory::Fixture::new(if empty { "integral" } else { category });
+    let mut outputs = Vec::with_capacity(rational_float_factory::OPERATIONS);
+    for _ in 0..3 {
+        fixture.run(&mut outputs);
+        fixture.validate(&outputs);
+        outputs.clear();
+    }
+    let mut counter = CounterControl::required().expect("acknowledged instruction counter");
+    counter
+        .command(CounterCommand::Enable)
+        .expect("enable counter");
+    if !empty {
+        fixture.run(&mut outputs);
+    }
+    counter
+        .command(CounterCommand::Disable)
+        .expect("disable counter");
+    if !empty {
+        fixture.validate(&outputs);
+    }
+    // Every result survives counter close and is saved in the raw sample log.
+    for (index, value) in outputs.iter().enumerate() {
+        println!("{index} {value}");
+    }
+    println!("validated category={category} outputs={}", outputs.len());
+}
+
+#[cfg(target_os = "linux")]
+fn collect_float_factory(directory: &std::path::Path) {
+    use purrdf_testkit::bench::counter::collect_instructions;
+    std::fs::create_dir(directory).expect("new instruction report directory");
+    let executable = std::env::current_exe().expect("benchmark executable");
+    for category in ["empty", "fractional", "integral", "extreme"] {
+        for sample in 0..10 {
+            let raw = directory.join(format!("{category}-{sample}"));
+            let count = collect_instructions(
+                &executable,
+                &["--float-factory-sample".into(), category.into()],
+                &raw,
+            )
+            .expect("complete instruction sample; inspect retained raw receipts on failure");
+            println!("{category} {sample} {}", count.instructions);
+        }
+    }
+}
+
 bench_group!(
     benches,
     bench_small,
     bench_growth,
     bench_karatsuba,
-    bench_fine_products
+    bench_fine_products,
+    bench_float_factory
 );
-bench_main!(benches);
+
+fn main() -> std::process::ExitCode {
+    #[cfg(target_os = "linux")]
+    {
+        let args: Vec<_> = std::env::args()
+            .skip(1)
+            .filter(|arg| arg != "--bench")
+            .collect();
+        match args.first().map(String::as_str) {
+            Some("--float-factory-sample") => {
+                assert_eq!(args.len(), 2, "sample requires a category");
+                float_factory_sample(&args[1]);
+                return std::process::ExitCode::SUCCESS;
+            }
+            Some("--float-factory-instructions") => {
+                assert_eq!(args.len(), 2, "collection requires a new report directory");
+                collect_float_factory(std::path::Path::new(&args[1]));
+                return std::process::ExitCode::SUCCESS;
+            }
+            _ => {}
+        }
+    }
+    purrdf_testkit::bench::main(option_env!("CARGO_TARGET_TMPDIR"), &[benches])
+}
