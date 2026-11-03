@@ -15,13 +15,13 @@
 
 /// What a plain scalar denotes.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum Plain {
+pub(crate) enum Plain<'a> {
     /// `null`.
     Null,
     /// A boolean.
     Bool(bool),
     /// A finite number, as a JSON number lexeme.
-    Number(String),
+    Number(NumberText<'a>),
     /// `.inf`, `-.inf` or `.nan`, which JSON cannot hold.
     NonFinite,
     /// Text.
@@ -57,8 +57,68 @@ fn radix_value(digits: &str, radix: u32) -> Option<u128> {
     Some(value)
 }
 
+/// A recognized number's borrowed spelling plan. Classification allocates
+/// nothing; native materialization uses the caller's admitted account.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum NumberText<'a> {
+    Borrowed(&'a str),
+    Radix {
+        negative: bool,
+        magnitude: u128,
+    },
+    Float {
+        negative: bool,
+        integer: &'a str,
+        fraction: Option<&'a str>,
+        exponent: &'a str,
+    },
+}
+impl NumberText<'_> {
+    pub(crate) fn is_integer(&self) -> bool {
+        match self {
+            Self::Borrowed(text) => !text.bytes().any(|byte| matches!(byte, b'.' | b'e' | b'E')),
+            Self::Radix { .. } => true,
+            Self::Float {
+                fraction, exponent, ..
+            } => fraction.is_none() && exponent.is_empty(),
+        }
+    }
+}
+impl core::fmt::Display for NumberText<'_> {
+    fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Borrowed(text) => out.write_str(text),
+            Self::Radix {
+                negative,
+                magnitude,
+            } => {
+                if *negative {
+                    out.write_str("-")?;
+                }
+                magnitude.fmt(out)
+            }
+            Self::Float {
+                negative,
+                integer,
+                fraction,
+                exponent,
+            } => {
+                if *negative {
+                    out.write_str("-")?;
+                }
+                out.write_str(if integer.is_empty() { "0" } else { integer })?;
+                if let Some(fraction) = fraction {
+                    out.write_str(".")?;
+                    out.write_str(if fraction.is_empty() { "0" } else { fraction })?;
+                }
+                out.write_str(exponent)
+            }
+        }
+    }
+}
+
 /// An integer spelling's JSON lexeme.
-fn integer(scalar: &str) -> Option<String> {
+fn integer(scalar: &str) -> Option<NumberText<'_>> {
     let (negative, unsigned) = match scalar.as_bytes().first() {
         Some(b'-') => (true, &scalar[1..]),
         Some(b'+') => (false, &scalar[1..]),
@@ -78,24 +138,30 @@ fn integer(scalar: &str) -> Option<String> {
             }
             if negative {
                 // A JSON-grammatical negative decimal keeps its spelling.
-                return Some(scalar.to_owned());
+                return Some(NumberText::Borrowed(scalar));
             }
             if !scalar.starts_with('+') {
-                return Some(scalar.to_owned());
+                return Some(NumberText::Borrowed(scalar));
             }
             radix_value(unsigned, 10)?
         }
     };
     if negative {
-        (magnitude <= 1_u128 << 127).then(|| format!("-{magnitude}"))
+        (magnitude <= 1_u128 << 127).then_some(NumberText::Radix {
+            negative,
+            magnitude,
+        })
     } else {
-        Some(magnitude.to_string())
+        Some(NumberText::Radix {
+            negative,
+            magnitude,
+        })
     }
 }
 
 /// A core-schema decimal float spelling's JSON lexeme:
 /// `[-+]? ( \. [0-9]+ | [0-9]+ ( \. [0-9]* )? ) ( [eE] [-+]? [0-9]+ )?`.
-fn float(scalar: &str) -> Option<String> {
+fn float(scalar: &str) -> Option<NumberText<'_>> {
     let bytes = scalar.as_bytes();
     let mut at = 0;
     let negative = match bytes.first() {
@@ -144,26 +210,16 @@ fn float(scalar: &str) -> Option<String> {
     if end != bytes.len() {
         return None;
     }
-    let integer_part = integer_part.trim_start_matches('0');
-    let mut lexeme = String::with_capacity(scalar.len() + 2);
-    if negative {
-        lexeme.push('-');
-    }
-    lexeme.push_str(if integer_part.is_empty() {
-        "0"
-    } else {
-        integer_part
-    });
-    if bytes[int_end..].first() == Some(&b'.') {
-        lexeme.push('.');
-        lexeme.push_str(if fraction.is_empty() { "0" } else { fraction });
-    }
-    lexeme.push_str(exponent);
-    Some(lexeme)
+    Some(NumberText::Float {
+        negative,
+        integer: integer_part.trim_start_matches('0'),
+        fraction: (bytes[int_end..].first() == Some(&b'.')).then_some(fraction),
+        exponent,
+    })
 }
 
 /// What the untagged plain scalar `scalar` denotes.
-pub(crate) fn resolve(scalar: &str) -> Plain {
+pub(crate) fn resolve(scalar: &str) -> Plain<'_> {
     match scalar {
         "" | "~" | "null" | "Null" | "NULL" => return Plain::Null,
         "true" | "True" | "TRUE" => return Plain::Bool(true),
@@ -185,5 +241,5 @@ pub(crate) fn resolve(scalar: &str) -> Plain {
 
 /// Whether a string must be quoted to read back as a string.
 pub(crate) fn needs_quotes(text: &str) -> bool {
-    resolve(text) != Plain::String || digits_but_not_number(text)
+    !matches!(resolve(text), Plain::String) || digits_but_not_number(text)
 }
