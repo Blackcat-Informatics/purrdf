@@ -20,6 +20,7 @@ pub(super) enum PayloadError {
 #[derive(Debug)]
 pub(super) enum PayloadCause {
     Codec(CodecError),
+    Stream(purrdf_hash::error::IoFailure),
     MissingCatalog(Value),
     TransformedNotBytes,
     BlobNotBytes,
@@ -43,6 +44,55 @@ impl From<CodecError> for PayloadError {
     }
 }
 
+impl From<std::io::Error> for PayloadError {
+    fn from(error: std::io::Error) -> Self {
+        let class = stream_classification(&error);
+        classified(PayloadCause::Stream(error.into()), class)
+    }
+}
+
+impl From<DecodeError> for PayloadError {
+    fn from(error: DecodeError) -> Self {
+        let class = stream_classification(&error);
+        classified(PayloadCause::Cbor(error), class)
+    }
+}
+
+fn stream_classification(
+    error: &(dyn std::error::Error + 'static),
+) -> (bool, Option<&'static str>) {
+    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(error);
+    let mut budget = false;
+    let mut unavailable = None;
+    while let Some(error) = source {
+        match error.downcast_ref::<CodecError>() {
+            Some(CodecError::Limit { .. }) => {
+                budget = true;
+                break;
+            }
+            Some(CodecError::Unavailable { reason, .. }) => {
+                unavailable = Some(*reason);
+                break;
+            }
+            _ => source = error.source(),
+        }
+    }
+    (budget, unavailable)
+}
+
+fn classified(
+    detail: PayloadCause,
+    (budget, unavailable): (bool, Option<&'static str>),
+) -> PayloadError {
+    if budget {
+        PayloadError::Budget(detail)
+    } else if let Some(reason) = unavailable {
+        PayloadError::Unavailable { reason, detail }
+    } else {
+        PayloadError::Damaged(detail)
+    }
+}
+
 impl PayloadError {
     pub(super) fn blob_refusal_kind(&self) -> Option<super::BlobRefusalKind> {
         match self {
@@ -53,6 +103,10 @@ impl PayloadError {
             } if error.is_capability_unavailable() => {
                 Some(super::BlobRefusalKind::UnavailableCapability)
             }
+            Self::Unavailable {
+                detail: PayloadCause::Stream(_),
+                ..
+            } => Some(super::BlobRefusalKind::UnavailableCapability),
             _ => None,
         }
     }
@@ -106,6 +160,7 @@ impl fmt::Display for PayloadCause {
         match self {
             Self::Codec(CodecError::Unavailable { detail, .. }) => detail.fmt(f),
             Self::Codec(error) => error.fmt(f),
+            Self::Stream(error) => error.fmt(f),
             Self::MissingCatalog(value) => write!(f, "codec id {value:?} not in catalog"),
             Self::TransformedNotBytes => f.write_str("transformed frame 'd' must be a byte string"),
             Self::BlobNotBytes => f.write_str("blob frame 'd' must be a byte string"),
@@ -122,7 +177,11 @@ impl fmt::Display for PayloadCause {
     }
 }
 
-purrdf_lex::error_source!(PayloadCause { Codec, Cbor });
+purrdf_lex::error_source!(PayloadCause {
+    Codec,
+    Stream,
+    Cbor
+});
 
 impl purrdf_hash::error::StructuredError for PayloadError {
     purrdf_hash::error_visit! {
@@ -137,6 +196,7 @@ impl purrdf_hash::error::StructuredError for PayloadError {
 impl purrdf_hash::error::StructuredError for PayloadCause {
     purrdf_hash::error_visit! {
         Codec(error) => "gts-payload-codec" { "cause" => Cause(error) },
+        Stream(error) => "gts-payload-stream" { "cause" => Cause(error) },
         MissingCatalog(value) => "gts-payload-missing-catalog" { "id" => Record(value) },
         TransformedNotBytes => "gts-payload-transformed-not-bytes" {},
         BlobNotBytes => "gts-payload-blob-not-bytes" {},

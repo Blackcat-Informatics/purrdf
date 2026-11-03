@@ -248,9 +248,13 @@ impl<'v> Encodable for BorrowedItem<'v> {
     fn scalar<W: Write + ?Sized>(self, out: &mut W) -> Result<bool, WriteFault> {
         match self.major() {
             BYTES => {
-                let bytes = self.bytes()?.expect("validated byte-string major type");
-                head::write_head(out, BYTES, bytes.len() as u64)?;
-                out.write_all(&bytes)?;
+                let bytes = self
+                    .byte_chunks()
+                    .expect("validated byte-string major type");
+                head::write_head(out, BYTES, bytes.byte_len() as u64)?;
+                for chunk in bytes {
+                    out.write_all(chunk)?;
+                }
             }
             TEXT => {
                 let text = self.text()?.expect("validated text major type");

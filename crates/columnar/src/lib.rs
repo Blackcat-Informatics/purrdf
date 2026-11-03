@@ -50,4 +50,7 @@ pub use parquet::Compression;
 pub use projection::{ColumnarProjection, ProjectionCell, ProjectionRows};
 pub use reader::{ColumnarRead, read, read_with_ordinals};
 pub use schema::{ColumnSchema, PhysicalType, Repetition, Table, TableSchema};
-pub use writer::{ColumnarWrite, project, write, write_to, write_with_options};
+pub use writer::{
+    BlobSource, ColumnarWrite, project, write, write_to, write_with_blob_sources_to,
+    write_with_options,
+};

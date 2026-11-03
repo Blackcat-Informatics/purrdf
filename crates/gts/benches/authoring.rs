@@ -512,7 +512,7 @@ struct ReaderSink {
 impl StreamingSink for ReaderSink {
     fn blob_payload(&mut self, payload: BlobPayload<'_>) {
         self.blobs += 1;
-        self.bytes += payload.bytes.map_or(0, <[u8]>::len);
+        self.bytes += payload.bytes.len();
     }
 }
 
@@ -527,7 +527,20 @@ struct PayloadCheck<'a>(&'a [u8]);
 
 impl StreamingSink for PayloadCheck<'_> {
     fn blob_payload(&mut self, payload: BlobPayload<'_>) {
-        assert_eq!(payload.bytes, Some(self.0), "streamed plaintext must match");
+        let bytes = payload
+            .bytes
+            .chunks()
+            .expect("streamed plaintext must be present");
+        assert_eq!(bytes.byte_len(), self.0.len(), "streamed plaintext length");
+        let mut offset = 0;
+        for chunk in bytes {
+            assert_eq!(
+                chunk,
+                &self.0[offset..offset + chunk.len()],
+                "streamed plaintext must match"
+            );
+            offset += chunk.len();
+        }
     }
 }
 

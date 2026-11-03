@@ -6,16 +6,31 @@
 use purrdf_lex::cbor::{self, BorrowedItem, EncodedItem, Value, ValueRef};
 
 #[derive(Debug)]
-pub(super) enum StreamItem {
+pub(super) enum StreamItem<'a> {
     Header(Value),
-    Frame(EncodedItem),
+    Frame(FrameItem<'a>),
 }
 
-pub(super) fn classify(item: EncodedItem) -> Result<StreamItem, cbor::DecodeError> {
+#[derive(Debug)]
+pub(super) enum FrameItem<'a> {
+    Borrowed(BorrowedItem<'a>),
+    Owned(EncodedItem),
+}
+
+impl FrameItem<'_> {
+    pub(super) fn view(&self) -> BorrowedItem<'_> {
+        match self {
+            Self::Borrowed(item) => *item,
+            Self::Owned(item) => item.view(),
+        }
+    }
+}
+
+pub(super) fn classify(item: FrameItem<'_>) -> Result<StreamItem<'_>, cbor::DecodeError> {
     let raw = ValueRef::Encoded(item.view());
     let inner = raw.tag().map_or(raw, |(_, item)| item);
     if inner.is_map() && inner.get("gts")?.is_some() && inner.get("t")?.is_none() {
-        return item.decode().map(StreamItem::Header);
+        return item.view().decode().map(StreamItem::Header);
     }
     Ok(StreamItem::Frame(item))
 }
@@ -53,12 +68,10 @@ impl<'a> Frame<'a> {
             }
             Ok(None)
         };
-        let frame_type = lookup("t")?.map(ValueRef::text).transpose()?.flatten();
-        // Blob callbacks retain the existing eager/lazy byte contract. Every
-        // other frame can inspect its logical payload through the same view,
-        // including unknown frames that still resolve capabilities before refusal.
-        let borrowed_data = frame_type.as_deref() != Some("blob");
-        let data = if borrowed_data { lookup("d")? } else { None };
+        // Payload bytes stay in the encoded frame owner, including blobs.
+        // Metadata retention must not duplicate an arbitrarily large payload.
+        let borrowed_data = true;
+        let data = lookup("d")?;
         let mut metadata = Vec::new();
         for entry in entries {
             let (key, value) = entry;
@@ -90,6 +103,26 @@ pub(super) enum Payload<'a> {
     Value(Option<ValueRef<'a>>),
     Encoded(EncodedItem),
     Blob(std::borrow::Cow<'a, [u8]>),
+}
+
+pub(super) enum BlobBytes<'a> {
+    Resident(std::borrow::Cow<'a, [u8]>),
+    Chunks(cbor::ByteChunks<'a>),
+}
+
+impl BlobBytes<'_> {
+    pub(super) fn chunks(&self) -> cbor::ByteChunks<'_> {
+        match self {
+            Self::Resident(bytes) => cbor::ByteChunks::from_slice(bytes),
+            Self::Chunks(chunks) => *chunks,
+        }
+    }
+    pub(super) fn into_owned(self) -> Vec<u8> {
+        match self {
+            Self::Resident(bytes) => bytes.into_owned(),
+            Self::Chunks(chunks) => chunks.flatten().copied().collect(),
+        }
+    }
 }
 
 static NULL: Value = Value::Null;

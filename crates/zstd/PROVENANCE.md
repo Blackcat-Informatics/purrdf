@@ -48,3 +48,7 @@ or semantic feature is added by this consolidation.
 
 The workspace version and package name identify this maintained provider;
 downstream consumers do not depend on a root-only registry patch.
+
+The finite frame-sequence reader reuses the streaming block decoder while
+advancing through concatenated and skippable frames. It verifies checksums and
+reapplies the declared dictionary without retaining the complete decoded output.

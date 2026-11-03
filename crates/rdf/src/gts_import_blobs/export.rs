@@ -4,8 +4,8 @@
 //! Explicitly lossy all-inline admission, sharing the strict blob collector.
 
 use super::{
-    BlobCollector, GtsBlobLimits, GtsBlobMetadataSource, GtsBlobRetentionRefusal, GtsBlobUsage,
-    GtsImportedBlob, RdfDiagnostic,
+    BlobCollector, CollectedPayload, GtsBlobLimits, GtsBlobMetadataSource, GtsBlobRecord,
+    GtsBlobRetentionRefusal, GtsBlobStager, GtsBlobUsage, GtsStagedPayload, RdfDiagnostic,
 };
 use purrdf_gts::reader::{BlobPayload, BlobRefusalKind};
 use purrdf_lex::allocation::{Memory, Resident};
@@ -107,24 +107,24 @@ impl GtsBlobOmission {
 /// RDF data and frame integrity remain mandatory; only the named blob admission
 /// cases are recoverable. Blob metadata is not copied into an unused lookaside.
 #[derive(Debug)]
-pub struct GtsInlineExport {
+pub struct GtsInlineExport<Payload = Arc<[u8]>> {
     /// The authoritative scoped native RDF dataset.
     dataset: Arc<crate::RdfDataset>,
     /// Admitted unique decoded blobs, in deterministic digest order.
-    blobs: Vec<GtsImportedBlob>,
+    blobs: Vec<GtsBlobRecord<Payload>>,
     /// Final omissions, excluding proved identities subsequently admitted.
     omissions: Vec<GtsBlobOmission>,
     /// Logical charges and peaks during admission, not total process memory.
     usage: GtsBlobUsage,
 }
 
-impl GtsInlineExport {
+impl<Payload> GtsInlineExport<Payload> {
     /// Consume the eager admission result without copying its payload owners.
     pub fn into_parts(
         self,
     ) -> (
         Arc<crate::RdfDataset>,
-        Vec<GtsImportedBlob>,
+        Vec<GtsBlobRecord<Payload>>,
         Vec<GtsBlobOmission>,
         GtsBlobUsage,
     ) {
@@ -150,7 +150,31 @@ pub fn import_gts_inline_for_export(
             "inline export collector is missing",
         )
     })?;
-    collector.finish_export(bundle.dataset)
+    collector.finish_export(bundle.dataset, CollectedPayload::resident)
+}
+
+/// Stage admitted inline blobs through bounded decoded chunks.
+///
+/// The returned selected descriptors retain provenance and canonical content
+/// identities, never payload bytes. Sink writes remain provisional until this
+/// operation succeeds; the caller owns cleanup of replaced or refused handles.
+pub fn import_gts_inline_to(
+    bytes: &[u8],
+    limits: GtsBlobLimits,
+    stager: &mut dyn GtsBlobStager,
+) -> Result<GtsInlineExport<GtsStagedPayload>, RdfDiagnostic> {
+    let mut collector = BlobCollector::new(&[], limits)?;
+    collector.export = Some(Vec::new());
+    collector.stager = Some(stager);
+    let (bundle, collector) =
+        crate::gts_import_sink::import_with_collector(bytes, Some(collector))?;
+    let collector = collector.ok_or_else(|| {
+        RdfDiagnostic::error(
+            "rdf-ir-gts-import-internal",
+            "streaming export collector is missing",
+        )
+    })?;
+    collector.finish_export(bundle.dataset, CollectedPayload::staged)
 }
 
 impl BlobCollector<'_> {
@@ -185,7 +209,7 @@ impl BlobCollector<'_> {
 
     pub(super) fn omit_or_error(
         &mut self,
-        payload: BlobPayload<'_>,
+        payload: &BlobPayload<'_>,
         kind: GtsBlobOmissionKind,
         error: RdfDiagnostic,
     ) -> Result<(), RdfDiagnostic> {
@@ -197,7 +221,7 @@ impl BlobCollector<'_> {
 
     pub(super) fn record_export_omission(
         &mut self,
-        payload: BlobPayload<'_>,
+        payload: &BlobPayload<'_>,
         kind: GtsBlobOmissionKind,
         cause: Option<RdfDiagnostic>,
     ) -> Result<(), RdfDiagnostic> {
@@ -207,9 +231,11 @@ impl BlobCollector<'_> {
         let omission = GtsBlobOmission {
             kind,
             digest: Some(memory.string(payload.digest)?),
-            digest_computed: payload.bytes.is_some_and(|bytes| {
-                payload.codecs.is_empty() && purrdf_gts::wire::digest_str(bytes) == payload.digest
-            }),
+            digest_computed: payload.digest_computed
+                || payload.bytes.chunks().is_some_and(|bytes| {
+                    payload.codecs.is_empty()
+                        && purrdf_gts::wire::digest_chunks(bytes) == payload.digest
+                }),
             encoded_bytes: payload.encoded_len,
             source,
             limits: self.limits,
@@ -226,10 +252,11 @@ impl BlobCollector<'_> {
         Ok(())
     }
 
-    fn finish_export(
+    fn finish_export<Payload>(
         mut self,
         dataset: Arc<crate::RdfDataset>,
-    ) -> Result<GtsInlineExport, RdfDiagnostic> {
+        convert: impl FnMut(CollectedPayload) -> Result<Payload, RdfDiagnostic>,
+    ) -> Result<GtsInlineExport<Payload>, RdfDiagnostic> {
         let mut omissions = self.export.take().ok_or_else(|| {
             RdfDiagnostic::error(
                 "rdf-ir-gts-import-internal",
@@ -312,7 +339,7 @@ impl BlobCollector<'_> {
                 .then(a.digest.cmp(&b.digest))
                 .then(a.kind.cmp(&b.kind))
         });
-        let blobs = self.take_export_blobs()?;
+        let blobs = self.take_export_blobs(convert)?;
         Ok(GtsInlineExport {
             dataset,
             blobs,
@@ -321,13 +348,16 @@ impl BlobCollector<'_> {
         })
     }
 
-    pub(super) fn take_export_blobs(&mut self) -> Result<Vec<GtsImportedBlob>, RdfDiagnostic> {
+    pub(super) fn take_export_blobs<Payload>(
+        &mut self,
+        mut convert: impl FnMut(CollectedPayload) -> Result<Payload, RdfDiagnostic>,
+    ) -> Result<Vec<GtsBlobRecord<Payload>>, RdfDiagnostic> {
         let mut resident = Resident;
         let mut memory = Memory::new(&mut resident);
         let mut blobs = Vec::new();
         memory.reserve(&mut blobs, self.selected.len())?;
         while let Some((_, blob)) = self.selected.pop_first() {
-            memory.push(&mut blobs, blob)?;
+            memory.push(&mut blobs, blob.try_map_payload(&mut convert)?)?;
         }
         Ok(blobs)
     }

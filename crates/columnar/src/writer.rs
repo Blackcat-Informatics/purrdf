@@ -118,6 +118,55 @@ pub fn write_to<D: DatasetView, E>(
     Ok(report)
 }
 
+/// A verified content identity with a known-length, replayable payload source.
+/// Source reads must remain stable until the export finishes.
+pub trait BlobSource {
+    /// Native SHA-256 identity of the decoded payload.
+    fn digest(&self) -> purrdf_core::ContentDigest;
+    /// Exact decoded byte length.
+    fn len(&self) -> usize;
+    /// Whether the source contains no payload bytes.
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+    /// Open the payload from its beginning without retaining it in memory.
+    fn open(&self) -> std::io::Result<Box<dyn std::io::Read + '_>>;
+}
+
+/// Write native uncompressed files with window-bounded blob payload storage.
+///
+/// RDF dictionary/row preparation is unchanged. Only sorted blob descriptors,
+/// one fixed read buffer and footer metadata are retained for the blob table.
+/// Each payload remains one BYTE_ARRAY value and is verified during replay.
+/// Emitted chunks are provisional until this operation succeeds.
+pub fn write_with_blob_sources_to<D: DatasetView, B: BlobSource, E>(
+    view: &D,
+    blobs: &[B],
+    mut emit: impl FnMut(Table, &[u8]) -> Result<(), E>,
+) -> Result<WriteReport, ColumnarSinkError<D::ReadError, E>> {
+    let no_blobs = ContentStore::new();
+    let prepared = view
+        .checked_read(|view| prepare(view, &no_blobs))
+        .map_err(ColumnarSinkError::SourceRead)??;
+    let mut ordered: Vec<_> = blobs.iter().collect();
+    ordered.sort_unstable_by_key(|blob| blob.digest());
+    for pair in ordered.windows(2) {
+        if pair[0].digest() == pair[1].digest() {
+            return Err(ColumnarError::DuplicateBlob(pair[0].digest()).into());
+        }
+    }
+    let options = WriteOptions::default();
+    let mut report = WriteReport::default();
+    for (entry, table) in report.tables.iter_mut().zip(Table::ALL) {
+        *entry = if table == Table::Blobs {
+            crate::parquet::write_blob_sources_to(&ordered, &mut emit)?
+        } else {
+            write_rows_to(table, prepared.rows(table), &options, &mut emit)?
+        };
+    }
+    Ok(report)
+}
+
 /// Project an RDF view into the authoritative five-table schema.
 ///
 /// This is the same canonical projection the Parquet writer uses. Relational

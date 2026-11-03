@@ -14,10 +14,13 @@ use crate::{GtsBundle, RdfDiagnostic};
 
 mod error;
 mod export;
+mod staging;
 pub use error::GtsBlobRetentionRefusal;
 pub use export::{
     GtsBlobOmission, GtsBlobOmissionKind, GtsInlineExport, import_gts_inline_for_export,
+    import_gts_inline_to,
 };
+use staging::{PayloadFailure, stage_payload};
 
 /// A required inline blob, selected independently of RDF statement order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -103,7 +106,8 @@ impl GtsBlobLimits {
 
 /// Logical retained bytes and input-derived cardinalities of one selected import.
 /// These are payload and existing refused-metadata charges, not dataset, index,
-/// allocator capacity, frame-buffer or codec-workspace measurements.
+/// allocator capacity, frame-buffer or codec-workspace measurements. Staged payload
+/// charges describe selected storage, not resident process memory.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct GtsBlobUsage {
     /// Decoded bytes currently held by selected unique digests.
@@ -189,18 +193,18 @@ impl GtsBlobMetadataSource {
     }
 }
 
-/// Authenticated selected bytes and exact public metadata from one GTS import.
+/// Authenticated selected payload and exact public metadata from one GTS import.
 #[non_exhaustive]
 #[derive(Clone, Debug)]
-pub struct GtsImportedBlob {
+pub struct GtsBlobRecord<Payload> {
     /// Content digest, checked against the decoded bytes.
     pub digest: String,
     /// Final effective public metadata, preserved without a lossy projection.
     pub metadata: Option<Value>,
     /// Exact source of effective metadata, including metadata-only updates.
     pub metadata_source: Option<GtsBlobMetadataSource>,
-    /// Decoded payload, shared without copying by retained consumer views.
-    pub bytes: Arc<[u8]>,
+    /// Selected decoded payload owner or caller-owned staging descriptor.
+    pub bytes: Payload,
     /// Zero-based segment containing the selected payload occurrence.
     pub segment_index: u64,
     /// Zero-based frame within that segment.
@@ -211,6 +215,92 @@ pub struct GtsImportedBlob {
     pub frame_range: ByteRange,
     /// Verified completed head of the payload's segment.
     pub segment_head: Vec<u8>,
+}
+
+/// An eager selected payload, shared without copying its retained bytes.
+pub type GtsImportedBlob = GtsBlobRecord<Arc<[u8]>>;
+
+/// A verified decoded payload in caller-owned provisional staging storage.
+#[derive(Clone, Copy, Debug)]
+pub struct GtsStagedPayload {
+    /// Handle returned by the staging sink.
+    pub handle: u64,
+    /// Exact decoded length.
+    pub len: usize,
+    /// Native columnar content identity, computed while staging.
+    pub sha256: crate::ContentDigest,
+}
+
+/// A selected payload descriptor without resident payload bytes.
+pub type GtsStagedBlob = GtsBlobRecord<GtsStagedPayload>;
+
+/// Caller-owned staging for verified, replayable blob exports.
+///
+/// Writes are provisional until the import succeeds and returns their selected
+/// handles. Replaced and recoverably refused handles are discarded immediately.
+/// On import failure the caller owns disposal of all remaining provisional handles. No whole payload or payload set is retained by this interface.
+pub trait GtsBlobStager {
+    /// Create seekable provisional storage for a transformed RDF frame.
+    fn scratch(&mut self) -> std::io::Result<Box<dyn purrdf_lex::cbor::ReplayStorage>>;
+    /// Begin one provisional decoded payload.
+    fn begin(&mut self) -> Result<u64, RdfDiagnostic>;
+    /// Dispose of a superseded or recoverably refused provisional handle.
+    fn discard(&mut self, handle: u64) -> Result<(), RdfDiagnostic>;
+    /// Append one bounded decoded chunk to a provisional handle.
+    fn write(&mut self, handle: u64, bytes: &[u8]) -> Result<(), RdfDiagnostic>;
+}
+
+enum CollectedPayload {
+    Resident(Arc<[u8]>),
+    Staged(GtsStagedPayload),
+}
+
+impl CollectedPayload {
+    fn len(&self) -> usize {
+        match self {
+            Self::Resident(bytes) => bytes.len(),
+            Self::Staged(payload) => payload.len,
+        }
+    }
+
+    fn resident(self) -> Result<Arc<[u8]>, RdfDiagnostic> {
+        match self {
+            Self::Resident(bytes) => Ok(bytes),
+            Self::Staged(_) => Err(RdfDiagnostic::error(
+                "rdf-ir-gts-import-internal",
+                "staged payload requested through the resident import API",
+            )),
+        }
+    }
+
+    fn staged(self) -> Result<GtsStagedPayload, RdfDiagnostic> {
+        match self {
+            Self::Staged(payload) => Ok(payload),
+            Self::Resident(_) => Err(RdfDiagnostic::error(
+                "rdf-ir-gts-import-internal",
+                "resident payload requested through the staging import API",
+            )),
+        }
+    }
+}
+
+impl<Payload> GtsBlobRecord<Payload> {
+    fn try_map_payload<Next>(
+        self,
+        convert: impl FnOnce(Payload) -> Result<Next, RdfDiagnostic>,
+    ) -> Result<GtsBlobRecord<Next>, RdfDiagnostic> {
+        Ok(GtsBlobRecord {
+            digest: self.digest,
+            metadata: self.metadata,
+            metadata_source: self.metadata_source,
+            bytes: convert(self.bytes)?,
+            segment_index: self.segment_index,
+            frame_index: self.frame_index,
+            frame_id: self.frame_id,
+            frame_range: self.frame_range,
+            segment_head: self.segment_head,
+        })
+    }
 }
 
 /// One payload a byte budget refused, reported rather than silently dropped.
@@ -330,10 +420,11 @@ struct BlobFrame {
 
 pub(crate) struct BlobCollector<'a> {
     export: Option<Vec<GtsBlobOmission>>,
+    stager: Option<&'a mut dyn GtsBlobStager>,
     selectors: Vec<GtsBlobSelector<'a>>,
     selector_index: Vec<(u8, &'a str)>,
     limits: GtsBlobLimits,
-    selected: OrderedTable<String, GtsImportedBlob>,
+    selected: OrderedTable<String, GtsBlobRecord<CollectedPayload>>,
     refused: Vec<RefusedOccurrence>,
     /// Digests some occurrence in this container carried bytes for, whether or
     /// not they were selected. Distinguishes a payload we declined to retain
@@ -457,6 +548,11 @@ struct SelectionOutcome {
 }
 
 impl<'a> BlobCollector<'a> {
+    pub(crate) fn frame_scratch(
+        &mut self,
+    ) -> Option<std::io::Result<Box<dyn purrdf_lex::cbor::ReplayStorage>>> {
+        self.stager.as_deref_mut().map(GtsBlobStager::scratch)
+    }
     fn selects(&self, digest: &str, key: Option<&SelectionKey>) -> bool {
         self.export.is_some()
             || self.selector_index.binary_search(&(0, digest)).is_ok()
@@ -569,6 +665,7 @@ impl<'a> BlobCollector<'a> {
         let selectors = memory.collect(selectors.iter().copied())?;
         Ok(Self {
             export: None,
+            stager: None,
             selectors,
             selector_index: ordered,
             limits,
@@ -643,7 +740,7 @@ impl<'a> BlobCollector<'a> {
         Ok(())
     }
 
-    pub(crate) fn payload(&mut self, payload: BlobPayload<'_>) -> Result<(), RdfDiagnostic> {
+    pub(crate) fn payload(&mut self, mut payload: BlobPayload<'_>) -> Result<(), RdfDiagnostic> {
         let mut resident = Resident;
         let mut memory = Memory::resume(&mut resident, self.storage_bytes()?);
         if payload.payload_present {
@@ -687,10 +784,11 @@ impl<'a> BlobCollector<'a> {
                 // surfacing as spurious decode refusals far from the cause.
                 self.usage
                     .replace_payload(old.bytes.len(), 0, self.selected.len())?;
+                self.release_payload(&old.bytes)?;
             }
             return Ok(());
         }
-        if payload.payload_present && payload.bytes.is_none() {
+        if payload.payload_present && payload.bytes.is_absent() {
             return Err(RdfDiagnostic::error(
                 "rdf-ir-gts-blob-payload",
                 "selected blob payload field is not a byte string",
@@ -699,8 +797,8 @@ impl<'a> BlobCollector<'a> {
         validate_metadata(metadata, payload.digest)?;
         if self.export.is_some()
             && payload.codecs.is_empty()
-            && let Some(bytes) = payload.bytes
-            && purrdf_gts::wire::digest_str(bytes) != payload.digest
+            && let Some(bytes) = payload.bytes.chunks()
+            && purrdf_gts::wire::digest_chunks(bytes) != payload.digest
         {
             return Err(RdfDiagnostic::error(
                 "rdf-ir-gts-blob-digest",
@@ -709,7 +807,7 @@ impl<'a> BlobCollector<'a> {
         }
         if let Err(failure) = check_metadata_bound(metadata, self.limits.max_metadata_bytes) {
             let error = failure.into_diagnostic()?;
-            return self.omit_or_error(payload, GtsBlobOmissionKind::MetadataBudget, error);
+            return self.omit_or_error(&payload, GtsBlobOmissionKind::MetadataBudget, error);
         }
         let metadata = metadata.cloned();
         // The reader fires its frame event for every frame before any of that
@@ -746,7 +844,8 @@ impl<'a> BlobCollector<'a> {
                     .transpose()?,
             }
         };
-        let Some(wire_bytes) = payload.bytes else {
+        if payload.bytes.is_absent() {
+            let digest = payload.digest;
             let Some(previous) = self.selected.get_mut_by(|key| payload.digest.cmp(key)) else {
                 // No bytes retained for this digest yet. Whether that means the
                 // blob is external, or merely that its payload has not been read
@@ -756,19 +855,19 @@ impl<'a> BlobCollector<'a> {
                 // whole container.
                 if self.export.is_some() {
                     self.record_export_omission(
-                        payload,
+                        &payload,
                         GtsBlobOmissionKind::MissingInlinePayload,
                         None,
                     )?;
                 }
                 self.unresolved
-                    .insert(memory.string(payload.digest)?, (), &mut memory)?;
+                    .insert(memory.string(digest)?, (), &mut memory)?;
                 return Ok(());
             };
             previous.metadata = metadata;
             previous.metadata_source = metadata_source;
             return Ok(());
-        };
+        }
         let old_len = previous.map_or(0, |blob| blob.bytes.len());
         let other_bytes = self
             .usage
@@ -780,22 +879,29 @@ impl<'a> BlobCollector<'a> {
             .max_total_decoded_bytes
             .checked_sub(other_bytes)
             .ok_or(StorageError::SizeOverflow)?;
+        let claimed_digest = payload.digest;
+        let digest_computed = payload.digest_computed
+            || payload.codecs.is_empty()
+                && payload
+                    .bytes
+                    .chunks()
+                    .is_some_and(|bytes| purrdf_gts::wire::digest_chunks(bytes) == payload.digest);
+        let encoded_bytes = payload.encoded_len;
+        let segment_index = payload.segment_index;
+        let limits = self.limits;
+        let usage = self.usage;
         let refusal =
-            |cause: Option<purrdf_gts::codec::CodecError>| -> Result<RdfDiagnostic, RdfDiagnostic> {
+            |cause: Option<purrdf_gts::model::DiagnosticCause>| -> Result<RdfDiagnostic, RdfDiagnostic> {
                 let failure = GtsBlobRetentionRefusal {
-                    digest: Some(Memory::new(&mut Resident).string(payload.digest)?),
-                    digest_computed: payload.codecs.is_empty()
-                        && purrdf_gts::wire::digest_str(wire_bytes) == payload.digest,
-                    encoded_bytes: payload.encoded_len,
-                    limits: self.limits,
+                    digest: Some(Memory::new(&mut Resident).string(claimed_digest)?),
+                    digest_computed,
+                    encoded_bytes,
+                    limits,
                     available_decoded_bytes: remaining,
-                    usage: self.usage,
-                    segment_index: payload.segment_index,
+                    usage,
+                    segment_index,
                     frame_index: frame.frame_index,
-                    cause: cause
-                        .map(purrdf_gts::model::retain_native_cause)
-                        .transpose()?
-                        .map(purrdf_gts::model::DiagnosticCause::Native),
+                    cause,
                 };
                 let message = Memory::new(&mut Resident).format(&failure)?;
                 let code = if failure.cause.is_some() {
@@ -807,35 +913,56 @@ impl<'a> BlobCollector<'a> {
                 Ok(RdfDiagnostic::error(code, message)
                     .with_location(
                         crate::RdfLocation::logical("gts:blob")
-                            .with_gts_segment(payload.segment_index)
+                            .with_gts_segment(segment_index)
                             .with_gts_frame(frame.frame_index),
                     )
                     .with_native_cause(cause, &mut Memory::new(&mut Resident))?)
             };
         if payload.encoded_len > self.limits.max_encoded_bytes {
             let error = refusal(None)?;
-            return self.omit_or_error(payload, GtsBlobOmissionKind::ByteBudget, error);
+            return self.omit_or_error(&payload, GtsBlobOmissionKind::ByteBudget, error);
         }
         let limit = self.limits.max_decoded_bytes.min(remaining);
-        let bytes = match purrdf_gts::codec::decode_chain_bounded(payload.codecs, wire_bytes, limit)
-        {
-            Ok(bytes) => bytes,
-            Err(error) => {
-                let kind = if matches!(error, purrdf_gts::codec::CodecError::Limit { .. }) {
-                    Some(GtsBlobOmissionKind::ByteBudget)
-                } else if error.is_capability_unavailable() {
-                    Some(GtsBlobOmissionKind::UnavailableCapability)
+        let chunks = payload.bytes.chunks();
+        let source = payload.bytes.reader().ok_or_else(|| {
+            RdfDiagnostic::error(
+                "rdf-ir-gts-import-internal",
+                "present blob payload has no readable backing",
+            )
+        })?;
+        let decoded = if let Some(stager) = self.stager.as_deref_mut() {
+            stage_payload(stager, payload.codecs, source, limit)
+        } else {
+            let decoded =
+                if let Some(bytes) = chunks.and_then(purrdf_lex::cbor::ByteChunks::contiguous) {
+                    purrdf_gts::codec::decode_chain_bounded(payload.codecs, bytes, limit)
+                        .map_err(PayloadFailure::Codec)
                 } else {
-                    None
+                    use std::io::Read as _;
+                    purrdf_gts::codec::decode_chain_reader(payload.codecs, source, limit)
+                        .and_then(|mut source| {
+                            let mut bytes = Vec::new();
+                            source.read_to_end(&mut bytes)?;
+                            Ok(bytes)
+                        })
+                        .map_err(PayloadFailure::Read)
                 };
-                let error = refusal(Some(error))?;
+            decoded.map(|bytes| {
+                let digest = purrdf_gts::wire::digest_str(&bytes);
+                (CollectedPayload::Resident(bytes.into()), digest)
+            })
+        };
+        let (bytes, digest) = match decoded {
+            Ok(decoded) => decoded,
+            Err(error) => {
+                let (kind, cause) = error.into_cause()?;
+                let error = refusal(Some(cause))?;
                 return match kind {
-                    Some(kind) => self.omit_or_error(payload, kind, error),
+                    Some(kind) => self.omit_or_error(&payload, kind, error),
                     None => Err(error),
                 };
             }
         };
-        let digest = purrdf_gts::wire::digest_str(&bytes);
         if digest != payload.digest {
             return Err(RdfDiagnostic::error(
                 "rdf-ir-gts-blob-digest",
@@ -846,13 +973,13 @@ impl<'a> BlobCollector<'a> {
             ));
         }
         let next_len = bytes.len();
-        self.selected.insert(
+        let previous = self.selected.insert(
             memory.string(&digest)?,
-            GtsImportedBlob {
+            GtsBlobRecord {
                 digest,
                 metadata,
                 metadata_source,
-                bytes: bytes.into(),
+                bytes,
                 segment_index: payload.segment_index,
                 frame_index: frame.frame_index,
                 frame_id: memory.collect(frame.frame_id.iter().copied())?,
@@ -861,8 +988,26 @@ impl<'a> BlobCollector<'a> {
             },
             &mut memory,
         )?;
+        if let Some(previous) = previous {
+            self.release_payload(&previous.bytes)?;
+        }
         self.usage
             .replace_payload(old_len, next_len, self.selected.len())?;
+        Ok(())
+    }
+
+    fn release_payload(&mut self, payload: &CollectedPayload) -> Result<(), RdfDiagnostic> {
+        if let CollectedPayload::Staged(payload) = payload {
+            self.stager
+                .as_deref_mut()
+                .ok_or_else(|| {
+                    RdfDiagnostic::error(
+                        "rdf-ir-gts-import-internal",
+                        "staged payload has no staging owner",
+                    )
+                })?
+                .discard(payload.handle)?;
+        }
         Ok(())
     }
 
@@ -973,6 +1118,7 @@ impl<'a> BlobCollector<'a> {
                 if let Some((_, old)) = self.selected.remove_entry_by(|key| digest.cmp(key)) {
                     self.usage
                         .replace_payload(old.bytes.len(), 0, self.selected.len())?;
+                    self.release_payload(&old.bytes)?;
                 }
             } else if self.selected.get_by(|key| digest.cmp(key)).is_some()
                 && (self.export.is_none()
@@ -1256,7 +1402,7 @@ impl<'a> BlobCollector<'a> {
         );
         let mut resident = Resident;
         let mut memory = Memory::new(&mut resident);
-        let blobs = self.take_export_blobs()?;
+        let blobs = self.take_export_blobs(CollectedPayload::resident)?;
         let refused = memory.collect(self.refused.into_iter().map(|refused| refused.blob))?;
         Ok((blobs, refused, self.usage))
     }

@@ -1569,7 +1569,12 @@ mod tests {
             project_graph_input_scene(&semantic_input(true), &VizSpec::default()).unwrap();
         validate_scene(&healthy).unwrap();
         let node = healthy.nodes[0].clone();
-        let edge = healthy.edges[0].clone();
+        let edge_index = healthy
+            .edges
+            .iter()
+            .position(|edge| edge.anchor.is_some())
+            .expect("healthy scene has an anchored assertion edge");
+        let edge = healthy.edges[edge_index].clone();
         let counts = (healthy.nodes.len(), healthy.edges.len());
         let mut errors = Vec::new();
         for case in [
@@ -1588,36 +1593,38 @@ mod tests {
                 "duplicate-nodes" => scene.nodes.push(node.clone()),
                 "duplicate-edges" => scene.edges.push(edge.clone()),
                 "unbound-edge" => {
-                    scene.edges[0].bindings.clear();
+                    scene.edges[edge_index].bindings.clear();
                     scene.nodes[0].bindings.clear();
                 }
                 "unbound-node" => scene.nodes[0].bindings.clear(),
                 "missing-node" => {
-                    scene.edges[0].source = node_endpoint("absent-node", "absent-port")
+                    scene.edges[edge_index].source = node_endpoint("absent-node", "absent-port");
                 }
-                "missing-port" => scene.edges[0].source = node_endpoint(&node.id, "absent-port"),
+                "missing-port" => {
+                    scene.edges[edge_index].source = node_endpoint(&node.id, "absent-port");
+                }
                 "missing-edge" => {
-                    scene.edges[0].source = VizEndpoint::EdgeAnchor {
+                    scene.edges[edge_index].source = VizEndpoint::EdgeAnchor {
                         edge: "absent-edge".to_owned(),
                         anchor: "absent-anchor".to_owned(),
-                    }
+                    };
                 }
                 "wrong-anchor" | "no-anchor" => {
-                    scene.edges[0].source = VizEndpoint::EdgeAnchor {
+                    scene.edges[edge_index].source = VizEndpoint::EdgeAnchor {
                         edge: edge.id.clone(),
                         anchor: "absent-anchor".to_owned(),
                     };
                     if case == "no-anchor" {
-                        scene.edges[0].anchor = None;
+                        scene.edges[edge_index].anchor = None;
                     }
                 }
                 _ => unreachable!(),
             }
             if case.starts_with("duplicate") {
-                scene.edges[0].source = node_endpoint("absent-node", "absent-port");
+                scene.edges[edge_index].source = node_endpoint("absent-node", "absent-port");
             } else if case.contains("anchor") || case.starts_with("missing") {
-                scene.edges[0].target = node_endpoint("later-absent-node", "absent-port");
-                scene.edges[0].bindings.clear();
+                scene.edges[edge_index].target = node_endpoint("later-absent-node", "absent-port");
+                scene.edges[edge_index].bindings.clear();
             }
             errors.push((case, validate_scene(&scene).unwrap_err()));
         }

@@ -9,6 +9,12 @@ use std::io::{self, Read};
 
 use super::{Integer, Value};
 
+mod replay;
+pub use replay::{
+    ByteRangeReader, ItemRange, MapRangeCursor, RangeCursor, ReplayBuffer, ReplayStorage,
+    SpooledItem, spool_item,
+};
+
 /// The resource bounds of one decode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Limits {
@@ -50,6 +56,13 @@ pub enum DecodeErrorKind {
     NotDeterministic(&'static str),
     /// Bytes follow the item where the whole input was to be one item.
     Trailing,
+    /// Caller-owned replay bytes differ from the admitted item.
+    ReplayMismatch {
+        /// Original admitted encoded-byte identity.
+        expected: purrdf_hash::hex::Digest32,
+        /// Actual replayed encoded-byte identity.
+        actual: purrdf_hash::hex::Digest32,
+    },
     /// The reader failed.
     Io(purrdf_hash::error::IoFailure),
     /// A reader violated its buffer-length contract.
@@ -106,6 +119,9 @@ impl fmt::Display for DecodeError {
                 write!(f, "not deterministically encoded: {rule}")
             }
             DecodeErrorKind::Trailing => f.write_str("bytes follow the item"),
+            DecodeErrorKind::ReplayMismatch { .. } => {
+                f.write_str("replay storage differs from the admitted CBOR item")
+            }
             DecodeErrorKind::Io(cause) => write!(f, "read failed: {}", cause.kind()),
             DecodeErrorKind::ReadCount { actual, maximum } => write!(
                 f,
@@ -135,6 +151,9 @@ impl purrdf_hash::error::StructuredError for DecodeErrorKind {
         TooLong => "cbor-length-overflow" {},
         NotDeterministic(rule) => "cbor-not-deterministic" { "rule" => Text(rule) },
         Trailing => "cbor-trailing-data" {},
+        ReplayMismatch { expected, actual } => "cbor-replay-mismatch" {
+            "expected" => Record(expected), "actual" => Record(actual),
+        },
         Io(cause) => "cbor-io" { "cause" => Cause(cause) },
         ReadCount { actual, maximum } => "cbor-reader-count" { "actual" => Unsigned(*actual as u128), "maximum" => Unsigned(*maximum as u128) },
         OffsetOverflow { position, additional } => "cbor-offset-overflow" { "position" => Unsigned(*position as u128), "additional" => Unsigned(*additional as u128) },
@@ -158,6 +177,17 @@ trait Source {
     fn byte(&mut self) -> Result<u8, DecodeError>;
     /// Append the next `len` bytes to `out`.
     fn take(&mut self, len: u64, out: &mut Vec<u8>) -> Result<(), DecodeError>;
+    /// Consume uninterpreted bytes without retaining a complete string.
+    fn skip_bytes(&mut self, mut len: u64) -> Result<(), DecodeError> {
+        let mut scratch = Vec::new();
+        while len != 0 {
+            scratch.clear();
+            let count = len.min(32768);
+            self.take(count, &mut scratch)?;
+            len -= count;
+        }
+        Ok(())
+    }
     /// The bytes already read, for the deterministic key-order check.
     fn consumed(&self) -> Option<&[u8]>;
 }
@@ -179,6 +209,10 @@ impl Slice<'_> {
 }
 
 impl Source for Slice<'_> {
+    fn skip_bytes(&mut self, len: u64) -> Result<(), DecodeError> {
+        self.pos = self.extent(len)?.end;
+        Ok(())
+    }
     fn offset(&self) -> usize {
         self.pos
     }
@@ -366,21 +400,57 @@ trait DecodeString<S: Source>: DecodeOutput {
         at: usize,
         depth: usize,
     ) -> Result<Self::Item, DecodeError> {
-        let bytes = string_bytes(source, major, length, deterministic, at)?;
-        let value = if major == 2 {
-            Value::Bytes(bytes)
-        } else {
-            Value::Text(
-                String::from_utf8(bytes)
-                    .map_err(|_| DecodeError::new(DecodeErrorKind::InvalidUtf8, at))?,
-            )
-        };
-        Ok(self.scalar(value, (at, source.offset()), depth))
+        string_value(self, source, major, length, deterministic, at, depth)
     }
 }
 
+fn string_value<S: Source, B: DecodeOutput + ?Sized>(
+    output: &mut B,
+    source: &mut S,
+    major: u8,
+    length: Option<u64>,
+    deterministic: bool,
+    at: usize,
+    depth: usize,
+) -> Result<B::Item, DecodeError> {
+    let bytes = string_bytes(source, major, length, deterministic, at)?;
+    let value = if major == 2 {
+        Value::Bytes(bytes)
+    } else {
+        Value::Text(
+            String::from_utf8(bytes)
+                .map_err(|_| DecodeError::new(DecodeErrorKind::InvalidUtf8, at))?,
+        )
+    };
+    Ok(output.scalar(value, (at, source.offset()), depth))
+}
+
 impl<S: Source> DecodeString<S> for OwnedOutput {}
-impl<S: Source, F: FnMut(ItemSpan)> DecodeString<S> for SpanOutput<'_, F, false> {}
+impl<S: Source, F: FnMut(ItemSpan)> DecodeString<S> for SpanOutput<'_, F, false> {
+    fn string(
+        &mut self,
+        source: &mut S,
+        major: u8,
+        length: Option<u64>,
+        deterministic: bool,
+        at: usize,
+        depth: usize,
+    ) -> Result<(), DecodeError> {
+        if major != super::head::BYTES {
+            return string_value(self, source, major, length, deterministic, at, depth);
+        }
+        string_chunks(
+            source,
+            major,
+            length,
+            deterministic,
+            at,
+            |source, len, _| source.skip_bytes(len),
+        )?;
+        self.record((at, source.offset()), depth);
+        Ok(())
+    }
+}
 
 impl<F: FnMut(ItemSpan)> DecodeString<Slice<'_>> for SpanOutput<'_, F, true> {
     fn string(
@@ -791,33 +861,41 @@ fn string_chunks<S: Source>(
                 at,
             ));
         }
-        loop {
-            let chunk_at = source.offset();
-            let initial = source.byte()?;
-            if initial == 0xff {
-                return Ok(());
-            }
-            if initial >> 5 != major {
-                return Err(DecodeError::new(
-                    DecodeErrorKind::Malformed(
-                        "an indefinite string's chunks must be strings of its own type",
-                    ),
-                    chunk_at,
-                ));
-            }
-            let Some(length) = argument(source, initial, chunk_at, false)? else {
-                return Err(DecodeError::new(
-                    DecodeErrorKind::Malformed("an indefinite string's chunks must be definite"),
-                    chunk_at,
-                ));
-            };
+        while let Some((length, chunk_at)) = next_string_chunk(source, major)? {
             chunk(source, length, chunk_at)?;
         }
+        return Ok(());
     };
     if usize::try_from(length).is_err() {
         return Err(DecodeError::new(DecodeErrorKind::TooLong, at));
     }
     chunk(source, length, at)
+}
+
+fn next_string_chunk<S: Source>(
+    source: &mut S,
+    major: u8,
+) -> Result<Option<(u64, usize)>, DecodeError> {
+    let at = source.offset();
+    let initial = source.byte()?;
+    if initial == 0xff {
+        return Ok(None);
+    }
+    if initial >> 5 != major {
+        return Err(DecodeError::new(
+            DecodeErrorKind::Malformed(
+                "an indefinite string's chunks must be strings of its own type",
+            ),
+            at,
+        ));
+    }
+    let length = argument(source, initial, at, false)?.ok_or_else(|| {
+        DecodeError::new(
+            DecodeErrorKind::Malformed("an indefinite string's chunks must be definite"),
+            at,
+        )
+    })?;
+    Ok(Some((length, at)))
 }
 
 /// A major type 7 item: a simple value or a float.
@@ -1013,6 +1091,78 @@ pub struct BorrowedItem<'a> {
     limits: Limits,
 }
 
+/// Original byte-string chunks without concatenating indefinite encodings.
+#[derive(Clone, Copy)]
+pub struct ByteChunks<'a> {
+    pending: Option<&'a [u8]>,
+    encoded: &'a [u8],
+}
+
+purrdf_hash::debug_non_exhaustive!(['a] ByteChunks<'a> {});
+
+impl<'a> ByteChunks<'a> {
+    /// Borrow one existing byte slice as a single chunk.
+    pub const fn from_slice(bytes: &'a [u8]) -> Self {
+        Self {
+            pending: Some(bytes),
+            encoded: &[],
+        }
+    }
+    /// Exact remaining payload length, excluding CBOR chunk heads.
+    #[must_use]
+    pub fn byte_len(self) -> usize {
+        // Every chunk is disjoint inside one admitted slice, so their combined
+        // payload length cannot exceed that slice's addressable extent.
+        self.map(<[u8]>::len).sum()
+    }
+    /// Borrow a contiguous backing slice when no encoded chunks remain.
+    pub fn contiguous(self) -> Option<&'a [u8]> {
+        self.encoded
+            .is_empty()
+            .then_some(self.pending.unwrap_or(&[]))
+    }
+}
+
+#[allow(
+    clippy::copy_iterator,
+    reason = "A borrowed cursor is intentionally copied to hash and replay the same admitted bytes without retaining payloads"
+)]
+impl<'a> Iterator for ByteChunks<'a> {
+    type Item = &'a [u8];
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(bytes) = self.pending.take() {
+            return Some(bytes);
+        }
+        if self.encoded.is_empty() {
+            return None;
+        }
+        // Initial admission established that every indefinite byte-string
+        // child is a complete definite byte string of this same major type.
+        Some(
+            super::head::read_bytes(&mut self.encoded)
+                .expect("INVARIANT: admitted byte-string chunks have definite byte heads"),
+        )
+    }
+}
+
+impl Read for ByteChunks<'_> {
+    fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+        let mut written = 0;
+        while written < output.len() {
+            let Some(chunk) = self.next() else {
+                break;
+            };
+            let count = chunk.len().min(output.len() - written);
+            output[written..written + count].copy_from_slice(&chunk[..count]);
+            written += count;
+            if count < chunk.len() {
+                self.pending = Some(&chunk[count..]);
+            }
+        }
+        Ok(written)
+    }
+}
+
 /// Validate the front item without retaining a Value tree and borrow its bytes.
 pub fn borrowed_prefix(
     bytes: &[u8],
@@ -1029,6 +1179,22 @@ pub fn borrowed_prefix(
 }
 
 impl<'a> BorrowedItem<'a> {
+    /// Borrow the chunks of an admitted byte string without flattening them.
+    pub fn byte_chunks(self) -> Option<ByteChunks<'a>> {
+        if self.major() != super::head::BYTES {
+            return None;
+        }
+        if self.encoded[0] & 31 == 31 {
+            return Some(ByteChunks {
+                pending: None,
+                encoded: &self.encoded[1..self.encoded.len() - 1],
+            });
+        }
+        let mut encoded = self.encoded;
+        let bytes = super::head::read_bytes(&mut encoded)
+            .expect("INVARIANT: admitted definite byte strings have their declared extent");
+        Some(ByteChunks::from_slice(bytes))
+    }
     /// The exact original encoding, including indefinite and non-shortest forms.
     pub const fn encoded(self) -> &'a [u8] {
         self.encoded
