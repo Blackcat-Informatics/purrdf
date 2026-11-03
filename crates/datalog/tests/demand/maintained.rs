@@ -28,6 +28,17 @@ impl Drop for Original {
     }
 }
 
+struct Grant(Arc<AtomicUsize>);
+impl Admission for Grant {
+    fn resize(&mut self, bytes: usize) -> Result<(), StorageError> {
+        if bytes > self.0.load(Ordering::Relaxed) {
+            Err(StorageError::AdmissionFailed)
+        } else {
+            Ok(())
+        }
+    }
+}
+
 fn updates<const N: usize>(
     rules: &[DlClause<N>],
     goal: &ClauseAtom<N>,
@@ -39,13 +50,34 @@ fn updates<const N: usize>(
     let input = stratified::input(seed);
     let prepared = prepare_demanded(rules, goal, input.interner()).unwrap();
     let options = EvalOptions::default();
+    let ceiling = Arc::new(AtomicUsize::new(0));
     let mut model = prepared
-        .maintain::<Box<Original>, Original, _>(input, context(), options)
+        .maintain_in::<Box<Original>, Original, _, _>(
+            input,
+            context(),
+            options,
+            Grant(ceiling.clone()),
+        )
         .unwrap();
     assert!(matches!(
         model.answers(),
         Err(MaintenanceError::InitialIncomplete)
     ));
+    assert!(matches!(
+        model.resume_until(options, u128::MAX, None),
+        Ok(ResumeProgress::Paused(EvalError::Storage(
+            StorageError::AdmissionFailed
+        )))
+    ));
+    ceiling.store(usize::MAX, Ordering::Relaxed);
+    if goal.predicate().is_var() {
+        let paused = model
+            .resume_until(options.with_max_generated_terms(0), u128::MAX, None)
+            .unwrap();
+        assert!(
+            matches!(paused, ResumeProgress::Paused(EvalError::TermLimitExceeded { report, .. }) if report.generated_terms() == 1)
+        );
+    }
     assert!(matches!(
         model.resume_until(options, u128::MAX, None),
         Ok(ResumeProgress::Complete)
@@ -290,22 +322,58 @@ fn reserved_input_rejection_preserves_the_previous_demand_snapshot_and_allows_va
             atom("?x", "blocked", "?y").into_negated(),
         ],
     )];
-    let input = store(&[(0, 1)]);
-    let prepared = prepare_demanded(&negative, &atom("0", "out", "?y"), input.interner()).unwrap();
-    assert!(matches!(
-        prepared.maintain::<usize, Resident, _>(input, context(), options),
-        Err(DemandError::Unsupported {
-            reason: purrdf_datalog::demand::Unsupported::MaintenanceNegation,
-            ..
-        })
-    ));
-    assert_eq!(
-        prepared
-            .evaluate(store(&[(0, 1)]), &options, None)
-            .unwrap()
-            .answers()
-            .unwrap()
-            .len(),
-        1
+    updates(
+        &negative,
+        &atom("0", "out", "?y"),
+        &[atom("0", "edge", "1")],
+        &[
+            (atom("0", "blocked", "1"), 1),
+            (atom("0", "blocked", "1"), 1),
+            (atom("0", "blocked", "1"), -1),
+            (atom("0", "blocked", "1"), -1),
+            (atom("0", "edge", "1"), -1),
+            (atom("0", "edge", "2"), 1),
+        ],
+    );
+    let variable = vec![DlClause::datalog(
+        atom("?s", "out", "?o"),
+        vec![
+            atom("?s", "?p", "?o"),
+            atom("?s", "blocked", "?o").into_negated(),
+        ],
+    )];
+    updates(
+        &variable,
+        &atom("?s", "?p", "?o"),
+        &[atom("0", "edge", "1")],
+        &[
+            (atom("0", "blocked", "1"), 1),
+            (atom("0", "blocked", "1"), -1),
+            (atom("7", "new", "8"), 1),
+            (atom("7", "new", "8"), -1),
+            (atom("0", "edge", "1"), -1),
+        ],
+    );
+    let variable = vec![DlClause::datalog(
+        quad("?s", "out", "?o", "?g"),
+        vec![
+            quad("?s", "?p", "?o", "?g"),
+            quad("?s", "blocked", "?o", "?g").into_negated(),
+        ],
+    )];
+    updates(
+        &variable,
+        &quad("?s", "?p", "?o", "?g"),
+        &[quad("0", "edge", "1", ""), quad("0", "edge", "1", "named")],
+        &[
+            (quad("0", "blocked", "1", ""), 1),
+            (quad("0", "blocked", "1", "named"), 1),
+            (quad("0", "blocked", "1", ""), -1),
+            (quad("0", "blocked", "1", "named"), -1),
+            (quad("7", "new", "8", ""), 1),
+            (quad("7", "new", "8", ""), -1),
+            (quad("0", "edge", "1", "named"), -1),
+            (quad("0", "edge", "1", ""), -1),
+        ],
     );
 }

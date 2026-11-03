@@ -335,6 +335,7 @@ fn original_invalid_rules_refuse_before_source_mutation_and_shadow_seeds_keep_ow
         ),
         Negation::new(vec![atom("?x", "?predicate", "?y")], Vec::new()),
     ] {
+        let guarded = !group.guards().is_empty();
         let mut invalid = rules.clone();
         invalid.push(
             DlClause::datalog(
@@ -346,16 +347,22 @@ fn original_invalid_rules_refuse_before_source_mutation_and_shadow_seeds_keep_ow
         let dictionary = CheckedDictionary::default();
         let control = dictionary.control.clone();
         control.lookup_failure.store(true, Ordering::Relaxed);
-        assert!(matches!(
-            evaluate_demanded(
-                &invalid,
-                &atom("0", "selected", "?y"),
-                RelationStore::with_dictionary(dictionary),
-                &EvalOptions::default(),
-                None
-            ),
-            Err(DemandError::Unsupported { .. })
-        ));
+        let error = evaluate_demanded(
+            &invalid,
+            &atom("0", "selected", "?y"),
+            RelationStore::with_dictionary(dictionary),
+            &EvalOptions::default(),
+            None,
+        )
+        .unwrap_err();
+        if guarded {
+            assert!(matches!(error, DemandError::Unsupported { .. }));
+        } else {
+            assert!(matches!(
+                error,
+                DemandError::Compile(EvalError::NonStratifiable { .. })
+            ));
+        }
         assert_eq!(control.writes.load(Ordering::Relaxed), 0);
     }
     let mut invalid = rules.clone();
@@ -403,7 +410,7 @@ fn original_invalid_rules_refuse_before_source_mutation_and_shadow_seeds_keep_ow
             &EvalOptions::default(),
             None
         ),
-        Err(DemandError::Source(Lost))
+        Err(DemandError::Evaluation(EvalError::Source(Lost)))
     ));
 }
 
@@ -510,10 +517,7 @@ fn selective_negative_support_reports_seed_overhead_and_deterministic_work() {
             let preparation = answer.preparation();
             assert_eq!(preparation.original_facts, extra + 3);
             assert_eq!(preparation.shadow_facts, extra + 3);
-            assert_eq!(
-                answer.budget().input_terms(),
-                preparation.original_terms + preparation.shadow_terms
-            );
+            assert_eq!(answer.budget().input_terms(), preparation.original_terms);
             let work = (answer.work().committed_facts(), answer.work().join_steps());
             if let Some(previous) = previous {
                 assert_eq!(work, previous);

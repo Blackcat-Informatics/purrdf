@@ -15,6 +15,7 @@ use purrdf_lex::walk::HeapSortFrame;
 enum Phase {
     Reserve,
     Validate,
+    Project,
     SortChanges,
     ReserveIndexes,
     Seeds,
@@ -47,7 +48,7 @@ where
     pub(super) weights: &'a mut FastMap<[D::Id; N], i64>,
     pub(super) weights_bytes: &'a mut usize,
     pub(super) reserved_input_names: &'a [String],
-    pub(super) state: &'a FixpointState<D, N>,
+    pub(super) state: &'a mut FixpointState<D, N>,
 }
 
 pub(super) struct Frame<M, S: Admission, I: TermIdentity, const N: usize>
@@ -75,6 +76,7 @@ where
     current: Option<(RowId, [I; N])>,
     sort: Option<HeapSortFrame>,
     unit_admitted: bool,
+    projection: Option<crate::demand::projection::Update<I, N>>,
 }
 
 impl<M, S: Admission, I: TermIdentity, const N: usize> Frame<M, S, I, N>
@@ -104,6 +106,7 @@ where
             current: None,
             sort: None,
             unit_admitted: false,
+            projection: None,
         }
     }
 
@@ -147,15 +150,15 @@ where
     ) -> Result<bool, MaintenanceError<D::Error>> {
         flush_retired_bytes(&mut self.retired_bytes, memory)
             .map_err(|error| MaintenanceError::Failed(EvalError::Storage(error)))?;
-        let rel = &inputs.state.rel;
-        let dictionary = rel.interner();
-        dictionary.check_read().map_err(source_error)?;
-        let native = inputs
-            .state
-            .native
-            .as_ref()
-            .expect("maintenance retains native chosen proofs");
         loop {
+            let rel = &inputs.state.rel;
+            let dictionary = rel.interner();
+            dictionary.check_read().map_err(source_error)?;
+            let native = inputs
+                .state
+                .native
+                .as_ref()
+                .expect("maintenance retains native chosen proofs");
             match self.phase {
                 Phase::Reserve => {
                     if !self.allow_unit(1, &mut allow) {
@@ -172,17 +175,23 @@ where
                 }
                 Phase::Validate => {
                     let Some(&(terms, delta)) = self.batch.changes().get(self.cursor) else {
-                        self.sort = Some(HeapSortFrame::new(self.changes.len()));
-                        self.phase = Phase::SortChanges;
+                        self.phase = Phase::Project;
                         continue;
                     };
-                    if !self.allow_unit(1, &mut allow) {
+                    let cost = inputs
+                        .state
+                        .projection
+                        .as_ref()
+                        .map_or(Ok(1), |projection| projection.input_scan_work())
+                        .map_err(storage_error)?;
+                    if !self.allow_unit(cost, &mut allow) {
                         return Ok(false);
                     }
                     super::validate_input_names(
                         dictionary,
                         terms.map(DictionaryTerm::Id),
                         inputs.reserved_input_names,
+                        inputs.state.projection.as_ref(),
                     )?;
                     let weight = i128::from(inputs.weights.get(&terms).copied().unwrap_or(0))
                         + i128::from(delta);
@@ -194,6 +203,46 @@ where
                         i64::try_from(weight).expect("validated exact multiplicity"),
                     ));
                     self.cursor += 1;
+                }
+                Phase::Project => {
+                    super::super::check_budget(inputs.state).map_err(MaintenanceError::Failed)?;
+                    if let Some(runtime) = inputs.state.projection.as_mut() {
+                        let projection = self.projection.get_or_insert_with(|| {
+                            crate::demand::projection::Update::new(self.changes.len())
+                        });
+                        let progress = projection
+                            .resume(
+                                runtime,
+                                &mut inputs.state.rel,
+                                &mut self.changes,
+                                |terms| inputs.weights.get(terms).copied().unwrap_or(0),
+                                memory,
+                                &mut allow,
+                            )
+                            .map_err(|error| MaintenanceError::Failed(error.into_eval()))?;
+                        super::super::check_budget(inputs.state)
+                            .map_err(MaintenanceError::Failed)?;
+                        match progress {
+                            crate::demand::projection::Progress::Paused => return Ok(false),
+                            crate::demand::projection::Progress::Advanced => continue,
+                            crate::demand::projection::Progress::Complete => {}
+                            crate::demand::projection::Progress::Inserted(_) => {
+                                unreachable!("projection preparation publishes no row")
+                            }
+                        }
+                        self.retired_bytes = self
+                            .retired_bytes
+                            .checked_add(
+                                self.projection
+                                    .take()
+                                    .expect("completed projection")
+                                    .retire()
+                                    .map_err(storage_error)?,
+                            )
+                            .ok_or_else(|| storage_error(StorageError::SizeOverflow))?;
+                    }
+                    self.sort = Some(HeapSortFrame::new(self.changes.len()));
+                    self.phase = Phase::SortChanges;
                 }
                 Phase::SortChanges => {
                     if !self
@@ -301,7 +350,7 @@ where
                     self.phase = self.after_fanout;
                 }
                 Phase::ReachReserve => {
-                    let count = inputs.impacts.predicates.len();
+                    let count = inputs.impacts.keys.len();
                     let cost = count.checked_add(1).ok_or(MaintenanceError::Failed(
                         EvalError::Storage(StorageError::SizeOverflow),
                     ))?;
@@ -332,7 +381,7 @@ where
                     };
                 }
                 Phase::ReachSeeds => {
-                    let Some(predicate) = inputs.impacts.predicates.get(self.cursor) else {
+                    let Some(predicate) = inputs.impacts.keys.get(self.cursor) else {
                         self.cursor = 0;
                         self.phase = Phase::ReachEdges;
                         continue;
@@ -340,11 +389,14 @@ where
                     if !self.allow_unit(1, &mut allow) {
                         return Ok(false);
                     }
-                    self.reached[self.cursor] = predicate == crate::plan::ANY_PREDICATE
-                        || dictionary
-                            .lookup_term(predicate)
-                            .map_err(source_error)?
-                            .is_some_and(|id| self.altered.contains(&id));
+                    let mut reached = false;
+                    for id in &self.altered {
+                        reached |= inputs
+                            .state
+                            .predicate_matches(predicate, *id)
+                            .map_err(source_error)?;
+                    }
+                    self.reached[self.cursor] = reached;
                     self.cursor += 1;
                 }
                 Phase::ReachEdges => {
@@ -407,23 +459,48 @@ where
                     };
                 }
                 Phase::ClosureVisit => {
-                    if !self.allow_unit(1, &mut allow) {
+                    let cost = if inputs.state.projection.is_some() {
+                        self.changes
+                            .len()
+                            .checked_add(1)
+                            .ok_or_else(|| storage_error(StorageError::SizeOverflow))?
+                    } else {
+                        1
+                    };
+                    if !self.allow_unit(cost, &mut allow) {
                         return Ok(false);
                     }
                     let (row, terms) = self
                         .current
                         .expect("the original closure row remains owned");
                     let old = inputs.weights.get(&terms).copied().unwrap_or(0);
+                    let mut source_terms = terms;
+                    if let Some(original) = inputs
+                        .state
+                        .projection
+                        .as_ref()
+                        .and_then(|projection| projection.shadow_source(terms[1]))
+                    {
+                        source_terms[1] = original;
+                    }
                     let weight = self
                         .batch
                         .changes()
-                        .binary_search_by_key(&terms, |(ids, _)| *ids)
+                        .binary_search_by_key(&source_terms, |(ids, _)| *ids)
                         .map_or(old, |index| {
                             i64::try_from(
                                 i128::from(old) + i128::from(self.batch.changes()[index].1),
                             )
                             .expect("every original batch multiplicity was validated")
                         });
+                    let weight = if source_terms == terms {
+                        self.changes
+                            .iter()
+                            .find(|(ids, _)| *ids == terms)
+                            .map_or(weight, |(_, weight)| *weight)
+                    } else {
+                        weight
+                    };
                     if weight == 0 && !self.deleted.contains_key(&row) {
                         reserve_index_in(
                             &mut self.deleted,

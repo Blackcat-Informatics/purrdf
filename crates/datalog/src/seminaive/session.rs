@@ -204,6 +204,8 @@ where
             return Err(EvalError::BaseReadRequiresSchedule { rule });
         }
         edb.interner().check_read().map_err(EvalError::Source)?;
+        let mut state = FixpointState::seeded_with_native(edb, options, native);
+        state.attach_projection(exe);
         Ok(Self {
             exe,
             guards,
@@ -212,7 +214,7 @@ where
                 context,
             },
             options,
-            state: Some(FixpointState::seeded_with_native(edb, options, native)),
+            state: Some(state),
             stratum: 0,
             frame: None,
             complete: false,
@@ -326,6 +328,19 @@ where
                     report: state.report(),
                 });
             }
+            loop {
+                match state.project_in(memory, |_| !is_stopped(stop))? {
+                    crate::demand::projection::Progress::Complete => break,
+                    crate::demand::projection::Progress::Inserted(_) => {}
+                    crate::demand::projection::Progress::Advanced => {}
+                    crate::demand::projection::Progress::Paused => {
+                        return Err(EvalError::Stopped {
+                            report: state.report(),
+                        });
+                    }
+                }
+            }
+            check_budget(state)?;
             while self.stratum < self.exe.stratum_count() {
                 if self.exe.stratum_is_empty(self.stratum) {
                     self.stratum += 1;

@@ -47,9 +47,10 @@ encoding.
 
 ## Prepared demand queries
 
-`demand::prepare_demanded` compiles one fixed-predicate triple or quad goal and
+`demand::prepare_demanded` compiles one triple or quad goal and
 its rules into a reusable `PreparedDemand`. Positive recursion and stratified
-negation use the existing native transformation and evaluator. Call
+negation, with fixed or variable predicates, use the existing native transformation
+and evaluator. Call
 `prepared.evaluate(source, &options, stop)` for each original source store;
 execution preserves its dictionary IDs and applies the supplied governors and
 stop signal. The returned answer owns its dictionary independently of the
@@ -65,7 +66,7 @@ is needed. Prepare again against the same source to choose a fresh namespace
 and accept the legitimate input. Execution checks compatibility again; a prepared artifact
 does not reserve caller vocabulary or claim snapshot continuity.
 
-For a positive fixed-predicate triple or quad program, `prepared.maintain` creates
+For an admitted triple or quad program, `prepared.maintain` creates
 a `MaintainedDemand` borrowing that artifact and owning the original source.
 `maintain_in` also accepts supplemental native storage admission. Resume initial
 evaluation with `resume_until`; then admit input terms, construct an original
@@ -73,13 +74,18 @@ signed `ChangeBatch`, call `begin`, and resume that transaction. The native engi
 retains its original watermark and admission through work, storage and stop pauses.
 `answers` and `delta` publish only complete matching goal rows and net membership
 changes. The transformed model stays private. Output vectors use resident storage.
+Variable predicates preserve original dictionary identity through private mapping
+relations. Negative support and its mapping dependencies participate in the same
+native stratification and transaction maintenance as the authored rules.
+
+Private projection runs under the execution governors. `preparation()` reports
+original input rows and terms plus additional private mapping and shadow rows
+and terms. New private terms count against the original dictionary baseline.
 
 Generated transformation names are refused in every host-input position, by
 spelling or existing ID. A namespace refusal during transaction preparation leaves
 the preceding complete answers, delta and applied watermark available. All term
 positions are checked before `admit_terms` can intern any fresh spelling.
-Maintained demand currently refuses prepared stratified programs explicitly;
-their existing reusable complete evaluation remains available.
 
 ## Design commitments
 

@@ -3,7 +3,7 @@
 
 //! Complete answers to one positive triple or quad goal without materializing unrelated rules.
 //!
-//! A magic-set transformation carries bound subject/object/graph coordinates through
+//! A magic-set transformation carries bound subject/predicate/object/graph coordinates through
 //! authored body order. Subsuming adornments share one demand relation; the
 //! original atoms and final goal retain constants and repeated-variable equality.
 //! The transformed clauses run through the ordinary compiler and semi-naive engine.
@@ -14,7 +14,8 @@
 //! The retained partial closure is private: it is complete only for the requested goal.
 
 mod maintained;
-mod stratified;
+pub(crate) mod projection;
+mod transform;
 pub use maintained::{DemandDelta, DemandDeltaResult, MaintainedDemand};
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -25,12 +26,10 @@ use crate::cursor::LendingIterator;
 use crate::dictionary::TermDictionary;
 use crate::guard::NoGuards;
 use crate::seminaive::{
-    BudgetReport, EvalError, EvalOptions, Evaluation, Executable, WorkReport, compile,
-    evaluate_guarded,
+    BudgetReport, EvalError, EvalOptions, Evaluation, Executable, WorkReport, evaluate_guarded,
 };
 use crate::stop::StopSignal;
 use crate::store::{Arity, Bound, RelationStore, StoreShape};
-use purrdf_hash::{Domain, frame::frame_le_into};
 
 /// A fragment refusal before any transformed execution or source mutation.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -41,11 +40,9 @@ pub enum Unsupported {
     Guard,
     /// The requested goal must be positive.
     Negation,
-    /// Incremental demand maintenance currently admits positive programs only.
-    MaintenanceNegation,
     /// Immutable base reads belong to the scheduled evaluator.
     BaseRead,
-    /// Every predicate must be a fixed IRI.
+    /// A constant predicate must be an IRI; variable predicates are admitted.
     Predicate,
     /// A head variable has no positive relational binder.
     UnboundVariable(String),
@@ -56,7 +53,6 @@ impl purrdf_hash::error::StructuredError for Unsupported {
         Head(form) => "datalog-demand-unsupported-head" { "form" => Record(form) },
         Guard => "datalog-demand-unsupported-guard" {},
         Negation => "datalog-demand-unsupported-negation" {},
-        MaintenanceNegation => "datalog-demand-unsupported-maintenance-negation" {},
         BaseRead => "datalog-demand-unsupported-base-read" {},
         Predicate => "datalog-demand-unsupported-predicate" {},
         UnboundVariable(variable) => "datalog-demand-unbound-variable" { "variable" => Text(variable) },
@@ -152,19 +148,20 @@ where
     preparation: Preparation,
 }
 
-/// Resident source preparation before the governed evaluator starts.
+/// Original input and private projection counts for this execution.
 ///
-/// Shadow facts and terms are part of the evaluator's transformed input baseline,
-/// including its generated-term allowance. They are not reported as derived facts.
+/// Projection runs under the evaluator's governors. Private mapping and shadow
+/// rows count as transformed input, while new terms count against the original
+/// input dictionary's generated-term allowance. They are not rule-derived facts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Preparation {
-    /// Original caller-owned rows before shadow seeding.
+    /// Original caller-owned rows before private projection.
     pub original_facts: usize,
-    /// Original dictionary's distinct terms before shadow seeding.
+    /// Original dictionary's distinct terms before private projection.
     pub original_terms: u64,
-    /// Additional input rows in isolated shadow relations.
+    /// Additional private input rows in mapping and isolated shadow relations.
     pub shadow_facts: usize,
-    /// Additional dictionary terms minted while seeding those rows.
+    /// Additional dictionary terms minted during private projection.
     pub shadow_terms: u64,
 }
 
@@ -183,7 +180,6 @@ where
     executable: Executable<N>,
     goal: ClauseAtom<N>,
     names: Vec<String>,
-    shadows: BTreeMap<String, String>,
 }
 
 impl<const N: usize> PreparedDemand<N>
@@ -218,7 +214,7 @@ where
 
     /// Execute the prepared transformation over a compatible original source.
     ///
-    /// Namespace compatibility is checked before shadow seeding or evaluation.
+    /// Namespace compatibility is checked before private projection or evaluation.
     /// Work, cancellation, budgets and answer ownership retain the one-shot
     /// API's contract; preparation counts describe this execution's source.
     /// # Errors
@@ -226,14 +222,27 @@ where
     /// original evaluator refusal. No partial answer is returned on exhaustion.
     pub fn evaluate<D: TermDictionary>(
         &self,
-        mut edb: RelationStore<D, N>,
+        edb: RelationStore<D, N>,
         options: &EvalOptions,
         stop: Option<&dyn StopSignal>,
     ) -> Result<DemandAnswer<D, N>, DemandError<D::Error>> {
         self.check_compatibility(edb.interner())?;
-        let preparation = stratified::seed(&mut edb, &self.shadows)?;
+        let original_facts = edb.row_count();
+        let original_terms = edb.interner().term_count();
         let evaluation = evaluate_guarded(&self.executable, edb, &NoGuards, options, stop)
             .map_err(DemandError::Evaluation)?;
+        let preparation = Preparation {
+            original_facts,
+            original_terms,
+            shadow_facts: evaluation
+                .projection
+                .as_ref()
+                .map_or(0, |projection| projection.seeded_rows()),
+            shadow_terms: evaluation
+                .projection
+                .as_ref()
+                .map_or(0, |projection| projection.seeded_terms()),
+        };
         Ok(DemandAnswer {
             evaluation,
             goal: self.goal.clone(),
@@ -244,8 +253,8 @@ where
 
 /// Compile a reusable demand transformation without modifying the source.
 ///
-/// Checks the same complete fixed-predicate triple/quad fragment as
-/// [`evaluate_demanded`], including stratified negation. The dictionary is used
+/// Checks the same complete triple/quad fragment as [`evaluate_demanded`],
+/// including variable predicates and stratified negation. The dictionary is used
 /// only to choose collision-free generated names; it is neither retained nor
 /// copied. Later executions check their own dictionary before mutation.
 /// # Errors
@@ -259,32 +268,14 @@ where
     Arity<N>: StoreShape<N>,
 {
     validate(rules, goal)?;
-    if rules
-        .iter()
-        .any(|rule| !rule.negations().is_empty() || rule.body().iter().any(ClauseAtom::is_negated))
-    {
-        return stratified::prepare(rules, goal, dictionary);
-    }
-    let descriptors = descriptors(rules, goal);
-    let mut names = names(&descriptors, rules, goal, dictionary, 0)?;
-    let transformed = transform(rules, goal, &descriptors, &names);
-    let executable = compile(transformed).map_err(DemandError::Compile)?;
-    // Ordinals are already embedded in the executable. Runtime namespace checks
-    // use the same inventory as an exact logarithmic lexical index.
-    names.sort_unstable();
-    Ok(PreparedDemand {
-        executable,
-        goal: goal.clone(),
-        names,
-        shadows: BTreeMap::new(),
-    })
+    transform::prepare(rules, goal, dictionary)
 }
 
 impl<D: TermDictionary, const N: usize> DemandAnswer<D, N>
 where
     Arity<N>: StoreShape<N>,
 {
-    /// Original input and resident shadow-seeding counts.
+    /// Original input and governed private projection counts.
     pub const fn preparation(&self) -> Preparation {
         self.preparation
     }
@@ -312,7 +303,11 @@ where
     /// # Errors
     /// Preserves dictionary lookup and read failures, including an empty answer.
     pub fn answers(&self) -> Result<Vec<[D::Id; N]>, D::Error> {
-        answers(self.evaluation.facts(), &self.goal)
+        answers(
+            self.evaluation.facts(),
+            &self.goal,
+            self.evaluation.projection.as_deref(),
+        )
     }
 }
 
@@ -354,6 +349,7 @@ impl<'a, I: crate::dictionary::TermIdentity, const N: usize> GoalMatch<'a, I, N>
 fn answers<D: TermDictionary, const N: usize>(
     facts: &RelationStore<D, N>,
     goal: &ClauseAtom<N>,
+    projection: Option<&projection::Runtime<D::Id, N>>,
 ) -> Result<Vec<[D::Id; N]>, D::Error>
 where
     Arity<N>: StoreShape<N>,
@@ -373,7 +369,10 @@ where
         let mut rows = partition.select(bound);
         while let Some((subject, object, _)) = rows.next() {
             let row = partition.row(subject, object);
-            if matcher.matches(row) {
+            if matcher.matches(row)
+                && (!goal.predicate().is_var()
+                    || projection.is_some_and(|projection| projection.original(row[1])))
+            {
                 answers.push(row);
             }
         }
@@ -382,15 +381,16 @@ where
     Ok(answers)
 }
 
-/// Answer one positive, fixed-predicate triple or quad goal with demand propagation.
+/// Answer one positive triple or quad goal with demand propagation.
 ///
 /// The complete authored program and goal are validated before dictionary mutation
 /// or execution. Atomic heads must be range-restricted; guards, base/model reads
 /// and every other head form are refused. Stratified negation, including guard-free
 /// conjunctions, discovers demand through an isolated positive shadow of the input.
-/// Shadow input is resident preparation and belongs to the transformed input baseline;
-/// [`DemandAnswer::preparation`] reports its additional rows and terms. The ordinary
-/// evaluator alone enforces execution options and cancellation.
+/// Predicates may be fixed IRIs or variables. Private mapping relations preserve
+/// original predicate identities and keep generated facts out of variable matches.
+/// [`DemandAnswer::preparation`] reports additional private rows and terms. The
+/// ordinary evaluator governs their construction, execution and cancellation.
 /// # Errors
 /// Returns an unsupported fragment, namespace/dictionary failure, or the original
 /// compiler/evaluator refusal. A budget or cancellation refusal yields no answer owner.
@@ -459,245 +459,8 @@ fn validate_atom<const N: usize>(atom: &ClauseAtom<N>) -> Result<(), Unsupported
     if atom.read_source() != ReadSource::Evaluation {
         return Err(Unsupported::BaseRead);
     }
-    if atom.predicate_iri().is_none() {
+    if atom.predicate_iri().is_none() && !atom.predicate().is_var() {
         return Err(Unsupported::Predicate);
     }
     Ok(())
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-struct Descriptor {
-    predicate: String,
-    pattern: BindingPattern,
-}
-
-fn arguments<const N: usize>(atom: &ClauseAtom<N>) -> impl Iterator<Item = &ClauseTerm> {
-    atom.terms()
-        .into_iter()
-        .enumerate()
-        .filter_map(|(at, term)| (at != 1).then_some(term))
-}
-fn pattern<const N: usize>(atom: &ClauseAtom<N>, bound: &BTreeSet<String>) -> BindingPattern {
-    BindingPattern::from_bools(
-        arguments(atom).map(|term| term.variable().is_none_or(|name| bound.contains(name))),
-    )
-}
-fn bind<const N: usize>(atom: &ClauseAtom<N>, bound: &mut BTreeSet<String>) {
-    bound.extend(
-        arguments(atom)
-            .filter_map(ClauseTerm::variable)
-            .map(str::to_owned),
-    );
-}
-fn head_bindings<const N: usize>(
-    head: &ClauseAtom<N>,
-    pattern: BindingPattern,
-) -> BTreeSet<String> {
-    arguments(head)
-        .enumerate()
-        .filter(|(at, _)| pattern.is_bound(*at))
-        .filter_map(|(_, term)| term.variable().map(str::to_owned))
-        .collect()
-}
-
-/// Finite adornment closure followed by its minimal (most general) antichains.
-/// Keep discovered patterns monotonically: a broader pattern may expose new demands.
-fn descriptors<const N: usize>(rules: &[DlClause<N>], goal: &ClauseAtom<N>) -> Vec<Descriptor> {
-    let definitions: BTreeSet<_> = rules
-        .iter()
-        // validate admitted one atomic head and an IRI predicate for every rule.
-        .map(|rule| rule.datalog_head().unwrap().predicate_iri().unwrap())
-        .collect();
-    let mut found = BTreeSet::from([Descriptor {
-        // validate_atom checked the goal's predicate before descriptors is called.
-        predicate: goal.predicate_iri().unwrap().to_owned(),
-        pattern: pattern(goal, &BTreeSet::new()),
-    }]);
-    loop {
-        let mut next = found.clone();
-        for demand in &found {
-            for rule in rules.iter().filter(|rule| {
-                // validate admitted only atomic heads; these immutable rules are unchanged.
-                rule.datalog_head().unwrap().predicate_iri() == Some(demand.predicate.as_str())
-            }) {
-                // The same validated rule still has its single atomic head.
-                let mut bound = head_bindings(rule.datalog_head().unwrap(), demand.pattern);
-                for atom in rule.body() {
-                    // validate_atom checked every authored body predicate as an IRI.
-                    if definitions.contains(atom.predicate_iri().unwrap()) {
-                        next.insert(Descriptor {
-                            // This is the same validated body atom used by the lookup above.
-                            predicate: atom.predicate_iri().unwrap().to_owned(),
-                            pattern: pattern(atom, &bound),
-                        });
-                    }
-                    bind(atom, &mut bound);
-                }
-            }
-        }
-        if next == found {
-            break;
-        }
-        found = next;
-    }
-    found
-        .iter()
-        .filter(|entry| {
-            !found.iter().any(|other| {
-                other.predicate == entry.predicate
-                    && other.pattern != entry.pattern
-                    && other.pattern.subsumes(entry.pattern)
-            })
-        })
-        .cloned()
-        .collect()
-}
-
-const NAMESPACE: Domain = Domain::new(b"purrdf-datalog/demand-predicates/v1");
-
-/// One digest, one common collision nonce and unique sorted ordinals avoid
-/// both existing dictionary terms and collisions between internal descriptors.
-fn names<D: TermDictionary, const N: usize>(
-    descriptors: &[Descriptor],
-    rules: &[DlClause<N>],
-    goal: &ClauseAtom<N>,
-    dictionary: &D,
-    additional: usize,
-) -> Result<Vec<String>, DemandError<D::Error>> {
-    let authored: BTreeSet<_> = rules
-        .iter()
-        .flat_map(|rule| {
-            rule.body().iter().chain(rule.head_atoms()).chain(
-                rule.negations()
-                    .iter()
-                    .flat_map(crate::guard::Negation::atoms),
-            )
-        })
-        .chain(std::iter::once(goal))
-        .flat_map(ClauseAtom::terms)
-        .filter_map(ClauseTerm::surface)
-        .collect();
-    let mut digest = purrdf_hash::blake3::Hasher::new();
-    digest.update(NAMESPACE.as_bytes());
-    frame_le_into(&mut digest, &crate::cache::canonical_rule_hash(rules));
-    let goal_clause = DlClause::datalog(goal.clone(), Vec::new());
-    frame_le_into(
-        &mut digest,
-        &crate::cache::canonical_rule_hash(&[goal_clause]),
-    );
-    for descriptor in descriptors {
-        frame_le_into(&mut digest, descriptor.predicate.as_bytes());
-        frame_le_into(&mut digest, descriptor.pattern.code().as_bytes());
-    }
-    let digest = purrdf_hash::hex::encode(digest.finalize().as_bytes());
-    dictionary.check_read().map_err(DemandError::Source)?;
-    let mut nonce = 0_u64;
-    loop {
-        let candidates: Vec<_> = (0..=descriptors.len() + additional)
-            .map(|ordinal| format!("urn:purrdf:demand:{digest}:{nonce}:{ordinal}"))
-            .collect();
-        let mut collision = false;
-        for name in &candidates {
-            let surface = format!("<{name}>");
-            // Check the entire original dictionary, even terms absent from rows.
-            let existing = dictionary
-                .lookup_term(&surface)
-                .map_err(DemandError::Source)?;
-            collision |= existing.is_some() || authored.contains(&surface);
-        }
-        dictionary.check_read().map_err(DemandError::Source)?;
-        if !collision {
-            return Ok(candidates);
-        }
-        nonce = nonce
-            .checked_add(1)
-            .ok_or(DemandError::NamespaceExhausted)?;
-    }
-}
-
-fn demand_atom<const N: usize>(
-    atom: &ClauseAtom<N>,
-    descriptor: &Descriptor,
-    name: &str,
-    unit: &str,
-) -> ClauseAtom<N> {
-    // Dense payload adornments [subject, object, graph] retain their native
-    // positions [0, 2, 3]. In particular, DefaultGraph never leaves its graph slot.
-    let mut positions = atom.terms().map(Clone::clone);
-    positions[1] = ClauseTerm::iri(name);
-    for (payload, at) in (0..N).filter(|at| *at != 1).enumerate() {
-        if !descriptor.pattern.is_bound(payload) {
-            positions[at] = ClauseTerm::iri(unit);
-        }
-    }
-    ClauseAtom::from_positions(positions)
-}
-
-fn select<'a>(
-    descriptors: &'a [Descriptor],
-    predicate: &str,
-    pattern: BindingPattern,
-) -> Option<(usize, &'a Descriptor)> {
-    descriptors.iter().enumerate().find(|(_, descriptor)| {
-        descriptor.predicate == predicate && descriptor.pattern.subsumes(pattern)
-    })
-}
-
-fn transform<const N: usize>(
-    rules: &[DlClause<N>],
-    goal: &ClauseAtom<N>,
-    descriptors: &[Descriptor],
-    names: &[String],
-) -> Vec<DlClause<N>> {
-    // names emits one ordinal per descriptor plus a unit ordinal, even for an empty set.
-    let unit = names.last().expect("the unit has its own ordinal");
-    // descriptors starts with the goal pattern; antichain reduction retains either
-    // that pattern or a subsuming pattern for the same predicate, so select succeeds.
-    let (seed, descriptor) = select(
-        descriptors,
-        // validate_atom admitted this unchanged goal only with an IRI predicate.
-        goal.predicate_iri().unwrap(),
-        pattern(goal, &BTreeSet::new()),
-    )
-    .expect("the goal demand is covered");
-    let mut transformed = vec![DlClause::datalog(
-        demand_atom(goal, descriptor, &names[seed], unit),
-        Vec::new(),
-    )];
-    let definitions: BTreeMap<_, Vec<_>> = rules.iter().fold(BTreeMap::new(), |mut map, rule| {
-        // validate admitted one atomic head with an IRI predicate for every rule.
-        map.entry(rule.datalog_head().unwrap().predicate_iri().unwrap())
-            .or_default()
-            .push(rule);
-        map
-    });
-    for (ordinal, descriptor) in descriptors.iter().enumerate() {
-        let Some(rules) = definitions.get(descriptor.predicate.as_str()) else {
-            continue;
-        };
-        for rule in rules {
-            // The definition map contains only the immutable, validated atomic rules.
-            let head = rule.datalog_head().unwrap();
-            let magic = demand_atom(head, descriptor, &names[ordinal], unit);
-            let mut bound = head_bindings(head, descriptor.pattern);
-            let mut prefix = vec![magic];
-            for atom in rule.body() {
-                if let Some((at, needed)) = select(
-                    descriptors,
-                    // validate_atom admitted every body atom only with an IRI predicate.
-                    atom.predicate_iri().unwrap(),
-                    pattern(atom, &bound),
-                ) {
-                    transformed.push(DlClause::datalog(
-                        demand_atom(atom, needed, &names[at], unit),
-                        prefix.clone(),
-                    ));
-                }
-                prefix.push(atom.clone());
-                bind(atom, &mut bound);
-            }
-            transformed.push(DlClause::datalog(head.clone(), prefix));
-        }
-    }
-    transformed
 }

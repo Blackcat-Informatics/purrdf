@@ -108,6 +108,102 @@ fn compare(rules: &[DlClause<3>], goal: &ClauseAtom<3>, edges: &[(usize, usize)]
     );
 }
 
+#[test]
+fn variable_predicates_preserve_original_answers_repeated_variables_and_bound_residuals() {
+    let programs = [
+        vec![DlClause::datalog(
+            atom("?s", "reach", "?o"),
+            vec![atom("?s", "?p", "?o")],
+        )],
+        vec![DlClause::datalog(
+            atom("?p", "?p", "?o"),
+            vec![atom("?p", "edge", "?o")],
+        )],
+        vec![DlClause::datalog(
+            atom("?s", "out", "?o"),
+            vec![
+                atom("?s", "?p", "?o"),
+                atom("?s", "blocked", "?o").into_negated(),
+            ],
+        )],
+        vec![
+            DlClause::datalog(
+                atom("?s", "?p", "?o"),
+                vec![atom("?s", "edge", "?p"), atom("?s", "edge", "?o")],
+            ),
+            DlClause::datalog(
+                atom("?s", "out", "?o"),
+                vec![
+                    atom("?s", "edge", "?o"),
+                    atom("?s", "blocked", "?o").into_negated(),
+                ],
+            ),
+        ],
+    ];
+    for rules in programs {
+        for goal in [
+            atom("?s", "?p", "?o"),
+            atom("0", "?p", "1"),
+            atom("0", "0", "1"),
+            atom("?same", "?same", "?o"),
+            atom("0", "out", "?o"),
+        ] {
+            compare(&rules, &goal, &[(0, 1), (1, 2), (8, 9)]);
+        }
+    }
+    let rules = vec![DlClause::datalog(
+        quad("?s", "reach", "?o", "?g"),
+        vec![quad("?s", "?p", "?o", "?g")],
+    )];
+    for goal in [
+        quad("?s", "?p", "?o", "?g"),
+        quad("0", "?p", "1", ""),
+        quad("0", "edge", "1", ""),
+    ] {
+        let input = || quad_store(&[("0", "1", ""), ("1", "2", "named")]);
+        let expected = full(&rules, &goal, input());
+        let answer =
+            evaluate_demanded(&rules, &goal, input(), &EvalOptions::default(), None).unwrap();
+        assert_eq!(
+            surfaces(answer.dictionary(), answer.answers().unwrap()),
+            expected
+        );
+    }
+    let source = stratified::input(&[
+        quad("0", "0", "1", ""),
+        quad("0", "0", "2", ""),
+        quad("0", "0", "1", "0"),
+        quad("0", "0", "2", "0"),
+    ]);
+    let rules = vec![DlClause::datalog(
+        quad("?s", "out", "?o", "?g"),
+        vec![quad("?s", "?s", "?o", "?g")],
+    )];
+    for goal in [quad("0", "out", "1", ""), quad("0", "out", "1", "0")] {
+        let expected = full(&rules, &goal, source.clone());
+        assert_eq!(expected.len(), 1);
+        let answer =
+            evaluate_demanded(&rules, &goal, source.clone(), &EvalOptions::default(), None)
+                .unwrap();
+        assert_eq!(
+            surfaces(answer.dictionary(), answer.answers().unwrap()),
+            expected
+        );
+    }
+    let rules = vec![DlClause::datalog(
+        quad("?o", "?p", "?s", "?p"),
+        vec![quad("?s", "?p", "?o", "?p")],
+    )];
+    let goal = quad("?s", "?p", "0", "?p");
+    let expected = full(&rules, &goal, source.clone());
+    assert_eq!(expected.len(), 2);
+    let answer = evaluate_demanded(&rules, &goal, source, &EvalOptions::default(), None).unwrap();
+    assert_eq!(
+        surfaces(answer.dictionary(), answer.answers().unwrap()),
+        expected
+    );
+}
+
 fn quad(subject: &str, predicate: &str, object: &str, graph: &str) -> ClauseAtom<4> {
     ClauseAtom::quad(
         term(subject),
@@ -460,11 +556,22 @@ fn generated_positive_programs_match_full_model_filtering() {
                 vec![atom("?x", "edge", "?y")],
             ));
         }
+        rules.push(DlClause::datalog(
+            atom("?x", "any", "?y"),
+            vec![atom("?x", "?predicate", "?y")],
+        ));
+        rules.push(DlClause::datalog(
+            atom("?predicate", "?predicate", "?y"),
+            vec![atom("?predicate", "edge", "?y")],
+        ));
         for goal in [
             atom("0", "reach", "?y"),
             atom("?x", "reach", "1"),
             atom("2", "reach", "3"),
             atom("?x", "reach", "?x"),
+            atom("0", "?predicate", "?y"),
+            atom("0", "?predicate", "1"),
+            atom("0", "0", "?y"),
         ] {
             compare(&rules, &goal, &edges);
         }
@@ -577,11 +684,13 @@ struct Control {
     read_failure: AtomicBool,
     writes: AtomicUsize,
     fail_write_at: AtomicUsize,
+    alias_private: AtomicBool,
 }
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 struct CheckedDictionary {
     terms: TermInterner,
     control: Arc<Control>,
+    aliases: BTreeMap<TermId, TermId>,
 }
 impl TermDictionary for CheckedDictionary {
     type Id = TermId;
@@ -599,14 +708,22 @@ impl TermDictionary for CheckedDictionary {
     }
     fn resolve_term(&self, id: TermId) -> Result<&str, Lost> {
         self.check_read()?;
-        Ok(self.terms.resolve(id))
+        Ok(self
+            .terms
+            .resolve(self.aliases.get(&id).copied().unwrap_or(id)))
     }
     fn compare_terms(
         &self,
         left: DictionaryTerm<'_, TermId>,
         right: DictionaryTerm<'_, TermId>,
     ) -> Result<std::cmp::Ordering, Lost> {
-        purrdf_datalog::dictionary::compare_lexical_terms(self, left, right)
+        let left = left.canonicalize(self)?;
+        let right = right.canonicalize(self)?;
+        let lexical = purrdf_datalog::dictionary::compare_lexical_terms(self, left, right)?;
+        Ok(lexical.then_with(|| match (left, right) {
+            (DictionaryTerm::Id(left), DictionaryTerm::Id(right)) => left.cmp(&right),
+            _ => std::cmp::Ordering::Equal,
+        }))
     }
     fn with_interned<T, const N: usize>(
         &mut self,
@@ -620,15 +737,27 @@ impl TermDictionary for CheckedDictionary {
         let mut candidate = Self {
             terms: self.terms.clone(),
             control: self.control.clone(),
+            aliases: self.aliases.clone(),
         };
         let mut ids = Vec::new();
         for term in terms {
             ids.push(match term {
                 DictionaryTerm::Id(id) => id,
-                DictionaryTerm::Surface(surface) => candidate
-                    .terms
-                    .intern(surface)
-                    .map_err(DictionaryError::Storage)?,
+                DictionaryTerm::Surface(surface) => {
+                    if candidate.control.alias_private.load(Ordering::Relaxed)
+                        && surface.starts_with("<urn:purrdf:demand:")
+                    {
+                        candidate
+                            .terms
+                            .lookup("<urn:edge>")
+                            .expect("fixture original identity")
+                    } else {
+                        candidate
+                            .terms
+                            .intern(surface)
+                            .map_err(DictionaryError::Storage)?
+                    }
+                }
             });
         }
         let ids = ids.try_into().expect("fixed input arity");
@@ -649,6 +778,78 @@ impl TermDictionary for CheckedDictionary {
     fn resident_bytes(&self) -> usize {
         self.terms.byte_len()
     }
+}
+
+#[test]
+fn shadow_mapping_preserves_distinct_original_ids_with_identical_spellings() {
+    let mut dictionary = CheckedDictionary::default();
+    let original = dictionary.terms.intern("<urn:edge>").unwrap();
+    let alias = dictionary.terms.intern("<urn:edge-alias>").unwrap();
+    dictionary.aliases.insert(alias, original);
+    dictionary.terms.intern("<urn:out>").unwrap();
+    dictionary.terms.intern("<urn:blocked>").unwrap();
+    let mut input = RelationStore::<_, 3>::with_dictionary(dictionary);
+    input
+        .insert_terms(["<urn:s>", "<urn:edge>", "<urn:o>"].map(DictionaryTerm::Surface))
+        .unwrap();
+    let first = ["<urn:s>", "<urn:edge>", "<urn:o>"]
+        .map(|surface| input.interner().lookup_term(surface).unwrap().unwrap());
+    let mut second = first;
+    second[1] = alias;
+    input.insert_terms(second.map(DictionaryTerm::Id)).unwrap();
+    let rules = vec![DlClause::datalog(
+        atom("?s", "out", "?o"),
+        vec![
+            atom("?s", "?p", "?o"),
+            atom("?s", "blocked", "?o").into_negated(),
+        ],
+    )];
+    let goal = atom("?s", "?p", "?o");
+    let expected = evaluate_guarded(
+        &compile(rules.clone()).unwrap(),
+        input.clone(),
+        &NoGuards,
+        &EvalOptions::default(),
+        None,
+    )
+    .unwrap();
+    let expected: BTreeSet<_> = expected.facts().rows_from(0).map(|(_, row)| row).collect();
+    let answer = evaluate_demanded(&rules, &goal, input, &EvalOptions::default(), None).unwrap();
+    assert_eq!(
+        answer
+            .answers()
+            .unwrap()
+            .into_iter()
+            .collect::<BTreeSet<_>>(),
+        expected
+    );
+    assert!(answer.answers().unwrap().contains(&first));
+    assert!(answer.answers().unwrap().contains(&second));
+}
+
+#[test]
+fn private_predicate_identity_aliases_fail_at_the_original_dictionary_factory() {
+    let mut input = RelationStore::<_, 3>::with_dictionary(CheckedDictionary::default());
+    input
+        .insert_terms(["<urn:s>", "<urn:edge>", "<urn:o>"].map(DictionaryTerm::Surface))
+        .unwrap();
+    input
+        .interner()
+        .control
+        .alias_private
+        .store(true, Ordering::Relaxed);
+    let error = evaluate_demanded(
+        &[],
+        &atom("?s", "?p", "?o"),
+        input,
+        &EvalOptions::default(),
+        None,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        DemandError::Evaluation(EvalError::DemandInput { .. })
+    ));
 }
 
 #[test]
@@ -765,7 +966,6 @@ fn unsupported_programs<const N: usize>(
     let body = atom("?x", "edge", "?y");
     let bad = [
         DlClause::datalog(head.clone(), vec![body.clone().into_negated()]),
-        DlClause::datalog(head.clone(), vec![atom("?x", "?p", "?y")]),
         DlClause::datalog(head.clone(), vec![body.clone()])
             .with_guards(vec![Guard::not_equal("?x", "?y")]),
         DlClause::new(
@@ -813,12 +1013,9 @@ fn unsupported_programs<const N: usize>(
         assert!(captured.child("reason").code.starts_with("datalog-demand-"));
         assert_eq!(control.writes.load(Ordering::Relaxed), 0);
     }
-    for goal in [
-        atom("0", "?p", "?y"),
-        atom("0", "reach", "?y").into_negated(),
-    ]
-    .into_iter()
-    .chain(extra_goals)
+    for goal in [atom("0", "reach", "?y").into_negated()]
+        .into_iter()
+        .chain(extra_goals)
     {
         assert!(matches!(
             evaluate_demanded(

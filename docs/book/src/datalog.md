@@ -75,38 +75,40 @@ cross-graph relationships. The internal closure is not exposed as a
 complete model of the authored program. Dictionary failures remain errors during
 preparation, execution and answer access, including empty answers.
 
-This entry point admits stratified relational rules with fixed IRI predicates and
+This entry point admits stratified relational rules with fixed IRI or variable predicates and
 one range-restricted atomic head. It validates the whole program before execution,
-including unreachable rules. Guards, base or model reads, variable predicates
+including unreachable rules. Guards, base or model reads
 and other head forms are refused. A head graph variable must have a
 positive relational binder, like every other head variable.
 
 Negated atoms and guard-free negated conjunctions retain their native semantics.
 Demand discovery uses an isolated positive shadow: it overapproximates possible
 bindings without using negative filters. Original input rows seed that shadow
-with the same subject, object and graph IDs; exact derived facts never feed it.
+with the same subject, object and graph IDs; private mapping relations preserve
+the original predicate identity. Exact derived facts never feed the shadow.
 Exact authored rules retain their negative conditions, so native stratification
 completes the demanded lower relations before absence is decided. This can
 request more than the minimal slice, but does not unconditionally materialize
 entire negative-support relations. Each conjunction keeps its existential
 bindings local.
 
-Preparation and the vector returned by `answers()` use resident allocation.
+Compilation and the vector returned by `answers()` use resident allocation.
 Execution uses the supplied `EvalOptions` and `StopSignal`; cancellation or an
 exceeded budget returns no partial answer owner. `work()` and `budget()` describe
-the transformed execution, including shadow and demand derivations. For programs
-with negation, `preparation()` separately reports original input rows and terms,
-and additional shadow input rows and terms. Stored-fact and arena totals include
-that augmented input; the generated-term allowance starts from its transformed
-term count, not the original source count. Preparation allocation is not execution
-work. Positive-only programs add no shadow input. Internal predicates use a framed native digest of the program, goal
+the transformed execution, including private input and demand derivations.
+`preparation()` separately reports original input rows and terms, and additional
+private mapping and shadow input rows and terms. Their construction uses the
+execution governors; new private terms count against the original dictionary
+baseline. Positive-only programs add no shadow input. Variable predicates use
+source-derived mappings that prevent generated facts from matching authored
+wildcards. Internal predicates use a framed native digest of the program, goal
 and sorted binding descriptors, with collision checks against the full dictionary
 and authored constants before any term is minted.
 
-### Maintained positive demand queries
+### Maintained demand queries
 
-`demand::prepare_demanded` retains a reusable transformation. For a positive
-fixed-predicate program, call `prepared.maintain` with the original source store,
+`demand::prepare_demanded` retains a reusable transformation. For an admitted
+program, call `prepared.maintain` with the original source store,
 the caller's `SessionContext` and evaluation options. The returned
 `MaintainedDemand` borrows the prepared artifact and uses the native maintenance
 engine. `maintain_in` additionally accepts supplemental metadata storage admission.
@@ -118,6 +120,7 @@ native cumulative work allowance, storage admission, cancellation and retained
 frames. The batch's opaque watermark is acknowledged only when the whole
 transaction completes. Insertions, retractions, duplicate assertions and removal
 of unsupported recursive cycles use the same native maintenance implementation.
+Stratified negative support and private mappings participate in that transaction.
 
 `answers` and `delta` retain the original goal's constants, repeated-variable and
 graph filters. `delta` contains exact net membership insertions and removals at
@@ -130,8 +133,8 @@ Host input cannot reference generated transformation terms in any position,
 including by an existing ID. Transaction validation occurs during metered native
 preparation before model mutation. A namespace rejection preserves the preceding
 complete snapshot and watermark. `admit_terms` validates its whole row before
-interning any term. Prepared programs with negation are explicitly refused by
-this maintenance entry point; their reusable complete evaluation is unchanged.
+interning any term. Only actually generated private identities are reserved;
+other caller spellings remain available.
 
 ## Determinism
 

@@ -115,13 +115,27 @@ where
                 loop {
                     match frame.phase {
                         Phase::Metadata => {
-                            if !frame
-                                .metadata
-                                .resume(&mut state.rel, memory, |cost| meter.allow(cost))
-                                .map_err(native_error)?
-                            {
-                                return meter.paused(state.report());
+                            if state.projection.is_some() {
+                                loop {
+                                    match state.project_in(memory, |cost| meter.allow(cost))? {
+                                        crate::demand::projection::Progress::Complete => break,
+                                        crate::demand::projection::Progress::Inserted(_) => {}
+                                        crate::demand::projection::Progress::Advanced => {}
+                                        crate::demand::projection::Progress::Paused => {
+                                            return meter.paused(state.report());
+                                        }
+                                    }
+                                }
+                            } else {
+                                if !frame
+                                    .metadata
+                                    .resume(&mut state.rel, memory, |cost| meter.allow(cost))
+                                    .map_err(native_error)?
+                                {
+                                    return meter.paused(state.report());
+                                }
                             }
+                            check_budget(state)?;
                             frame.phase = Phase::Weights;
                         }
                         Phase::Weights => {
