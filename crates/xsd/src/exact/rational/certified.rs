@@ -413,14 +413,14 @@ impl Rational {
         let Some(decoded) = crate::ieee::dyadic::Binary64Dyadic::decode(value) else {
             return Ok(None);
         };
-        let mut numerator = Int::from_u64(decoded.significand()).with_sign(decoded.negative());
+        let numerator = Int::from_u64(decoded.significand()).with_sign(decoded.negative());
         let exponent = decoded.exponent();
-        let denominator = if exponent < 0 {
-            Int::one().shl_using(exponent.unsigned_abs(), storage)?
-        } else {
-            numerator = numerator.shl_using(exponent.unsigned_abs(), storage)?;
-            Int::one()
-        };
+        if exponent >= 0 {
+            let numerator = numerator.shl_using(exponent.unsigned_abs(), storage)?;
+            // An integer already has the canonical denominator Integer::ONE.
+            return Ok(Some(Self::from_integer(Integer::from_bigint(numerator))));
+        }
+        let denominator = Int::one().shl_using(exponent.unsigned_abs(), storage)?;
         // The shared decoder already removed every power of two from its
         // nonzero significand. These two branches are canonical construction
         // proofs and require no additional gcd or independent reduction body.

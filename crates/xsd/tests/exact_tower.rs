@@ -284,6 +284,13 @@ prop_test! {
     fn float_sources_convert_exactly(bits in any::<u64>()) {
         let double = f64::from_bits(bits);
         let single = f32::from_bits((bits >> 32) as u32);
+        match Rational::from_f32(single) {
+            Ok(rational) => prop_assert!(oracle_rational(&rational).value_eq(&Oracle::from_f32(single))),
+            Err(error) => {
+                prop_assert!(!single.is_finite());
+                prop_assert_eq!(error, ExactError::NotFinite);
+            }
+        }
         for (value, exact, back) in [
             (Decimal::from_f64(double), double.is_finite().then(|| Oracle::from_f64(double)), double),
             (
@@ -574,7 +581,12 @@ fn owl_rational_identifies_the_full_exact_decimal_branch_only() {
 
 #[test]
 fn non_finite_sources_are_refused_and_finite_extremes_are_not() {
-    for refused in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+    for refused in [
+        f64::NAN,
+        f64::from_bits(u64::MAX),
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+    ] {
         assert_eq!(Decimal::from_f64(refused), Err(ExactError::NotFinite));
         assert_eq!(Rational::from_f64(refused), Err(ExactError::NotFinite));
         assert_eq!(
@@ -588,10 +600,21 @@ fn non_finite_sources_are_refused_and_finite_extremes_are_not() {
         f64::MIN,
         f64::from_bits(1),
         -f64::from_bits(1),
+        f64::from_bits(2),
+        f64::from_bits((1_u64 << 52) - 1),
+        f64::MIN_POSITIVE,
+        f64::from_bits((1_u64 << 52) + 1),
+        2_f64.powi(1023),
         0.0,
         -0.0,
     ] {
         let decimal = Decimal::from_f64(accepted).expect("finite");
+        let rational = Rational::from_f64(accepted).expect("finite");
+        assert!(oracle_rational(&rational).value_eq(&Oracle::from_f64(accepted)));
+        assert_eq!(rational, Rational::from_decimal(&decimal));
+        if accepted == 0.0 {
+            assert_eq!(rational, Rational::ZERO);
+        }
         assert_eq!(decimal.to_f64().to_bits(), (accepted + 0.0).to_bits());
         assert!(Integer::from_f64_truncated(accepted).is_ok());
     }
@@ -609,6 +632,21 @@ fn non_finite_sources_are_refused_and_finite_extremes_are_not() {
         1074
     );
     assert!(Decimal::from_f32(f32::NAN).is_err());
+    for refused in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        assert_eq!(Rational::from_f32(refused), Err(ExactError::NotFinite));
+    }
+    for accepted in [
+        0.0_f32,
+        -0.0,
+        f32::from_bits(1),
+        f32::from_bits((1 << 23) - 1),
+        f32::MIN_POSITIVE,
+        f32::MAX,
+        f32::MIN,
+    ] {
+        let rational = Rational::from_f32(accepted).expect("finite");
+        assert!(oracle_rational(&rational).value_eq(&Oracle::from_f32(accepted)));
+    }
     assert_eq!(
         Decimal::from_f32(0.1).expect("finite").to_string(),
         "0.100000001490116119384765625"
