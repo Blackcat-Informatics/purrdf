@@ -115,19 +115,6 @@ where
         self.batch.watermark()
     }
 
-    /// One phase iteration may retain multiple successful factories before the
-    /// next factory refuses. Its logical operation credit is consumed only once.
-    fn allow_unit(&mut self, cost: usize, allow: &mut impl FnMut(usize) -> bool) -> bool {
-        if self.unit_admitted {
-            return allow(0); // A fresh stop signal still applies to a retained unit.
-        }
-        if !allow(cost) {
-            return false;
-        }
-        self.unit_admitted = true;
-        true
-    }
-
     pub(super) fn reject(self) -> usize {
         assert_eq!(self.phase, Phase::Validate);
         let bytes = self.changes.capacity() * size_of::<([I; N], i64)>();
@@ -161,7 +148,7 @@ where
                 .expect("maintenance retains native chosen proofs");
             match self.phase {
                 Phase::Reserve => {
-                    if !self.allow_unit(1, &mut allow) {
+                    if !crate::allocation::allow_unit(&mut self.unit_admitted, 1, &mut allow) {
                         return Ok(false);
                     }
                     reserve_array_in(
@@ -184,7 +171,7 @@ where
                         .as_ref()
                         .map_or(Ok(1), crate::demand::projection::Runtime::input_scan_work)
                         .map_err(storage_error)?;
-                    if !self.allow_unit(cost, &mut allow) {
+                    if !crate::allocation::allow_unit(&mut self.unit_admitted, cost, &mut allow) {
                         return Ok(false);
                     }
                     super::validate_input_names(
@@ -270,7 +257,7 @@ where
                     self.phase = Phase::ReserveIndexes;
                 }
                 Phase::ReserveIndexes => {
-                    if !self.allow_unit(1, &mut allow) {
+                    if !crate::allocation::allow_unit(&mut self.unit_admitted, 1, &mut allow) {
                         return Ok(false);
                     }
                     reserve_index_in(
@@ -291,7 +278,7 @@ where
                         self.phase = Phase::ReachReserve;
                         continue;
                     };
-                    if !self.allow_unit(1, &mut allow) {
+                    if !crate::allocation::allow_unit(&mut self.unit_admitted, 1, &mut allow) {
                         return Ok(false);
                     }
                     let old = inputs.weights.get(&terms).copied().unwrap_or(0);
@@ -323,7 +310,8 @@ where
                     let capacity = rows.map_or(0, RowSet::scan_work).checked_add(1).ok_or(
                         MaintenanceError::Failed(EvalError::Storage(StorageError::SizeOverflow)),
                     )?;
-                    if !self.allow_unit(capacity, &mut allow) {
+                    if !crate::allocation::allow_unit(&mut self.unit_admitted, capacity, &mut allow)
+                    {
                         return Ok(false);
                     }
                     let count = rows.map_or(0, RowSet::len);
@@ -356,7 +344,7 @@ where
                     let cost = count.checked_add(1).ok_or(MaintenanceError::Failed(
                         EvalError::Storage(StorageError::SizeOverflow),
                     ))?;
-                    if !self.allow_unit(cost, &mut allow) {
+                    if !crate::allocation::allow_unit(&mut self.unit_admitted, cost, &mut allow) {
                         return Ok(false);
                     }
                     reserve_array_in(
@@ -388,7 +376,7 @@ where
                         self.phase = Phase::ReachEdges;
                         continue;
                     };
-                    if !self.allow_unit(1, &mut allow) {
+                    if !crate::allocation::allow_unit(&mut self.unit_admitted, 1, &mut allow) {
                         return Ok(false);
                     }
                     let mut reached = false;
@@ -411,7 +399,7 @@ where
                         }
                         continue;
                     };
-                    if !self.allow_unit(1, &mut allow) {
+                    if !crate::allocation::allow_unit(&mut self.unit_admitted, 1, &mut allow) {
                         return Ok(false);
                     }
                     if self.reached[edge.body] {
@@ -430,7 +418,7 @@ where
                         self.phase = Phase::ClosurePop;
                         continue;
                     }
-                    if !self.allow_unit(1, &mut allow) {
+                    if !crate::allocation::allow_unit(&mut self.unit_admitted, 1, &mut allow) {
                         return Ok(false);
                     }
                     let rule = self.cursor;
@@ -450,7 +438,7 @@ where
                     self.cursor += 1;
                 }
                 Phase::ClosurePop => {
-                    if !self.allow_unit(1, &mut allow) {
+                    if !crate::allocation::allow_unit(&mut self.unit_admitted, 1, &mut allow) {
                         return Ok(false);
                     }
                     self.current = self.roots.pop();
@@ -471,7 +459,7 @@ where
                     } else {
                         1
                     };
-                    if !self.allow_unit(cost, &mut allow) {
+                    if !crate::allocation::allow_unit(&mut self.unit_admitted, cost, &mut allow) {
                         return Ok(false);
                     }
                     let (row, terms) = self
@@ -542,7 +530,7 @@ where
                     .ok_or(MaintenanceError::Failed(EvalError::Storage(
                         StorageError::SizeOverflow,
                     )))?;
-                    if !self.allow_unit(cost, &mut allow) {
+                    if !crate::allocation::allow_unit(&mut self.unit_admitted, cost, &mut allow) {
                         return Ok(false);
                     }
                     reserve_array_in(
@@ -588,7 +576,7 @@ where
                 }
                 Phase::Heads => {
                     if self.cursor == self.delete.len() || inputs.exe.rule_count() == 0 {
-                        if !self.allow_unit(1, &mut allow) {
+                        if !crate::allocation::allow_unit(&mut self.unit_admitted, 1, &mut allow) {
                             return Ok(false);
                         }
                         dictionary.check_read().map_err(source_error)?;
@@ -601,7 +589,7 @@ where
                         self.cursor += 1;
                         continue;
                     }
-                    if !self.allow_unit(1, &mut allow) {
+                    if !crate::allocation::allow_unit(&mut self.unit_admitted, 1, &mut allow) {
                         return Ok(false);
                     }
                     let runtime = &inputs.exe.runtimes()[self.rule];

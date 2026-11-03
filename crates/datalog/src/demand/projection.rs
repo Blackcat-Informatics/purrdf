@@ -112,11 +112,7 @@ pub(crate) enum Error<E> {
     Native(DictionaryError<E>),
     Identity,
 }
-impl<E> From<DictionaryError<E>> for Error<E> {
-    fn from(error: DictionaryError<E>) -> Self {
-        Self::Native(error)
-    }
-}
+purrdf_lex::variant_from!(impl<E> Error<E> { Native(DictionaryError<E>) });
 impl<E> From<StorageError> for Error<E> {
     fn from(error: StorageError) -> Self {
         Self::Native(DictionaryError::Storage(error))
@@ -270,16 +266,6 @@ where
         Ok(Some(result?))
     }
 
-    fn allow(&mut self, cost: usize, allow: &mut impl FnMut(usize) -> bool) -> bool {
-        if self.unit_admitted {
-            return allow(0);
-        }
-        if !allow(cost) {
-            return false;
-        }
-        self.unit_admitted = true;
-        true
-    }
     fn complete_unit(&mut self) {
         self.unit_admitted = false;
     }
@@ -338,7 +324,7 @@ where
         }
         self.member_in(original, memory)?;
         loop {
-            if !self.allow(1, &mut allow) {
+            if !crate::allocation::allow_unit(&mut self.unit_admitted, 1, &mut allow) {
                 return Ok(false);
             }
             reserve_ordered_in(&mut self.members, memory, &mut self.retired_bytes)?;
@@ -509,7 +495,7 @@ where
                             continue;
                         }
                     }
-                    if !self.allow(1, &mut allow) {
+                    if !crate::allocation::allow_unit(&mut self.unit_admitted, 1, &mut allow) {
                         return Ok(Progress::Paused);
                     }
                     let (row, terms) = self.current.expect("retained original source row");
@@ -558,7 +544,7 @@ where
                         self.next_phase(Phase::Sort);
                         continue;
                     }
-                    if !self.allow(1, &mut allow) {
+                    if !crate::allocation::allow_unit(&mut self.unit_admitted, 1, &mut allow) {
                         return Ok(Progress::Paused);
                     }
                     if self.pending_name.is_none() {
@@ -615,7 +601,7 @@ where
                         self.next_phase(Phase::Members);
                         continue;
                     }
-                    if !self.allow(1, &mut allow) {
+                    if !crate::allocation::allow_unit(&mut self.unit_admitted, 1, &mut allow) {
                         return Ok(Progress::Paused);
                     }
                     let name = &self.plan.internal_order[self.internal_cursor];
@@ -670,7 +656,7 @@ where
                         self.next_phase(Phase::Mirrors);
                         continue;
                     };
-                    if !self.allow(1, &mut allow) {
+                    if !crate::allocation::allow_unit(&mut self.unit_admitted, 1, &mut allow) {
                         return Ok(Progress::Paused);
                     }
                     if !self.mint_in(original, rel, memory, &mut allow)? {
@@ -684,7 +670,7 @@ where
                     return Ok(Progress::Advanced);
                 }
                 Phase::PublishMap => {
-                    if !self.allow(1, &mut allow) {
+                    if !crate::allocation::allow_unit(&mut self.unit_admitted, 1, &mut allow) {
                         return Ok(Progress::Paused);
                     }
                     let original = self.publishing.expect("retained map publication");
@@ -724,7 +710,7 @@ where
                         self.next_phase(Phase::Complete);
                         continue;
                     };
-                    if !self.allow(1, &mut allow) {
+                    if !crate::allocation::allow_unit(&mut self.unit_admitted, 1, &mut allow) {
                         return Ok(Progress::Paused);
                     }
                     if let Some(target) = self.shadow_target(terms[1]) {

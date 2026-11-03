@@ -48,17 +48,6 @@ impl<I: TermIdentity, const N: usize> Update<I, N> {
         }
     }
 
-    fn allow(&mut self, allow: &mut impl FnMut(usize) -> bool) -> bool {
-        if self.unit_admitted {
-            return allow(0);
-        }
-        if !allow(1) {
-            return false;
-        }
-        self.unit_admitted = true;
-        true
-    }
-
     pub(crate) fn retire(self) -> Result<usize, StorageError> {
         self.retired_bytes
             .checked_add(self.deltas.storage_bytes()?)
@@ -88,7 +77,7 @@ impl<I: TermIdentity, const N: usize> Update<I, N> {
                         self.phase = Phase::Sort;
                         continue;
                     }
-                    if !self.allow(&mut allow) {
+                    if !crate::allocation::allow_unit(&mut self.unit_admitted, 1, &mut allow) {
                         return Ok(Progress::Paused);
                     }
                     let (terms, weight) = changes[self.cursor];
@@ -154,7 +143,7 @@ impl<I: TermIdentity, const N: usize> Update<I, N> {
                         self.phase = Phase::Mirrors;
                         continue;
                     };
-                    if !self.allow(&mut allow) {
+                    if !crate::allocation::allow_unit(&mut self.unit_admitted, 1, &mut allow) {
                         return Ok(Progress::Paused);
                     }
                     let old = runtime.references(id);
@@ -194,7 +183,7 @@ impl<I: TermIdentity, const N: usize> Update<I, N> {
                         self.phase = Phase::Complete;
                         continue;
                     }
-                    if !self.allow(&mut allow) {
+                    if !crate::allocation::allow_unit(&mut self.unit_admitted, 1, &mut allow) {
                         return Ok(Progress::Paused);
                     }
                     let (mut terms, weight) = changes[self.cursor];
