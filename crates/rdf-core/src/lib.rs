@@ -61,6 +61,7 @@ pub mod bytes;
 // the malformed-list taxonomy and standard-`rdf:` const set backing the
 // `DatasetView` walker methods.
 pub mod collections;
+pub mod content_alias;
 pub mod content_id;
 pub mod content_store;
 // The cover law: verbatim byte spans back into the document they cover,
