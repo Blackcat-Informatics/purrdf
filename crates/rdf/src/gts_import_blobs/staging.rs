@@ -70,7 +70,7 @@ pub(super) fn stage_payload(
     let mut blake3 = purrdf_hash::blake3::Hasher::new();
     let mut sha256 = purrdf_core::ContentHasher::default();
     let mut len = 0usize;
-    let mut scratch = [0; 32768];
+    let mut scratch = [0; 8192];
     let result: Result<_, PayloadFailure> = (|| {
         loop {
             let count = match source.read(&mut scratch) {

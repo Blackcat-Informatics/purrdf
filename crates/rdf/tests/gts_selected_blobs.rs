@@ -2483,7 +2483,15 @@ fn inline_export_keeps_zstd_checksum_damage_hard_when_decode_is_admitted() {
                     assert_eq!(cause.code, "gts-payload-damaged");
                     cause.child("detail").child("cause")
                 };
-                assert_eq!(codec.code, "gts-codec-failed");
+                if declared_digest {
+                    assert_eq!(codec.code, "gts-codec-failed");
+                } else {
+                    assert_eq!(codec.code, "std-io");
+                    assert_eq!(
+                        codec.child("cause").child("cause").code,
+                        "zstd-frame-decoder-checksum-mismatch"
+                    );
+                }
             }
             // No integrity claim is made after refusing before output is decoded.
             let mut damaged = wire.to_vec();
@@ -2569,7 +2577,13 @@ fn inline_export_retains_missing_codec_cause_but_nonblob_refusal_is_hard() {
     );
     let inspected = Capture::read(omissions[0].native_cause().unwrap());
     assert_eq!(
-        inspected.child("cause").child("detail").child("cause").code,
+        inspected
+            .child("cause")
+            .child("detail")
+            .child("cause")
+            .child("cause")
+            .child("cause")
+            .code,
         "gts-codec-unavailable"
     );
     drop(inspected);

@@ -209,7 +209,7 @@ impl BlobCollector<'_> {
 
     pub(super) fn omit_or_error(
         &mut self,
-        payload: BlobPayload<'_>,
+        payload: &BlobPayload<'_>,
         kind: GtsBlobOmissionKind,
         error: RdfDiagnostic,
     ) -> Result<(), RdfDiagnostic> {
@@ -221,7 +221,7 @@ impl BlobCollector<'_> {
 
     pub(super) fn record_export_omission(
         &mut self,
-        payload: BlobPayload<'_>,
+        payload: &BlobPayload<'_>,
         kind: GtsBlobOmissionKind,
         cause: Option<RdfDiagnostic>,
     ) -> Result<(), RdfDiagnostic> {

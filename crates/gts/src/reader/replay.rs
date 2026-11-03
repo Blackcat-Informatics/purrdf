@@ -3,7 +3,11 @@
 
 //! Snapshot interpretation over native admitted CBOR replay ranges.
 
-use super::*;
+use super::{
+    BLOB_BUDGET_DIAGNOSTIC, BlobContent, BlobPayload, BlobRefusalKind, FoldError, Folder,
+    PayloadCause, PayloadError, Read, StreamingSink, TermIdBase, Value, ValueRef, cbor,
+    digest_label,
+};
 
 impl Folder<'_, '_, '_> {
     pub(super) fn spool_snapshot(
@@ -82,7 +86,7 @@ impl Folder<'_, '_, '_> {
                 };
                 let mut digest = purrdf_hash::blake3::Hasher::new();
                 let mut length = 0usize;
-                let mut scratch = [0; 32768];
+                let mut scratch = [0; 8192];
                 loop {
                     let count = match bytes.read(&mut scratch) {
                         Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,

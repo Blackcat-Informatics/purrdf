@@ -485,7 +485,7 @@ where
     output.publish(&length_prefix.to_le_bytes())?;
     let mut digest = purrdf_core::ContentHasher::default();
     let mut read = 0usize;
-    let mut scratch = [0; 32768];
+    let mut scratch = [0; 8192];
     loop {
         let bound = (length - read).saturating_add(1).min(scratch.len());
         let count = match source.read(&mut scratch[..bound]) {

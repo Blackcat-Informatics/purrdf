@@ -351,10 +351,10 @@ impl ItemRange {
         Ok(selected)
     }
     /// Read a definite or indefinite byte string without retaining its payload.
-    pub fn byte_reader<'a, R: Read + Seek + ?Sized>(
+    pub fn byte_reader<R: Read + Seek + ?Sized>(
         self,
-        reader: &'a mut R,
-    ) -> Result<Option<ByteRangeReader<'a, R>>, DecodeError> {
+        reader: &mut R,
+    ) -> Result<Option<ByteRangeReader<'_, R>>, DecodeError> {
         let mut source = RangeSource::new(reader, self)?;
         let first = source.byte()?;
         if first >> 5 != 2 {
