@@ -41,6 +41,7 @@ mod layout;
 mod predicate_error;
 mod presentation;
 mod scene;
+mod scene_error;
 mod spec_error;
 mod svg;
 
@@ -49,6 +50,7 @@ pub use layout::*;
 pub use predicate_error::{VizPredicateError, VizResolvedPredicate};
 pub use presentation::*;
 pub use scene::*;
+pub use scene_error::VizSceneError;
 pub use spec_error::{VizSpecError, VizVocabularyError};
 pub use svg::*;
 
