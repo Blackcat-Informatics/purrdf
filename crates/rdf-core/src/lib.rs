@@ -354,7 +354,8 @@ pub mod prelude {
 pub use ir::{
     CompositeDatasetView, CompositeSource, CompositeViewId, GraphPlacement, OwnerKey,
     OwnerMutability, RetainedCharge, RetentionGuard, RetentionLedger, RetentionSnapshot,
-    ScopeBinding, ViewAccountingReport, ViewLimits, ViewStats, ViewWork,
+    ScopeBinding, UnionDatasetView, UnionError, UnionSource, UnionTermGuard, UnionTermId,
+    ViewAccountingReport, ViewLimits, ViewStats, ViewWork,
 };
 
 #[doc(hidden)]

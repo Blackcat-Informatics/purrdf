@@ -161,6 +161,7 @@ deps = [
     "purrdf-iri",
     "purrdf-xsd",
     "purrdf-lex",
+    "purrdf-stack",
 ]
 
 [[crate]]

@@ -489,6 +489,21 @@ pub trait ViewTermId:
     fn encode_computed(scratch_index: u32) -> Self::JoinKeyAtom;
 }
 
+/// Implement the computed-key arm of [`ViewTermId`] for a wide join space.
+///
+/// Invoke inside an implementation whose `JoinKeyAtom` is `u128` and whose
+/// existing IDs never set bit 127. The high bit separates every computed
+/// scratch index from those existing IDs. The original ID encoding remains
+/// the implementation's responsibility.
+#[macro_export]
+macro_rules! wide_computed_join_key_method {
+    () => {
+        fn encode_computed(scratch_index: u32) -> u128 {
+            (1_u128 << 127) | u128::from(scratch_index)
+        }
+    };
+}
+
 impl ViewTermId for TermId {
     type JoinKeyAtom = u64;
 
@@ -686,6 +701,13 @@ impl GraphSelector {
 ///   silently drops the layer it was told to expect, and reports success. Claim what
 ///   the view enumerates, and enumerate what it claims.
 pub trait DatasetView {
+    /// Retained-source accounting already established by a composed carrier.
+    /// A further composition carries these original aggregate dimensions forward
+    /// instead of treating a nested union as one fresh source. Ordinary backends
+    /// return `None`; their reached RDF is counted by the composing view.
+    fn retained_view_stats(&self) -> Option<crate::ViewStats> {
+        None
+    }
     /// Immutable snapshot identity when the view carries a certified content or
     /// representation binding. Unknown identity is explicit, never an address,
     /// statistics fingerprint or session-local term identifier.
@@ -2230,6 +2252,12 @@ impl DatasetView for RdfDataset {
 /// and RDF 1.2 side-tables — is forwarded, so no default (e.g. an empty reifier layer)
 /// can silently diverge from the inner view.
 impl<T: DatasetView> DatasetView for Arc<T> {
+    fn checked_read<U>(&self, read: impl FnOnce(&Self) -> U) -> Result<U, Self::ReadError> {
+        (**self).checked_read(|_| read(self))
+    }
+    fn retained_view_stats(&self) -> Option<crate::ViewStats> {
+        (**self).retained_view_stats()
+    }
     fn snapshot_identity(&self) -> Result<Option<purrdf_hash::hex::Digest32>, Self::ReadError> {
         (**self).snapshot_identity()
     }
