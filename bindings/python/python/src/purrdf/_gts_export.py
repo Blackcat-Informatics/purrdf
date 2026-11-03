@@ -105,7 +105,7 @@ def gts_to_sqlite(data: bytes, path: str, *, blob_limits: Any) -> GtsExportResul
         rows, blobs, report = _native._gts_columnar_staged_from_bytes(
             data, blob_limits=blob_limits, staging=staging
         )
-        connection = sqlite3.connect(path)
+        connection = sqlite3.connect(path, autocommit=False)
         try:
             with connection:
                 for table, ddl, count in _tables(rows):
