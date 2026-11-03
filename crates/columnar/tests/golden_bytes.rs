@@ -16,6 +16,13 @@ use purrdf_core::{
 };
 use purrdf_testkit::rng::splitmix64_next as mix;
 
+#[path = "golden_bytes/union_view.rs"]
+mod union_view;
+use union_view::{
+    arbitrary_backend_union_keeps_live_failures_and_exact_view_limits,
+    arbitrary_backend_union_writes_the_same_archive_and_scoped_rdf,
+};
+
 /// Every term kind in a seeded mix, so each nullable `INT64` column of the
 /// terms table (datatype, direction, scope, the triple components) holds runs
 /// of nulls and values of many lengths across several 64-row words, and the
@@ -198,4 +205,8 @@ fn seeded_files_are_the_pinned_bytes() {
     assert_eq!(observed, pinned);
 }
 
-purrdf_testkit::harness_main!(seeded_files_are_the_pinned_bytes);
+purrdf_testkit::harness_main!(
+    seeded_files_are_the_pinned_bytes,
+    arbitrary_backend_union_writes_the_same_archive_and_scoped_rdf,
+    arbitrary_backend_union_keeps_live_failures_and_exact_view_limits,
+);

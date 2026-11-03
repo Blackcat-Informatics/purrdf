@@ -1881,6 +1881,9 @@ fn alias_last(
 }
 
 impl DatasetView for CompositeDatasetView {
+    fn retained_view_stats(&self) -> Option<ViewStats> {
+        Some(self.stats())
+    }
     type Id = CompositeViewId;
     type ReadError = Infallible;
     type TermGuard<'a>

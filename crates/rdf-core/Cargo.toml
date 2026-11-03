@@ -80,10 +80,11 @@ regex = { workspace = true }
 # Normalized regex IR for faithful Unicode ECMA-262 pattern emission.
 regex-syntax = { workspace = true }
 
-[dev-dependencies]
-# Runs the deep-structure tests on a stack of a stated size: a fresh thread
-# natively, the running stack under a fresh floor on wasm32.
+# Admits each nested arbitrary-backend checked-read scope against the current
+# native or wasm shadow-stack floor; never starts a new thread for a read.
 purrdf-stack = { workspace = true }
+
+[dev-dependencies]
 # The workspace's shared counting allocator, for `tests/ir_zero_alloc.rs`. Path-
 # only and unpublished, so it is stripped from the packaged manifest; std-only
 # and dependency-free, so it needs no target gate.

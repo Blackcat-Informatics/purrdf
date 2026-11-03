@@ -73,6 +73,7 @@ pub mod skolem;
 pub mod term;
 mod term_walk;
 pub mod triple;
+pub mod union;
 pub mod validate;
 
 pub use builder::{
@@ -150,6 +151,7 @@ pub use triple::{
 pub use composite::{
     CompositeDatasetView, CompositeSource, CompositeViewId, GraphPlacement, ScopeBinding,
 };
+pub use union::{UnionDatasetView, UnionError, UnionSource, UnionTermGuard, UnionTermId};
 pub use view_accounting::{
     OwnerKey, OwnerMutability, RetainedCharge, RetentionGuard, RetentionLedger, RetentionSnapshot,
     ViewAccountingReport, ViewLimits, ViewStats, ViewWork,
