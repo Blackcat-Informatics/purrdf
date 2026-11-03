@@ -89,6 +89,10 @@ pub enum ColumnarError {
     Storage(purrdf_lex::allocation::StorageError),
     /// Original content-store integrity refusal during projection.
     ContentStore(purrdf_core::ContentStoreError),
+    /// Original staged-payload source I/O failure.
+    BlobRead(purrdf_hash::error::IoFailure),
+    /// A replayable blob source repeated a canonical content identity.
+    DuplicateBlob(purrdf_core::ContentDigest),
     /// Original blob integrity refusal at its decoded row.
     BlobContent {
         /// Zero-based blob table row.
@@ -207,6 +211,8 @@ impl purrdf_hash::error::StructuredError for ColumnarError {
         },
         Storage(cause) => "columnar-storage" { "cause" => Cause(cause) },
         ContentStore(cause) => "columnar-content-store" { "cause" => Cause(cause) },
+        BlobRead(cause) => "columnar-blob-read" { "cause" => Cause(cause) },
+        DuplicateBlob(digest) => "columnar-duplicate-blob" { "digest" => Record(digest) },
         BlobContent { row, cause } => "columnar-blob-content" {
             "row" => Unsigned(*row as u128), "cause" => Cause(cause),
         },
@@ -333,6 +339,10 @@ impl fmt::Display for ColumnarError {
             Self::ContentStore(cause) => {
                 write!(f, "columnar content store is malformed: {cause}")
             }
+            Self::BlobRead(cause) => write!(f, "columnar blob source read failed: {cause}"),
+            Self::DuplicateBlob(digest) => {
+                write!(f, "columnar blob source repeats digest {digest}")
+            }
             Self::BlobContent { row, cause } => {
                 write!(f, "columnar blobs.bytes is malformed: row {row}: {cause}")
             }
@@ -406,6 +416,7 @@ purrdf_lex::error_source!(ColumnarError => {
     Self::Projection { reason, .. } => reason,
     Self::Storage(cause) => cause,
     Self::ContentStore(cause) => cause,
+    Self::BlobRead(cause) => cause,
     Self::BlobContent { cause, .. } => cause,
     Self::Reconstruction(cause) => cause,
     Self::Reader { reason, .. } => reason,

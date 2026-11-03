@@ -173,7 +173,7 @@ pub use collections::{
     SoleObject, build_rdf_list, convertible_list_cells, walk_rdf_list,
 };
 pub use content_id::{Blake3ContentId, ContentIdScheme};
-pub use content_store::{Bytes, ContentDigest, ContentStore, ContentStoreError};
+pub use content_store::{Bytes, ContentDigest, ContentHasher, ContentStore, ContentStoreError};
 pub use dataset_view::{
     AccessCost, DatasetMut, DatasetView, DrainCheckpoint, DrainFailure, FallibleDatasetView,
     GraphMatch, GraphMatchValue, GraphSelector, NoopReservation, OwnedWorkspaceReservation,

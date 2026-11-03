@@ -27,7 +27,7 @@ use crate::{
 };
 pub use encoding::EncodingReason;
 pub use profile::{ColumnProfile, MetadataProfile, PageProfile, RowGroupProfile, SchemaProfile};
-pub(crate) use stream::{write_rows, write_rows_to};
+pub(crate) use stream::{write_blob_sources_to, write_rows, write_rows_to};
 
 const PARQUET_MAGIC: &[u8; 4] = b"PAR1";
 const FILE_VERSION: i32 = 1;
@@ -481,7 +481,39 @@ fn encode_page(
     let definition_len = checked_i32_len(definitions.len(), "definition-level byte length")?;
     let row_count = i32::try_from(row_count).expect("TableData bounded row count");
     let null_count = i32::try_from(null_count).expect("null count <= row count");
-    let header = CompactWriter::root(|writer| {
+    let header = encode_page_header(
+        uncompressed_page_size,
+        compressed_page_size,
+        definition_len,
+        row_count,
+        null_count,
+        encoding,
+    );
+    let page_len = header.len() + definitions.len() + compressed_values.len();
+    let total_uncompressed_size = i64::try_from(header.len()).expect("header length fits i64")
+        + i64::from(uncompressed_page_size);
+    let total_compressed_size = i64::try_from(page_len).map_err(|_| {
+        ColumnarError::limit("column chunk byte length", page_len, i64::MAX as usize)
+    })?;
+    out.reserve(page_len);
+    out.extend_from_slice(&header);
+    out.extend_from_slice(definitions);
+    out.extend_from_slice(&compressed_values);
+    Ok(EncodedPage {
+        total_uncompressed_size,
+        total_compressed_size,
+    })
+}
+
+fn encode_page_header(
+    uncompressed_page_size: i32,
+    compressed_page_size: i32,
+    definition_len: i32,
+    row_count: i32,
+    null_count: i32,
+    encoding: PageEncoding<'_>,
+) -> Vec<u8> {
+    CompactWriter::root(|writer| {
         writer.i32_field(1, PAGE_TYPE_DATA_V2);
         writer.i32_field(2, uncompressed_page_size);
         writer.i32_field(3, compressed_page_size);
@@ -497,20 +529,6 @@ fn encode_page(
                 writer.struct_field(8, |writer| stats.write(writer));
             }
         });
-    });
-    let page_len = header.len() + definitions.len() + compressed_values.len();
-    let total_uncompressed_size = i64::try_from(header.len()).expect("header length fits i64")
-        + i64::from(uncompressed_page_size);
-    let total_compressed_size = i64::try_from(page_len).map_err(|_| {
-        ColumnarError::limit("column chunk byte length", page_len, i64::MAX as usize)
-    })?;
-    out.reserve(page_len);
-    out.extend_from_slice(&header);
-    out.extend_from_slice(definitions);
-    out.extend_from_slice(&compressed_values);
-    Ok(EncodedPage {
-        total_uncompressed_size,
-        total_compressed_size,
     })
 }
 

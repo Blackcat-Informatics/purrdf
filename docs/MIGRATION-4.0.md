@@ -49,6 +49,34 @@ division, WKT and GeoJSON parsing resource policies, the SPARQL pre-binding rewr
 SPARQL diagnostic codes.
 Each has its own section below.
 
+## Streaming GTS payloads
+
+`BlobPayload::bytes` now uses `BlobContent`: source-backed CBOR chunks,
+a replay reader, or `Absent`. Consume it during the callback with `reader()`;
+use `chunks()` only when the source supports borrowed chunks. Payload events
+are no longer `Copy` or `Clone`. `digest_computed` distinguishes a verified
+identity from a declared digest that the consumer must verify.
+
+`prepare_gts_columnar_to` accepts a `GtsBlobStager` for provisional payloads
+and seekable transformed-snapshot scratch. Implement `begin`, `write`, `discard`
+and `scratch`; scratch implements `cbor::ReplayStorage::finish`. Successful
+imports return selected handles. Superseded payloads, recoverable omissions
+and successfully interpreted snapshot scratch are released during import.
+On failure, dispose of the remaining provisional storage.
+
+Python SQLite, DuckDB and Parquet GTS exports use provisional files and bounded
+payload I/O. Existing explicit limits, unbounded admission and typed omission
+reports still apply. The native dataset, term/reference state, metadata and
+output descriptors remain resident; streaming payloads does not establish a
+process-wide memory ceiling. The explicit resident row/file APIs still
+materialize their returned payloads.
+
+Streamed Parquet blobs use one uncompressed row group per selected digest in
+canonical SHA-256 order. Their physical bytes differ from the resident writer's
+page grouping; the native five-table schema and logical contents are unchanged.
+`write_with_blob_sources_to` verifies source length and digest while writing.
+Its output stays provisional until it returns success.
+
 ## Controlled native RDF parsing
 
 `parse_dataset_controlled` accepts Turtle and TriG with caller-owned storage,

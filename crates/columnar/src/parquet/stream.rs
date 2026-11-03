@@ -385,7 +385,18 @@ fn write_rows_limited<'a, S, E>(
         )?);
     }
     drop(pending);
-    let footer = encode_file_metadata(table, row_count, &groups);
+    finish_file(output, row_count, &groups)
+}
+
+fn finish_file<S, E, F>(
+    mut output: Output<'_, F>,
+    row_count: i64,
+    groups: &[EncodedGroup],
+) -> Result<TableWriteReport, ColumnarSinkError<S, E>>
+where
+    F: FnMut(Table, &[u8]) -> Result<(), E>,
+{
+    let footer = encode_file_metadata(output.table, row_count, groups);
     let length = u32::try_from(footer.len()).map_err(|_| {
         ColumnarError::limit("Parquet footer length", footer.len(), u32::MAX as usize)
     })?;
@@ -397,6 +408,138 @@ fn write_rows_limited<'a, S, E>(
         rows: row_count as u64,
         row_groups: groups.len() as u64,
         data_pages: output.pages,
+    })
+}
+
+pub(crate) fn write_blob_sources_to<S, E, B: crate::BlobSource>(
+    blobs: &[&B],
+    emit: &mut impl FnMut(Table, &[u8]) -> Result<(), E>,
+) -> Result<TableWriteReport, ColumnarSinkError<S, E>> {
+    let mut output = Output {
+        table: Table::Blobs,
+        offset: 0,
+        pages: 0,
+        emit,
+    };
+    output.publish(PARQUET_MAGIC)?;
+    let mut groups = Vec::with_capacity(blobs.len());
+    for blob in blobs {
+        let offset = output.offset as i64;
+        let digest = blob.digest();
+        let spelling = digest.to_hex();
+        let columns = vec![
+            emit_blob_column(
+                spelling.as_bytes(),
+                spelling.len(),
+                "digest",
+                None,
+                &mut output,
+            )?,
+            emit_blob_column(
+                blob.open()
+                    .map_err(|cause| ColumnarError::BlobRead(cause.into()))?,
+                blob.len(),
+                "bytes",
+                Some(digest),
+                &mut output,
+            )?,
+        ];
+        groups.push(EncodedGroup {
+            columns,
+            row_count: 1,
+            offset,
+        });
+    }
+    let row_count = i64::try_from(blobs.len()).map_err(|_| table_budget_overflow())?;
+    finish_file(output, row_count, &groups)
+}
+
+fn emit_blob_column<S, E, F>(
+    mut source: impl std::io::Read,
+    length: usize,
+    path: &'static str,
+    expected: Option<purrdf_core::ContentDigest>,
+    output: &mut Output<'_, F>,
+) -> Result<EncodedColumn, ColumnarSinkError<S, E>>
+where
+    F: FnMut(Table, &[u8]) -> Result<(), E>,
+{
+    let length_prefix = checked_i32_len(length, "PLAIN BYTE_ARRAY length")?;
+    let page_size = length.checked_add(4).ok_or_else(table_budget_overflow)?;
+    let page_size = checked_i32_len(page_size, "Parquet uncompressed page size")?;
+    let header = super::encode_page_header(
+        page_size,
+        page_size,
+        0,
+        1,
+        0,
+        super::PageEncoding {
+            compression: Compression::Uncompressed,
+            values: ENCODING_PLAIN,
+            statistics: None,
+        },
+    );
+    let data_page_offset = output.offset as i64;
+    let total_size = header.len() as i64 + i64::from(page_size);
+    output.publish(&header)?;
+    output.publish(&length_prefix.to_le_bytes())?;
+    let mut digest = purrdf_core::ContentHasher::default();
+    let mut read = 0usize;
+    let mut scratch = [0; 32768];
+    loop {
+        let bound = (length - read).saturating_add(1).min(scratch.len());
+        let count = match source.read(&mut scratch[..bound]) {
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            result => result.map_err(|cause| ColumnarError::BlobRead(cause.into()))?,
+        };
+        if count == 0 {
+            break;
+        }
+        if count > length - read {
+            return Err(ColumnarError::LimitExceeded {
+                context: "staged blob byte length",
+                value: (read + count) as u64,
+                maximum: length as u64,
+            }
+            .into());
+        }
+        output.publish(&scratch[..count])?;
+        digest.update(&scratch[..count]);
+        read += count;
+    }
+    if read != length {
+        return Err(ColumnarError::Truncated {
+            context: "staged blob bytes",
+            needed: length,
+            available: read,
+        }
+        .into());
+    }
+    if let Some(stored) = expected {
+        let actual = digest.finish();
+        if stored != actual {
+            return Err(ColumnarError::ContentStore(
+                purrdf_core::ContentStoreError::DigestMismatch { stored, actual },
+            )
+            .into());
+        }
+    }
+    output.pages += 1;
+    Ok(EncodedColumn {
+        physical_type: parquet_physical_type(PhysicalType::ByteArray),
+        encodings: vec![ENCODING_PLAIN, ENCODING_RLE],
+        path,
+        codec: Compression::Uncompressed.parquet_id(),
+        num_values: 1,
+        total_uncompressed_size: total_size,
+        total_compressed_size: total_size,
+        data_page_offset,
+        dictionary_page_offset: None,
+        statistics: pruning::Statistics::default(),
+        pages: Vec::new(),
+        column_index: None,
+        offset_index: None,
+        bloom: None,
     })
 }
 

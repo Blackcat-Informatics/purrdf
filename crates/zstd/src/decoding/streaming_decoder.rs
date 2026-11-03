@@ -65,6 +65,100 @@ pub struct StreamingDecoder<READ: Read, DEC: BorrowMut<FrameDecoder>> {
     dict: Option<DictionaryHandle>,
 }
 
+/// A bounded reader over every frame of a finite Zstandard sequence.
+///
+/// Unlike a single-frame decoder's `Read`, this advances through concatenated
+/// and skippable frames. It shares the existing block/window decoder and verifies
+/// each content checksum before accepting the following frame.
+pub struct FrameSequence<READ: Read> {
+    inner: StreamingDecoder<READ, FrameDecoder>,
+    done: bool,
+}
+
+purrdf_hash::debug_non_exhaustive!([READ: Read] FrameSequence<READ> {});
+
+impl<READ: Read> FrameSequence<READ> {
+    /// Read a finite sequence, optionally forcing its declared dictionary on
+    /// every data frame, including frames that omit their dictionary ID.
+    pub fn new(source: READ, dictionary: Option<&[u8]>) -> Result<Self, Error> {
+        let mut decoder = FrameDecoder::new();
+        decoder.set_content_checksum(crate::decoding::ContentChecksum::Verify);
+        let dict = dictionary
+            .map(DictionaryHandle::decode_dict)
+            .transpose()
+            .map_err(|cause| purrdf_hash::error::io_error(crate::io::ErrorKind::Other, cause))?;
+        let mut result = Self {
+            inner: StreamingDecoder {
+                decoder,
+                source,
+                dict,
+            },
+            done: false,
+        };
+        result.done = !result.advance()?;
+        Ok(result)
+    }
+
+    fn advance(&mut self) -> Result<bool, Error> {
+        use crate::decoding::errors::ReadFrameHeaderError;
+        loop {
+            let mut first = [0];
+            let count = loop {
+                match self.inner.source.read(&mut first) {
+                    Err(error) if error.kind() == crate::io::ErrorKind::Interrupted => {}
+                    result => break result?,
+                }
+            };
+            if count == 0 {
+                return Ok(false);
+            }
+            let source = first.as_slice().chain(&mut self.inner.source);
+            let initialized = if let Some(dict) = &self.inner.dict {
+                self.inner.decoder.init_with_dict_handle(source, dict)
+            } else {
+                self.inner.decoder.init(source)
+            };
+            match initialized {
+                Ok(()) => return Ok(true),
+                Err(FrameDecoderError::ReadFrameHeaderError(ReadFrameHeaderError::SkipFrame {
+                    length,
+                    ..
+                })) => {
+                    let mut remaining = length as usize;
+                    let mut scratch = [0; 8192];
+                    while remaining != 0 {
+                        let count = remaining.min(scratch.len());
+                        self.inner.source.read_exact(&mut scratch[..count])?;
+                        remaining -= count;
+                    }
+                }
+                Err(error) => {
+                    return Err(purrdf_hash::error::io_error(
+                        crate::io::ErrorKind::Other,
+                        error,
+                    ));
+                }
+            }
+        }
+    }
+}
+
+impl<READ: Read> Read for FrameSequence<READ> {
+    fn read(&mut self, output: &mut [u8]) -> Result<usize, Error> {
+        if output.is_empty() {
+            return Ok(0);
+        }
+        while !self.done {
+            let count = self.inner.read(output)?;
+            if count != 0 {
+                return Ok(count);
+            }
+            self.done = !self.advance()?;
+        }
+        Ok(0)
+    }
+}
+
 impl<READ: Read, DEC: BorrowMut<FrameDecoder>> StreamingDecoder<READ, DEC> {
     pub fn new_with_decoder(
         mut source: READ,
@@ -175,7 +269,7 @@ impl<READ: Read, DEC: BorrowMut<FrameDecoder>> Read for StreamingDecoder<READ, D
             // checksum at this finish point. No-op in other modes.
 
             if let Err(e) = decoder.verify_content_checksum() {
-                return Err(Error::other(e));
+                return Err(purrdf_hash::error::io_error(crate::io::ErrorKind::Other, e));
             }
             //No more bytes can ever be decoded
             return Ok(0);
@@ -206,7 +300,7 @@ impl<READ: Read, DEC: BorrowMut<FrameDecoder>> Read for StreamingDecoder<READ, D
                 decoder.decode_blocks(&mut self.source, BlockDecodingStrategy::UptoBytes(step))
             {
                 {
-                    return Err(Error::other(e));
+                    return Err(purrdf_hash::error::io_error(crate::io::ErrorKind::Other, e));
                 }
             }
         }
@@ -224,7 +318,7 @@ impl<READ: Read, DEC: BorrowMut<FrameDecoder>> Read for StreamingDecoder<READ, D
             && decoder.can_collect() == 0
             && let Err(e) = decoder.verify_content_checksum()
         {
-            return Err(Error::other(e));
+            return Err(purrdf_hash::error::io_error(crate::io::ErrorKind::Other, e));
         }
 
         Ok(written)
@@ -263,7 +357,9 @@ impl<READ: Read, DEC: BorrowMut<FrameDecoder>> Read for StreamingDecoder<READ, D
             self.decoder
                 .borrow_mut()
                 .decode_current_frame_to_vec(&compressed, output, dict.as_ref())
-                .map_err(Error::other)?;
+                .map_err(|cause| {
+                    purrdf_hash::error::io_error(crate::io::ErrorKind::Other, cause)
+                })?;
             return Ok(output.len() - start_total);
         }
         // Mid-frame fallback: drain the partially-read CURRENT frame through the
@@ -294,7 +390,9 @@ impl<READ: Read, DEC: BorrowMut<FrameDecoder>> Read for StreamingDecoder<READ, D
             self.decoder
                 .borrow_mut()
                 .decode_concatenated_frames_to_vec(&mut input, output, dict.as_ref())
-                .map_err(Error::other)?;
+                .map_err(|cause| {
+                    purrdf_hash::error::io_error(crate::io::ErrorKind::Other, cause)
+                })?;
         }
         Ok(output.len() - start_total)
     }

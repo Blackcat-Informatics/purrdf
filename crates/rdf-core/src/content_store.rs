@@ -34,6 +34,25 @@ pub type Bytes = Vec<u8>;
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ContentDigest(Digest32);
 
+/// Incremental computation of the native SHA-256 content identity.
+#[derive(Clone, Default)]
+pub struct ContentHasher(Sha256);
+
+purrdf_hash::debug_non_exhaustive!(ContentHasher {});
+
+impl ContentHasher {
+    /// Include the next original payload bytes.
+    pub fn update(&mut self, bytes: &[u8]) {
+        self.0.update(bytes);
+    }
+
+    /// Finish the same content identity as [`ContentDigest::of`].
+    #[must_use]
+    pub fn finish(self) -> ContentDigest {
+        ContentDigest::from_raw(self.0.finalize().into())
+    }
+}
+
 impl purrdf_hash::error::StructuredError for ContentDigest {
     purrdf_hash::error_visit! {
         @tuple self (digest) => "content-digest-sha256" { "digest" => Record(digest) }
@@ -43,9 +62,9 @@ impl purrdf_hash::error::StructuredError for ContentDigest {
 impl ContentDigest {
     /// Compute the digest of `bytes` directly (SHA-256).
     pub fn of(bytes: &[u8]) -> Self {
-        let mut hasher = Sha256::new();
+        let mut hasher = ContentHasher::default();
         hasher.update(bytes);
-        Self(Digest32::new(hasher.finalize().into()))
+        hasher.finish()
     }
 
     /// Wrap 32 raw digest bytes as a `ContentDigest` WITHOUT re-hashing.

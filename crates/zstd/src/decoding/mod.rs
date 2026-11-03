@@ -41,7 +41,7 @@ mod streaming_decoder;
 pub use dictionary::{Dictionary, DictionaryHandle};
 pub use frame_decoder::{BlockDecodingStrategy, ContentChecksum, FrameDecoder};
 
-pub use streaming_decoder::StreamingDecoder;
+pub use streaming_decoder::{FrameSequence, StreamingDecoder};
 
 /// Decompressed size a frame declares in its header, as read by
 /// [`read_frame_content_size`] without decoding the frame body.

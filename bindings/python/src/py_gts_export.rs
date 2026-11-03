@@ -9,6 +9,8 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict};
 use std::sync::Arc;
 
+mod stream;
+
 /// Caller-owned byte policy. Every field is explicit; None means unbounded.
 #[pyclass(name = "GtsBlobLimits", frozen)]
 #[derive(Debug, Clone, Copy)]
@@ -271,6 +273,7 @@ fn gts_columnar_parquet_from_bytes<'py>(
 }
 
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    stream::register(m)?;
     m.add_class::<PyGtsBlobLimits>()?;
     m.add_class::<PyGtsBlobUsage>()?;
     m.add_class::<PyGtsBlobOmission>()?;
