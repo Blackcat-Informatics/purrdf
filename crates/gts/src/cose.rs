@@ -22,6 +22,7 @@ use crate::wire;
 mod borrowed;
 /// Pinned draft composite primitive and canonical key/signature encodings.
 pub mod composite;
+mod headers;
 mod sign1;
 #[cfg(test)]
 mod tests;
@@ -40,10 +41,10 @@ pub use sign1::{
 
 // -- COSE_Encrypt0 (AES-256-GCM, keyed by kid) — GTS-SPEC §9.3 -----------------
 
-/// Why a `decrypt0` could not return plaintext.
+/// Why protected-header authoring or authenticated opening could not complete.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Encrypt0Error {
-    /// The COSE_Encrypt0 structure could not be parsed.
+    /// The envelope or caller-supplied protected header is invalid.
     Malformed,
     /// No content key was resolved for the recipient `kid`.
     MissingKey,
@@ -100,7 +101,66 @@ fn enc_structure(protected: &[u8]) -> Vec<u8> {
 /// in here.
 pub fn encrypt0_with_iv(plaintext: &[u8], kid: &str, key: &[u8; 32], iv: &[u8; 12]) -> Vec<u8> {
     let protected = encrypt0_protected();
+    // Preserve the legacy infallible API's existing oversized-input boundary.
+    seal_with_protected(plaintext, kid, key, iv, protected)
+        .expect("legacy COSE_Encrypt0 encryption requires inputs within AES-GCM limits")
+}
+
+/// Seal with extra authenticated protected-header entries.
+///
+/// Labels are CBOR integers or text. Integer label 1 is reserved for A256GCM;
+/// labels 4, 5 and 6 would conflict with the fixed unprotected kid/full IV.
+/// Label 7 is unsupported: these envelopes implement no countersignature layer.
+/// Text labels are distinct from integers, including text `"1"`.
+/// The map and its nested values use the shared canonical CBOR ordering.
+/// Nonce freshness remains the caller's responsibility.
+///
+/// Application metadata and critical-header meaning are caller-owned. Critical
+/// declarations must be nonempty lists of unique labels present in this map;
+/// callers must enforce their meaning before using the opened plaintext.
+///
+/// # Errors
+/// Returns [`Encrypt0Error::Malformed`] for reserved, duplicate or invalid
+/// labels, invalid registered-header values or critical declarations, or a
+/// header exceeding the shared CBOR decoder's default nesting bound, or inputs
+/// exceeding the AES-GCM plaintext or associated-data length bounds.
+pub fn encrypt0_with_protected(
+    plaintext: &[u8],
+    kid: &str,
+    key: &[u8; 32],
+    iv: &[u8; 12],
+    extra: &[(Value, Value)],
+) -> Result<Vec<u8>, Encrypt0Error> {
+    // Validate borrowed input before cloning caller-owned values.
+    headers::header_labels(extra).ok_or(Encrypt0Error::Malformed)?;
+    if extra
+        .iter()
+        .any(|(label, _)| matches!(label.as_integer().map(Integer::get), Some(1 | 4..=6)))
+    {
+        return Err(Encrypt0Error::Malformed);
+    }
+    let mut entries = vec![(Value::from(ALG), Value::from(ALG_A256GCM))];
+    entries.extend_from_slice(extra);
+    let protected = wire::canonical(&Value::Map(entries));
+    // Use the same accepted depth and map judgment as the matching opener.
+    decode_protected(&protected)?;
+    seal_with_protected(plaintext, kid, key, iv, protected)
+}
+
+fn seal_with_protected(
+    plaintext: &[u8],
+    kid: &str,
+    key: &[u8; 32],
+    iv: &[u8; 12],
+    protected: Vec<u8>,
+) -> Result<Vec<u8>, Encrypt0Error> {
+    if u64::try_from(plaintext.len()).map_err(|_| Encrypt0Error::Malformed)? > aes_gcm::P_MAX {
+        return Err(Encrypt0Error::Malformed);
+    }
     let aad = enc_structure(&protected);
+    if u64::try_from(aad.len()).map_err(|_| Encrypt0Error::Malformed)? > aes_gcm::A_MAX {
+        return Err(Encrypt0Error::Malformed);
+    }
     let cipher = Aes256Gcm::new(key.into());
     let ciphertext = cipher
         .encrypt(
@@ -110,7 +170,7 @@ pub fn encrypt0_with_iv(plaintext: &[u8], kid: &str, key: &[u8; 32], iv: &[u8; 1
                 aad: &aad,
             },
         )
-        .expect("AES-256-GCM encryption cannot fail for a valid key/nonce");
+        .map_err(|_| Encrypt0Error::Malformed)?;
     // Unprotected header keys in canonical order: kid (4) before iv (5).
     let cose = Value::Tag(
         TAG_ENCRYPT0,
@@ -126,7 +186,7 @@ pub fn encrypt0_with_iv(plaintext: &[u8], kid: &str, key: &[u8; 32], iv: &[u8; 1
             Value::Bytes(ciphertext),
         ])),
     );
-    wire::canonical(&cose)
+    Ok(wire::canonical(&cose))
 }
 
 /// Seal `plaintext` as a COSE_Encrypt0 to the recipient `kid` (§9.3).
@@ -205,6 +265,65 @@ pub fn decrypt0(
         BoundedDecrypt0Error::Crypto(error) => error,
         BoundedDecrypt0Error::Limit => Encrypt0Error::Malformed,
     })
+}
+
+/// A complete authenticated plaintext and protected-header map.
+///
+/// The map includes the algorithm and all protected entries. It excludes
+/// unauthenticated unprotected headers. Authentication does not establish
+/// application meaning: the caller must enforce its metadata and critical
+/// header policy before using the plaintext.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OpenedEncrypt0 {
+    /// Authenticated plaintext.
+    pub plaintext: Vec<u8>,
+    /// Complete authenticated map, in its received entry order.
+    pub protected: Vec<(Value, Value)>,
+}
+
+/// Open an A256GCM envelope and return its complete authenticated protected map.
+///
+/// Original protected bytes, including noncanonical valid CBOR spellings, are
+/// authenticated verbatim. Metadata is decoded locally and published only after
+/// successful authentication. Unknown application and critical-header meaning
+/// remains the caller's responsibility; this API validates declaration shape
+/// and references, not application-specific instructions.
+///
+/// # Errors
+/// Returns [`Encrypt0Error::Malformed`] for invalid protected maps, labels,
+/// algorithm or critical declarations, or the same key/authentication errors as
+/// [`decrypt0`]. No plaintext or protected entries are returned on failure.
+pub fn decrypt0_with_protected(
+    blob: &[u8],
+    resolve: impl Fn(&str) -> Option<[u8; 32]>,
+) -> Result<OpenedEncrypt0, Encrypt0Error> {
+    let parts = parse_encrypt0(blob).ok_or(Encrypt0Error::Malformed)?;
+    let protected = decode_protected(&parts.protected)?;
+    let plaintext = decrypt_parts(parts, resolve, blob.len()).map_err(|error| match error {
+        BoundedDecrypt0Error::Crypto(error) => error,
+        BoundedDecrypt0Error::Limit => Encrypt0Error::Malformed,
+    })?;
+    Ok(OpenedEncrypt0 {
+        plaintext,
+        protected,
+    })
+}
+
+fn decode_protected(bytes: &[u8]) -> Result<Vec<(Value, Value)>, Encrypt0Error> {
+    let entries = cbor::decode(bytes, cbor::Limits::DEFAULT)
+        .map_err(|_| Encrypt0Error::Malformed)?
+        .into_map()
+        .map_err(|_| Encrypt0Error::Malformed)?;
+    let labels = headers::header_labels(&entries).ok_or(Encrypt0Error::Malformed)?;
+    headers::critical_labels(&entries, &labels).ok_or(Encrypt0Error::Malformed)?;
+    if headers::header_value(&entries, ALG).and_then(Value::as_integer) != Some(ALG_A256GCM.into())
+        || entries
+            .iter()
+            .any(|(label, _)| matches!(label.as_integer().map(Integer::get), Some(4..=6)))
+    {
+        return Err(Encrypt0Error::Malformed);
+    }
+    Ok(entries)
 }
 
 /// Internal bounded decryption failures, without extending the public error enum.

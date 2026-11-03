@@ -640,6 +640,9 @@ struct Pattern {
 }
 
 impl DatasetView for DeltaDatasetView {
+    fn retained_view_stats(&self) -> Option<crate::ViewStats> {
+        Some(self.stats())
+    }
     type Id = DeltaViewId;
     type ReadError = std::convert::Infallible;
     type TermGuard<'a>

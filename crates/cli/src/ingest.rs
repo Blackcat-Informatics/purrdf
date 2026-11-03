@@ -41,10 +41,9 @@
 //! sources, and a quad that mentions one never collapses with its counterpart.
 //!
 //! The cost is that a pack in a multi-source list must be MATERIALIZED through
-//! `dataset_from_view` rather than read as a zero-copy `PackView`: a union takes concrete
-//! datasets, and there is no view type that is the union of two others. That is a real,
-//! deliberate trade — stated here rather than hidden — and it is why a SINGLE-source
-//! convert never enters this lane at all.
+//! `dataset_from_view` rather than read as a zero-copy `PackView`: this CLI lane returns
+//! a concrete dataset for conversion. Read-through callers can use `UnionDatasetView`
+//! to borrow arbitrary views instead. A SINGLE-source convert never enters this lane.
 //!
 //! # Why one source never enters this lane
 //!
