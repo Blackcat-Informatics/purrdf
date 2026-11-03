@@ -1,12 +1,21 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The workspace's one YAML 1.2 emitter and reader, over the JSON data model
-//! ([`crate::json::Value`]).
+//! The workspace's one YAML 1.2 grammar, lexical syntax and JSON projection.
 //!
-//! PurRDF reads and writes YAML only as a spelling of JSON-shaped data — LinkML
-//! schemas, OKF frontmatter, YAML-LD — so both directions work over
-//! [`crate::json::Value`], and one scalar resolver decides both what a plain
+//! [`read_syntax`] retains original source bytes, ordered occurrences, decoded
+//! lexical scalars, styles, properties and trivia before Core-schema resolution.
+//! Its borrowed [`SyntaxDocument`] carries a byte identity and explicit input,
+//! live allocation, occurrence and depth bounds. [`SyntaxDocument::to_core`]
+//! projects through the same parser and eager builder as [`read_with`].
+//! [`emit_scalar`] shares the native quoting and escape bodies with [`write`](fn@write),
+//! reports the actual safe style, and admits its complete measured output before
+//! writing. Layout-policy consumers can use it without a local scalar encoder.
+//!
+//! The semantic reader and writer carry JSON-shaped data — LinkML schemas,
+//! OKF frontmatter, YAML-LD — through [`crate::json::Value`]. Lexical syntax
+//! preserves authored constructs before that projection. One scalar resolver
+//! decides both what a plain
 //! scalar denotes when it is read and whether a string must be quoted when it
 //! is written: whatever [`write`](fn@write) leaves plain, [`read`] reads back as the same
 //! string.
@@ -18,7 +27,7 @@
 //! these deliberate differences:
 //!
 //! * **Numbers are written as their lexemes.** `serde_yaml` wrote a JSON number
-//!   through binary64, so `1.50` became `1.5` and `1e+20` became `1e20`; here
+//!   through `binary64`, so `1.50` became `1.5` and `1e+20` became `1e20`; here
 //!   the lexeme is written as it is, and nothing is rounded.
 //! * **A string holding U+2028 or U+2029 is double-quoted**, with `\L` and
 //!   `\P`. The reference emitter wrote those characters raw inside a
@@ -26,7 +35,7 @@
 //!   content and misreads the indentation that follows them.
 //! * **A string a YAML 1.2 reader would take for a number is quoted even when
 //!   `serde_yaml` would have read it as a string**: a float spelling beyond the
-//!   binary64 range (`1e400`) is single-quoted.
+//!   `binary64` range (`1e400`) is single-quoted.
 //!
 //! # The reader
 //!
@@ -51,17 +60,27 @@
 //! Plain scalars resolve by the core schema as `serde_yaml` applies it, except that a number
 //! keeps its lexeme where the lexeme is a JSON number (`1.50` stays `1.50`) and
 //! is otherwise respelt as the JSON number it denotes (`0x1F` is `31`, `+.5` is
-//! `0.5`), and that a float spelling beyond the binary64 range is a number, not
+//! `0.5`), and that a float spelling beyond the `binary64` range is a number, not
 //! a string. Mapping keys stay in document order. Nesting is bounded by
 //! [`Limits::max_depth`], and neither direction spends a machine-stack frame
 //! per nesting level.
 
+mod admission;
+mod build;
 mod read;
 mod resolve;
+mod syntax;
 mod write;
 
 pub use read::{Error, ErrorKind, Limits, read, read_with};
-pub use write::write;
+pub use syntax::{
+    Attachment, BlockHeader, Chomping, CollectionStyle, NodeId, NodeKind, Position,
+    ProjectionLimits, ScalarStyle, Span, SyntaxDocument, SyntaxEntry, SyntaxEscape, SyntaxLimits,
+    SyntaxNode, SyntaxScalar, Trivia, TriviaKind, read_syntax,
+};
+pub use write::{
+    EmitError, EmitLimits, EmitStyle, EmittedScalar, ScalarContext, emit_scalar, write,
+};
 
 #[cfg(test)]
 mod tests;
