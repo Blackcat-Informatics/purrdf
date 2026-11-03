@@ -489,6 +489,21 @@ pub trait ViewTermId:
     fn encode_computed(scratch_index: u32) -> Self::JoinKeyAtom;
 }
 
+/// Implement the computed-key arm of [`ViewTermId`] for a wide join space.
+///
+/// Invoke inside an implementation whose `JoinKeyAtom` is `u128` and whose
+/// existing IDs never set bit 127. The high bit separates every computed
+/// scratch index from those existing IDs. The original ID encoding remains
+/// the implementation's responsibility.
+#[macro_export]
+macro_rules! wide_computed_join_key_method {
+    () => {
+        fn encode_computed(scratch_index: u32) -> u128 {
+            (1_u128 << 127) | u128::from(scratch_index)
+        }
+    };
+}
+
 impl ViewTermId for TermId {
     type JoinKeyAtom = u64;
 

@@ -22,9 +22,7 @@ impl ViewTermId for Key {
     fn encode(self) -> u128 {
         u128::from(self.0)
     }
-    fn encode_computed(index: u32) -> u128 {
-        (1_u128 << 127) | u128::from(index)
-    }
+    purrdf_core::wide_computed_join_key_method!();
 }
 fn key(id: TermId) -> Key {
     Key(id.index() as u64 * 17 + 101)
@@ -242,6 +240,9 @@ pub(super) fn arbitrary_backend_union_writes_the_same_archive_and_scoped_rdf() {
     let shared = (ScopeBinding::Shared, ScopeBinding::Shared);
     {
         let union = UnionDatasetView::new(&host, &*extra, shared, ViewLimits::default()).unwrap();
+        assert!(union.stats().work.copied_index_bytes > 0);
+        assert_eq!(union.stats().work.copied_terms, 0);
+        assert_eq!(union.stats().work.copied_text_bytes, 0);
         assert_eq!(files(&union), files(&*extra));
         assert_eq!(union.quads().count(), extra.quad_count());
         assert_eq!(union.reifier_quads().count(), extra.reifiers().count());
@@ -368,6 +369,19 @@ pub(super) fn arbitrary_backend_union_writes_the_same_archive_and_scoped_rdf() {
         embedded.len(),
         2,
         "each source's CDT blank identity stays distinct"
+    );
+    // The first source's embedded scope stays zero, so its original lexical
+    // form remains borrowed; only the other source publishes rebound text.
+    let rebound = embedded
+        .iter()
+        .filter(|text| text.as_str() != "[_:embedded]");
+    assert_eq!(
+        independent.stats().work.copied_terms,
+        rebound.clone().count()
+    );
+    assert_eq!(
+        independent.stats().work.copied_text_bytes,
+        rebound.map(String::len).sum::<usize>()
     );
     assert_eq!(independent.named_graphs().count(), 1);
 }

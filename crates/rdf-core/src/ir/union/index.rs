@@ -6,8 +6,9 @@
 use super::{UnionError, UnionTermId, check_stats};
 use crate::{
     BlankScope, DatasetView, TermGuard, TermRef, TermValue, ViewLimits, ViewStats, ViewTermId,
+    ViewWork,
 };
-use purrdf_lex::allocation::{Admission, Memory, OrderedTable};
+use purrdf_lex::allocation::{Admission, Memory, OrderedTable, StorageError};
 
 pub(super) struct Index<I> {
     pub(super) ids: Vec<I>,
@@ -37,6 +38,36 @@ impl<I: ViewTermId> Index<I> {
     pub(super) fn local(&self, id: UnionTermId) -> Option<I> {
         self.reverse.get(&id).copied()
     }
+
+    pub(super) fn published_work(&self) -> Result<ViewWork, StorageError> {
+        let mut work = ViewWork::default();
+        // Count published ID fields, excluding table slack, enum tags and hashes.
+        for (count, width) in [
+            (self.ids.len(), size_of::<I>()),
+            (self.aliases.len(), size_of::<UnionTermId>()),
+            (
+                self.reverse.len(),
+                size_of::<I>() + size_of::<UnionTermId>(),
+            ),
+            (self.scopes.len(), 2 * size_of::<BlankScope>()),
+        ] {
+            work.copied_index_bytes = count
+                .checked_mul(width)
+                .and_then(|bytes| work.copied_index_bytes.checked_add(bytes))
+                .ok_or(StorageError::SizeOverflow)?;
+        }
+        for text in self.rebound.iter().flatten() {
+            work.copied_terms = work
+                .copied_terms
+                .checked_add(1)
+                .ok_or(StorageError::SizeOverflow)?;
+            work.copied_text_bytes = work
+                .copied_text_bytes
+                .checked_add(text.len())
+                .ok_or(StorageError::SizeOverflow)?;
+        }
+        Ok(work)
+    }
 }
 
 fn reach<I: ViewTermId, L, R, S: Admission + ?Sized>(
@@ -53,9 +84,7 @@ fn reach<I: ViewTermId, L, R, S: Admission + ?Sized>(
     stats.retained_terms = stats
         .retained_terms
         .checked_add(1)
-        .ok_or(UnionError::Storage(
-            purrdf_lex::allocation::StorageError::SizeOverflow,
-        ))?;
+        .ok_or(UnionError::Storage(StorageError::SizeOverflow))?;
     check_stats(limits, stats)?;
     ids.insert(id, (), memory)?;
     memory.push(pending, id)?;
@@ -81,9 +110,7 @@ pub(super) fn capture<D: DatasetView, L, R, S: Admission + ?Sized>(
             stats.retained_rows = stats
                 .retained_rows
                 .checked_add(1)
-                .ok_or(UnionError::Storage(
-                    purrdf_lex::allocation::StorageError::SizeOverflow,
-                ))?;
+                .ok_or(UnionError::Storage(StorageError::SizeOverflow))?;
             check_stats(limits, stats)?;
             for id in [Some(row.s), Some(row.p), Some(row.o), row.g]
                 .into_iter()
@@ -140,18 +167,13 @@ pub(super) fn capture<D: DatasetView, L, R, S: Admission + ?Sized>(
                     lexical
                         .len()
                         .checked_add(language.map_or(0, str::len))
-                        .ok_or(UnionError::Storage(
-                            purrdf_lex::allocation::StorageError::SizeOverflow,
-                        ))?
+                        .ok_or(UnionError::Storage(StorageError::SizeOverflow))?
                 }
             };
-            stats.retained_payload_bytes =
-                stats
-                    .retained_payload_bytes
-                    .checked_add(bytes)
-                    .ok_or(UnionError::Storage(
-                        purrdf_lex::allocation::StorageError::SizeOverflow,
-                    ))?;
+            stats.retained_payload_bytes = stats
+                .retained_payload_bytes
+                .checked_add(bytes)
+                .ok_or(UnionError::Storage(StorageError::SizeOverflow))?;
             check_stats(limits, stats)?;
         }
         memory.release_vec(pending)?;

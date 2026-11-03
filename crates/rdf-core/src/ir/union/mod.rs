@@ -8,10 +8,11 @@ mod storage;
 
 use self::index::{Index, capture};
 use self::storage::{Account, Grant, Reservation};
+use super::cursor::Cursor;
 use crate::hash::{hash_of, reserve_table_with_memory, table::HashTable};
 use crate::{
     BlankScope, DatasetView, GraphMatch, NoopReservation, QuadIds, RdfStoreCapabilities,
-    ScopeBinding, TermGuard, TermRef, TermValue, ViewLimits, ViewStats, ViewTermId,
+    ScopeBinding, TermGuard, TermRef, TermValue, ViewLimits, ViewStats, ViewTermId, ViewWork,
     WorkspaceReservation,
 };
 use purrdf_lex::allocation::{Admission, Memory, OrderedTable, StorageError};
@@ -107,9 +108,7 @@ impl ViewTermId for UnionTermId {
     fn encode(self) -> u128 {
         u128::from(self.0)
     }
-    fn encode_computed(index: u32) -> u128 {
-        (1_u128 << 127) | u128::from(index)
-    }
+    crate::wide_computed_join_key_method!();
 }
 
 /// A borrowed source in a runtime list, with an explicit blank-scope law.
@@ -147,12 +146,6 @@ enum Entry<'a, A: DatasetView, B: DatasetView> {
     Right(&'a B, ScopeBinding, Index<B::Id>),
 }
 impl<A: DatasetView, B: DatasetView> Entry<'_, A, B> {
-    fn scopes(&self) -> (&[(BlankScope, BlankScope)], ScopeBinding) {
-        match self {
-            Self::Left(_, b, i) => (&i.scopes, *b),
-            Self::Right(_, b, i) => (&i.scopes, *b),
-        }
-    }
     fn scopes_mut(&mut self) -> (&mut [(BlankScope, BlankScope)], ScopeBinding) {
         match self {
             Self::Left(_, b, i) => (&mut i.scopes, *b),
@@ -342,10 +335,10 @@ fn assign_scopes<A: DatasetView, B: DatasetView, S: Admission + ?Sized>(
     memory: &mut Memory<'_, S>,
 ) -> Result<(), UnionError<A::ReadError, B::ReadError>> {
     let mut occupied = OrderedTable::default();
-    for entry in &*entries {
-        let (scopes, binding) = entry.scopes();
+    for entry in &mut *entries {
+        let (scopes, binding) = entry.scopes_mut();
         if binding == ScopeBinding::Shared {
-            for &(scope, _) in scopes {
+            for &(scope, _) in &*scopes {
                 occupied.insert(scope, (), memory)?;
             }
         }
@@ -658,6 +651,7 @@ impl<'a, A: DatasetView, B: DatasetView> UnionDatasetView<'a, A, B> {
                 }
                 parts.graphs.sort_unstable();
                 parts.graphs.dedup();
+                parts.stats.work = parts.published_work()?;
                 Ok(parts)
             })();
             let mut data = built.map_err(|e| match e {
@@ -710,31 +704,14 @@ enum Table {
     Annotation,
 }
 
-enum Rows<A, B, C> {
-    Ordinary(A),
-    Reifier(B),
-    Annotation(C),
-}
-impl<T, A: Iterator<Item = T>, B: Iterator<Item = T>, C: Iterator<Item = T>> Iterator
-    for Rows<A, B, C>
-{
-    type Item = T;
-    fn next(&mut self) -> Option<T> {
-        match self {
-            Self::Ordinary(rows) => rows.next(),
-            Self::Reifier(rows) => rows.next(),
-            Self::Annotation(rows) => rows.next(),
-        }
-    }
-}
 fn source_rows<D: DatasetView>(
     source: &D,
     table: Table,
 ) -> impl Iterator<Item = QuadIds<D::Id>> + '_ {
     match table {
-        Table::Ordinary => Rows::Ordinary(source.quads()),
-        Table::Reifier => Rows::Reifier(source.reifier_quads()),
-        Table::Annotation => Rows::Annotation(source.annotation_quads()),
+        Table::Ordinary => Cursor::<_, _, _, std::iter::Empty<_>>::First(source.quads()),
+        Table::Reifier => Cursor::Second(source.reifier_quads()),
+        Table::Annotation => Cursor::Third(source.annotation_quads()),
     }
 }
 
@@ -887,10 +864,12 @@ impl<
                     };
                     current = Some(match entry {
                         Entry::Left(v, _, i) => {
-                            Either::Left(source_rows(*v, table).map(move |row| map_row(i, row)))
+                            Cursor::<_, _, std::iter::Empty<_>, std::iter::Empty<_>>::First(
+                                source_rows(*v, table).map(move |row| map_row(i, row)),
+                            )
                         }
                         Entry::Right(v, _, i) => {
-                            Either::Right(source_rows(*v, table).map(move |row| map_row(i, row)))
+                            Cursor::Second(source_rows(*v, table).map(move |row| map_row(i, row)))
                         }
                     });
                 }
@@ -1218,6 +1197,46 @@ impl<A: DatasetView, B: DatasetView> Parts<'_, A, B> {
         Ok(UnionTermGuard { pin })
     }
 
+    fn published_work(&self) -> Result<ViewWork, StorageError> {
+        let mut work = ViewWork::default();
+        for entry in &self.entries {
+            let copied = match entry {
+                Entry::Left(_, _, index) => index.published_work()?,
+                Entry::Right(_, _, index) => index.published_work()?,
+            };
+            for (total, amount) in [
+                (&mut work.copied_terms, copied.copied_terms),
+                (&mut work.copied_text_bytes, copied.copied_text_bytes),
+                (&mut work.copied_index_bytes, copied.copied_index_bytes),
+            ] {
+                *total = total
+                    .checked_add(amount)
+                    .ok_or(StorageError::SizeOverflow)?;
+            }
+        }
+        for origin in &self.representatives {
+            let local = match origin.local {
+                Local::Left(_) => size_of::<A::Id>(),
+                Local::Right(_) => size_of::<B::Id>(),
+            };
+            work.copied_index_bytes = work
+                .copied_index_bytes
+                .checked_add(size_of::<usize>() + local)
+                .ok_or(StorageError::SizeOverflow)?;
+        }
+        let canonical = self
+            .keys
+            .len()
+            .checked_add(self.graphs.len())
+            .and_then(|ids| ids.checked_mul(size_of::<UnionTermId>()))
+            .ok_or(StorageError::SizeOverflow)?;
+        work.copied_index_bytes = work
+            .copied_index_bytes
+            .checked_add(canonical)
+            .ok_or(StorageError::SizeOverflow)?;
+        Ok(work)
+    }
+
     fn find(
         &self,
         term: TermRef<'_, UnionTermId>,
@@ -1361,20 +1380,6 @@ fn finish_index<I: ViewTermId, S: Admission + ?Sized>(
         )?;
     }
     memory.release_vec(std::mem::take(&mut index.states))
-}
-
-enum Either<A, B> {
-    Left(A),
-    Right(B),
-}
-impl<T, A: Iterator<Item = T>, B: Iterator<Item = T>> Iterator for Either<A, B> {
-    type Item = T;
-    fn next(&mut self) -> Option<T> {
-        match self {
-            Self::Left(v) => v.next(),
-            Self::Right(v) => v.next(),
-        }
-    }
 }
 
 struct BorrowReservation<'a, R>(&'a mut R);
