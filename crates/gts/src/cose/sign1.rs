@@ -3,12 +3,13 @@
 
 //! One strict detached GTS Sign1 parser and algorithm dispatch.
 
-use std::collections::BTreeSet;
-
 use purrdf_ed25519::{Signature, SigningKey, VerifyingKey};
 use purrdf_lex::cbor::{self, Integer, Value};
 
-use super::composite;
+use super::{
+    composite,
+    headers::{HeaderLabel, critical_labels, header_labels, header_value},
+};
 use crate::{model, wire};
 
 const ALG: i64 = 1;
@@ -254,88 +255,12 @@ pub fn sign_id(frame_id: &[u8], signing_key: &SigningKey, kid: &str) -> Vec<u8> 
         .expect("Ed25519 signing is infallible and requires no entropy")
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum HeaderLabel<'a> {
-    Integer(Integer),
-    Text(&'a str),
-}
-impl<'a> HeaderLabel<'a> {
-    fn from_value(value: &'a Value) -> Result<Self, Sign1Error> {
-        match value {
-            Value::Integer(integer) => Ok(Self::Integer(*integer)),
-            Value::Text(text) => Ok(Self::Text(text)),
-            _ => Err(Sign1Error::Malformed),
-        }
-    }
-}
-
-fn header_labels(headers: &[(Value, Value)]) -> Result<BTreeSet<HeaderLabel<'_>>, Sign1Error> {
-    let mut labels = BTreeSet::new();
-    for (label, value) in headers {
-        if !labels.insert(HeaderLabel::from_value(label)?) {
-            return Err(Sign1Error::Malformed);
-        }
-        // RFC 9052 common-header value types, even for ignored metadata.
-        match label.as_integer().map(Integer::get) {
-            Some(1) if value.as_integer().is_none() => return Err(Sign1Error::Malformed),
-            Some(2) if value.as_array().is_none_or(Vec::is_empty) => {
-                return Err(Sign1Error::Malformed);
-            }
-            Some(3) if !valid_content_type(value) => {
-                return Err(Sign1Error::Malformed);
-            }
-            Some(4..=6) if value.as_bytes().is_none() => return Err(Sign1Error::Malformed),
-            // This GTS signing contract implements no counter-signature layer.
-            Some(7) => return Err(Sign1Error::Malformed),
-            _ => {}
-        }
-    }
-    Ok(labels)
-}
-
-/// RFC 9052 §3.1: a nonnegative CoAP content format, or exactly two
-/// RFC 6838 §4.2 restricted names. Parameter syntax is not part of this
-/// COSE textual pair; no trimming, case normalization or slash repair occurs.
-fn valid_content_type(value: &Value) -> bool {
-    match value {
-        Value::Integer(integer) => integer.get() >= 0,
-        Value::Text(text) => text
-            .split_once('/')
-            .is_some_and(|(kind, subtype)| restricted_name(kind) && restricted_name(subtype)),
-        _ => false,
-    }
-}
-
-/// The exact ABNF `ALPHA / DIGIT` followed by up to 126 of those characters
-/// or `! # $ & - ^ _ . +`. Length is bytes; every admitted byte is ASCII.
-fn restricted_name(name: &str) -> bool {
-    let Some((first, rest)) = name.as_bytes().split_first() else {
-        return false;
-    };
-    name.len() <= 127
-        && first.is_ascii_alphanumeric()
-        && rest.iter().all(|byte| {
-            byte.is_ascii_alphanumeric()
-                || matches!(
-                    byte,
-                    b'!' | b'#' | b'$' | b'&' | b'-' | b'^' | b'_' | b'.' | b'+'
-                )
-        })
-}
-
-fn header_value(headers: &[(Value, Value)], label: i64) -> Option<&Value> {
-    headers
-        .iter()
-        .find(|(key, _)| key.as_integer() == Some(label.into()))
-        .map(|(_, value)| value)
-}
-
 fn validate_headers(
     protected: &[(Value, Value)],
     unprotected: &[(Value, Value)],
 ) -> Result<Algorithm, Sign1Error> {
-    let protected_labels = header_labels(protected)?;
-    let unprotected_labels = header_labels(unprotected)?;
+    let protected_labels = header_labels(protected).ok_or(Sign1Error::Malformed)?;
+    let unprotected_labels = header_labels(unprotected).ok_or(Sign1Error::Malformed)?;
     // RFC 9052 §3 recommends rejecting cross-bucket ambiguity. GTS does so.
     if !protected_labels.is_disjoint(&unprotected_labels)
         || header_value(unprotected, ALG).is_some()
@@ -349,19 +274,11 @@ fn validate_headers(
     if present(iv) && present(partial_iv) {
         return Err(Sign1Error::Malformed);
     }
-    if let Some(critical) = header_value(protected, CRIT) {
-        let mut labels = BTreeSet::new();
-        for value in critical.as_array().ok_or(Sign1Error::Malformed)? {
-            let label = HeaderLabel::from_value(value)?;
-            // Only alg and kid are interpreted by this detached GTS contract.
-            // Unknown noncritical metadata can be retained; it cannot become
-            // a critical instruction the verifier silently ignores.
-            if !labels.insert(label)
-                || !protected_labels.contains(&label)
-                || !matches!(label, HeaderLabel::Integer(n) if n.get() == i128::from(ALG) || n.get() == i128::from(KID))
-            {
-                return Err(Sign1Error::Malformed);
-            }
+    for label in critical_labels(protected, &protected_labels).ok_or(Sign1Error::Malformed)? {
+        // Only alg and kid are interpreted by this detached GTS contract.
+        if !matches!(label, HeaderLabel::Integer(n) if n.get() == i128::from(ALG) || n.get() == i128::from(KID))
+        {
+            return Err(Sign1Error::Malformed);
         }
     }
     let algorithm = header_value(protected, ALG)
