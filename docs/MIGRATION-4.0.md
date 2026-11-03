@@ -56,6 +56,8 @@ a replay reader, or `Absent`. Consume it during the callback with `reader()`;
 use `chunks()` only when the source supports borrowed chunks. Payload events
 are no longer `Copy` or `Clone`. `digest_computed` distinguishes a verified
 identity from a declared digest that the consumer must verify.
+Streaming codec failures retain their original native causes through the
+standard I/O bridge; inspect that source chain for codec-specific fields.
 
 `prepare_gts_columnar_to` accepts a `GtsBlobStager` for provisional payloads
 and seekable transformed-snapshot scratch. Implement `begin`, `write`, `discard`

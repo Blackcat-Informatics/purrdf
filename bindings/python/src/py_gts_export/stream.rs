@@ -200,7 +200,7 @@ impl Read for PayloadReader {
 }
 
 /// Stream native files through host callbacks; payload staging stays provisional.
-#[pyfunction]
+#[pyfunction(name = "_gts_columnar_stream_to")]
 #[pyo3(signature = (data, *, blob_limits, staging, emit))]
 fn gts_columnar_stream_to(
     py: Python<'_>,
@@ -244,19 +244,21 @@ fn gts_columnar_stream_to(
     })
 }
 
+type StagedRows<'py> = (
+    Bound<'py, PyDict>,
+    Vec<(String, usize, u64)>,
+    PyGtsBlobExportReport,
+);
+
 /// Canonical RDF rows and replayable blob handles, without resident payload rows.
-#[pyfunction]
+#[pyfunction(name = "_gts_columnar_staged_from_bytes")]
 #[pyo3(signature = (data, *, blob_limits, staging))]
 fn gts_columnar_staged_from_bytes<'py>(
     py: Python<'py>,
     data: &[u8],
     blob_limits: &Bound<'_, PyAny>,
     staging: &Bound<'_, PyAny>,
-) -> PyResult<(
-    Bound<'py, PyDict>,
-    Vec<(String, usize, u64)>,
-    PyGtsBlobExportReport,
-)> {
+) -> PyResult<StagedRows<'py>> {
     let limits = limits_from(blob_limits)?;
     let stager = Stager::from_host(staging)?;
     let (projection, blobs, report) = py.detach(move || {
@@ -284,7 +286,15 @@ fn gts_columnar_staged_from_bytes<'py>(
 }
 
 pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
-    module.add_function(wrap_pyfunction!(gts_columnar_stream_to, module)?)?;
-    module.add_function(wrap_pyfunction!(gts_columnar_staged_from_bytes, module)?)?;
+    // PyO3's public registration appends even underscored names to `__all__`.
+    // These callbacks belong to the host implementation, so set attributes only.
+    module.setattr(
+        "_gts_columnar_stream_to",
+        wrap_pyfunction!(gts_columnar_stream_to, module)?,
+    )?;
+    module.setattr(
+        "_gts_columnar_staged_from_bytes",
+        wrap_pyfunction!(gts_columnar_staged_from_bytes, module)?,
+    )?;
     Ok(())
 }

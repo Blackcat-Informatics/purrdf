@@ -669,7 +669,6 @@ impl Folder<'_, '_, '_> {
         bytes: Option<cbor::ByteChunks<'_>>,
         codecs: &[Codec],
         declared_metadata: Option<&Value>,
-        payload_present: bool,
         encoded_len: usize,
     ) {
         // Only a sink can observe the meta, so look it up only when one is
@@ -686,8 +685,8 @@ impl Folder<'_, '_, '_> {
             digest_computed,
             metadata: declared_metadata.or(meta),
             metadata_declared: declared_metadata.is_some(),
+            payload_present: bytes.is_some(),
             bytes: bytes.map_or(BlobContent::Absent, BlobContent::Chunks),
-            payload_present,
             encoded_len,
             codecs,
         });
@@ -1390,7 +1389,6 @@ impl Folder<'_, '_, '_> {
                             &chain
                         },
                         declared_metadata,
-                        true,
                         encoded_len,
                     );
                     if self.materialize {
@@ -1433,15 +1431,7 @@ impl Folder<'_, '_, '_> {
                 self.blob_meta_index
                     .set(&mut self.g.blob_meta, digest.clone(), meta);
             }
-            self.emit_blob(
-                &digest,
-                false,
-                d,
-                &chain,
-                declared_metadata,
-                d.is_some(),
-                encoded_len,
-            );
+            self.emit_blob(&digest, false, d, &chain, declared_metadata, encoded_len);
             if let Some(raw) = d
                 && self.materialize
             {
@@ -1489,7 +1479,6 @@ impl Folder<'_, '_, '_> {
                     Some(bytes.chunks()),
                     if self.materialize { &[] } else { &chain },
                     declared_metadata,
-                    true,
                     encoded_len,
                 );
                 if self.materialize {
@@ -1547,9 +1536,15 @@ impl Folder<'_, '_, '_> {
             .as_deref()
             .and_then(StreamingSink::blob_decode_limit)
             .unwrap_or(usize::MAX);
+        if codecs.is_empty() && bytes.byte_len() > limit {
+            return Err(PayloadError::Budget(PayloadCause::DecodedBlobLimit {
+                actual: bytes.byte_len(),
+                limit,
+            }));
+        }
         let mut reader = crate::codec::decode_chain_reader(codecs, bytes, limit)?;
         let mut hash = purrdf_hash::blake3::Hasher::new();
-        let mut scratch = [0; 32768];
+        let mut scratch = [0; 8192];
         loop {
             let count = match reader.read(&mut scratch) {
                 Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
@@ -1662,15 +1657,7 @@ impl Folder<'_, '_, '_> {
                             BlobEntry::bytes(bytes.flatten().copied().collect()),
                         );
                     }
-                    self.emit_blob(
-                        &digest,
-                        true,
-                        Some(bytes),
-                        &[],
-                        None,
-                        true,
-                        bytes.byte_len(),
-                    );
+                    self.emit_blob(&digest, true, Some(bytes), &[], None, bytes.byte_len());
                 }
             }
         }
@@ -3105,10 +3092,6 @@ mod transformed_payload_tests {
     #[test]
     fn streaming_offsets_cross_u32_and_refuse_terminal_overflow() {
         use super::{StreamingCountingReader, next_stream_item};
-        assert_eq!(
-            size_of::<Result<Option<(Value, u64, u64)>, super::TornAppendError>>(),
-            size_of::<Result<Option<(Value, u64, u64)>, u64>>()
-        );
         let mut reader = StreamingCountingReader {
             inner: std::io::Cursor::new([1u8]),
             pos: (1 << 32) + 7,

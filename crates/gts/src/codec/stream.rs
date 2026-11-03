@@ -83,7 +83,7 @@ pub fn decode_chain_reader<'a>(
 }
 
 fn drain(source: &mut dyn Read) -> io::Result<()> {
-    let mut scratch = [0; 32768];
+    let mut scratch = [0; 8192];
     loop {
         match source.read(&mut scratch) {
             Ok(0) => return Ok(()),

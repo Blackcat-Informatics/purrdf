@@ -784,7 +784,7 @@ impl<'a> BlobCollector<'a> {
                 // surfacing as spurious decode refusals far from the cause.
                 self.usage
                     .replace_payload(old.bytes.len(), 0, self.selected.len())?;
-                self.release_payload(old.bytes)?;
+                self.release_payload(&old.bytes)?;
             }
             return Ok(());
         }
@@ -807,7 +807,7 @@ impl<'a> BlobCollector<'a> {
         }
         if let Err(failure) = check_metadata_bound(metadata, self.limits.max_metadata_bytes) {
             let error = failure.into_diagnostic()?;
-            return self.omit_or_error(payload, GtsBlobOmissionKind::MetadataBudget, error);
+            return self.omit_or_error(&payload, GtsBlobOmissionKind::MetadataBudget, error);
         }
         let metadata = metadata.cloned();
         // The reader fires its frame event for every frame before any of that
@@ -855,7 +855,7 @@ impl<'a> BlobCollector<'a> {
                 // whole container.
                 if self.export.is_some() {
                     self.record_export_omission(
-                        payload,
+                        &payload,
                         GtsBlobOmissionKind::MissingInlinePayload,
                         None,
                     )?;
@@ -920,7 +920,7 @@ impl<'a> BlobCollector<'a> {
             };
         if payload.encoded_len > self.limits.max_encoded_bytes {
             let error = refusal(None)?;
-            return self.omit_or_error(payload, GtsBlobOmissionKind::ByteBudget, error);
+            return self.omit_or_error(&payload, GtsBlobOmissionKind::ByteBudget, error);
         }
         let limit = self.limits.max_decoded_bytes.min(remaining);
         let chunks = payload.bytes.chunks();
@@ -933,19 +933,20 @@ impl<'a> BlobCollector<'a> {
         let decoded = if let Some(stager) = self.stager.as_deref_mut() {
             stage_payload(stager, payload.codecs, source, limit)
         } else {
-            let decoded = if let Some(bytes) = chunks.and_then(|chunks| chunks.contiguous()) {
-                purrdf_gts::codec::decode_chain_bounded(payload.codecs, bytes, limit)
-                    .map_err(PayloadFailure::Codec)
-            } else {
-                use std::io::Read as _;
-                purrdf_gts::codec::decode_chain_reader(payload.codecs, source, limit)
-                    .and_then(|mut source| {
-                        let mut bytes = Vec::new();
-                        source.read_to_end(&mut bytes)?;
-                        Ok(bytes)
-                    })
-                    .map_err(PayloadFailure::Read)
-            };
+            let decoded =
+                if let Some(bytes) = chunks.and_then(purrdf_lex::cbor::ByteChunks::contiguous) {
+                    purrdf_gts::codec::decode_chain_bounded(payload.codecs, bytes, limit)
+                        .map_err(PayloadFailure::Codec)
+                } else {
+                    use std::io::Read as _;
+                    purrdf_gts::codec::decode_chain_reader(payload.codecs, source, limit)
+                        .and_then(|mut source| {
+                            let mut bytes = Vec::new();
+                            source.read_to_end(&mut bytes)?;
+                            Ok(bytes)
+                        })
+                        .map_err(PayloadFailure::Read)
+                };
             decoded.map(|bytes| {
                 let digest = purrdf_gts::wire::digest_str(&bytes);
                 (CollectedPayload::Resident(bytes.into()), digest)
@@ -957,7 +958,7 @@ impl<'a> BlobCollector<'a> {
                 let (kind, cause) = error.into_cause()?;
                 let error = refusal(Some(cause))?;
                 return match kind {
-                    Some(kind) => self.omit_or_error(payload, kind, error),
+                    Some(kind) => self.omit_or_error(&payload, kind, error),
                     None => Err(error),
                 };
             }
@@ -988,14 +989,14 @@ impl<'a> BlobCollector<'a> {
             &mut memory,
         )?;
         if let Some(previous) = previous {
-            self.release_payload(previous.bytes)?;
+            self.release_payload(&previous.bytes)?;
         }
         self.usage
             .replace_payload(old_len, next_len, self.selected.len())?;
         Ok(())
     }
 
-    fn release_payload(&mut self, payload: CollectedPayload) -> Result<(), RdfDiagnostic> {
+    fn release_payload(&mut self, payload: &CollectedPayload) -> Result<(), RdfDiagnostic> {
         if let CollectedPayload::Staged(payload) = payload {
             self.stager
                 .as_deref_mut()
@@ -1117,7 +1118,7 @@ impl<'a> BlobCollector<'a> {
                 if let Some((_, old)) = self.selected.remove_entry_by(|key| digest.cmp(key)) {
                     self.usage
                         .replace_payload(old.bytes.len(), 0, self.selected.len())?;
-                    self.release_payload(old.bytes)?;
+                    self.release_payload(&old.bytes)?;
                 }
             } else if self.selected.get_by(|key| digest.cmp(key)).is_some()
                 && (self.export.is_none()

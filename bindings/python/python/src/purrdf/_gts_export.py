@@ -102,10 +102,10 @@ def gts_to_sqlite(data: bytes, path: str, *, blob_limits: Any) -> GtsExportResul
     from .purrdf_native import rdf as _native
 
     with _staging() as staging:
-        rows, blobs, report = _native.gts_columnar_staged_from_bytes(
+        rows, blobs, report = _native._gts_columnar_staged_from_bytes(
             data, blob_limits=blob_limits, staging=staging
         )
-        connection = sqlite3.connect(path)
+        connection = sqlite3.connect(path, autocommit=False)
         try:
             with connection:
                 for table, ddl, count in _tables(rows):
@@ -183,7 +183,7 @@ def gts_to_parquet(data: bytes, out_dir: str, *, blob_limits: Any) -> GtsExportR
                     files[name] = stack.enter_context((Path(provisional) / name).open("wb"))
                 _write_chunk(files[name], chunk)
 
-            report = _native.gts_columnar_stream_to(
+            report = _native._gts_columnar_stream_to(
                 data, blob_limits=blob_limits, staging=staging, emit=emit,
             )
         written = []
