@@ -242,7 +242,7 @@ pub(crate) fn run(
     let data_format = format::resolve(options.from, options.data)?;
     // No `--base` refusal here, unlike every other subcommand: see the module documentation
     // for why this run's base can never be inert.
-    let data = source::load_dataset(options.data, data_format, options.base, canonical)?;
+    let data = source::load_dataset(options.data, data_format, options.base, None, canonical)?;
 
     let schema_base = schema_base(options.schema)?;
     let schema = read_schema(options.schema, options.schema_from, schema_base.as_deref())?;

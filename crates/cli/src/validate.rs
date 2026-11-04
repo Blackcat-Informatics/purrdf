@@ -476,7 +476,7 @@ pub(crate) fn run(
     // Decided off the command line too: an IRI that is not one is a malformed request.
     let validation = validation_options(options)?;
 
-    let data = source::load_dataset(options.input, data_format, options.base, canonical)?;
+    let data = source::load_dataset(options.input, data_format, options.base, None, canonical)?;
     // The graph this run VALIDATES: `IN` itself, or `IN` with the change applied. Built
     // before the shapes are read, because its `sh:shapesGraph` links (SHACL 1.2 Core
     // section 6.4) decide what the shapes graph is — and a change may add or retract a
@@ -841,7 +841,7 @@ fn apply_changes(
 ) -> Result<MutableDataset, CliError> {
     let mut mutation = MutableDataset::new(Arc::clone(base));
     if let Some((path, format)) = added {
-        let document = source::load_dataset(path, format, base_iri, canonical)?;
+        let document = source::load_dataset(path, format, base_iri, None, canonical)?;
         for row in QuadValues::surface_of(&document) {
             mutation.insert(row).map_err(|error| {
                 CliError::Runtime(format!("--changes {path}: {}", error.diagnostic_code()))
@@ -849,7 +849,7 @@ fn apply_changes(
         }
     }
     if let Some((path, format)) = removed {
-        let document = source::load_dataset(path, format, base_iri, canonical)?;
+        let document = source::load_dataset(path, format, base_iri, None, canonical)?;
         for row in QuadValues::surface_of(&document) {
             // A row the data graph does not carry retracts nothing. That is the
             // `DatasetMut::remove` contract everywhere else in PurRDF, and it is right

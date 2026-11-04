@@ -67,7 +67,7 @@ use crate::source::{self, TransportPolicy};
 /// The resolved input side of a command: the ordered source list plus the flags that
 /// apply to every entry in it.
 pub(crate) struct Sources<'a> {
-    /// Explicit YAML-LD controls, set only by convert after format admission.
+    /// Explicit YAML-LD controls, set after format admission.
     pub(crate) input_options: Option<&'a [u8]>,
     /// The ordered source paths — the positional `IN` first, then each `--input`.
     /// Never empty.
@@ -170,25 +170,14 @@ pub(crate) fn ingest(
     let mut datasets: Vec<Arc<RdfDataset>> = Vec::with_capacity(sources.paths.len());
     let mut ledger = LossLedger::new();
     for (path, format) in sources.paths.iter().zip(formats.iter().copied()) {
-        let (dataset, source_ledger) = if let Some(options) = sources.input_options {
-            let SourceFormat::Native(format) = format else {
-                return Err(CliError::Usage(
-                    "YAML-LD input options require YAML-LD input".into(),
-                ));
-            };
-            (
-                source::load_native(path, format, sources.base, sources.transport, Some(options))?,
-                LossLedger::new(),
-            )
-        } else {
-            source::load_dataset_reporting(
-                path,
-                format,
-                sources.base,
-                sources.transport,
-                canonical,
-            )?
-        };
+        let (dataset, source_ledger) = source::load_dataset_reporting(
+            path,
+            format,
+            sources.base,
+            sources.transport,
+            sources.input_options,
+            canonical,
+        )?;
         for entry in source_ledger.entries() {
             ledger.record(entry.clone());
         }

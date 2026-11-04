@@ -194,7 +194,7 @@ pub(crate) fn run_rules(
         }
     };
 
-    let data = source::load_dataset(options.input, data_format, options.base, canonical)?;
+    let data = source::load_dataset(options.input, data_format, options.base, None, canonical)?;
     let mut diagnostics: Vec<lint::MandatoryDiagnostic> = Vec::new();
     let limits = purrdf::shapes::RuleLimits {
         max_term_generating_rounds: options.max_term_generating_rounds,
@@ -574,7 +574,7 @@ pub(crate) fn run_node_expr(
         canonical,
     )?;
     let table = shapes_imports(&root_document, options.imports, canonical)?;
-    let data = source::load_dataset(options.input, data_format, options.base, canonical)?;
+    let data = source::load_dataset(options.input, data_format, options.base, None, canonical)?;
     let selector = match (argv_selector, options.expr.expr_turtle_file) {
         (Some(selector), _) => selector,
         (None, Some(path)) => {

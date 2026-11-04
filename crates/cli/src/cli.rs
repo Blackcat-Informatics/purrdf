@@ -786,6 +786,9 @@ pub(crate) enum Command {
     },
     /// Apply a SPARQL UPDATE and serialize the resulting RDF dataset.
     Update {
+        /// Closed version-one YAML-LD Basic input-options JSON file, for --data only.
+        #[arg(long, value_name = "PATH")]
+        yamlld_input_options: Option<PathBuf>,
         /// Exact supplied `xsd:dateTime` for every WHERE operation's `NOW()`.
         /// Omitted, native host-clock behavior is unchanged.
         #[arg(long, value_name = "XSD_DATE_TIME", allow_hyphen_values = true)]
@@ -2905,10 +2908,12 @@ impl Cli {
                 data,
                 output,
                 update,
+                yamlld_input_options,
                 ..
             } => {
                 paths.push(PathBuf::from(data));
                 paths.push(PathBuf::from(output));
+                paths.extend(yamlld_input_options.iter().cloned());
                 if let Some(path) = update.strip_prefix('@') {
                     paths.push(PathBuf::from(path));
                 }

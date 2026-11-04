@@ -106,7 +106,7 @@ impl PremiseImports {
         let mut map = ImportMap::default();
         for pair in &pairs {
             let document_format = format::resolve(from, pair.path)?;
-            let document = source::load_dataset(pair.path, document_format, base, canonical)?;
+            let document = source::load_dataset(pair.path, document_format, base, None, canonical)?;
             // `parse_import_pairs` already blamed the argument for a repeated or relative IRI;
             // the table's own key policy is the one every insertion site shares.
             map.try_insert(pair.iri, document)
