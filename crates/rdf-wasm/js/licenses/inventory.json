@@ -729,17 +729,24 @@
       "source_checksum": "f4987bdc12753382e0bec4a65c50738ffaabc998b9cdd1f952fb5f39b0048a96"
     },
     {
-      "id": "visual-hashing-1.0.0",
+      "id": "visual-hashing-native",
       "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
       "notices": [
-        "dependencies/visual-hashing-1.0.0/LICENSE-APACHE",
-        "dependencies/visual-hashing-1.0.0/LICENSE-MIT",
-        "dependencies/visual-hashing-1.0.0/LICENSE-MULAN"
+        "third-party/visual-hashing-native/0-LICENSE-MIT",
+        "third-party/visual-hashing-native/1-LICENSE-APACHE",
+        "third-party/visual-hashing-native/2-LICENSE-MULAN"
       ],
-      "repository": "https://github.com/Blackcat-Informatics/visual-hashing",
-      "scope": "resolved normal/build input, including target-specific alternatives",
-      "source": "registry+https://github.com/rust-lang/crates.io-index",
-      "source_checksum": "5056c65a9a789c9c1156fbfab38df224d7b729089e3b075892136e8f3092166e"
+      "paths": [
+        "crates/lex/src/visual_fingerprint.rs",
+        "crates/lex/src/visual_fingerprint/**",
+        "vectors/emojihash/**",
+        "vectors/randomart/**"
+      ],
+      "provenance": [
+        "docs/provenance/visual-hashing.md"
+      ],
+      "scope": "modified inherited emoji alphabet, spoken labels and randomart rendering; upstream BLAKE3 is excluded and shared native BLAKE3 supplies the XOF",
+      "source": "https://github.com/Blackcat-Informatics/visual-hashing/tree/519c5bbdb5e0ef4c6c70aa0b5cf42a8877f6e776"
     },
     {
       "id": "wasm-bindgen-0.2.129",
@@ -836,7 +843,7 @@
     "LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
     "LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
     "LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c",
-    "NOTICE.txt": "6b7ae212b2c2f32b4f042a84cc7e6272a655190b7bf6a4a8d4c2b16865734b9f",
+    "NOTICE.txt": "b8451b855ca914f997bddbe284588744bb1d25a4177635ec35a6c2bcdb23eb44",
     "dependencies/aead-0.6.1/LICENSE-APACHE": "b1cf9a3333ca78152b859012cd4a804156e5243e9ca20ad1df7327ba5ea7405c",
     "dependencies/aead-0.6.1/LICENSE-MIT": "33b32a251d445c5c03a634e64c53314c55540fc367fabdd45d9b6c8f260c028c",
     "dependencies/aes-0.9.3/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
@@ -924,9 +931,6 @@
     "dependencies/unicode-ident-1.0.27/LICENSE-UNICODE": "f7db81051789b729fea528a63ec4c938fdcb93d9d61d97dc8cc2e9df6d47f2a1",
     "dependencies/universal-hash-0.6.1/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
     "dependencies/universal-hash-0.6.1/LICENSE-MIT": "efa52eb70a774b62c50cf50f5e57e2625c29d375d09b91132f4f020e47b9944e",
-    "dependencies/visual-hashing-1.0.0/LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
-    "dependencies/visual-hashing-1.0.0/LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
-    "dependencies/visual-hashing-1.0.0/LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c",
     "dependencies/wasm-bindgen-0.2.129/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
     "dependencies/wasm-bindgen-0.2.129/LICENSE-MIT": "378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397",
     "dependencies/wasm-bindgen-macro-0.2.129/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
@@ -966,6 +970,9 @@
     "third-party/structured-zstd-native/1-NOTICE": "ba21bda21a598fe47ef2348a601ef7480566bae8fd5f02e67989a162b77dbdcd",
     "third-party/toml-test/0-MIT.txt": "01ef58ee6449fa01a284c10808e27800d66bfea271bc29281125ff8e5642b86f",
     "third-party/unicode/0-Unicode-3.0.txt": "8fa201617d2c10c64205a88903dfac046417e6b95748e36b492026fbc38c5b94",
+    "third-party/visual-hashing-native/0-LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
+    "third-party/visual-hashing-native/1-LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+    "third-party/visual-hashing-native/2-LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c",
     "third-party/whatwg-html-references/0-LICENSE-WHATWG": "85dc6f5ccb57a6fe8c33d158f9fc8fc7ee5655a5d3db2cdd131c6a3d0f48a864"
   },
   "first_party_license": "MIT OR Apache-2.0 OR MulanPSL-2.0",

@@ -144,6 +144,7 @@ pub mod constructors;
 pub mod control;
 pub mod crockford;
 pub mod diagnostic;
+pub mod visual_fingerprint;
 /// Borrowed typed error inspection shared by all native producers.
 pub use purrdf_hash::error;
 pub mod html;

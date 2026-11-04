@@ -1,0 +1,83 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Frozen visual-hashing 1.0.0 alphabet; see the parent module's provenance.
+
+/// The 64-entry emoji alphabet (a 6-bit digit set).
+pub const EMOJI: [&str; 64] = [
+    "🐵", "🐶", "🐺", "🦊", "🐱", "🦁", "🐯", "🐴", "🦄", "🦓", "🦌", "🐮", "🐷", "🐗", "🐭", "🐹",
+    "🐰", "🐻", "🐼", "🐨", "🐸", "🐲", "🐔", "🐧", "🦆", "🦅", "🦉", "🦇", "🐢", "🐍", "🦎", "🐊",
+    "🐳", "🐬", "🐟", "🐠", "🐡", "🦈", "🐙", "🦑", "🦀", "🦞", "🦐", "🦋", "🐌", "🐞", "🐝", "🐜",
+    "🦂", "🍎", "🍐", "🍊", "🍋", "🍌", "🍉", "🍇", "🍓", "🍒", "🍍", "🥝", "🍑", "🥥", "🥕", "🌽",
+];
+
+/// The stable label for each entry in [`EMOJI`], by index.
+pub const LABELS: [&str; 64] = [
+    "monkey",
+    "dog",
+    "wolf",
+    "fox",
+    "cat",
+    "lion",
+    "tiger",
+    "horse",
+    "unicorn",
+    "zebra",
+    "deer",
+    "cow",
+    "pig",
+    "boar",
+    "mouse",
+    "hamster",
+    "rabbit",
+    "bear",
+    "panda",
+    "koala",
+    "frog",
+    "dragon",
+    "chicken",
+    "penguin",
+    "duck",
+    "eagle",
+    "owl",
+    "bat",
+    "turtle",
+    "snake",
+    "lizard",
+    "crocodile",
+    "whale",
+    "dolphin",
+    "fish",
+    "tropical-fish",
+    "blowfish",
+    "shark",
+    "octopus",
+    "squid",
+    "crab",
+    "lobster",
+    "shrimp",
+    "butterfly",
+    "snail",
+    "lady-beetle",
+    "bee",
+    "ant",
+    "scorpion",
+    "apple",
+    "pear",
+    "orange",
+    "lemon",
+    "banana",
+    "watermelon",
+    "grapes",
+    "strawberry",
+    "cherries",
+    "pineapple",
+    "kiwi",
+    "peach",
+    "coconut",
+    "carrot",
+    "corn",
+];
+
+/// The number of distinct emoji digits (a 6-bit alphabet).
+pub const ALPHABET_SIZE: usize = 64;
