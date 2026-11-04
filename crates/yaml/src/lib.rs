@@ -86,16 +86,6 @@ impl purrdf_hash::error::StructuredError for YamlError {
     }
 }
 
-pub(crate) struct Ceiling(pub(crate) usize);
-impl purrdf_lex::allocation::Admission for Ceiling {
-    fn resize(&mut self, live: usize) -> Result<(), purrdf_lex::allocation::StorageError> {
-        self.0
-            .checked_sub(live)
-            .map(|_| ())
-            .ok_or(purrdf_lex::allocation::StorageError::AdmissionFailed)
-    }
-}
-
 pub(crate) fn admit_count(
     current: usize,
     maximum: usize,
