@@ -3132,10 +3132,13 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                             path.push_str("_:");
                             path.push_str(issuer.issue(related));
                         }
-                        // 5.4.4.3: discard a partial path that cannot win.
-                        if group.chosen_path.as_ref().is_some_and(|best| {
-                            path.len() >= best.len() && path.as_str() > best.as_str()
-                        }) {
+                        // 5.4.4.3: appending cannot repair a strictly greater
+                        // lexicographic prefix, even when it is shorter than best.
+                        if group
+                            .chosen_path
+                            .as_ref()
+                            .is_some_and(|best| path.as_str() > best.as_str())
+                        {
                             pruned = true;
                             break;
                         }
@@ -3193,10 +3196,13 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
             candidate.path.push_str(hash.as_str());
             candidate.path.push('>');
             candidate.issuer = frame.issuer;
-            // 5.4.5.5: prune only after the complete child result is appended.
-            if group.chosen_path.as_ref().is_some_and(|best| {
-                candidate.path.len() >= best.len() && candidate.path.as_str() > best.as_str()
-            }) {
+            // 5.4.5.5: after appending the complete child result, a strictly
+            // greater prefix cannot win regardless of the remaining children.
+            if group
+                .chosen_path
+                .as_ref()
+                .is_some_and(|best| candidate.path.as_str() > best.as_str())
+            {
                 group.candidate = None;
             }
             frame = parent;
