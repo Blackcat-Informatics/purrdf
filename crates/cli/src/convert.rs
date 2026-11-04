@@ -249,6 +249,7 @@ fn convert_one_view(
         source_format,
         options.base,
         options.transport,
+        None,
         ConvertOp {
             out: output,
             target: target_format,
