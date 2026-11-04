@@ -366,6 +366,11 @@ impl<S: Admission> AliasScope<S> {
     pub const fn scope(&self) -> ScopeId {
         self.scope
     }
+    /// Number of distinct assigned content identities. Reading this metadata
+    /// performs no lookup and does not enumerate the admitted digest payload.
+    pub fn identity_count(&self) -> usize {
+        self.payload.digests.len()
+    }
     /// Take a refused destructor/commit cleanup shrink. Its grant remains
     /// conservative until the original authority accepts its release.
     pub fn take_cleanup_refusal(&mut self) -> Option<StorageError> {
