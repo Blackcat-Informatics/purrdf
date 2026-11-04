@@ -5,11 +5,13 @@
 //! resolves structured replies, then matches full identities across datasets.
 
 use purrdf_core::content_alias::{AliasScope, ScopeId};
+use purrdf_core::visual_fingerprint::{self, Request};
 use purrdf_hash::{blake3, hex::Digest32};
 use purrdf_lex::{
     allocation::{Admission, Memory, OwnedAdmission, StorageError},
     json::{self, Object, Value},
 };
+use std::io::Write as _;
 
 struct Authority {
     max_bytes: usize,
@@ -148,6 +150,55 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(original_right.provenance, "source B, row 9");
     selected_left.release()?;
     selected_right.release()?;
+
+    // Scope changes the short reference, never the presentation of the resolved
+    // authoritative digest. No alias spelling enters the rendering algorithm.
+    let left_reference = left_map.reference(left_scope, left[0].digest)?;
+    let right_reference = right_map.reference(right_scope, left[0].digest)?;
+    let visual_request = Request::new(11, "BLAKE3 256")?;
+    let left_visual = visual_fingerprint::present(
+        left_map.resolve(left_reference)?,
+        visual_request,
+        Authority::bounded(),
+    )?;
+    let right_visual = visual_fingerprint::present(
+        right_map.resolve(right_reference)?,
+        visual_request,
+        Authority::bounded(),
+    )?;
+    let left_rendering = left_visual.rendering();
+    let right_rendering = right_visual.rendering();
+    assert_eq!(
+        (
+            left_rendering.emoji(),
+            left_rendering.spoken(),
+            left_rendering.randomart()
+        ),
+        (
+            right_rendering.emoji(),
+            right_rendering.spoken(),
+            right_rendering.randomart()
+        ),
+    );
+    for (reference, visual) in [
+        (left_reference, &left_visual),
+        (right_reference, &right_visual),
+    ] {
+        let rendering = visual.rendering();
+        writeln!(
+            std::io::stdout().lock(),
+            "digest {} scope {} alias {} scheme {} symbols {} emoji {} spoken {}",
+            visual.digest(),
+            reference.scope.digest(),
+            reference.alias.ordinal(),
+            rendering.scheme(),
+            rendering.symbols(),
+            rendering.emoji(),
+            rendering.spoken()
+        )?;
+    }
+    left_visual.release()?;
+    right_visual.release()?;
 
     // Persist these bytes with the host's original scope identity, then restore
     // them in a later process without allocating different aliases.

@@ -26,6 +26,14 @@ Evidence: crates/iri/unicode/PROVENANCE.md
 Evidence: LICENSING.md
 Notice: third-party/unicode/0-Unicode-3.0.txt
 
+visual-hashing-native: MIT OR Apache-2.0 OR MulanPSL-2.0
+Scope: modified inherited emoji alphabet, spoken labels and randomart rendering; upstream BLAKE3 is excluded and shared native BLAKE3 supplies the XOF
+Source: https://github.com/Blackcat-Informatics/visual-hashing/tree/519c5bbdb5e0ef4c6c70aa0b5cf42a8877f6e776
+Evidence: docs/provenance/visual-hashing.md
+Notice: third-party/visual-hashing-native/0-LICENSE-MIT
+Notice: third-party/visual-hashing-native/1-LICENSE-APACHE
+Notice: third-party/visual-hashing-native/2-LICENSE-MULAN
+
 whatwg-html-references: BSD-3-Clause
 Scope: named character-reference and numeric recovery DATA incorporated into generated source under WHATWG's explicit BSD-3-Clause grant; independently written resolver and generator retain the first-party grant
 Source: https://github.com/whatwg/html-build/tree/283a3531a61106d07d9a7d9fb3e6f3b9bfd33d70/entities/out

@@ -59,6 +59,8 @@ pub enum VerificationError {
     },
     /// The file declares no transport key.
     MissingTransportKey,
+    /// Native visual presentation of the resolved public key refused.
+    VisualFingerprint(purrdf_lex::visual_fingerprint::Error),
     /// The reader's complete original integrity diagnostic.
     Integrity(Diagnostic),
     /// Signatures failed cryptographic verification.
@@ -83,6 +85,7 @@ impl fmt::Display for VerificationError {
                 write!(f, "cannot load embedded transport key: {cause}")
             }
             Self::MissingTransportKey => f.write_str("no gts:transportKey found in file metadata"),
+            Self::VisualFingerprint(cause) => write!(f, "cannot present transport key: {cause}"),
             Self::Integrity(diagnostic) => write!(f, "{}: {}", diagnostic.code, diagnostic.detail),
             Self::Invalid { count } => write!(f, "{count} signature(s) invalid"),
             Self::Unverified { count } => {
@@ -96,6 +99,7 @@ impl fmt::Display for VerificationError {
 purrdf_lex::error_source!(VerificationError => {
     Self::TrustedPublicKey(cause) | Self::EmbeddedKey { cause, .. } => cause,
     Self::Integrity(diagnostic) => diagnostic,
+    Self::VisualFingerprint(cause) => cause,
 });
 
 impl purrdf_hash::error::StructuredError for VerificationError {
@@ -103,6 +107,7 @@ impl purrdf_hash::error::StructuredError for VerificationError {
         TrustedPublicKey(cause) => "gts-verify-trusted-key" { "cause" => Cause(cause) },
         EmbeddedKey { kid, cause } => "gts-verify-embedded-key" { "kid" => Text(kid), "cause" => Cause(cause) },
         MissingTransportKey => "gts-verify-missing-transport-key" {},
+        VisualFingerprint(cause) => "gts-verify-visual-fingerprint" { "cause" => Cause(cause) },
         Integrity(diagnostic) => "gts-verify-integrity" { "diagnostic" => Record(diagnostic) },
         Invalid { count } => "gts-verify-invalid-signatures" { "count" => Unsigned(*count as u128) },
         Unverified { count } => "gts-verify-unresolved-signatures" { "count" => Unsigned(*count as u128) },

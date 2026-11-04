@@ -545,7 +545,13 @@ mod tests {
         );
         assert_eq!(key.fingerprint, json_string_field(&raw, "fingerprint"));
         assert_eq!(
-            crate::emojihash::emojihash(&key.raw_public, 11),
+            crate::emojihash::render_bytes(
+                &key.raw_public,
+                crate::emojihash::Request::new(11, "").unwrap(),
+                purrdf_lex::allocation::Resident,
+            )
+            .unwrap()
+            .emoji(),
             json_string_field(&raw, "emojihash")
         );
     }

@@ -557,6 +557,23 @@ fingerprints = ["rule:hex-table", "rule:hex-format-loop", "rule:hex-pair-radix"]
 names = ['^(hex_value|hex_val|hex_digit|hex_nibble|lower_hex_value|unhex|encode_hex|decode_hex)$']
 
 [[job]]
+id = "visual-fingerprint"
+summary = "Admitted visual-hashing 1.0.0 emoji, spoken labels and bishop randomart over original bytes, with typed full-digest presentation"
+home = "purrdf_lex::visual_fingerprint::render_bytes"
+entry_points = ["purrdf_lex::visual_fingerprint::present", "purrdf_lex::visual_fingerprint::parse_digest", "purrdf_core::visual_fingerprint", "purrdf_gts::emojihash"]
+spec = "docs/provenance/visual-hashing.md; frozen visual-hashing 1.0.0 source and vectors at 519c5bbdb5e0ef4c6c70aa0b5cf42a8877f6e776"
+vectors = ["vectors/emojihash/empty.json", "vectors/emojihash/ascii-gts.json", "vectors/emojihash/zeros32.json", "vectors/emojihash/seq32.json", "vectors/randomart/empty.json", "vectors/randomart/ascii-gts.json", "vectors/randomart/zeros32.json", "vectors/randomart/seq32.json", "vectors/randomart/labeled-ed25519.json"]
+bench = []
+sites = []
+replaces_external = ["visual-hashing"]
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(emojihash|emojihash_labels|emoji_indices|randomart)$']
+
+[[job]]
 id = "json-schema-validation"
 summary = "JSON Schema validation, drafts 2020-12, 2019-09 and 07"
 home = "purrdf_jsonschema::Schema"

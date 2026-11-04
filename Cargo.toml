@@ -165,9 +165,6 @@ regex-syntax = "0.8.11"
 sha2 = { version = "0.11", default-features = false }
 # RFC 8878 frame checksums in the shared Zstandard provider.
 twox-hash = { version = "2", default-features = false, features = ["xxhash64"] }
-# 1.0.0 is the tri-licensed release and a zero-runtime-dependency leaf (its
-# BLAKE3 is in-tree; the blake3 crate remains only as its dev-dependency).
-visual-hashing = "1.0.0"
 # Raw Win32 declarations for `crates/stack`'s Windows stack-bound read
 # (`GetCurrentThreadStackLimits`): `Win32_System_Threading` only. Declarations
 # only, resolved against the platform SDK at link time — no bundled C source

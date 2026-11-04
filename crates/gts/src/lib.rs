@@ -70,9 +70,8 @@ pub mod compact;
 pub mod cose;
 pub mod dict;
 pub mod event_stream;
-// emojihash + randomart now live in the standalone `visual-hashing` crate;
-// re-exported here so `purrdf_gts::emojihash::…` paths keep resolving.
-pub use visual_hashing as emojihash;
+/// Fallible native visual fingerprints; key callers render original key bytes.
+pub use purrdf_lex::visual_fingerprint as emojihash;
 pub mod examples;
 pub mod files;
 #[doc(hidden)]
