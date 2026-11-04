@@ -2,8 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 use crate::{
-    Ceiling, Profile, SourceDocument, YamlError, admit_count, analyze, profile::validate_iri,
-    project,
+    Profile, SourceDocument, YamlError, admit_count, analyze, profile::validate_iri, project,
 };
 use purrdf_core::{
     ContentDigest, RdfDataset, TermId, TermRef,
@@ -11,7 +10,7 @@ use purrdf_core::{
     datatype::XSD_INTEGER,
     ir::QuadIds,
 };
-use purrdf_lex::allocation::{Memory, OrderedTable, StorageError};
+use purrdf_lex::allocation::{Ceiling, Memory, OrderedTable, StorageError};
 
 fn rows(dataset: &RdfDataset) -> impl Iterator<Item = QuadIds> + '_ {
     dataset

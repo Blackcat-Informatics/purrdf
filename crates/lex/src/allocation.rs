@@ -369,6 +369,26 @@ impl Admission for Resident {
     }
 }
 
+/// A fixed ceiling on the absolute live-byte total of one native account.
+///
+/// Each resize compares the requested total with the ceiling independently;
+/// admitted bytes are not subtracted from the ceiling. Native progress controls
+/// remain disabled, as in [`Admission`]'s defaults.
+#[derive(Debug)]
+pub struct Ceiling(
+    /// Maximum admitted live bytes, inclusive.
+    pub usize,
+);
+
+impl Admission for Ceiling {
+    fn resize(&mut self, live: usize) -> Result<(), StorageError> {
+        self.0
+            .checked_sub(live)
+            .map(|_| ())
+            .ok_or(StorageError::AdmissionFailed)
+    }
+}
+
 impl<A: Admission + ?Sized> Admission for &mut A {
     fn progress_enabled(&self) -> bool {
         (**self).progress_enabled()
