@@ -275,6 +275,7 @@ pub(crate) fn materialize_reported_over_input(
         format,
         base,
         policy,
+        None,
         Op {
             plan,
             imports,

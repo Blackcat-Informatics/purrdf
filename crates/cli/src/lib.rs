@@ -409,6 +409,7 @@ fn dispatch_with_request(
         )
         .map(|()| CliOutcome::Complete),
         Command::Query {
+            yamlld_input_options,
             data,
             base,
             entailment,
@@ -439,6 +440,7 @@ fn dispatch_with_request(
             query,
         } => query::run(
             &query::QueryOptions {
+                yamlld_input_options: yamlld_input_options.as_deref(),
                 geo: selected_geo,
                 data,
                 base: base.as_deref(),

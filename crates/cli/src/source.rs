@@ -682,10 +682,19 @@ pub(crate) fn run_over_input<Op: ViewOp>(
     path: &str,
     format: SourceFormat,
     base: Option<&str>,
+    input_options: Option<&[u8]>,
     op: Op,
     canonical: &mut crate::canonical::Request,
 ) -> Result<Op::Output, CliError> {
-    run_over_input_with_transport(path, format, base, TransportPolicy::Detect, op, canonical)
+    run_over_input_with_transport(
+        path,
+        format,
+        base,
+        TransportPolicy::Detect,
+        input_options,
+        op,
+        canonical,
+    )
 }
 
 /// [`run_over_input`] under an explicit [`TransportPolicy`].
@@ -699,12 +708,14 @@ pub(crate) fn run_over_input_with_transport<Op: ViewOp>(
     format: SourceFormat,
     base: Option<&str>,
     policy: TransportPolicy,
+    input_options: Option<&[u8]>,
     op: Op,
     canonical: &mut crate::canonical::Request,
 ) -> Result<Op::Output, CliError> {
+    refuse_container_input_options(format, input_options)?;
     match format {
         SourceFormat::Native(rdf_format) => {
-            let dataset = load_native(path, rdf_format, base, policy, None)?;
+            let dataset = load_native(path, rdf_format, base, policy, input_options)?;
             op.run(&*dataset, canonical)
         }
         SourceFormat::Pack => {
@@ -761,11 +772,7 @@ pub(crate) fn load_dataset_reporting(
     input_options: Option<&[u8]>,
     canonical: &mut crate::canonical::Request,
 ) -> Result<(Arc<RdfDataset>, LossLedger), CliError> {
-    if input_options.is_some() && !matches!(format, SourceFormat::Native(_)) {
-        return Err(CliError::Usage(
-            "YAML-LD input options require YAML-LD input".into(),
-        ));
-    }
+    refuse_container_input_options(format, input_options)?;
     match format {
         SourceFormat::Native(rdf_format) => Ok((
             load_native(path, rdf_format, base, policy, input_options)?,
@@ -778,6 +785,19 @@ pub(crate) fn load_dataset_reporting(
         }
         SourceFormat::Gts => load_gts(path, policy),
     }
+}
+
+/// Reject native text controls before a pack or GTS container is acquired.
+fn refuse_container_input_options(
+    format: SourceFormat,
+    input_options: Option<&[u8]>,
+) -> Result<(), CliError> {
+    if input_options.is_some() && !matches!(format, SourceFormat::Native(_)) {
+        return Err(CliError::Usage(
+            "YAML-LD input options require YAML-LD input".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// Admit formats and read one bounded, named YAML-LD options file before data I/O.
@@ -838,5 +858,5 @@ pub(crate) fn serialize_input_to_nquads(
         }
     }
 
-    run_over_input(path, format, base, NQuadsOp, canonical)
+    run_over_input(path, format, base, None, NQuadsOp, canonical)
 }

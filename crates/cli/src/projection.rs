@@ -86,6 +86,7 @@ pub(crate) fn run_project(
         input,
         source_format,
         base,
+        None,
         ProjectOp {
             profile,
             config: &config,

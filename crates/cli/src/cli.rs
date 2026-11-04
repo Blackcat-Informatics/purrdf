@@ -556,6 +556,10 @@ pub(crate) enum Command {
     },
     /// Evaluate a SPARQL query over an RDF or pack data source.
     Query {
+        /// Closed version-one YAML-LD Basic input-options JSON file, for --data only.
+        /// Premise imports keep their default input policy.
+        #[arg(long, value_name = "PATH")]
+        yamlld_input_options: Option<PathBuf>,
         /// Data-source path (format inferred from its extension). A pack file is
         /// queried zero-copy (unless `--entailment` forces materialization).
         #[arg(long)]
@@ -2882,6 +2886,7 @@ impl Cli {
             }
             Command::Query {
                 data,
+                yamlld_input_options,
                 rules,
                 report,
                 imports,
@@ -2889,6 +2894,7 @@ impl Cli {
                 ..
             } => {
                 paths.push(PathBuf::from(data));
+                paths.extend(yamlld_input_options.iter().cloned());
                 if let Some(path) = rules {
                     paths.push(path.clone());
                 }
