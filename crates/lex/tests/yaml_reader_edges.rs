@@ -114,6 +114,24 @@ fn yaml_stream_admission_includes_all_retained_documents_and_alias_copies() {
         read_stream(" ", limits).unwrap_err().kind(),
         ErrorKind::Input { limit: 0 }
     );
+    // Calibrate the public result's admission boundary without pinning native
+    // parser-frame or Vec layouts. Its slot refusal precedes end-marker syntax.
+    let mut limits = stream_limits();
+    let (mut lower, mut upper) = (0, limits.max_allocation_bytes);
+    while lower < upper {
+        let middle = lower.midpoint(upper);
+        limits.max_allocation_bytes = middle;
+        if read_stream("a", limits).is_ok() {
+            upper = middle;
+        } else {
+            lower = middle + 1;
+        }
+    }
+    limits.max_allocation_bytes = lower - 1;
+    assert_eq!(
+        read_stream("a\n... b", limits).unwrap_err().kind(),
+        ErrorKind::Allocation { limit: lower - 1 }
+    );
     let mut limits = stream_limits();
     limits.max_allocation_bytes = 64 << 10;
     let document = format!("--- '{}'\n", "x".repeat(8 << 10));

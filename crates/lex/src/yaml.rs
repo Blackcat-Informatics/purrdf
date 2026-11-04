@@ -8,6 +8,22 @@
 //! Its borrowed [`SyntaxDocument`] carries a byte identity and explicit input,
 //! live allocation, occurrence and depth bounds. [`SyntaxDocument::to_core`]
 //! projects through the same parser and eager builder as [`read_with`].
+//! [`read_syntax_stream`] retains ordered document roots and exact absolute
+//! prologues, envelopes and start/end markers in one [`SyntaxArena`]. Its explicit
+//! [`SyntaxStreamLimits`] admit the complete input, document metadata, decoded
+//! text, occurrences, trivia and parser state under aggregate bounds. An absent
+//! stream has no documents; an explicit empty document has an empty scalar root.
+//! No later failure publishes a partial stream.
+//!
+//! Explicit tags retain their raw span and a separate lexical identity:
+//! document-local handles expand their admitted `%TAG` prefixes, percent escapes
+//! decode as UTF-8, and the bare `!` remains non-specific. Untagged nodes have no
+//! explicit identity. Unknown handles are refused; unsupported specific tags
+//! survive lexically for a later semantic projection to judge. Anchor names
+//! shadow at declaration and reset per document. Only acyclic aliases are
+//! supported: an alias to an in-progress anchor has its own positioned refusal.
+//! Scalar-key uniqueness remains the lexical text/raw-tag law, rather than a
+//! complete Core representation-key equality or YAML-LD composition proof.
 //! [`emit_scalar`] shares the native quoting and escape bodies with [`write`](fn@write),
 //! reports the actual safe style, and admits its complete measured output before
 //! writing. Layout-policy consumers can use it without a local scalar encoder.
@@ -90,9 +106,10 @@ mod write;
 
 pub use read::{Error, ErrorKind, Limits, StreamLimits, read, read_stream, read_with};
 pub use syntax::{
-    Attachment, BlockHeader, Chomping, CollectionStyle, NodeId, NodeKind, Position,
-    ProjectionLimits, ScalarStyle, Span, SyntaxDocument, SyntaxEntry, SyntaxEscape, SyntaxLimits,
-    SyntaxNode, SyntaxScalar, Trivia, TriviaKind, read_syntax,
+    Attachment, BlockHeader, Chomping, CollectionStyle, ExplicitTag, NodeId, NodeKind, Position,
+    ProjectionLimits, ScalarStyle, Span, SyntaxArena, SyntaxDocument, SyntaxDocumentRoot,
+    SyntaxEntry, SyntaxEscape, SyntaxLimits, SyntaxNode, SyntaxScalar, SyntaxStream,
+    SyntaxStreamLimits, Trivia, TriviaKind, read_syntax, read_syntax_stream,
 };
 pub use write::{
     EmitError, EmitLimits, EmitStyle, EmittedScalar, ScalarContext, emit_scalar, write,

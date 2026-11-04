@@ -19,6 +19,16 @@ pub(super) struct PropertySpans {
 }
 pub(super) trait Builder {
     const LEXICAL: bool = false;
+    fn tag(
+        &mut self,
+        _: super::syntax::Span,
+        tag: super::syntax::ExplicitTag,
+    ) -> Result<(), Refusal> {
+        if let super::syntax::ExplicitTag::Specific(name) = tag {
+            self.discard_text(name)?;
+        }
+        Ok(())
+    }
     fn properties(&mut self, _: usize, _: bool, _: PropertySpans) -> Result<(), Refusal> {
         Ok(())
     }
