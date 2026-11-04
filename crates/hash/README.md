@@ -584,6 +584,7 @@ source on every run.
 | `b"positional-grams-1-2-3-relative-offsets-emoji-endpoints-rarest-anchor-v1"` | `SUBSTRING_LAW` | `crates/text/src/profile.rs` |
 | `b"purrdf-core/accepted-row/v1"` | `ACCEPTANCE_DOMAIN` | `crates/rdf-core/src/evidence/accepted.rs` |
 | `b"purrdf-core/composite-snapshot/v1"` | `(inline)` | `crates/rdf-core/src/ir/composite.rs` |
+| `b"purrdf-core/content-alias-revision/v1"` | `REVISION_DOMAIN` | `crates/rdf-core/src/content_alias.rs` |
 | `b"purrdf-core/dataset-state/v1"` | `STATE_DOMAIN` | `crates/rdf-core/src/ir/canon/state.rs` |
 | `b"purrdf-core/delta-snapshot/v1"` | `(inline)` | `crates/rdf-core/src/ir/mutable/delta_view.rs` |
 | `b"purrdf-core/evidence-aggregate-column/v1"` | `(inline)` | `crates/rdf-core/src/evidence.rs` |
