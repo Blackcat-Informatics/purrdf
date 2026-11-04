@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1017-add-a-native-yaml-source-carrier-with",
+  "branch": "paudley/1017-add-a-native-yaml-source-carrier-with",
+  "base_ref": "ee52c2feee09a0558441752d3ec58759bd336d4b",
+  "head": "62029d8c1241bdbdab3f1321e03f0eec91f9d6a7",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/1017-add-a-native-yaml-source-carrier-with/.stage/1017-main-integration/sync/20261104T130630-9cda7c76dfdd45488ae0192de7caf81f",
+  "conflicts": [],
+  "status": "fast_forward",
+  "base": "ee52c2feee09a0558441752d3ec58759bd336d4b",
+  "merge_bases": [
+    "62029d8c1241bdbdab3f1321e03f0eec91f9d6a7"
+  ],
+  "commit": "ee52c2feee09a0558441752d3ec58759bd336d4b"
+}

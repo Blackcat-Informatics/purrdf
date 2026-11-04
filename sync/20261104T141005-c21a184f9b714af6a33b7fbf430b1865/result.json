@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1017-add-a-native-yaml-source-carrier-with",
+  "branch": "paudley/1017-add-a-native-yaml-source-carrier-with",
+  "base_ref": "4f7d803866752fec2be1ce393386e3e939ebb9f6",
+  "head": "80d3ed5af60feba3bf66facb4d356ab7bdc70439",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/1017-add-a-native-yaml-source-carrier-with/.stage/1017-main-integration/sync/20261104T141005-c21a184f9b714af6a33b7fbf430b1865",
+  "conflicts": [
+    "helpers-ledger.toml"
+  ],
+  "status": "completed",
+  "base": "4f7d803866752fec2be1ce393386e3e939ebb9f6",
+  "merge_bases": [
+    "734c9db0e83030df439cbed5bd5826310a4e99be",
+    "8544c40f4a59350390ec217676fd680e606c4398"
+  ],
+  "merge_index": "8713fa24e4bb7aceeef14b50ac24b4d5826147a173b7191c584bbee0b67d103b",
+  "reused_paths": [],
+  "rerere_output": "Recorded preimage for 'helpers-ledger.toml'\n",
+  "candidate_tree": "cf12e56989df72ac0a575d2744d993f8688aaaa0",
+  "candidate_patch": "candidate-53258976f909490b9e70f51cae82bb1d.patch",
+  "validation_records": [],
+  "commit": "5714d3f1ad063259c9910c7b5caf0034b87875a1",
+  "tree": "cf12e56989df72ac0a575d2744d993f8688aaaa0"
+}

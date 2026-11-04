@@ -1,0 +1,111 @@
+diff --git crates/gts/src/model.rs crates/gts/src/model.rs
+index d43dc2ae8..0379bdc7d 100644
+--- crates/gts/src/model.rs
++++ crates/gts/src/model.rs
+@@ -494,18 +494,7 @@ impl Diagnostic {
+ ///
+ /// # Errors
+ /// Returns the original allocation refusal before publishing a partial owner.
+-pub fn retain_native_cause(
+-    cause: impl purrdf_hash::error::NativeError + 'static,
+-) -> Result<
+-    purrdf_lex::allocation::SharedOwned<Box<dyn purrdf_hash::error::NativeError>>,
+-    purrdf_lex::allocation::StorageError,
+-> {
+-    use purrdf_lex::allocation::{Memory, Resident, SharedOwned, StorageError};
+-    let mut resident = Resident;
+-    let mut memory = Memory::new(&mut resident);
+-    let cause: Box<dyn purrdf_hash::error::NativeError> = memory.boxed(cause)?;
+-    SharedOwned::try_from_admitted(cause, Resident).map_err(|_| StorageError::AllocationFailed)
+-}
++pub use purrdf_lex::allocation::retain_native_cause;
+ 
+ impl PartialEq for Diagnostic {
+     fn eq(&self, other: &Self) -> bool {
+diff --git crates/lex/src/allocation.rs crates/lex/src/allocation.rs
+index ac6f33e6e..bb3d6c853 100644
+--- crates/lex/src/allocation.rs
++++ crates/lex/src/allocation.rs
+@@ -16,6 +16,8 @@ mod boxed;
+ pub mod shared;
+ pub use boxed::{try_boxed, try_boxed_one};
+ pub use shared::{Shared, SharedAllocError, SharedCloneError, SharedOwned, SharedText, SharedView};
++mod cause;
++pub use cause::retain_native_cause;
+ mod text;
+ pub use text::OwnedText;
+ mod ordered;
+diff --git crates/lex/src/allocation/cause.rs crates/lex/src/allocation/cause.rs
+new file mode 100644
+index 000000000..30e73bfb1
+--- /dev/null
++++ crates/lex/src/allocation/cause.rs
+@@ -0,0 +1,23 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! Fallible shared ownership of original native diagnostic causes.
++
++use super::{Memory, Resident, SharedOwned, StorageError};
++use purrdf_hash::error::NativeError;
++
++/// Retain an original native failure without copying or rendering its payload.
++///
++/// The erased payload and shared owner use the common fallible allocation path.
++/// Copies retain this owner without copying its payload.
++///
++/// # Errors
++/// Returns the original allocation refusal before publishing a partial owner.
++pub fn retain_native_cause(
++    cause: impl NativeError + 'static,
++) -> Result<SharedOwned<Box<dyn NativeError>>, StorageError> {
++    let mut resident = Resident;
++    let mut memory = Memory::new(&mut resident);
++    let cause: Box<dyn NativeError> = memory.boxed(cause)?;
++    SharedOwned::try_from_admitted(cause, Resident).map_err(|_| StorageError::AllocationFailed)
++}
+diff --git crates/rdf-wasm/js/tests/roundtrip.test.mjs crates/rdf-wasm/js/tests/roundtrip.test.mjs
+index dd7ae26f8..3d4b27df9 100644
+--- crates/rdf-wasm/js/tests/roundtrip.test.mjs
++++ crates/rdf-wasm/js/tests/roundtrip.test.mjs
+@@ -252,8 +252,8 @@ test("datasetToStream → streamToDataset round-trips via the Sink", async () =>
+   assert.equal(rebuilt.size, 1);
+ });
+ 
+-test("an unsupported format is a rejected error", () => {
+-  assert.throws(() => Dataset.parse("", "yaml-ld"));
++test("an unsupported format crosses the wasm boundary as a JavaScript Error", () => {
++  assert.throws(() => Dataset.parse("", "application/x-purrdf-unsupported"), { name: "Error", message: /unsupported RDF format/ });
+ });
+ 
+ // RDF-1.2 directional-literal datatype reporting: the engine STORES rdf:langString
+diff --git crates/rdf/src/native_codecs/jsonld/yaml.rs crates/rdf/src/native_codecs/jsonld/yaml.rs
+index ecb34f902..78edc1c54 100644
+--- crates/rdf/src/native_codecs/jsonld/yaml.rs
++++ crates/rdf/src/native_codecs/jsonld/yaml.rs
+@@ -160,7 +160,7 @@ fn yaml_error(error: yaml::Error) -> RdfDiagnostic {
+         let mut memory = Memory::new(&mut resident);
+         let mut diagnostic = RdfDiagnostic::try_error_with_memory(code, &error, &mut memory)?;
+         diagnostic.location = Some(memory.boxed(location(error.line(), error.column()))?);
+-        let cause = purrdf_gts::model::retain_native_cause(error)?;
++        let cause = purrdf_lex::allocation::retain_native_cause(error)?;
+         diagnostic.with_native_cause(cause, &mut memory)
+     };
+     result().unwrap_or_else(RdfDiagnostic::from)
+diff --git docs/WASM_TESTING.md docs/WASM_TESTING.md
+index d5bd5311f..03e328c79 100644
+--- docs/WASM_TESTING.md
++++ docs/WASM_TESTING.md
+@@ -26,6 +26,12 @@ as text, and keeps an owned native cause readable after its dataset wrapper is
+ freed. Native Rust owns the underlying reserved-vocabulary refusal semantics.
+ Run only this named package case for those host obligations.
+ 
++The packaged case `an unsupported format crosses the wasm boundary as a JavaScript
++Error` in `roundtrip.test.mjs` exercises the format resolver's wasm-only
++`JsError` construction/import and the JavaScript exception name and message.
++It uses an unregistered media type; native Rust owns format classification and
++YAML-LD empty-stream semantics. Run only this named case for that host obligation.
++
+ The packaged case `wasm_shacl_apply_rules: maxStoredFacts reaches the evaluator
+ and names the host control` checks BigInt argument transport, a JavaScript Error
+ and its host-specific control name, and returned string ownership. Its fixture
