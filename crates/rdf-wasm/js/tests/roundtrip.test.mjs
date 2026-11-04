@@ -252,8 +252,8 @@ test("datasetToStream → streamToDataset round-trips via the Sink", async () =>
   assert.equal(rebuilt.size, 1);
 });
 
-test("an unsupported format is a rejected error", () => {
-  assert.throws(() => Dataset.parse("", "yaml-ld"));
+test("an unsupported format crosses the wasm boundary as a JavaScript Error", () => {
+  assert.throws(() => Dataset.parse("", "application/x-purrdf-unsupported"), { name: "Error", message: /unsupported RDF format/ });
 });
 
 // RDF-1.2 directional-literal datatype reporting: the engine STORES rdf:langString
