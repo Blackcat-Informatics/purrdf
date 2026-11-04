@@ -494,18 +494,7 @@ impl Diagnostic {
 ///
 /// # Errors
 /// Returns the original allocation refusal before publishing a partial owner.
-pub fn retain_native_cause(
-    cause: impl purrdf_hash::error::NativeError + 'static,
-) -> Result<
-    purrdf_lex::allocation::SharedOwned<Box<dyn purrdf_hash::error::NativeError>>,
-    purrdf_lex::allocation::StorageError,
-> {
-    use purrdf_lex::allocation::{Memory, Resident, SharedOwned, StorageError};
-    let mut resident = Resident;
-    let mut memory = Memory::new(&mut resident);
-    let cause: Box<dyn purrdf_hash::error::NativeError> = memory.boxed(cause)?;
-    SharedOwned::try_from_admitted(cause, Resident).map_err(|_| StorageError::AllocationFailed)
-}
+pub use purrdf_lex::allocation::retain_native_cause;
 
 impl PartialEq for Diagnostic {
     fn eq(&self, other: &Self) -> bool {
