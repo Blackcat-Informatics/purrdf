@@ -1,0 +1,19 @@
+ghprsq structured squash audit metadata
+
+parent_hashes: cc4d9c48ac36c3f29f0f00e03d32144920b34d43
+
+GhpRsq-Schema: 1
+GhpRsq-Merge-Style: structured-squash
+GhpRsq-GitHub-Repo: Blackcat-Informatics/purrdf
+GhpRsq-GitHub-Pull-Request: 1029
+GhpRsq-GitHub-PR-URL: https://github.com/Blackcat-Informatics/purrdf/pull/1029
+GhpRsq-Base-Ref: main
+GhpRsq-Base-OID: 3ab4f2338a4e18fcbd540d2ae874799607d8feba
+GhpRsq-Head-Ref: paudley/1028-share-fixed-allocation-ceilings-and
+GhpRsq-Head-OID: cc4d9c48ac36c3f29f0f00e03d32144920b34d43
+GhpRsq-Result-Tree: a68fce68759c0f3b0d45d7f869fc5a39477f0286
+GhpRsq-Result-Commit: 8ac1e6bb3d772bb89fa0f2688507b092e4b994bf
+GhpRsq-Parent-Hashes: cc4d9c48ac36c3f29f0f00e03d32144920b34d43
+GhpRsq-Squash-Notes-SHA256: 2215cdf84ec82ae5ffa25acffa8871009f9888ab1632432d1867c9763ddda17c
+GhpRsq-Defect-Class: none
+GhpRsq-Stage-Evidence: none
