@@ -2345,7 +2345,7 @@ pub(crate) mod tests {
         assert_eq!(
             JobError::message(SHACL_CODE, "invalid shapes").diagnostic_json(),
             Some(
-                RdfDiagnostic::error(SHACL_CODE, "invalid shapes")
+                purrdf_core::RdfDiagnostic::error(SHACL_CODE, "invalid shapes")
                     .to_json()
                     .to_string()
             )
