@@ -50,10 +50,10 @@ purrdf-sparql-results = { workspace = true }
 # directly. Path-depends on the SAME
 # ../rdf-core so `SparqlRequest`/`SparqlResult` unify.
 purrdf-sparql-eval = { workspace = true }
+# Existing first-party allocation home for admitted native and C handle controls.
+purrdf-lex = { workspace = true }
 
 [dev-dependencies]
-# The tests read the SARIF and SPARQL-results JSON the ABI returns.
-purrdf-lex = { workspace = true }
 # The ABI tests recompute the SHA-256 identities the library returns, in lowercase
 # hex.
 sha2 = { workspace = true }

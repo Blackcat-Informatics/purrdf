@@ -17,7 +17,7 @@
 #
 # Regenerate by running `cargo test -p purrdf-capi --test abi_signatures` and
 # pasting the ACTUAL block it prints. Never hand-tune a single line.
-abi-version 0.19.0
+abi-version 0.20.0
 const char *purrdf_error_canonicalization_json(const PurrdfError *error)
 const char *purrdf_error_execution_receipt_json(const PurrdfError *error)
 const char *purrdf_error_message(const PurrdfError *err)
@@ -133,6 +133,8 @@ int32_t purrdf_update_governed_with_geo(const PurrdfGeoSession *geo, PurrdfDatas
 int32_t purrdf_update_governed_xpath_regex(PurrdfDataset *dataset, const char *request, const char *base_iri, const char *aggregate_namespace, const char *regex_profile, int32_t graph_existence, const PurrdfQueryGovernors *governors, const char *now, const uint64_t *entropy_seed, PurrdfBuffer **out_receipt, int32_t *out_outcome, PurrdfGovernorEvidence *out_evidence, PurrdfError **out_error)
 int32_t purrdf_xsd_canonical_lexical(const char *lexical, const char *datatype, PurrdfBuffer **out_buffer, PurrdfError **out_error)
 int32_t purrdf_xsd_value_compare(const char *left_lexical, const char *left_datatype, const char *right_lexical, const char *right_datatype, uint8_t *out_comparable, int32_t *out_order, PurrdfError **out_error)
+int32_t purrdf_yaml_source_export(const uint8_t *source, size_t source_len, const char *source_iri, const uint8_t *profile_json, size_t profile_len, PurrdfDataset **out_dataset, PurrdfBuffer **out_root, PurrdfError **out_error)
+int32_t purrdf_yaml_source_reconstruct(const PurrdfDataset *dataset, const char *root, const uint8_t *profile_json, size_t profile_len, PurrdfBuffer **out_source, PurrdfError **out_error)
 size_t purrdf_shapes_import_error_iri_count(const PurrdfError *err)
 void purrdf_buffer_free(PurrdfBuffer *buf)
 void purrdf_cancellation_free(PurrdfCancellation *cancellation)
