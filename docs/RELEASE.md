@@ -109,6 +109,7 @@ workflow, the bootstrap script and the crates.io preflight all source, and which
 - `purrdf-mime`
 - `purrdf-json`
 - `purrdf-toml`
+- `purrdf-yaml`
 - `purrdf-slice`
 - `purrdf-shapes`
 - `purrdf-geo`
@@ -194,14 +195,15 @@ first tagged run can publish the complete workspace in dependency order.
    records; deleting a crate would undo the setup. Yank can be reversed with
    `cargo yank --undo --version 0.0.0 "$new_crate"`.
 
-### Outstanding bootstrap: `purrdf-zstd`, `purrdf-geo-kernel`, `purrdf-mime`, `purrdf-toml` and `purrdf-glob`
+### Outstanding bootstrap: `purrdf-zstd`, `purrdf-geo-kernel`, `purrdf-mime`, `purrdf-toml`, `purrdf-yaml` and `purrdf-glob`
 
-Five crates are in the release set above and require new records before tagging.
+Six crates are in the release set above and require new records before tagging.
 `purrdf-zstd` is the **tenth** crate in publish order;
 `purrdf-geo-kernel` is the **fourteenth** crate in publish order;
 `purrdf-mime` is the **twenty-sixth** crate in publish order;
 `purrdf-toml` is the **twenty-eighth** crate in publish order;
-`purrdf-glob` is the **thirty-fourth** crate in publish order. Their implementations
+`purrdf-yaml` is the **twenty-ninth** crate in publish order;
+`purrdf-glob` is the **thirty-fifth** crate in publish order. Their implementations
 are part of the workspace; the registry's public index has no records for them.
 Create the isolated empty bootstrap package, configure its Trusted Publisher
 entry and lock, then reconcile the ledger after the public preflight verifies
@@ -364,7 +366,7 @@ git push origin rust-v0.1.5
 
 The workflow refuses before packaging if any release crate lacks its record
 or publishing lock, or the bootstrap ledger has not been reconciled with the
-registry; see [bootstrap status](#outstanding-bootstrap-purrdf-zstd-purrdf-geo-kernel-purrdf-mime-purrdf-toml-and-purrdf-glob). It publishes
+registry; see [bootstrap status](#outstanding-bootstrap-purrdf-zstd-purrdf-geo-kernel-purrdf-mime-purrdf-toml-purrdf-yaml-and-purrdf-glob). It publishes
 functional crates in the declared dependency order and skips a version already
 present. A partially completed release resumes with `gh run rerun <run-id>`.
 

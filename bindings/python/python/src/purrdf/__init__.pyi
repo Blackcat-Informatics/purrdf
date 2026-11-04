@@ -972,6 +972,7 @@ class Store(_QuadStore):
         *,
         path: str | None = ...,
         base: str | None = ...,
+        input_options: str | None = ...,
     ) -> list[tuple[str, str]]: ...
     def bulk_load(
         self,
@@ -980,6 +981,7 @@ class Store(_QuadStore):
         *,
         path: str | None = ...,
         base: str | None = ...,
+        input_options: str | None = ...,
     ) -> list[tuple[str, str]]: ...
     def add(self, quad: Quad) -> None: ...
     def remove(self, quad: Quad) -> None: ...
@@ -1086,6 +1088,7 @@ class MutableDataset(_QuadStore):
         *,
         path: str | None = ...,
         base: str | None = ...,
+        input_options: str | None = ...,
     ) -> list[tuple[str, str]]: ...
     def add(self, quad: Quad) -> bool: ...
     def remove(self, quad: Quad) -> bool: ...
@@ -1150,7 +1153,8 @@ class Dataset:
 # HexTuples) emits absolute IRIs rather than raising; a base that is not an absolute
 # IRI raises on either leg.
 def parse(
-    input: bytes | str, format: RdfFormat, *, base: str | None = ...
+    input: bytes | str, format: RdfFormat, *, base: str | None = ...,
+    input_options: str | None = ...
 ) -> list[Quad]: ...
 @overload
 def serialize(

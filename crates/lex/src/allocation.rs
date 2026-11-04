@@ -16,6 +16,8 @@ mod boxed;
 pub mod shared;
 pub use boxed::{try_boxed, try_boxed_one};
 pub use shared::{Shared, SharedAllocError, SharedCloneError, SharedOwned, SharedText, SharedView};
+mod cause;
+pub use cause::retain_native_cause;
 mod text;
 pub use text::OwnedText;
 mod ordered;

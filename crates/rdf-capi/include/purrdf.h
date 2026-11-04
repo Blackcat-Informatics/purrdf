@@ -349,8 +349,14 @@
  * MaxUdfDepth enables that inclusive finite limit; UnlimitedUdfDepth removes
  * the default depth limit of 32. The two flag bits conflict. Rebuild callers
  * against the new structure layout and regenerate any copied declarations.
+ *
+ * # `0.18.0` → `0.19.0`: configured YAML-LD input
+ *
+ * `purrdf_parse` gains nullable `input_options` bytes and `input_options_len`
+ * after `source_name`. Pass null and zero for the existing default behavior.
+ * Rebuild all consumers against the new header; options select Basic only.
  */
-#define PURRDF_ABI_MINOR 18
+#define PURRDF_ABI_MINOR 19
 
 /**
  * ABI patch version. Reset to `0` by the MINOR bump documented above.
@@ -2729,18 +2735,23 @@ int32_t purrdf_dataset_term_count(const PurrdfDataset *dataset, size_t *out);
 /**
  * Parse `len` bytes of `media_type` (e.g. `"text/turtle"`, `"application/n-quads"`)
  * into a fresh frozen dataset. `base_iri` and `source_name` may be null. On
+ * `input_options` is nullable UTF-8 JSON with an explicit byte length. Null requires
+ * length zero and retains default parsing. Present options require YAML-LD. On
  * success `*out_dataset` is a caller-owned handle (free with
  * `purrdf_dataset_free`); on failure `*out_error` is set.
  *
  * # Safety
  * `bytes` must be valid for `len` bytes; the `c_char` pointers must be null or
- * NUL-terminated; the out-params must be writable.
+ * NUL-terminated; `input_options` must be valid for `input_options_len` bytes
+ * when non-null; the out-params must be writable.
  */
 int32_t purrdf_parse(const uint8_t *bytes,
                      size_t len,
                      const char *media_type,
                      const char *base_iri,
                      const char *source_name,
+                     const uint8_t *input_options,
+                     size_t input_options_len,
                      PurrdfDataset **out_dataset,
                      PurrdfError **out_error);
 

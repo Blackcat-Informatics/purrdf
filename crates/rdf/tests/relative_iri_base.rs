@@ -1777,6 +1777,19 @@ fn yamlld_reports_its_context_base_identically_to_jsonld() {
             Some("http://caller.example/"),
         ),
     );
+    let nested = format!("[null, [[{JSONLD_RELATIVE_SUBJECT_WITH_CONTEXT_BASE}]]]");
+    assert_eq!(
+        document_base(
+            &nested,
+            "application/ld+json",
+            Some("http://caller.example/")
+        ),
+        document_base(
+            JSONLD_RELATIVE_SUBJECT_WITH_CONTEXT_BASE,
+            "application/ld+json",
+            Some("http://caller.example/")
+        ),
+    );
 }
 
 /// A JSON-LD `"@base": null` CLEARS the caller's base, and the report says so with `None`

@@ -152,6 +152,62 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
 | Python binding suite | first-party, compat differential vs rdflib 7.6 included | **4279** pass · 4 strict-xfail (ledgered; last complete broad-suite snapshot) · 1 skipped. The count is the WHOLE binding suite — entailment, GTS, projections, shapes — not the rdflib differential alone; the 4 ledgered entries are that differential's |
 | GTS transport | frozen cross-language vectors, `vectors/` | **38 / 39** vectors fold byte-exactly into the `<id>.expected.json` the corpus ships · 1 ledgered divergence. `12-conflicting-reifier` binds one reifier id to two triples and carries no quoted-triple term; `rdf:reifies` is not a functional property, so both bindings are legitimate and this reader keeps both without complaint (two rows, no diagnostic) where the committed expectation still states the superseded single-binding reading (one row plus a `ConflictingReifier` diagnostic). The expectation encodes a premise the reader has shed, and the corpus is governed upstream in [`gmeow-gts`](https://github.com/Blackcat-Informatics/gmeow-gts) and never regenerated here, so the disagreement stands until it is corrected there. It is held to XPASS discipline in both directions: the ledgered vector must STILL disagree, and no unlisted vector may start disagreeing |
 
+## Native YAML-LD Basic
+
+The native YAML-LD reader targets the
+[YAML-LD 1.0 Working Draft of 24 October 2026](https://www.w3.org/TR/2026/WD-yaml-ld-10-20261024/).
+`yamlld_to_jsonld`, the YAML-LD codec and default dataset parsing share one
+bytes-to-Basic-value adapter. `YamlLdOptions` exposes first-document selection
+by default, `extract_all_scripts` for all documents, and explicit lexical and
+semantic admission bounds. The selected value enters the existing JSON-LD
+expander directly; it is not serialized and parsed again for RDF construction.
+String conversion separately admits escaped JSON output and writer scratch
+under `max_serialization_bytes`, in addition to the already admitted Basic
+value. Direct RDF parsing does not serialize or spend that allowance. The byte
+input ceiling is checked before UTF-8 decoding scans the input.
+
+The implementation applies the draft's document-loading and mapping-key
+requirements in two phases. The complete stream must have valid YAML syntax,
+acyclic document-local aliases, mapping/sequence/null roots and string mapping
+keys. The mapping-key requirement is that each key is a scalar whose resolved
+tag is `tag:yaml.org,2002:str`; decoded string identity also determines duplicate
+keys. These checks apply to unselected documents. Deferred lexical key ingestion
+preserves entries until that resolved identity can be checked.
+
+Semantic construction then applies the draft's first-document or all-document
+selection. Only selected values undergo Core scalar-tag validation, non-finite
+number refusal and exact numeric materialization. Consequently a later mapping
+with a non-finite or unsupported tagged value does not fail first-document
+construction, while a later invalid key, root or cyclic alias does. This is the
+native interpretation of loading the complete stream before constructing the
+selected JSON-LD values; loading is not eager construction of every document.
+Absent streams, explicit empty documents and resolved null roots contribute no
+RDF statements. All-document arrays are traversed as document entries, including
+nested arrays and null, while arrays inside JSON literals stay literal.
+
+| Obligation | Native diagnostic |
+| --- | --- |
+| Invalid UTF-8 bytes | `invalid-encoding`, with the original byte index in its message and line/column in its location |
+| A key does not resolve to a string scalar | `mapping-key-error` |
+| Invalid YAML, duplicate keys, unsupported roots, cycles or selected scalar construction | `loading-document-failed` |
+| Input, document, node, depth, numeric, allocation, output or physical storage exhaustion | Explicit `native-yaml-*` refusal retaining the typed YAML or storage cause |
+
+The consuming Lex projection resumes the exact retained arena account,
+including document metadata, and admits validation scratch, prepared values,
+alias copies and final output while that arena is alive. One numeric account
+covers global key/root classification and selected value construction. Prepared
+alias targets produce independent JSON copies without materializing numeric
+spellings again. Expanded selected nodes and collection depth are bounded;
+unselected value graphs do not consume those construction bounds.
+
+Native cases live in `crates/lex/tests/yaml_syntax.rs`,
+`crates/rdf/tests/yaml_mapping_keys.rs` and
+`crates/rdf/tests/relative_iri_base.rs`. They cover selection and phase refusals,
+combined admission, native routing, JSON-LD entry arrays, explicit blank-label
+sharing and anonymous alias copies. Source-cover RDF export/reconstruction,
+configured foreign-binding controls and the complete pinned YAML-LD conformance
+matrix are separate commitments; these native cases do not establish them.
+
 ## Where the suites live
 
 - `vectors/shexTest/` — the official ShEx suite pinned at tag `v2.1.0`

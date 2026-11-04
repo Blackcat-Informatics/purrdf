@@ -455,6 +455,9 @@ pub(crate) enum Command {
     },
     /// Convert RDF between syntaxes, and to/from the native pack container.
     Convert {
+        /// Closed version-one YAML-LD Basic input-options JSON file.
+        #[arg(long, value_name = "PATH")]
+        yamlld_input_options: Option<PathBuf>,
         /// Input format override; inferred from each input's extension when omitted.
         /// Applies to EVERY source in the list, including each `--input`.
         #[arg(long, value_enum)]
@@ -2843,6 +2846,7 @@ impl Cli {
                 paths.push(PathBuf::from(output));
             }
             Command::Convert {
+                yamlld_input_options,
                 inputs,
                 rules,
                 report,
@@ -2851,6 +2855,7 @@ impl Cli {
                 output,
                 ..
             } => {
+                paths.extend(yamlld_input_options.iter().cloned());
                 paths.extend(inputs.iter().map(PathBuf::from));
                 if let Some(path) = rules {
                     paths.push(path.clone());

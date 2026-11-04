@@ -317,7 +317,13 @@ pub const PURRDF_ABI_MAJOR: u32 = 0;
 /// MaxUdfDepth enables that inclusive finite limit; UnlimitedUdfDepth removes
 /// the default depth limit of 32. The two flag bits conflict. Rebuild callers
 /// against the new structure layout and regenerate any copied declarations.
-pub const PURRDF_ABI_MINOR: u32 = 18;
+///
+/// # `0.18.0` → `0.19.0`: configured YAML-LD input
+///
+/// `purrdf_parse` gains nullable `input_options` bytes and `input_options_len`
+/// after `source_name`. Pass null and zero for the existing default behavior.
+/// Rebuild all consumers against the new header; options select Basic only.
+pub const PURRDF_ABI_MINOR: u32 = 19;
 /// ABI patch version. Reset to `0` by the MINOR bump documented above.
 pub const PURRDF_ABI_PATCH: u32 = 0;
 

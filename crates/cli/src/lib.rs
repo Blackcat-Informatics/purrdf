@@ -353,6 +353,7 @@ fn dispatch_with_request(
             }
         }
         Command::Convert {
+            yamlld_input_options,
             from,
             inputs,
             transport,
@@ -370,6 +371,7 @@ fn dispatch_with_request(
             output,
         } => convert::run(
             &convert::ConvertOptions {
+                yamlld_input_options: yamlld_input_options.as_deref(),
                 from: *from,
                 to: *to,
                 inputs,

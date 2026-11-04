@@ -424,6 +424,7 @@ dependencies = [
  "purrdf-toml",
  "purrdf-validate",
  "purrdf-xsd",
+ "purrdf-yaml",
  "rayon",
  "sha2",
 ]
@@ -1066,6 +1067,17 @@ dependencies = [
  "purrdf-alloc-probe",
  "purrdf-hash",
  "purrdf-lex",
+ "purrdf-testkit",
+]
+
+[[package]]
+name = "purrdf-yaml"
+version = "3.0.1"
+dependencies = [
+ "purrdf-core",
+ "purrdf-hash",
+ "purrdf-lex",
+ "purrdf-rdf",
  "purrdf-testkit",
 ]
 

@@ -110,15 +110,13 @@ ALLOWLIST: dict[tuple[str, str], str] = {
         "stack",
     ): "The RDF/XML writer's open-element stack. Popping it closes a tag; the "
     "bytes for that tag were already emitted and are not touched.",
-    (
-        "crates/rdf/src/native_codecs/jsonld/context/compiler.rs",
-        "self.remote_stack",
-    ): "The JSON-LD context compiler's remote-context stack, which exists to "
+    ("crates/rdf/src/native_codecs/jsonld/context/compiler.rs", "self.remote_stack"): "The JSON-LD context compiler's remote-context stack, which exists to "
     "detect cyclic `@context` IRIs. It holds IRIs under consideration, not output.",
-    (
-        "crates/rdf/src/native_codecs/jsonld/carrier.rs",
-        "stack",
-    ): "The JSON-LD carrier's list-fold frames: `fold_lists` walks nested `@list` "
+    ("crates/rdf/src/native_codecs/jsonld/expand.rs", "frames"):
+    "JSON-LD document-entry and base traversal frames hold input iterators; popping releases exhausted cursors, never emitted bytes.",
+    ("crates/rdf/src/native_codecs/jsonld/expand.rs", "pending"):
+    "The blank-label prepass visits references to parsed JSON input values; removing pending visits never rewinds serialized output.",
+    ("crates/rdf/src/native_codecs/jsonld/carrier.rs", "stack"): "The JSON-LD carrier's list-fold frames: `fold_lists` walks nested `@list` "
     "values over a heap stack of open lists and pops a frame once every item is "
     "folded. It holds in-memory values under construction, not output.",
     (

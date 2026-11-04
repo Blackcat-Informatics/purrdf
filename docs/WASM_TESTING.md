@@ -3,6 +3,12 @@
 
 # Native ownership and WASM execution
 
+The exact package case `configured YAML input crosses wasm-bindgen with native error records`
+in `jsonld-configured.test.mjs` checks the appended text-options argument, the
+preserved `rememberEmptyGraphs` slot, and native code/location records on real
+JavaScript `Error` objects. Run only that named case for configured input.
+Native Rust owns YAML grammar, selection and resource-account correctness.
+
 Native Rust owns general semantics, grammar, arithmetic, refusal, ownership and
 conformance. A WASM build, 32-bit value, shared test runner, or historical
 selection does not justify replaying an ordinary Rust suite on WASM.
@@ -25,6 +31,12 @@ a caught host Error from a WASM trap, transports an exact maximum `u64` policy
 as text, and keeps an owned native cause readable after its dataset wrapper is
 freed. Native Rust owns the underlying reserved-vocabulary refusal semantics.
 Run only this named package case for those host obligations.
+
+The packaged case `an unsupported format crosses the wasm boundary as a JavaScript
+Error` in `roundtrip.test.mjs` exercises the format resolver's wasm-only
+`JsError` construction/import and the JavaScript exception name and message.
+It uses an unregistered media type; native Rust owns format classification and
+YAML-LD empty-stream semantics. Run only this named case for that host obligation.
 
 The packaged case `wasm_shacl_apply_rules: maxStoredFacts reaches the evaluator
 and names the host control` checks BigInt argument transport, a JavaScript Error
@@ -192,6 +204,8 @@ These exact package cases cover the heap driver's host boundaries:
 | `update-coordinates.test.mjs` / `UPDATE host coordinate errors precede mutation and release every claim` | Raw UPDATE argument positions preserve coordinate refusal and release the host dataset claim |
 | `async-concurrency.test.mjs` / `a request as deep as the synchronous lane evaluates answers on a job's region` | Actual per-job shadow-stack bounds, floor refusal, idle-pointer restoration, reuse and nonzero JSPI suspension |
 | `async-concurrency.test.mjs` / `a trap poisons every entry point of the instance, and jobs that fault without trapping poison nothing` | The existing armed WASM trap during async SERVICE handling poisons active and parked jobs and every exported surface; ordinary host faults leave the instance reusable |
+| `panic-poison.test.mjs` / `a panic in a synchronous call poisons every entry point, and typed errors poison nothing` | An armed real WASM panic reaches the panic hook and linked poison gate, rejects suspended host jobs and gates every export; native coded JavaScript errors leave the instance usable |
+| `trap-poison.test.mjs` / `a trap that is not a panic, in a synchronous call, poisons every entry point` | An armed real WASM trap unbalances the linked gate and the host observes permanent poisoning, while prior coded JavaScript errors preserve reuse |
 
 Names such as `wasm_determinism` or `product_wasm` do not make their entire native
 registration a WASM obligation. Unselected general tests remain native. Adding

@@ -107,6 +107,12 @@ executes that example against the generated shared library and committed header.
 
 ## ABI contract (every entry point)
 
+ABI `0.19.0` extends `purrdf_parse` with `const uint8_t *input_options` and
+`size_t input_options_len` after `source_name`. Recompile consumers against the
+generated header. Pass `NULL, 0` for existing default parsing; explicit options
+require YAML-LD input. See [YAML-LD input options](../../docs/YAML_INPUT_OPTIONS.md)
+for the closed Basic schema, defaults and independent admission accounts.
+
 `purrdf_error_presentation_json(error)` returns a borrowed, nullable UTF-8 JSON
 record with stable diagnostic message identities, named typed parameters and
 exact logical anchors. It remains valid until `purrdf_error_free(error)`. This
@@ -137,7 +143,7 @@ the IRI failure without parsing English. The error message and the record's
   When an error out-pointer is supplied, a failure stores an owned `PurrdfError`
   there.
 - **SemVer-frozen ABI.** The status enum is append-only; new fields/functions are
-  additive. The current ABI is **0.18.0 (beta)** — the freeze *discipline* is in
+  additive. The current ABI is **0.19.0 (beta)** — the freeze *discipline* is in
   place, but the version stays pre-1.0 until a real C consumer and the rdflib
   shim exercise it. `purrdf_abi_version` reports it.
 - **An incompatible change is declared, not smuggled.** Pre-1.0 the project

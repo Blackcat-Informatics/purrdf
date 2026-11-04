@@ -6,7 +6,6 @@
 use std::os::raw::c_char;
 
 use purrdf_core::RdfDiagnostic;
-use purrdf_rs::{DatasetSink, GtsCodecBackend, RdfParseRequest, RdfParserBackend};
 
 use crate::error::PurrdfError;
 use crate::handles::PurrdfDataset;
@@ -25,12 +24,15 @@ fn parse_status(diagnostic: &RdfDiagnostic) -> PurrdfStatus {
 
 /// Parse `len` bytes of `media_type` (e.g. `"text/turtle"`, `"application/n-quads"`)
 /// into a fresh frozen dataset. `base_iri` and `source_name` may be null. On
+/// `input_options` is nullable UTF-8 JSON with an explicit byte length. Null requires
+/// length zero and retains default parsing. Present options require YAML-LD. On
 /// success `*out_dataset` is a caller-owned handle (free with
 /// `purrdf_dataset_free`); on failure `*out_error` is set.
 ///
 /// # Safety
 /// `bytes` must be valid for `len` bytes; the `c_char` pointers must be null or
-/// NUL-terminated; the out-params must be writable.
+/// NUL-terminated; `input_options` must be valid for `input_options_len` bytes
+/// when non-null; the out-params must be writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_parse(
     bytes: *const u8,
@@ -38,6 +40,8 @@ pub unsafe extern "C" fn purrdf_parse(
     media_type: *const c_char,
     base_iri: *const c_char,
     source_name: *const c_char,
+    input_options: *const u8,
+    input_options_len: usize,
     out_dataset: *mut *mut PurrdfDataset,
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
@@ -52,26 +56,24 @@ pub unsafe extern "C" fn purrdf_parse(
             let slice = std::slice::from_raw_parts(bytes, len);
             let media = cstr_to_str(media_type)?;
             let base_iri = opt_cstr_to_str(base_iri)?;
-            let source_name = opt_cstr_to_str(source_name)?;
-
-            let mut sink = DatasetSink::new();
-            GtsCodecBackend
-                .parse_into(
-                    RdfParseRequest {
-                        bytes: slice,
-                        media_type: media,
-                        base_iri,
-                        source_name,
-                    },
-                    &mut sink,
-                )
+            let _source_name = opt_cstr_to_str(source_name)?;
+            let input_options = if input_options.is_null() {
+                if input_options_len != 0 {
+                    return Err(PurrdfError::new(
+                        PurrdfStatus::NullPointer,
+                        "null input_options requires zero input_options_len",
+                    ));
+                }
+                None
+            } else {
+                Some(std::slice::from_raw_parts(input_options, input_options_len))
+            };
+            let dataset = purrdf_validate::rdf_input::parse(slice, media, base_iri, input_options)
                 .map_err(|diagnostic| {
                     PurrdfError::from_diagnostic(parse_status(&diagnostic), &diagnostic)
-                })?;
+                })?
+                .dataset;
 
-            let dataset = sink.into_dataset().ok_or_else(|| {
-                PurrdfError::new(PurrdfStatus::ParseError, "parse produced no dataset")
-            })?;
             *out_dataset = into_handle(PurrdfDataset::new(dataset));
             Ok(PurrdfStatus::Ok)
         })

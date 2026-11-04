@@ -20,7 +20,7 @@ use purrdf::ir::{GraphExistenceMode, MutableDataset};
 use purrdf::{
     CanonHash, JsonLdSerializeOptions, RdfDataset, RdfDatasetBuilder, RdfDiagnostic,
     SerializeGraph, SerializeOptions, StatementLayer, TermValue, ViewCanonError, classify,
-    datasets_isomorphic, empty_named_graphs_dropped, parse_dataset, serialize_dataset_to_format,
+    datasets_isomorphic, empty_named_graphs_dropped, serialize_dataset_to_format,
     serialize_dataset_to_format_with_jsonld_options, serialize_dataset_to_writer_with,
     serialize_dataset_with, try_canonicalize_flat_view,
 };
@@ -535,10 +535,17 @@ impl Dataset {
         format: &str,
         base: Option<String>,
         remember_empty_graphs: Option<bool>,
+        input_options: Option<String>,
     ) -> Result<Self, JsValue> {
         let media_type = resolve_media_type(format).map_err(|e| JsError::new(&e))?;
-        let dataset = parse_dataset(input.as_bytes(), media_type, base.as_deref())
-            .map_err(|e| diag_to_err(&e))?;
+        let dataset = purrdf_validate::rdf_input::parse(
+            input.as_bytes(),
+            media_type,
+            base.as_deref(),
+            input_options.as_deref().map(str::as_bytes),
+        )
+        .map_err(crate::operation::diagnostic_to_js)?
+        .dataset;
         Self::from_frozen_in(dataset.into(), Self::mode_of(remember_empty_graphs))
     }
 
@@ -1271,7 +1278,7 @@ mod tests {
         // isomorphism check below (a quad-count check alone would miss it).
         let nt = "<https://e/s> <https://e/p> <https://e/o> .\n\
                   <https://e/s> <https://e/label> \"value\" .\n";
-        let Ok(ds) = Dataset::parse(nt, "ntriples", None, None) else {
+        let Ok(ds) = Dataset::parse(nt, "ntriples", None, None, None) else {
             panic!("parse n-triples failed");
         };
         for fmt in [
@@ -1283,7 +1290,7 @@ mod tests {
             let Ok(text) = ds.serialize(fmt, None) else {
                 panic!("serialize {fmt} failed");
             };
-            let Ok(reparsed) = Dataset::parse(&text, fmt, None, None) else {
+            let Ok(reparsed) = Dataset::parse(&text, fmt, None, None, None) else {
                 panic!("re-parse {fmt} failed");
             };
             let Ok(iso) = datasets_isomorphic(
@@ -1420,6 +1427,7 @@ mod tests {
             "ntriples",
             None,
             None,
+            None,
         )
         .unwrap();
         let quads = ds.quads().unwrap();
@@ -1433,6 +1441,7 @@ mod tests {
         let ds = Dataset::parse(
             "<https://e/alice> <https://e/knows> <https://e/bob> .\n",
             "ntriples",
+            None,
             None,
             None,
         )
@@ -1516,7 +1525,7 @@ mod tests {
             "nquads",
             None,
             None,
-        )
+         None)
         .expect("parse");
         let mut added = Dataset::new(None).expect("empty");
         for quad in parsed.quads().expect("quads") {
@@ -1550,14 +1559,14 @@ mod tests {
     #[test]
     fn parse_then_serialize_round_trips_ntriples() {
         let input = "<https://e/s> <https://e/p> <https://e/o> .\n";
-        let ds = Dataset::parse(input, "ntriples", None, None).unwrap();
+        let ds = Dataset::parse(input, "ntriples", None, None, None).unwrap();
         assert_eq!(ds.size(), 1);
         let out = ds.serialize("ntriples", None).unwrap();
         assert!(out.contains("https://e/s"));
         assert!(out.contains("https://e/p"));
         assert!(out.contains("https://e/o"));
         // Re-parsing the output yields the same single quad.
-        let reparsed = Dataset::parse(&out, "ntriples", None, None).unwrap();
+        let reparsed = Dataset::parse(&out, "ntriples", None, None, None).unwrap();
         assert_eq!(reparsed.size(), 1);
     }
 
@@ -1577,7 +1586,7 @@ mod tests {
             "<https://e/r> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ",
             "<<( <https://e/s1> <https://e/p> <https://e/o1> )>> <https://e/g1> .\n",
         );
-        let ds = Dataset::parse(MIXED, "nquads", None, None)
+        let ds = Dataset::parse(MIXED, "nquads", None, None, None)
             .unwrap_or_else(|_| unreachable!("N-Quads parses"));
 
         let lossy = ds
@@ -1624,7 +1633,7 @@ mod tests {
             "<https://e/r> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> ",
             "<<( <https://e/s> <https://e/p> <https://e/o> )>> .\n",
         );
-        let ds = Dataset::parse(WITH_LAYER, "nquads", None, None)
+        let ds = Dataset::parse(WITH_LAYER, "nquads", None, None, None)
             .unwrap_or_else(|_| unreachable!("N-Quads parses"));
 
         // Star-capable: one document, both lanes, the triple term intact and no loss.
@@ -1675,6 +1684,7 @@ mod tests {
             "turtle",
             Some("https://example.org/".to_owned()),
             None,
+            None,
         )
         .unwrap();
         let out = ds.serialize("ntriples", None).unwrap();
@@ -1690,7 +1700,7 @@ mod tests {
         let base = "https://example.org/base/";
         let input = "<https://example.org/base/s> <https://example.org/base/p> \
                      <https://example.org/base/o> .\n";
-        let Ok(ds) = Dataset::parse(input, "ntriples", None, None) else {
+        let Ok(ds) = Dataset::parse(input, "ntriples", None, None, None) else {
             panic!("parse n-triples failed");
         };
         for format in ["jsonld", "yamlld"] {
@@ -1718,7 +1728,7 @@ mod tests {
             "<<( <https://e/s> <https://e/p> <https://e/o> )>> .\n",
             "<https://e/r> <https://e/confidence> \"0.9\" .\n",
         );
-        let Ok(ds) = Dataset::parse(input, "ntriples", None, None) else {
+        let Ok(ds) = Dataset::parse(input, "ntriples", None, None, None) else {
             panic!("parse n-triples failed");
         };
         for format in ["jsonld", "yamlld"] {
@@ -1750,7 +1760,7 @@ mod tests {
         // The factory uses the same native datatype expansion rule.
         let input =
             "<https://e/s> <https://e/p> \"\u{0645}\u{0631}\u{062d}\u{0628}\u{0627}\"@ar--rtl .\n";
-        let ds = Dataset::parse(input, "ntriples", None, None).unwrap();
+        let ds = Dataset::parse(input, "ntriples", None, None, None).unwrap();
         assert_eq!(ds.size(), 1, "the directional literal parsed into one quad");
 
         // Build the IDENTICAL directional literal the way a DataFactory would (which
@@ -1788,7 +1798,7 @@ mod tests {
         // Parse the plain (no-direction) language-tagged literal into the base.
         let input =
             "<https://e/s> <https://e/p> \"\u{0645}\u{0631}\u{062d}\u{0628}\u{0627}\"@ar .\n";
-        let ds = Dataset::parse(input, "ntriples", None, None).unwrap();
+        let ds = Dataset::parse(input, "ntriples", None, None, None).unwrap();
         assert_eq!(ds.size(), 1);
 
         // A directional query literal of the same text + language must NOT match it.

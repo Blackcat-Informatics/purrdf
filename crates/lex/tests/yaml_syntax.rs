@@ -9,6 +9,222 @@ use purrdf_lex::yaml::{
 };
 
 #[test]
+fn consuming_projection_checks_the_whole_stream_and_materializes_only_the_selection() {
+    use yaml::{
+        SyntaxKeyPolicy, SyntaxProjectionLimits as Bound, SyntaxRootPolicy as Root,
+        SyntaxSelection as Select,
+    };
+    fn ingest(source: &str) -> yaml::SyntaxStream<'_> {
+        yaml::read_syntax_stream_with(
+            source,
+            yaml::SyntaxStreamLimits {
+                syntax: SyntaxLimits::DEFAULT,
+                max_documents: 64,
+            },
+            SyntaxKeyPolicy::Deferred,
+        )
+        .unwrap()
+    }
+    let first =
+        |source| ingest(source).into_core(Select::First, Root::CollectionsOrNull, Bound::DEFAULT);
+    for source in ["", "# absent\n", "---\n", "null", "!!null null"] {
+        assert_eq!(first(source).unwrap(), purrdf_lex::json::Value::Null);
+    }
+    for source in ["--- {}\n--- {n: .inf}", "--- {}\n--- {n: !custom value}"] {
+        assert_eq!(
+            first(source).unwrap(),
+            purrdf_lex::json::Value::object([] as [(&str, purrdf_lex::json::Value); 0])
+        );
+        assert!(
+            ingest(source)
+                .into_core(Select::All, Root::CollectionsOrNull, Bound::DEFAULT)
+                .is_err()
+        );
+    }
+    for (source, kind) in [
+        ("--- {}\n--- {1: value}", ErrorKind::NonStringKey),
+        (
+            "--- {}\n--- {a: value, !!str a: other}",
+            ErrorKind::DuplicateKey,
+        ),
+        ("--- {}\n--- string", ErrorKind::InvalidRoot),
+        ("--- {}\n--- !!str null", ErrorKind::InvalidRoot),
+    ] {
+        assert_eq!(first(source).unwrap_err().kind(), kind);
+    }
+    let source = "{number: &n 0x100000000000000000000000000000001, copy: *n, date: 2026-11-04}";
+    let bound = Bound {
+        max_numeric_bytes: 39,
+        ..Bound::DEFAULT
+    };
+    let value = ingest(source)
+        .into_core(Select::First, Root::CollectionsOrNull, bound)
+        .unwrap();
+    assert_eq!(
+        purrdf_lex::json::write_compact(&value),
+        r#"{"number":340282366920938463463374607431768211457,"copy":340282366920938463463374607431768211457,"date":"2026-11-04"}"#
+    );
+    let source = "--- {n: 12}\n--- {n: 34}";
+    let work = Bound {
+        max_numeric_work: 9,
+        ..Bound::DEFAULT
+    };
+    assert!(
+        ingest(source)
+            .into_core(Select::First, Root::CollectionsOrNull, work)
+            .is_ok()
+    );
+    assert_eq!(
+        ingest(source)
+            .into_core(Select::All, Root::CollectionsOrNull, work)
+            .unwrap_err()
+            .kind(),
+        ErrorKind::NumericWork { limit: 9 }
+    );
+    let large = format!("--- {{}}\n--- {{n: +1{}}}", "0".repeat(4000));
+    assert!(
+        ingest(&large)
+            .into_core(
+                Select::First,
+                Root::CollectionsOrNull,
+                Bound {
+                    max_numeric_work: 128,
+                    max_numeric_bytes: 0,
+                    ..Bound::DEFAULT
+                }
+            )
+            .is_ok()
+    );
+    assert!(
+        ingest(source)
+            .into_core(
+                Select::First,
+                Root::CollectionsOrNull,
+                Bound {
+                    max_numeric_bytes: 2,
+                    ..Bound::DEFAULT
+                }
+            )
+            .is_ok()
+    );
+    assert_eq!(
+        ingest(source)
+            .into_core(
+                Select::All,
+                Root::CollectionsOrNull,
+                Bound {
+                    max_numeric_bytes: 2,
+                    ..Bound::DEFAULT
+                }
+            )
+            .unwrap_err()
+            .kind(),
+        ErrorKind::NumericOutput { limit: 2 }
+    );
+    let mut later = "--- {}\n---\na0: &a0 [x]\n".to_owned();
+    for n in 1..32 {
+        use core::fmt::Write as _;
+        writeln!(later, "a{n}: &a{n} [*a{}, *a{}]", n - 1, n - 1).unwrap();
+    }
+    assert!(
+        ingest(&later)
+            .into_core(
+                Select::First,
+                Root::CollectionsOrNull,
+                Bound {
+                    max_nodes: 1,
+                    ..Bound::DEFAULT
+                }
+            )
+            .is_ok()
+    );
+    assert_eq!(
+        ingest(&later)
+            .into_core(
+                Select::All,
+                Root::CollectionsOrNull,
+                Bound {
+                    max_nodes: 16,
+                    ..Bound::DEFAULT
+                }
+            )
+            .unwrap_err()
+            .kind(),
+        ErrorKind::Nodes { limit: 16 }
+    );
+    assert_eq!(
+        ingest("[&a [x], [*a]]")
+            .into_core(
+                Select::First,
+                Root::CollectionsOrNull,
+                Bound {
+                    max_depth: 2,
+                    ..Bound::DEFAULT
+                }
+            )
+            .unwrap_err()
+            .kind(),
+        ErrorKind::Depth { limit: 2 }
+    );
+    assert_eq!(
+        ingest("[&a [x], *a]")
+            .into_core(
+                Select::First,
+                Root::CollectionsOrNull,
+                Bound {
+                    max_nodes: 4,
+                    ..Bound::DEFAULT
+                }
+            )
+            .unwrap_err()
+            .kind(),
+        ErrorKind::Nodes { limit: 4 }
+    );
+    // A lower ceiling refuses the original retained account before key validation.
+    assert_eq!(
+        ingest("{1: value}")
+            .into_core(
+                Select::First,
+                Root::CollectionsOrNull,
+                Bound {
+                    max_allocation_bytes: 1,
+                    ..Bound::DEFAULT
+                }
+            )
+            .unwrap_err()
+            .kind(),
+        ErrorKind::Allocation { limit: 1 }
+    );
+    let source = format!("'{}'", "x".repeat(24 << 10));
+    assert!(
+        ingest(&source)
+            .into_core(
+                Select::First,
+                Root::Any,
+                Bound {
+                    max_allocation_bytes: 128 << 10,
+                    ..Bound::DEFAULT
+                }
+            )
+            .is_ok()
+    );
+    assert_eq!(
+        ingest(&source)
+            .into_core(
+                Select::First,
+                Root::Any,
+                Bound {
+                    max_allocation_bytes: 48 << 10,
+                    ..Bound::DEFAULT
+                }
+            )
+            .unwrap_err()
+            .kind(),
+        ErrorKind::Allocation { limit: 48 << 10 }
+    );
+}
+
+#[test]
 fn lexical_sample_retains_spelling_comments_styles_and_original_coordinates() {
     let source = "# retained notice\r\ntitle: 'quoted é' # retained tail\r\n\r\nvalues: [0x1F, 007, +007, 1e400, 0x100000000000000000000000000000001, true, null, ~, .inf]\r\nnested:\r\n  item: \"escaped\\\\value\"\r\n";
     let doc = yaml::read_syntax(source, SyntaxLimits::DEFAULT).unwrap();
