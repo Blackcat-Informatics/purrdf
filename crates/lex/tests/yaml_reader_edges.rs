@@ -81,7 +81,10 @@ fn yaml_stream_admission_includes_all_retained_documents_and_alias_copies() {
     let mut limits = stream_limits();
     limits.max_documents = 0;
     limits.max_allocation_bytes = 0;
-    assert!(read_stream("# empty\n...", limits).unwrap().is_empty());
+    assert_eq!(
+        read_stream("# empty\n...", limits).unwrap(),
+        Vec::<purrdf_lex::json::Value>::new()
+    );
     assert_eq!(
         read_stream("---", limits).unwrap_err().kind(),
         ErrorKind::Documents { limit: 0 }
