@@ -126,7 +126,7 @@ fn explicit_profile_schema_preserves_defaults_and_portable_boundaries() {
             format!(
                 "{},\"unknown\":[{}]}}",
                 &CONFIG[..CONFIG.len() - 1],
-                vec!["0"; 65].join(",")
+                ["0"; 65].join(",")
             ),
             "json-value-limit",
         ),
@@ -164,10 +164,13 @@ fn native_source_roundtrip_preserves_roots_profiles_and_original_refusals() {
         source
     );
     let serialize = |dataset: &RdfDataset| {
-        purrdf_rdf::serialize_dataset(
-            dataset,
-            "application/n-quads",
-            purrdf_rdf::SerializeGraph::Dataset,
+        String::from_utf8(
+            purrdf_rdf::serialize_dataset(
+                dataset,
+                "application/n-quads",
+                purrdf_rdf::SerializeGraph::Dataset,
+            )
+            .unwrap(),
         )
         .unwrap()
     };
