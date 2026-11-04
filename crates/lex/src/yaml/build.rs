@@ -144,6 +144,40 @@ pub(super) struct CoreMap {
 }
 
 impl CoreBuilder {
+    pub(super) fn validate_key(
+        &mut self,
+        text: &str,
+        plain: bool,
+        tag: Option<(Tag, usize)>,
+        at: usize,
+    ) -> Result<(), Refusal> {
+        match tag {
+            None if plain
+                && !self.limits.scalar_keys
+                && !matches!(self.classify(text, at)?, Plain::String) =>
+            {
+                Err((ErrorKind::NonStringKey, at))
+            }
+            None | Some((Tag::Str | Tag::NonSpecific, _)) => Ok(()),
+            Some((tag @ (Tag::Int | Tag::Float | Tag::Bool | Tag::Null), tag_at))
+                if self.limits.scalar_keys =>
+            {
+                let matches = match (tag, self.classify(text, at)?) {
+                    (Tag::Int, Plain::Number(plan)) => plan.is_integer(),
+                    (Tag::Float, Plain::Number(_) | Plain::NonFinite)
+                    | (Tag::Bool, Plain::Bool(_))
+                    | (Tag::Null, Plain::Null) => true,
+                    _ => false,
+                };
+                if matches {
+                    Ok(())
+                } else {
+                    Err((ErrorKind::Tag, tag_at))
+                }
+            }
+            Some(_) => Err((ErrorKind::NonStringKey, at)),
+        }
+    }
     pub(super) const fn new(limits: Limits, allocations: Allocations) -> Self {
         Self {
             limits,
@@ -151,7 +185,7 @@ impl CoreBuilder {
             numbers: super::number::Budget::new(limits),
         }
     }
-    fn classify<'a>(&mut self, text: &'a str, at: usize) -> Result<Plain<'a>, Refusal> {
+    pub(super) fn classify<'a>(&mut self, text: &'a str, at: usize) -> Result<Plain<'a>, Refusal> {
         self.numbers.classify(text).map_err(|kind| (kind, at))
     }
     fn storage(&self, cause: StorageError, at: usize) -> Refusal {
@@ -296,32 +330,8 @@ impl Builder for CoreBuilder {
         at: usize,
         _: usize,
     ) -> Result<String, Refusal> {
-        match tag {
-            None if plain
-                && !self.limits.scalar_keys
-                && !matches!(self.classify(&text, at)?, Plain::String) =>
-            {
-                Err((ErrorKind::NonStringKey, at))
-            }
-            None | Some((Tag::Str | Tag::NonSpecific, _)) => Ok(text),
-            Some((tag @ (Tag::Int | Tag::Float | Tag::Bool | Tag::Null), tag_at))
-                if self.limits.scalar_keys =>
-            {
-                let matches = match (tag, self.classify(&text, at)?) {
-                    (Tag::Int, Plain::Number(plan)) => plan.is_integer(),
-                    (Tag::Float, Plain::Number(_) | Plain::NonFinite)
-                    | (Tag::Bool, Plain::Bool(_))
-                    | (Tag::Null, Plain::Null) => true,
-                    _ => false,
-                };
-                if matches {
-                    Ok(text)
-                } else {
-                    Err((ErrorKind::Tag, tag_at))
-                }
-            }
-            Some(_) => Err((ErrorKind::NonStringKey, at)),
-        }
+        self.validate_key(&text, plain, tag, at)?;
+        Ok(text)
     }
     fn key_node(
         &mut self,

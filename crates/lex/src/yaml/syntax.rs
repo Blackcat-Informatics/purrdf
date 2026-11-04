@@ -75,6 +75,14 @@ pub struct SyntaxStreamLimits {
     /// Maximum retained document roots, including explicit empty documents.
     pub max_documents: usize,
 }
+/// When mapping-key identity is checked during lexical ingestion.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SyntaxKeyPolicy {
+    /// Preserve the existing decoded-text/raw-tag lexical uniqueness law.
+    Lexical,
+    /// Retain every entry for a later semantic key check.
+    Deferred,
+}
 
 /// A UTF-8 byte range in its owning document's original source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -92,7 +100,7 @@ impl Span {
 
 /// An occurrence handle, local to the document which returned it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct NodeId(usize);
+pub struct NodeId(pub(super) usize);
 /// Original source coordinates; columns count Unicode characters, not bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Position {
@@ -102,6 +110,20 @@ pub struct Position {
     pub line: usize,
     /// Character column from one.
     pub column: usize,
+}
+impl Position {
+    /// Locate a byte boundary in original UTF-8 source, including its EOF.
+    pub fn at(source: &str, offset: usize) -> Option<Self> {
+        if !source.is_char_boundary(offset) {
+            return None;
+        }
+        let (line, column) = read::position(source, offset);
+        Some(Self {
+            offset,
+            line,
+            column,
+        })
+    }
 }
 
 /// The spelling of a scalar before schema resolution.
@@ -355,8 +377,8 @@ pub struct SyntaxDocumentRoot {
 /// Empty streams have no roots. Only acyclic aliases are admitted.
 #[derive(Debug)]
 pub struct SyntaxStream<'a> {
-    documents: Vec<SyntaxDocumentRoot>,
-    arena: SyntaxArena<'a>,
+    pub(super) documents: Vec<SyntaxDocumentRoot>,
+    pub(super) arena: SyntaxArena<'a>,
 }
 impl SyntaxStream<'_> {
     /// Ordered document envelopes; an explicit empty document has a scalar root.
@@ -376,10 +398,11 @@ impl<'a> core::ops::Deref for SyntaxStream<'a> {
 pub struct SyntaxArena<'a> {
     source: &'a str,
     identity: Digest32,
-    nodes: Vec<SyntaxNode>,
+    pub(super) nodes: Vec<SyntaxNode>,
     trivia: Vec<Trivia>,
     directives: Vec<Span>,
     escapes: Vec<SyntaxEscape>,
+    pub(super) retained_bytes: usize,
 }
 impl<'a> SyntaxArena<'a> {
     /// Original UTF-8, including line endings, comments, BOM and markers.
@@ -419,15 +442,7 @@ impl<'a> SyntaxArena<'a> {
     }
     /// Locate a source byte, with CRLF/bare-CR and Unicode character columns.
     pub fn position(&self, offset: usize) -> Option<Position> {
-        if !self.source.is_char_boundary(offset) {
-            return None;
-        }
-        let (line, column) = read::position(self.source, offset);
-        Some(Position {
-            offset,
-            line,
-            column,
-        })
+        Position::at(self.source, offset)
     }
     /// Whether a key has the plain merge spelling (or an explicit merge tag).
     pub fn is_merge_key(&self, id: NodeId) -> bool {
@@ -455,6 +470,7 @@ pub(super) struct SyntaxBuilder<'a> {
     directives: Vec<Span>,
     escapes: Vec<SyntaxEscape>,
     questions: Vec<Span>,
+    key_policy: SyntaxKeyPolicy,
 }
 
 impl SyntaxBuilder<'_> {
@@ -702,6 +718,12 @@ impl Builder for SyntaxBuilder<'_> {
         value: NodeId,
         at: usize,
     ) -> Result<(), Refusal> {
+        if self.key_policy == SyntaxKeyPolicy::Deferred {
+            return self
+                .allocations
+                .push(&mut map.entries, SyntaxEntry { key, value })
+                .map_err(|cause| self.refuse(cause, at));
+        }
         self.allocations
             .reserve_index(&mut map.keys)
             .map_err(|cause| self.refuse(cause, at))?;
@@ -837,7 +859,19 @@ pub fn read_syntax_stream(
     source: &str,
     limits: SyntaxStreamLimits,
 ) -> Result<SyntaxStream<'_>, Error> {
-    let (parser_limits, builder) = prepare(source, limits.syntax)?;
+    read_syntax_stream_with(source, limits, SyntaxKeyPolicy::Lexical)
+}
+
+/// Read through the same lexical grammar with an explicit mapping-key policy.
+/// # Errors
+/// Returns the same positioned syntax and admission refusals as `read_syntax_stream`.
+pub fn read_syntax_stream_with(
+    source: &str,
+    limits: SyntaxStreamLimits,
+    policy: SyntaxKeyPolicy,
+) -> Result<SyntaxStream<'_>, Error> {
+    let (parser_limits, mut builder) = prepare(source, limits.syntax)?;
+    builder.key_policy = policy;
     let (documents, builder) = read::parse_stream(
         source,
         parser_limits,
@@ -879,6 +913,7 @@ fn prepare(source: &str, limits: SyntaxLimits) -> Result<(Limits, SyntaxBuilder<
         directives: Vec::new(),
         escapes: Vec::new(),
         questions: Vec::new(),
+        key_policy: SyntaxKeyPolicy::Lexical,
     };
     let parser_limits = Limits {
         max_depth: limits.max_depth,
@@ -1098,6 +1133,7 @@ impl<'a> SyntaxBuilder<'a> {
             trivia,
             directives: self.directives,
             escapes: self.escapes,
+            retained_bytes: self.allocations.live(),
         })
     }
 }
