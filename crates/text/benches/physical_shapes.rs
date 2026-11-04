@@ -56,7 +56,7 @@ fn dictionary(bench: &mut Bench) {
                 .collect();
             let capability = WorkspaceCapability::resident();
             let cache = DictionaryCache::default();
-            let compiled = cache.get(&fixture.index, &entries, &capability).unwrap();
+            let compiled = cache.get(&*fixture.index, &entries, &capability).unwrap();
             let matches = compiled
                 .scan(fixture.index.clone(), None, &capability)
                 .unwrap();
@@ -88,7 +88,7 @@ fn dictionary(bench: &mut Bench) {
                 b.iter(|| {
                     black_box(
                         cache
-                            .get(&fixture.index, black_box(&entries), &capability)
+                            .get(&*fixture.index, black_box(&entries), &capability)
                             .unwrap(),
                     )
                 });
@@ -98,7 +98,7 @@ fn dictionary(bench: &mut Bench) {
                     cache.clear();
                     black_box(
                         cache
-                            .get(&fixture.index, black_box(&entries), &capability)
+                            .get(&*fixture.index, black_box(&entries), &capability)
                             .unwrap(),
                     )
                 });

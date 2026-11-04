@@ -99,6 +99,7 @@
 //! that does not exist is a [`TextError::Data`].
 
 use crate::query_workspace::{admitted, overflow, query_error};
+use crate::{TextSource, source::SourceExt};
 use purrdf_sparql_eval::{
     AdmittedVec, NativeDiagnosticKind, WorkspaceAllocation, WorkspaceCapability,
 };
@@ -342,7 +343,7 @@ impl<P: CorpusProfile> PartitionFilter<P> {
 ///
 /// [`Analyzer`]: crate::Analyzer
 pub fn rank_partition<P: CorpusProfile>(
-    index: &TextIndex<P>,
+    index: &impl TextSource<P>,
     partition: &PartitionKey<P>,
     needle: &[String],
     limit: Option<u64>,
@@ -371,7 +372,7 @@ pub fn rank_partition<P: CorpusProfile>(
 ///   asking for a row a partition does not have is a question with an honest empty
 ///   answer rather than an error.
 pub fn select<P: CorpusProfile>(
-    index: &TextIndex<P>,
+    index: &impl TextSource<P>,
     needle: &[String],
     filter: &PartitionFilter<P>,
     ceiling: Option<u64>,
@@ -411,7 +412,7 @@ pub struct ScopedTerm<'a> {
 /// Refuses undeclared field predicates, scopes outside the analyzed needle,
 /// or the original scorer's typed numeric/data failure.
 pub fn select_scoped<P: CorpusProfile>(
-    index: &TextIndex<P>,
+    index: &impl TextSource<P>,
     needle: &[String],
     filter: &PartitionFilter<P>,
     scopes: &[ScopedTerm<'_>],
@@ -430,7 +431,7 @@ pub fn select_scoped<P: CorpusProfile>(
 }
 
 pub(crate) fn select_scoped_counted<P: CorpusProfile>(
-    index: &TextIndex<P>,
+    index: &impl TextSource<P>,
     needle: &[String],
     filter: &PartitionFilter<P>,
     scopes: &[ScopedTerm<'_>],
@@ -470,12 +471,18 @@ pub(crate) fn select_scoped_counted<P: CorpusProfile>(
 }
 
 pub(crate) fn matches_scopes<P: CorpusProfile>(
-    index: &TextIndex<P>,
+    index: &impl TextSource<P>,
     document: u32,
     scopes: &[ScopedTerm<'_>],
 ) -> Result<bool, TextError> {
     for scope in scopes {
-        if index.term_frequency_in_predicate(document, scope.term, scope.predicate)? == 0 {
+        if index.term_frequency_in_predicate_owned(
+            document,
+            scope.term,
+            scope.predicate,
+            &WorkspaceCapability::resident(),
+        )? == 0
+        {
             return Ok(false);
         }
     }
@@ -487,7 +494,7 @@ pub(crate) fn matches_scopes<P: CorpusProfile>(
 /// the tokens or any scoring weight. Explicit `ScopedTerm` requirements above
 /// instead denote separately required token/field constraints.
 pub(crate) fn matches_predicate<'a, P: CorpusProfile>(
-    index: &TextIndex<P>,
+    index: &impl TextSource<P>,
     document: u32,
     terms: impl IntoIterator<Item = &'a str>,
     predicate: Option<&TermValue>,
@@ -505,7 +512,7 @@ pub(crate) fn matches_predicate<'a, P: CorpusProfile>(
 }
 
 fn select_counted_with_membership<P: CorpusProfile>(
-    index: &TextIndex<P>,
+    index: &impl TextSource<P>,
     needle: &[String],
     filter: &PartitionFilter<P>,
     ceiling: Option<u64>,
@@ -530,7 +537,7 @@ fn select_counted_with_membership<P: CorpusProfile>(
 
 /// [`select`], adding the work it did to `work`.
 pub(crate) fn select_counted<P: CorpusProfile>(
-    index: &TextIndex<P>,
+    index: &impl TextSource<P>,
     needle: &[String],
     filter: &PartitionFilter<P>,
     ceiling: Option<u64>,
@@ -552,7 +559,7 @@ pub(crate) fn select_counted<P: CorpusProfile>(
 }
 
 pub(crate) fn select_counted_owned<'a, P: CorpusProfile>(
-    index: &TextIndex<P>,
+    index: &impl TextSource<P>,
     needle: impl ExactSizeIterator<Item = &'a str>,
     matches: impl Fn(&PartitionKey<P>) -> bool,
     ceiling: Option<u64>,
@@ -581,7 +588,7 @@ pub(crate) struct CandidateSelection<P, M> {
 }
 
 pub(crate) fn select_counted_membership_owned<'a, E: From<TextError>, P: CorpusProfile>(
-    index: &TextIndex<P>,
+    index: &impl TextSource<P>,
     needle: impl ExactSizeIterator<Item = &'a str>,
     mut selection: CandidateSelection<
         impl Fn(&PartitionKey<P>) -> bool,
@@ -757,7 +764,7 @@ pub(crate) fn distinct_terms_owned<'a>(
 
 /// Rank one partition against already-distinct, already-sorted `terms`.
 fn rank_terms<P: CorpusProfile>(
-    index: &TextIndex<P>,
+    index: &impl TextSource<P>,
     partition: &PartitionKey<P>,
     terms: &[&str],
     limit: Option<u64>,
@@ -777,7 +784,7 @@ fn rank_terms<P: CorpusProfile>(
 }
 
 fn rank_terms_owned<E: From<TextError>, P: CorpusProfile>(
-    index: &TextIndex<P>,
+    index: &impl TextSource<P>,
     partition: &PartitionKey<P>,
     terms: &[&str],
     limit: Option<u64>,
@@ -785,7 +792,7 @@ fn rank_terms_owned<E: From<TextError>, P: CorpusProfile>(
     workspace: &WorkspaceCapability,
     membership: &mut impl FnMut(u32) -> Result<bool, E>,
 ) -> Result<AdmittedVec<Scored>, E> {
-    let Some(partition) = admitted(index.partition_key_owned(partition, workspace))? else {
+    let Some(partition) = index.partition_key_owned(partition, workspace)? else {
         return Ok(AdmittedVec::new(workspace));
     };
     let candidates = candidates_owned(index, partition, terms, work, workspace, membership)?;
@@ -813,13 +820,13 @@ fn rank_terms_owned<E: From<TextError>, P: CorpusProfile>(
 
 /// One query term's retained predicate facts in one candidate document.
 #[derive(Clone, Copy)]
-struct CandidateOccurrence<'a> {
+struct CandidateOccurrence<F> {
     /// Canonical document identifier.
     document: u32,
     /// Ordinal of the sorted distinct query term.
     ordinal: usize,
     /// Borrowed predicate frequencies, avoiding per-candidate lookup or copying.
-    counts: &'a [(u32, u64)],
+    counts: F,
 }
 
 /// Every document of `partition` that holds at least one of `terms`, scored.
@@ -828,7 +835,7 @@ struct CandidateOccurrence<'a> {
 /// independent of field weights: a matching document can legitimately score
 /// zero, and still participates in the canonical tie order.
 fn candidates_owned<E: From<TextError>, P: CorpusProfile>(
-    index: &TextIndex<P>,
+    index: &impl TextSource<P>,
     partition: &PartitionKey<P>,
     terms: &[&str],
     work: &mut ScoringWork,
@@ -839,16 +846,14 @@ fn candidates_owned<E: From<TextError>, P: CorpusProfile>(
         return Ok(AdmittedVec::new(workspace));
     }
     let occurrences_count = terms.iter().try_fold(0usize, |count, term| {
-        let run = usize::try_from(admitted(
-            index.document_frequency_owned(partition, term, workspace),
-        )?)
-        .map_err(|_| overflow())?;
+        let run = usize::try_from(index.document_frequency_owned(partition, term, workspace)?)
+            .map_err(|_| overflow())?;
         count.checked_add(run).ok_or_else(overflow)
     })?;
     let mut occurrences = admitted(AdmittedVec::with_capacity(occurrences_count, workspace))?;
     for (ordinal, term) in terms.iter().enumerate() {
-        for posting in admitted(index.field_postings_owned(partition, term, workspace))? {
-            let (document, counts) = admitted(posting)?;
+        for posting in index.field_postings_owned(partition, term, workspace) {
+            let (document, counts) = posting?;
             admitted(occurrences.push(CandidateOccurrence {
                 document,
                 ordinal,
@@ -887,7 +892,7 @@ fn candidates_owned<E: From<TextError>, P: CorpusProfile>(
             .count();
         let held = occurrences[at..at + run]
             .iter()
-            .map(|entry| (entry.ordinal, entry.counts));
+            .map(|entry| (entry.ordinal, entry.counts.as_ref()));
         if membership(document)? {
             admitted(out.push(score_document(
                 index, &query, document, held, work, workspace,
@@ -904,7 +909,7 @@ fn candidates_owned<E: From<TextError>, P: CorpusProfile>(
 /// partition, which [`TextIndex::document_frequency`] reads off the dictionary
 /// in two binary searches without visiting a single posting.
 fn prepare_terms<'c, 'p, P: CorpusProfile>(
-    index: &TextIndex<P>,
+    index: &impl TextSource<P>,
     partition: &PartitionKey<P>,
     corpus: &'c PreparedCorpus<'p>,
     terms: &[&str],
@@ -919,7 +924,7 @@ fn prepare_terms<'c, 'p, P: CorpusProfile>(
 }
 
 fn prepare_terms_owned<'c, 'p, P: CorpusProfile>(
-    index: &TextIndex<P>,
+    index: &impl TextSource<P>,
     partition: &PartitionKey<P>,
     corpus: &'c PreparedCorpus<'p>,
     terms: &[&str],
@@ -929,7 +934,7 @@ fn prepare_terms_owned<'c, 'p, P: CorpusProfile>(
     for &term in terms {
         admitted(frequencies.push((
             term,
-            admitted(index.document_frequency_owned(partition, term, workspace))?,
+            index.document_frequency_owned(partition, term, workspace)?,
         )))?;
     }
     corpus.prepare_query_owned(&frequencies, workspace)
@@ -945,7 +950,7 @@ fn prepare_terms_owned<'c, 'p, P: CorpusProfile>(
 /// reach the same additions in the same order, so the two scores are one number
 /// rather than two numbers that agree.
 fn score_document<'a, P: CorpusProfile>(
-    index: &TextIndex<P>,
+    index: &impl TextSource<P>,
     query: &PreparedQuery<'_, '_>,
     document: u32,
     held: impl Iterator<Item = (usize, &'a [(u32, u64)])>,
@@ -1009,15 +1014,15 @@ pub(crate) struct ScoringWork {
 ///
 /// Work is independent of the corpus: one binary search per needle term for its
 /// document frequency, and one field-input assembly per held term.
-pub(crate) fn score_located_owned<P: CorpusProfile>(
-    index: &TextIndex<P>,
+pub(crate) fn score_located_owned<P: CorpusProfile, F: AsRef<[(u32, u64)]>>(
+    index: &impl TextSource<P>,
     document: u32,
     terms: &[&str],
-    located: &[(usize, &[(u32, u64)])],
+    located: &[(usize, F)],
     work: &mut ScoringWork,
     workspace: &WorkspaceCapability,
 ) -> Result<(BoundedScore, usize), TextError> {
-    let Some(partition) = admitted(index.partition_key_of_owned(document, workspace))? else {
+    let Some(partition) = index.partition_key_of_owned(document, workspace)? else {
         return Err(query_error(
             workspace,
             NativeDiagnosticKind::Data,
@@ -1030,7 +1035,9 @@ pub(crate) fn score_located_owned<P: CorpusProfile>(
         index,
         &query,
         document,
-        located.iter().copied(),
+        located
+            .iter()
+            .map(|(ordinal, counts)| (*ordinal, counts.as_ref())),
         work,
         workspace,
     )?;

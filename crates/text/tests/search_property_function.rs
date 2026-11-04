@@ -31,6 +31,11 @@ use purrdf_sparql_eval::{
 };
 use purrdf_text::{Fixed, RankingField, RankingProfile, TextIndex, TextSearchRelation};
 
+#[path = "support/segmented.rs"]
+mod segmented_fixture;
+#[path = "support/source.rs"]
+mod source_fixture;
+
 /// The caller-supplied predicate this host calls ranked retrieval by.
 const SEARCH: &str = "http://example.org/pf#search";
 
@@ -1173,7 +1178,234 @@ fn an_empty_index_answers_with_no_rows_and_attests_its_own_generation() {
     );
 }
 
+fn caller_owned_sources_share_native_rank_position_and_dictionary_behavior() {
+    use purrdf_sparql_eval::{BindingPattern, PropertyFunction, WorkspaceCapability};
+    use purrdf_text::{PartitionFilter, ScopedTerm, TermOccurrenceRelation, TextSource};
+    let workspace = WorkspaceCapability::resident();
+    let (dataset, index) = golden();
+    let columns = Arc::new(source_fixture::Columns::freeze(&index));
+    assert_eq!(columns.fingerprint(), index.fingerprint());
+    purrdf_text::verify_binding(&*columns, &*dataset, columns.config()).unwrap();
+    let (different, _) = ranked();
+    assert!(purrdf_text::verify_binding(&*columns, &*different, columns.config()).is_err());
+    let search = Arc::new(TextSearchRelation::from_source(columns.clone(), &workspace).unwrap());
+    let occurrences =
+        Arc::new(TermOccurrenceRelation::from_source(columns.clone(), &workspace).unwrap());
+    let native_search = TextSearchRelation::new(index.clone());
+    let native_occurrences = TermOccurrenceRelation::new(index.clone());
+    for mode in ["fbffff", "bbffff", "fbbfff", "fbfbff", "fbbbff"] {
+        assert_eq!(
+            search.rows_per_invocation(BindingPattern::from_code(mode)),
+            native_search.rows_per_invocation(BindingPattern::from_code(mode))
+        );
+    }
+    for mode in ["fbff", "bbff", "fbfb", "fbbf", "bbbb"] {
+        assert_eq!(
+            occurrences.rows_per_invocation(BindingPattern::from_code(mode)),
+            native_occurrences.rows_per_invocation(BindingPattern::from_code(mode))
+        );
+    }
+    let mut native = registry_of(SEARCH, index.clone());
+    native.register(
+        "http://example.org/pf#positions",
+        Arc::new(native_occurrences),
+    );
+    let mut external = PropertyFunctionRegistry::new();
+    external.register(SEARCH, search.clone());
+    external.register("http://example.org/pf#positions", occurrences);
+    for query in [
+        "SELECT ?doc ?score ?rank ?lang ?matched WHERE { ?doc <http://example.org/pf#search> (\"quick brown\" ?score ?rank ?lang ?matched) }",
+        "SELECT ?doc ?score WHERE { VALUES ?rank { 2 } ?doc <http://example.org/pf#search> (\"quick brown\" ?score ?rank ?lang ?matched) }",
+        "SELECT ?doc ?position WHERE { ?doc <http://example.org/pf#positions> (\"quick\" ?lang ?position) }",
+        "SELECT ?doc ?position WHERE { VALUES ?term { \"quick\" \"brown\" } ?doc <http://example.org/pf#positions> (?term ?lang ?position) }",
+    ] {
+        assert_eq!(
+            answer(&dataset, &external, query),
+            answer(&dataset, &native, query)
+        );
+    }
+    let rankings = search.observations().rankings();
+    let query = "SELECT ?score WHERE { <http://example.org/d1> <http://example.org/pf#search> (\"quick brown\" ?score [] [] []) }";
+    assert_eq!(
+        answer(&dataset, &external, query),
+        answer(&dataset, &native, query)
+    );
+    assert_eq!(search.observations().rankings(), rankings);
+    assert!(search.observations().point_scorings() > 0);
+    let predicate = purrdf_core::TermValue::iri(NOTE);
+    let terms = vec!["quick".to_owned(), "brown".to_owned()];
+    let scopes = [ScopedTerm {
+        term: "quick",
+        predicate: &predicate,
+    }];
+    assert_eq!(
+        purrdf_text::select_scoped(
+            &*columns,
+            &terms,
+            &PartitionFilter::unconstrained(),
+            &scopes,
+            Some(1),
+            None
+        )
+        .unwrap(),
+        purrdf_text::select_scoped(
+            &*index,
+            &terms,
+            &PartitionFilter::unconstrained(),
+            &scopes,
+            Some(1),
+            None
+        )
+        .unwrap()
+    );
+
+    // Aliased physical documents must keep their positional derivation bag.
+    let mut builder = RdfDatasetBuilder::new();
+    let predicate_id = builder.intern_iri(NOTE).unwrap();
+    let subject_id = builder.intern_iri("http://example.org/alias").unwrap();
+    let literal = builder
+        .intern_literal(RdfLiteral::simple("quick brown quick"))
+        .unwrap();
+    for graph in ["http://example.org/one", "http://example.org/two"] {
+        let graph = builder.intern_iri(graph).unwrap();
+        builder
+            .push_quad(subject_id, predicate_id, literal, Some(graph))
+            .unwrap();
+    }
+    let aliases = builder.freeze().unwrap();
+    let alias_index = Arc::new(TextIndex::from_dataset(&*aliases, &config_over(&[NOTE])).unwrap());
+    let alias_source = Arc::new(source_fixture::Columns::freeze(&alias_index));
+    let identity = purrdf_core::TermValue::iri("http://example.org/phrase");
+    let dictionary = purrdf_text::dictionary::Dictionary::compile(
+        &*alias_source,
+        &[purrdf_text::dictionary::DictionaryEntry {
+            identity: &identity,
+            phrase: "quick brown",
+            payload: &[],
+        }],
+        &workspace,
+    )
+    .unwrap();
+    let native_matches = dictionary.scan(alias_index, None, &workspace).unwrap();
+    let external_matches = dictionary.scan(alias_source, None, &workspace).unwrap();
+    let rows = |matches: &[purrdf_text::dictionary::DictionaryMatch]| {
+        matches
+            .iter()
+            .map(|row| (row.entry, row.start, row.end, row.path.to_vec()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(rows(external_matches.rows()), rows(native_matches.rows()));
+    assert_eq!(external_matches.work(), native_matches.work());
+    assert_eq!(
+        rows(external_matches.longest_first(&workspace).unwrap().rows()),
+        rows(native_matches.longest_first(&workspace).unwrap().rows())
+    );
+}
+
+fn caller_owned_sources_pin_cursors_and_preserve_source_and_workspace_failures() {
+    use purrdf_sparql_eval::{EvalError, PfArgs, PfCursor, PropertyFunction, WorkspaceCapability};
+    use purrdf_text::TermOccurrenceRelation;
+    use std::sync::atomic::Ordering;
+    let workspace = WorkspaceCapability::resident();
+    let (dataset, index) = golden();
+    let source = Arc::new(source_fixture::Columns::freeze(&index));
+    let relation = TermOccurrenceRelation::from_source(source.clone(), &workspace).unwrap();
+    let needle = purrdf_core::TermValue::simple_literal("quick");
+    let subject = [None];
+    let object = [Some(&needle), None, None];
+    let args = PfArgs::new(&subject, &object);
+    let mut retained: Box<dyn PfCursor> = relation.open(&args, None).unwrap();
+    let mut failing: Box<dyn PfCursor> = relation.open(&args, None).unwrap();
+    drop(relation);
+    drop(index);
+    source.fail_reads.store(true, Ordering::Relaxed);
+    let error = failing.next().unwrap_err();
+    let EvalError::RetainedNativeFailure(failure) = error else {
+        panic!("source read must retain its native cause");
+    };
+    assert_eq!(
+        failure.kind(),
+        purrdf_sparql_eval::NativeDiagnosticKind::SourceRead
+    );
+    assert!(
+        std::error::Error::source(&failure)
+            .unwrap()
+            .downcast_ref::<purrdf_core::SegmentedError>()
+            .is_some()
+    );
+    source.fail_reads.store(false, Ordering::Relaxed);
+    let search = Arc::new(TextSearchRelation::from_source(source.clone(), &workspace).unwrap());
+    let mut registry = PropertyFunctionRegistry::new();
+    registry.register(SEARCH, search);
+    let environment = ExtensionEnv::over_relations(registry).unwrap();
+    let query = "SELECT ?doc ?score WHERE { ?doc <http://example.org/pf#search> (\"quick\" ?score ?rank ?lang ?matched) }";
+    let image = segmented_fixture::segmented(&dataset);
+    let engine = NativeSparqlEngine::new();
+    let execute = || {
+        let session = image
+            .open_session(purrdf_core::SegmentedReadLimits::new(
+                2_000_000, 2, 16_384, 20_000_000, 8,
+            ))
+            .unwrap();
+        engine
+            .query_fallible_view(
+                &session,
+                SparqlRequest {
+                    query,
+                    base_iri: None,
+                    substitutions: &[],
+                },
+                &QueryOptions::EMPTY.with_env(&environment),
+            )
+            .map(|output| output.result.solutions().unwrap().1.len())
+            .map_err(Box::new)
+    };
+    assert_eq!(execute().unwrap(), 2);
+    assert!(
+        source
+            .observed_workspace
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(WorkspaceCapability::is_bounded)
+    );
+    let capability = source
+        .observed_workspace
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .clone();
+    source.page_bytes.store(4_000_000, Ordering::Relaxed);
+    assert!(matches!(
+        purrdf_text::TextSourceBounds::measure(&*source, &capability),
+        Err(purrdf_text::TextError::Capacity(_))
+    ));
+    let failure = execute().unwrap_err();
+    assert!(matches!(
+        *failure,
+        purrdf_sparql_eval::FallibleSparqlError::Operational {
+            error: purrdf_core::SegmentedError::Residency {
+                limit: 2_000_000,
+                ..
+            },
+            ..
+        }
+    ));
+    drop(environment);
+    drop(source);
+    // The cursor keeps the original immutable source alive after registration,
+    // the native donor and the caller's snapshot handle have all gone away.
+    let mut count = 0;
+    while retained.next().unwrap().is_some() {
+        count += 1;
+    }
+    assert_eq!(count, 3);
+}
+
 purrdf_testkit::harness_main!(
+    caller_owned_sources_share_native_rank_position_and_dictionary_behavior,
+    caller_owned_sources_pin_cursors_and_preserve_source_and_workspace_failures,
     borrowed_native_ranked_and_positional_producers_keep_their_rows,
     ranked_rows_for_a_needle,
     annotation_text_is_searchable_through_sparql,
