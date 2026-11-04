@@ -264,7 +264,10 @@ mod model;
 mod profile;
 mod split;
 pub mod syntax;
-pub use syntax::{AuthoringDocument, SyntaxDocument, SyntaxError, SyntaxLimits, authoring, syntax};
+pub use syntax::{
+    AuthoringDocument, CodeSpanLimits, SyntaxDocument, SyntaxError, SyntaxLimits, authoring,
+    replace_code_spans, syntax,
+};
 
 use purrdf_core::{BaseIri, parse_iri};
 

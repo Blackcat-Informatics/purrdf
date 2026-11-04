@@ -1,9 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The physical-line authoring contract stays distinct from structural slicing.
+//! Scalar and physical-line authoring retain their distinct interpretations.
 use purrdf_markdown::syntax::AuthoringLinkForm;
-use purrdf_markdown::{SyntaxError, SyntaxLimits, authoring, syntax};
+use purrdf_markdown::{
+    CodeSpanLimits, SyntaxError, SyntaxLimits, authoring, replace_code_spans, syntax,
+};
 
 fn limits() -> SyntaxLimits {
     SyntaxLimits {
@@ -257,4 +259,88 @@ fn authoring_refuses_original_resources_at_their_exact_boundaries() {
             matches!(authoring("α [a](b)", policy), Err(SyntaxError::Limit { resource: found, position, .. }) if found == resource && position.byte == 0)
         );
     }
+}
+
+fn scalar_limits() -> CodeSpanLimits {
+    CodeSpanLimits {
+        source_bytes: 4096,
+        auxiliary_bytes: 8192,
+        work: 65_536,
+    }
+}
+
+#[test]
+fn scalar_code_spans_use_maximal_runs_and_opener_only_escapes() {
+    for (source, expected) in [
+        ("`one`", " "),
+        ("``one`two``", " "),
+        ("`one``", "`one``"),
+        ("``one`", "``one`"),
+        ("`unmatched", "`unmatched"),
+        (r"\`one`", r"\`one`"),
+        (r"\\`one`", r"\\ "),
+        (r"\``a`b``", r"\``a`b``"),
+        (r"\\``a`b``", r"\\ "),
+        (r"``one\``", " "),
+        ("a`one\ntwo\rthree\r\nfour`z", "a z"),
+    ] {
+        assert_eq!(
+            replace_code_spans(source, scalar_limits()).unwrap(),
+            expected,
+            "source: {source:?}"
+        );
+    }
+}
+
+#[test]
+fn scalar_code_spans_preserve_literal_policy_and_utf8_bytes() {
+    use std::borrow::Cow;
+    for (source, expected) in [
+        ("<!-- `token` --> <b>&amp;</b>", "<!--   --> <b>&amp;</b>"),
+        ("```info\n`nested`\n```", " "),
+        ("~~~\n`token`\n~~~", "~~~\n \n~~~"),
+        ("title: \"`token`\"", "title: \" \""),
+        ("α`β\nγ`δ", "α δ"),
+        ("\u{feff}`token`", "\u{feff} "),
+    ] {
+        assert_eq!(
+            replace_code_spans(source, scalar_limits()).unwrap(),
+            expected
+        );
+    }
+    let mut zero_storage = scalar_limits();
+    zero_storage.auxiliary_bytes = 0;
+    for source in ["", "α &amp; <!-- literal -->", "``unmatched"] {
+        let result = replace_code_spans(source, zero_storage).unwrap();
+        assert!(matches!(result, Cow::Borrowed(text) if text == source));
+    }
+}
+
+#[test]
+fn scalar_code_spans_refuse_resources_at_original_positions() {
+    let source = "α `β` γ";
+    let mut policy = scalar_limits();
+    policy.source_bytes = source.len();
+    assert_eq!(replace_code_spans(source, policy).unwrap(), "α   γ");
+    policy.source_bytes -= 1;
+    assert!(matches!(
+        replace_code_spans(source, policy),
+        Err(SyntaxError::Limit { resource: "source bytes", actual, limit, position })
+            if actual == source.len() as u64 && limit + 1 == actual && position.byte == 0
+    ));
+    policy = scalar_limits();
+    policy.auxiliary_bytes = 0;
+    assert!(matches!(
+        replace_code_spans(source, policy),
+        Err(SyntaxError::Limit { resource: "auxiliary bytes", position, .. })
+            if position.byte == 3 && position.line == 1 && position.column == 3
+    ));
+    assert_eq!(replace_code_spans("α plain", policy).unwrap(), "α plain");
+    policy = scalar_limits();
+    policy.work = 0;
+    assert_eq!(replace_code_spans("", policy).unwrap(), "");
+    assert!(matches!(
+        replace_code_spans("α", policy),
+        Err(SyntaxError::Limit { resource: "work", position, .. }) if position.byte == 0
+    ));
 }

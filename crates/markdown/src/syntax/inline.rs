@@ -665,14 +665,12 @@ pub(super) fn occurrences(
         let mut opaque = None;
         let mut recorded = false;
         if doc.policy == super::Policy::Standard && b[at] == b'`' {
-            let run = b[at..].iter().take_while(|c| **c == b'`').count();
-            if let Some(end) =
-                super::code_span_end(text, at + run, run, |at| input.map[at], budget)?
-            {
+            let (opening_end, closing_end) =
+                super::code_span::read(text, at, |at| input.map[at], budget)?;
+            if let Some(end) = closing_end {
                 opaque = Some((end, InlineKind::Code));
-            }
-            if opaque.is_none() {
-                at += run;
+            } else {
+                at = opening_end;
                 continue;
             }
         } else if doc.policy == super::Policy::Standard && b[at] == b'<' {
