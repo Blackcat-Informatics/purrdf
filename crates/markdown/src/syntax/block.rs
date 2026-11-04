@@ -132,8 +132,7 @@ pub(super) fn authoring_heading(
     while at < end && matches!(b[at], b' ' | b'\t') {
         at += 1;
     }
-    let mut last = end;
-    if policy == super::Policy::Authoring {
+    let mut last = if policy == super::Policy::Authoring {
         let trimmed = text[at..end].trim_matches(purrdf_lex::terminals::is_unicode_white_space);
         if trimmed.is_empty() {
             return None;
@@ -142,8 +141,10 @@ pub(super) fn authoring_heading(
             - text[at..end]
                 .trim_start_matches(purrdf_lex::terminals::is_unicode_white_space)
                 .len();
-        last = at + trimmed.len();
-    }
+        at + trimmed.len()
+    } else {
+        end
+    };
     while last > at && matches!(b[last - 1], b' ' | b'\t') {
         last -= 1;
     }

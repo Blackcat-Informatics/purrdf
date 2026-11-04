@@ -103,14 +103,14 @@ fn attribute<'a, S: Admission + ?Sized>(
     name_end(scan, &mut at, TagPolicy::Standard);
     let name_end = at;
     whitespace(scan, &mut at)?;
-    let mut value_source = None;
-    if scan.byte(at) == Some(b'=') {
+    let value_source = if scan.byte(at) == Some(b'=') {
         at += 1;
         whitespace(scan, &mut at)?;
-        value_source = Some(value(scan, &mut at, TagPolicy::Standard)?.0);
+        Some(value(scan, &mut at, TagPolicy::Standard)?.0)
     } else {
         at = name_end;
-    }
+        None
+    };
     Some((
         Attribute {
             source: begin..at,

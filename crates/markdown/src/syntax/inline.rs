@@ -20,12 +20,10 @@ impl Input {
         let start = self.map[range.start];
         let end = if range.is_empty() {
             start
+        } else if self.ends.is_empty() {
+            self.map[range.end - 1] + 1
         } else {
-            if self.ends.is_empty() {
-                self.map[range.end - 1] + 1
-            } else {
-                self.ends[range.end - 1]
-            }
+            self.ends[range.end - 1]
         };
         span(start, end)
     }

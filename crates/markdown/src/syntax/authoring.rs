@@ -338,11 +338,17 @@ fn flush<'a>(
     sentinel(chunk, chunk.ends.last().copied().unwrap_or(0), budget)?;
     inline::occurrences(doc, chunk, &HashTable::new(), budget)?;
     // Transfer decoded strings rather than duplicating retained link storage.
-    let mut found = std::mem::take(&mut doc.links);
-    for link in found.iter() {
+    let found = std::mem::take(&mut doc.links);
+    for link in &found {
         budget.tick(link.source.start as usize, link.source.len() as usize)?;
     }
-    for link in found.drain(..) {
+    // Retain the backing-array charge while the consuming iterator is alive.
+    let bytes = budget.memory(|_| {
+        std::alloc::Layout::array::<super::Link<'a>>(found.capacity())
+            .map(|layout| layout.size())
+            .map_err(|_| purrdf_lex::allocation::StorageError::SizeOverflow)
+    })?;
+    for link in found {
         let multiline = doc.spelling(link.source).contains('\n');
         let link = AuthoringLink {
             source: link.source,
@@ -356,7 +362,7 @@ fn flush<'a>(
         };
         budget.push(if multiline { &mut *split } else { &mut *links }, link)?;
     }
-    budget.release(found)?;
+    budget.memory(|m| m.release_bytes(bytes))?;
     let old = std::mem::replace(chunk, empty());
     inline::release(old, budget)
 }
