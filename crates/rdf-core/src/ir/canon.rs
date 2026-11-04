@@ -2164,6 +2164,7 @@ impl<Id: ViewTermId> IdIssuer<Id> {
 /// One suspended n-degree invocation. Child results resume its current path;
 /// none of these owners recursively contains another frame.
 struct NDegreeFrame<Id> {
+    identifier: Id,
     issuer: IdIssuer<Id>,
     related: std::collections::btree_map::IntoIter<HashHex, Vec<Id>>,
     data: String,
@@ -2211,6 +2212,286 @@ struct CanonState<'a, D: DatasetView> {
     stop: Option<&'a dyn crate::StopSignal>,
 }
 
+/// Related-ID multiplicity in the already-built group at a search refusal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RdfcGroupStats {
+    /// Related-ID occurrences, including repeated occurrences of the same ID.
+    pub occurrences: usize,
+    /// Distinct related IDs among those occurrences.
+    pub distinct: usize,
+}
+
+impl RdfcGroupStats {
+    /// Inspect terminal failed state without allocating or reading the source.
+    fn at_refusal<Id: Ord>(items: &mut [Id]) -> Self {
+        items.sort_unstable();
+        Self {
+            occurrences: items.len(),
+            distinct: usize::from(!items.is_empty())
+                + items.windows(2).filter(|pair| pair[0] != pair[1]).count(),
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for RdfcGroupStats {
+    purrdf_hash::error_visit! {
+        @record self { occurrences, distinct } => "rdfc-related-group" {
+            "occurrences" => Unsigned(self.occurrences as u128),
+            "distinct" => Unsigned(self.distinct as u128),
+        }
+    }
+}
+
+/// The attempted search step that reached a finite caller ceiling.
+///
+/// Blank ordinals index this run's sorted collected blank IDs. They are neither
+/// canonical labels nor source-document provenance, and need not agree across
+/// different input views. Depth is zero at the root. Group statistics inspect
+/// only an already-built group; a refused child has not built its own group.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RdfcSearchContext {
+    /// Initial frame entry: no related group has been built.
+    InitialFrame {
+        /// Root blank ordinal; also the attempted frame at depth zero.
+        root_ordinal: usize,
+    },
+    /// Child frame entry, attributed to its calling parent's active group.
+    ChildFrame {
+        /// Root blank ordinal for this n-degree invocation.
+        root_ordinal: usize,
+        /// Attempted child blank ordinal.
+        frame_ordinal: usize,
+        /// Attempted child's depth below the root.
+        depth: usize,
+        /// The calling parent's group, not an unbuilt child group.
+        parent_group: RdfcGroupStats,
+    },
+    /// Permutation attempt in the current frame's active group.
+    Permutation {
+        /// Root blank ordinal for this n-degree invocation.
+        root_ordinal: usize,
+        /// Current frame's blank ordinal.
+        frame_ordinal: usize,
+        /// Current frame's depth below the root.
+        depth: usize,
+        /// The current frame's active group.
+        group: RdfcGroupStats,
+    },
+}
+
+impl purrdf_hash::error::StructuredError for RdfcSearchContext {
+    purrdf_hash::error_visit! {
+        InitialFrame { root_ordinal } => "rdfc-initial-frame" {
+            "root_ordinal" => Unsigned(*root_ordinal as u128),
+            "frame_ordinal" => Unsigned(*root_ordinal as u128),
+            "depth" => Unsigned(0),
+            "related_group" => Absent,
+        },
+        ChildFrame { root_ordinal, frame_ordinal, depth, parent_group } => "rdfc-child-frame" {
+            "root_ordinal" => Unsigned(*root_ordinal as u128),
+            "frame_ordinal" => Unsigned(*frame_ordinal as u128),
+            "depth" => Unsigned(*depth as u128),
+            "parent_group" => Record(parent_group),
+        },
+        Permutation { root_ordinal, frame_ordinal, depth, group } => "rdfc-permutation" {
+            "root_ordinal" => Unsigned(*root_ordinal as u128),
+            "frame_ordinal" => Unsigned(*frame_ordinal as u128),
+            "depth" => Unsigned(*depth as u128),
+            "group" => Record(group),
+        },
+    }
+}
+
+impl std::fmt::Display for RdfcSearchContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InitialFrame { root_ordinal } => write!(
+                f,
+                "initial frame: root ordinal={root_ordinal}, frame ordinal={root_ordinal}, depth=0, related group unavailable"
+            ),
+            Self::ChildFrame {
+                root_ordinal,
+                frame_ordinal,
+                depth,
+                parent_group,
+            } => write!(
+                f,
+                "child frame: root ordinal={root_ordinal}, frame ordinal={frame_ordinal}, depth={depth}, parent group occurrences={}, distinct={}",
+                parent_group.occurrences, parent_group.distinct
+            ),
+            Self::Permutation {
+                root_ordinal,
+                frame_ordinal,
+                depth,
+                group,
+            } => write!(
+                f,
+                "permutation: root ordinal={root_ordinal}, frame ordinal={frame_ordinal}, depth={depth}, current group occurrences={}, distinct={}",
+                group.occurrences, group.distinct
+            ),
+        }
+    }
+}
+
+/// One already-built related group on the active n-degree path at refusal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RdfcActiveGroup {
+    /// Run-local ordinal of the frame owning this group.
+    pub frame_ordinal: usize,
+    /// Zero-based depth of that built frame.
+    pub depth: usize,
+    /// Multiplicity of the group's original related IDs.
+    pub group: RdfcGroupStats,
+}
+
+/// A bounded summary of the built frames still active at finite refusal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RdfcActivePath {
+    /// Initial frame entry was refused before any related group was built.
+    UnbuiltRoot,
+    /// At least the root's active related group was already built.
+    Active {
+        /// The root frame's active related-hash group, not its first-degree group.
+        root_group: RdfcGroupStats,
+        /// Largest active group by occurrences; equal sizes select shallower depth.
+        /// This is structural evidence, not a claim that this group consumed most work.
+        largest_group: RdfcActiveGroup,
+    },
+}
+
+/// Progress through the failing root's original first-degree hash group.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RdfcRootProgress {
+    /// Full original first-degree group size, including any already-canonical IDs.
+    pub first_degree_group_size: usize,
+    /// Completed n-degree root searches within this first-degree group.
+    pub completed_root_searches: usize,
+}
+
+/// Group-opening label availability, with canonical labels taking precedence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RdfcGroupLabels {
+    /// IDs already carrying canonical labels.
+    pub canonical: RdfcGroupStats,
+    /// Noncanonical IDs already labeled by the frame issuer when this group opened.
+    pub temporary: RdfcGroupStats,
+    /// IDs absent from both issuers when this group opened.
+    pub unissued: RdfcGroupStats,
+}
+
+/// Recursion state of the current candidate at terminal refusal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RdfcCandidateProgress {
+    /// A child was selected and is awaiting entry or completion.
+    pub pending_child: bool,
+    /// Children still in the recursion iterator, excluding the pending child.
+    pub remaining_children: usize,
+}
+
+/// One built group's terminal state, without retaining IDs or candidate paths.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RdfcGroupObservation {
+    /// Coordinates and complete original related-ID inventory.
+    pub active: RdfcActiveGroup,
+    /// Availability against the canonical and frame issuers, never candidate issuer.
+    pub labels: RdfcGroupLabels,
+    /// Absent when no candidate is active at the refused boundary.
+    pub candidate: Option<RdfcCandidateProgress>,
+    /// A completed candidate has already supplied a chosen path for this group.
+    pub has_chosen_path: bool,
+}
+
+/// Fixed-size snapshots of built groups on the terminal active path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RdfcGroupObservations {
+    /// Current built group; the parent when child entry itself was refused.
+    pub at_refusal: RdfcGroupObservation,
+    /// Active group belonging to the root frame.
+    pub root: RdfcGroupObservation,
+    /// Largest active group, with the same shallower-depth tie rule as the path.
+    pub largest: RdfcGroupObservation,
+}
+
+/// Finalized finite-refusal evidence owned by one control's last actual run.
+///
+/// This lives outside the native error and receipt payloads. It adds no heap
+/// allocation, source read, event charge or stop poll. Initializing fixed metadata
+/// and copying it at finalization are the only changes on successful runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RdfcRefusalObservation {
+    /// Present for full canonicalization; isolated internal n-degree calls do not
+    /// have the surrounding first-degree group's progress.
+    pub first_degree_group: Option<RdfcRootProgress>,
+    /// Root and largest active group at the refused step.
+    pub path: RdfcActivePath,
+    /// Built-group evidence; absent only when `path` is `UnbuiltRoot`.
+    pub groups: Option<RdfcGroupObservations>,
+}
+
+impl std::fmt::Display for RdfcRefusalObservation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(progress) = self.first_degree_group {
+            write!(
+                f,
+                "first-degree group size={}, completed root searches in group={}; ",
+                progress.first_degree_group_size, progress.completed_root_searches
+            )?;
+        } else {
+            f.write_str("first-degree group progress unavailable; ")?;
+        }
+        match self.path {
+            RdfcActivePath::UnbuiltRoot => {
+                f.write_str("active root group unavailable (initial frame)")
+            }
+            RdfcActivePath::Active {
+                root_group,
+                largest_group,
+            } => write!(
+                f,
+                "active root group occurrences={}, distinct={}; largest active group frame ordinal={}, depth={}, occurrences={}, distinct={}",
+                root_group.occurrences,
+                root_group.distinct,
+                largest_group.frame_ordinal,
+                largest_group.depth,
+                largest_group.group.occurrences,
+                largest_group.group.distinct
+            ),
+        }?;
+        if let Some(groups) = self.groups {
+            for (name, observation) in [
+                ("at refusal", groups.at_refusal),
+                ("root", groups.root),
+                ("largest", groups.largest),
+            ] {
+                let labels = observation.labels;
+                write!(
+                    f,
+                    "; {name} group frame ordinal={}, depth={}, canonical occurrences={}, distinct={}, temporary occurrences={}, distinct={}, unissued occurrences={}, distinct={}, chosen path={}",
+                    observation.active.frame_ordinal,
+                    observation.active.depth,
+                    labels.canonical.occurrences,
+                    labels.canonical.distinct,
+                    labels.temporary.occurrences,
+                    labels.temporary.distinct,
+                    labels.unissued.occurrences,
+                    labels.unissued.distinct,
+                    observation.has_chosen_path
+                )?;
+                if let Some(candidate) = observation.candidate {
+                    write!(
+                        f,
+                        ", pending child={}, remaining children excluding pending={}",
+                        candidate.pending_child, candidate.remaining_children
+                    )?;
+                } else {
+                    f.write_str(", candidate absent")?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 /// A caller-selected finite search ceiling was reached before canonicalization
 /// completed. The rejected event is excluded from the actual charged work.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2222,14 +2503,17 @@ pub struct BudgetExceeded {
     /// The number of distinct blank nodes in the input that triggered
     /// exhaustion (diagnostic only).
     pub blank_count: usize,
+    /// The refused step and the group available at that boundary.
+    pub context: RdfcSearchContext,
 }
 
 impl purrdf_hash::error::StructuredError for BudgetExceeded {
     purrdf_hash::error_visit! {
-        @record self { blank_count, limit, work } => "canonical-budget-exceeded" {
+        @record self { blank_count, limit, work, context } => "canonical-budget-exceeded" {
             "blank_count" => Unsigned(self.blank_count as u128),
             "limit" => Unsigned(u128::from(self.limit)),
             "charged_work" => Unsigned(u128::from(self.work.total())),
+            "context" => Record(&self.context),
         }
     }
 }
@@ -2238,10 +2522,11 @@ impl std::fmt::Display for BudgetExceeded {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "canonicalization reached the caller's finite search limit {} after {} charged events ({} blanks)",
+            "canonicalization reached the caller's finite search limit {} after {} charged events ({} blanks); {}",
             self.limit,
             self.work.total(),
-            self.blank_count
+            self.blank_count,
+            self.context
         )
     }
 }
@@ -2654,7 +2939,22 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         self.run.check_stop().map_err(|_| CanonError::Stopped)
     }
 
-    fn charge_search(&self, event: SearchEvent) -> Result<(), CanonError> {
+    fn blank_ordinal(&self, identifier: D::Id) -> usize {
+        // Every frame identifier came from the collected blank incidence map.
+        self.blanks
+            .binary_search(&identifier)
+            .expect("a search frame identifies a collected blank")
+    }
+
+    fn charge_search(
+        &self,
+        event: SearchEvent,
+        context: impl FnOnce() -> (
+            RdfcSearchContext,
+            RdfcActivePath,
+            Option<RdfcGroupObservations>,
+        ),
+    ) -> Result<(), CanonError> {
         self.run.charge(event).map_err(|failure| match failure {
             SearchRefusal::Stopped => CanonError::Stopped,
             SearchRefusal::CounterCapacity => CanonError::CounterCapacity,
@@ -2662,10 +2962,17 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                 let SearchPolicy::Finite(limit) = self.run.policy() else {
                     unreachable!("only a finite policy can refuse its logical ceiling")
                 };
+                let (context, path, groups) = context();
+                self.run.observe_rdfc_refusal(&RdfcRefusalObservation {
+                    first_degree_group: None,
+                    path,
+                    groups,
+                });
                 CanonError::BudgetExceeded(BudgetExceeded {
                     blank_count: self.blanks.len(),
                     limit,
                     work: self.run.work(),
+                    context,
                 })
             }
         })
@@ -2773,7 +3080,15 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                 }
                 let mut temp = IdIssuer::new(TEMP_PREFIX);
                 temp.issue(b);
-                let (result_hash, result_issuer) = self.hash_n_degree(b, temp)?;
+                let (result_hash, result_issuer) =
+                    self.hash_n_degree(b, temp).inspect_err(|error| {
+                        if matches!(error, CanonError::BudgetExceeded(_)) {
+                            self.run.observe_rdfc_root_progress(RdfcRootProgress {
+                                first_degree_group_size: group.len(),
+                                completed_root_searches: hash_paths.len(),
+                            });
+                        }
+                    })?;
                 hash_paths.push((result_hash, result_issuer));
             }
             // 5.5: promote the temp issuers' bindings into the canonical issuer, the
@@ -2816,9 +3131,18 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         identifier: D::Id,
         issuer: IdIssuer<D::Id>,
     ) -> Result<IssuedHash<D::Id>, CanonError<D::ReadError>> {
-        let mut frame = self.n_degree_frame(identifier, issuer)?;
+        let mut frame = self.n_degree_frame(identifier, issuer, || {
+            (
+                RdfcSearchContext::InitialFrame {
+                    root_ordinal: self.blank_ordinal(identifier),
+                },
+                RdfcActivePath::UnbuiltRoot,
+                None,
+            )
+        })?;
         let mut parents: WorkList<NDegreeFrame<D::Id>, 8> = WorkList::default();
         loop {
+            let frame_identifier = frame.identifier;
             if let Some(group) = frame.group.as_mut() {
                 if let Some(mut candidate) = group.candidate.take() {
                     if let Some(related) = candidate.recursion.next() {
@@ -2827,7 +3151,24 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                         let child_issuer = candidate.issuer.clone();
                         candidate.pending = Some(related);
                         group.candidate = Some(candidate);
-                        let child = self.n_degree_frame(related, child_issuer)?;
+                        let child = self.n_degree_frame(related, child_issuer, || {
+                            let depth = parents.len();
+                            let observation = self.refusal_group(
+                                self.blank_ordinal(frame_identifier),
+                                depth,
+                                &frame.issuer,
+                                group,
+                            );
+                            let parent_group = observation.active.group;
+                            let context = RdfcSearchContext::ChildFrame {
+                                root_ordinal: self.blank_ordinal(identifier),
+                                frame_ordinal: self.blank_ordinal(related),
+                                depth: depth + 1,
+                                parent_group,
+                            };
+                            let (path, groups) = self.refusal_path(observation, &mut parents);
+                            (context, path, Some(groups))
+                        })?;
                         parents.push(frame);
                         frame = child;
                         continue;
@@ -2845,8 +3186,22 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
 
                 if let Some(perm) = group.permutations.next() {
                     // Charge after obtaining each permutation, including pruned ones.
-                    self.charge_search(SearchEvent::RdfcPermutation)
-                        .map_err(CanonError::with_read_error)?;
+                    self.charge_search(SearchEvent::RdfcPermutation, || {
+                        let frame_ordinal = self.blank_ordinal(frame_identifier);
+                        let depth = parents.len();
+                        let observation =
+                            self.refusal_group(frame_ordinal, depth, &frame.issuer, group);
+                        let group = observation.active.group;
+                        let context = RdfcSearchContext::Permutation {
+                            root_ordinal: self.blank_ordinal(identifier),
+                            frame_ordinal,
+                            depth,
+                            group,
+                        };
+                        let (path, groups) = self.refusal_path(observation, &mut parents);
+                        (context, path, Some(groups))
+                    })
+                    .map_err(CanonError::with_read_error)?;
                     let mut issuer = frame.issuer.clone();
                     let mut path = String::new();
                     let mut recursion = Vec::new();
@@ -2863,10 +3218,13 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                             path.push_str("_:");
                             path.push_str(issuer.issue(related));
                         }
-                        // 5.4.4.3: discard a partial path that cannot win.
-                        if group.chosen_path.as_ref().is_some_and(|best| {
-                            path.len() >= best.len() && path.as_str() > best.as_str()
-                        }) {
+                        // 5.4.4.3: appending cannot repair a strictly greater
+                        // lexicographic prefix, even when it is shorter than best.
+                        if group
+                            .chosen_path
+                            .as_ref()
+                            .is_some_and(|best| path.as_str() > best.as_str())
+                        {
                             pruned = true;
                             break;
                         }
@@ -2896,8 +3254,26 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
             if let Some((hash, related)) = frame.related.next() {
                 self.check_stop().map_err(CanonError::with_read_error)?;
                 frame.data.push_str(hash.as_str());
+                let fixed_label = |id| {
+                    self.canonical
+                        .issued_for(id)
+                        .or_else(|| frame.issuer.issued_for(id))
+                };
+                let mut permutations = permutations(&related);
+                if related.iter().all(|&id| fixed_label(id).is_some()) {
+                    // Every candidate has no recursion and the same final issuer.
+                    // Choose its minimum fixed-label concatenation once, retaining
+                    // the complete group inventory for refusal observations.
+                    permutations.items.sort_unstable_by(|&left, &right| {
+                        fixed_label_order(
+                            fixed_label(left).expect("the group has only fixed labels"),
+                            fixed_label(right).expect("the group has only fixed labels"),
+                        )
+                    });
+                    permutations.single = true;
+                }
                 frame.group = Some(NDegreeGroup {
-                    permutations: permutations(&related),
+                    permutations,
                     chosen_path: None,
                     chosen_issuer: None,
                     candidate: None,
@@ -2924,14 +3300,108 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
             candidate.path.push_str(hash.as_str());
             candidate.path.push('>');
             candidate.issuer = frame.issuer;
-            // 5.4.5.5: prune only after the complete child result is appended.
-            if group.chosen_path.as_ref().is_some_and(|best| {
-                candidate.path.len() >= best.len() && candidate.path.as_str() > best.as_str()
-            }) {
+            // 5.4.5.5: after appending the complete child result, a strictly
+            // greater prefix cannot win regardless of the remaining children.
+            if group
+                .chosen_path
+                .as_ref()
+                .is_some_and(|best| candidate.path.as_str() > best.as_str())
+            {
                 group.candidate = None;
             }
             frame = parent;
         }
+    }
+
+    /// Inspect only terminal state. The frame issuer remains unchanged while a
+    /// group runs; the candidate issuer would hide its initially unissued IDs.
+    fn refusal_group(
+        &self,
+        frame_ordinal: usize,
+        depth: usize,
+        issuer: &IdIssuer<D::Id>,
+        group: &mut NDegreeGroup<D::Id>,
+    ) -> RdfcGroupObservation {
+        let inventory = RdfcGroupStats::at_refusal(&mut group.permutations.items);
+        let empty = RdfcGroupStats {
+            occurrences: 0,
+            distinct: 0,
+        };
+        let mut labels = RdfcGroupLabels {
+            canonical: empty,
+            temporary: empty,
+            unissued: empty,
+        };
+        let mut previous = None;
+        for &related in &group.permutations.items {
+            let stats = if self.canonical.has(related) {
+                &mut labels.canonical
+            } else if issuer.has(related) {
+                &mut labels.temporary
+            } else {
+                &mut labels.unissued
+            };
+            stats.occurrences += 1;
+            stats.distinct += usize::from(previous != Some(related));
+            previous = Some(related);
+        }
+        RdfcGroupObservation {
+            active: RdfcActiveGroup {
+                frame_ordinal,
+                depth,
+                group: inventory,
+            },
+            labels,
+            candidate: group
+                .candidate
+                .as_ref()
+                .map(|candidate| RdfcCandidateProgress {
+                    pending_child: candidate.pending.is_some(),
+                    remaining_children: candidate.recursion.len(),
+                }),
+            has_chosen_path: group.chosen_path.is_some(),
+        }
+    }
+
+    /// Consume terminal failed state, without allocating or reading the source.
+    fn refusal_path(
+        &self,
+        at_refusal: RdfcGroupObservation,
+        parents: &mut WorkList<NDegreeFrame<D::Id>, 8>,
+    ) -> (RdfcActivePath, RdfcGroupObservations) {
+        let mut root = at_refusal;
+        let mut largest = at_refusal;
+        while let Some(mut parent) = parents.pop() {
+            // Every suspended frame has the active group that requested its child.
+            let group = parent
+                .group
+                .as_mut()
+                .expect("a suspended frame has an active group");
+            let observation = self.refusal_group(
+                self.blank_ordinal(parent.identifier),
+                parents.len(),
+                &parent.issuer,
+                group,
+            );
+            if observation.active.group.occurrences > largest.active.group.occurrences
+                || (observation.active.group.occurrences == largest.active.group.occurrences
+                    && observation.active.depth < largest.active.depth)
+            {
+                largest = observation;
+            }
+            root = observation;
+        }
+        (
+            RdfcActivePath::Active {
+                root_group: root.active.group,
+                largest_group: largest.active,
+            },
+            RdfcGroupObservations {
+                at_refusal,
+                root,
+                largest,
+            },
+        )
     }
 
     /// Enter §4.8 once. Work and stop checks have the same order at every depth.
@@ -2939,8 +3409,13 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         &self,
         identifier: D::Id,
         issuer: IdIssuer<D::Id>,
+        context: impl FnOnce() -> (
+            RdfcSearchContext,
+            RdfcActivePath,
+            Option<RdfcGroupObservations>,
+        ),
     ) -> Result<NDegreeFrame<D::Id>, CanonError<D::ReadError>> {
-        self.charge_search(SearchEvent::RdfcFrame)
+        self.charge_search(SearchEvent::RdfcFrame, context)
             .map_err(CanonError::with_read_error)?;
 
         // §4.8 step 3: map related-blank hash → the related blanks bearing it.
@@ -2953,6 +3428,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         }
 
         Ok(NDegreeFrame {
+            identifier,
             issuer,
             related: hn.into_iter(),
             data: String::new(),
@@ -3343,8 +3819,25 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
     }
 }
 
-/// A **lazy** generator of every permutation of a slice (identity first, then
-/// lexicographic position order). Lazy generation matters for the poison case: a
+/// Compare emitted `_:label` pieces by their two possible concatenations.
+/// Plain label order is insufficient: `_:b10_:b1` precedes `_:b1_:b10`.
+fn fixed_label_order(left: &str, right: &str) -> Ordering {
+    // The first "_:" is common to both concatenations.
+    left.bytes()
+        .chain(b"_:".iter().copied())
+        .chain(right.bytes())
+        .cmp(
+            right
+                .bytes()
+                .chain(b"_:".iter().copied())
+                .chain(left.bytes()),
+        )
+}
+
+/// A **lazy** permutation generator, exhaustive by default (identity first, then
+/// lexicographic position order). The solver can seed the minimum fixed-label
+/// ordering and select that single candidate after proving it sufficient.
+/// Lazy generation matters for the poison case: a
 /// 9-element related group has 9! = 362 880 permutations, so collecting them all
 /// upfront would allocate a factorial-sized `Vec<Vec<_>>` per n-degree call. Yielding
 /// one small `Vec` at a time keeps the call-budget guard the only bound on cost.
@@ -3353,6 +3846,8 @@ struct Permutations<T> {
     idx: Vec<usize>,
     first: bool,
     done: bool,
+    /// The solver proved the first ordering sufficient for a fixed-label group.
+    single: bool,
 }
 
 impl<T: Copy> Iterator for Permutations<T> {
@@ -3364,6 +3859,7 @@ impl<T: Copy> Iterator for Permutations<T> {
         }
         if self.first {
             self.first = false;
+            self.done = self.single;
         } else if !next_permutation(&mut self.idx) {
             self.done = true;
             return None;
@@ -3380,6 +3876,7 @@ fn permutations<T: Copy>(items: &[T]) -> Permutations<T> {
         first: true,
         // An empty slice still yields exactly one (empty) permutation.
         done: false,
+        single: false,
     }
 }
 
@@ -4505,6 +5002,16 @@ mod tests {
         b.push_quad(y, p, x, None).unwrap();
         let ds = b.freeze().expect("valid");
         assert_eq!(blank_count(&ds).unwrap(), 2);
+    }
+
+    #[test]
+    fn fixed_label_paths_order_prefix_labels_by_concatenation() {
+        let mut labels = ["b1", "b10", "b2"];
+        labels.sort_unstable_by(|left, right| fixed_label_order(left, right));
+        assert_eq!(
+            format!("_:{}_:{}_:{}", labels[0], labels[1], labels[2]),
+            "_:b10_:b1_:b2"
+        );
     }
 
     #[test]
@@ -6262,6 +6769,309 @@ mod tests {
                 .expect("the update always supplies a value")
                 == 0
         }
+    }
+
+    #[test]
+    fn relabel_refusal_attributes_initial_permutation_and_child_boundaries() {
+        let mut builder = RdfDatasetBuilder::new();
+        let predicate = iri(&mut builder, "link");
+        let x = builder.intern_blank("x", BlankScope::DEFAULT).unwrap();
+        let y = builder.intern_blank("y", BlankScope::DEFAULT).unwrap();
+        for name in ["g0", "g1", "g2"] {
+            let graph = iri(&mut builder, name);
+            builder.push_quad(x, predicate, y, Some(graph)).unwrap();
+            builder.push_quad(y, predicate, x, Some(graph)).unwrap();
+        }
+        let dataset = builder.freeze().expect("valid reciprocal graph fixture");
+        let stats = RdfcGroupStats {
+            occurrences: 3,
+            distinct: 1,
+        };
+        let boundaries = [
+            (
+                RdfcSearchContext::InitialFrame { root_ordinal: 0 },
+                "related group unavailable",
+            ),
+            (
+                RdfcSearchContext::Permutation {
+                    root_ordinal: 0,
+                    frame_ordinal: 0,
+                    depth: 0,
+                    group: stats,
+                },
+                "current group occurrences=3, distinct=1",
+            ),
+            (
+                RdfcSearchContext::ChildFrame {
+                    root_ordinal: 0,
+                    frame_ordinal: 1,
+                    depth: 1,
+                    parent_group: stats,
+                },
+                "parent group occurrences=3, distinct=1",
+            ),
+        ];
+        for (limit, (expected, visible_group)) in boundaries.into_iter().enumerate() {
+            let mut control =
+                CanonicalizationControl::new(SearchPolicy::Finite(limit as u64), None);
+            let position = control.position();
+            let error = canonical_relabel_with_mapping(&dataset, &mut control)
+                .expect_err("the selected search boundary must refuse");
+            assert!(
+                error.to_string().contains(visible_group),
+                "ordinary Display must retain group attribution through text wrappers"
+            );
+            let CanonError::BudgetExceeded(budget) = error else {
+                panic!("expected a finite search refusal");
+            };
+            assert_eq!(budget.limit, limit as u64);
+            assert_eq!(budget.work.total(), limit as u64);
+            assert_eq!(budget.blank_count, 2);
+            assert_eq!(budget.context, expected);
+            let (observed_position, observation) = control
+                .last_rdfc_refusal()
+                .expect("a finite RDFC refusal retains its observation");
+            assert_eq!(observed_position, position);
+            assert_eq!(
+                observation.first_degree_group,
+                Some(RdfcRootProgress {
+                    first_degree_group_size: 2,
+                    completed_root_searches: 0,
+                })
+            );
+            let expected_path = if limit == 0 {
+                RdfcActivePath::UnbuiltRoot
+            } else {
+                RdfcActivePath::Active {
+                    root_group: stats,
+                    largest_group: RdfcActiveGroup {
+                        frame_ordinal: 0,
+                        depth: 0,
+                        group: stats,
+                    },
+                }
+            };
+            assert_eq!(observation.path, expected_path);
+            let empty = RdfcGroupStats {
+                occurrences: 0,
+                distinct: 0,
+            };
+            let expected_groups = (limit != 0).then(|| {
+                let group = RdfcGroupObservation {
+                    active: RdfcActiveGroup {
+                        frame_ordinal: 0,
+                        depth: 0,
+                        group: stats,
+                    },
+                    labels: RdfcGroupLabels {
+                        canonical: empty,
+                        temporary: empty,
+                        unissued: stats,
+                    },
+                    candidate: (limit == 2).then_some(RdfcCandidateProgress {
+                        pending_child: true,
+                        remaining_children: 0,
+                    }),
+                    has_chosen_path: false,
+                };
+                RdfcGroupObservations {
+                    at_refusal: group,
+                    root: group,
+                    largest: group,
+                }
+            });
+            assert_eq!(observation.groups, expected_groups);
+            if limit != 0 {
+                let visible = observation.to_string();
+                assert!(visible.contains("unissued occurrences=3, distinct=1"));
+                if limit == 2 {
+                    assert!(
+                        visible
+                            .contains("pending child=true, remaining children excluding pending=0")
+                    );
+                }
+            }
+            let receipt = &control.receipts()[0];
+            assert_eq!(receipt.work, budget.work);
+            assert_eq!(receipt.observed_refusal, Some(SearchRefusal::Limit));
+            assert!(!receipt.completed);
+        }
+    }
+
+    #[test]
+    fn refusal_observation_retains_wider_ancestors_and_follows_joined_run_identity() {
+        let mut builder = RdfDatasetBuilder::new();
+        let predicate = iri(&mut builder, "link");
+        let blanks = ["x", "y", "z", "w"]
+            .map(|label| builder.intern_blank(label, BlankScope::DEFAULT).unwrap());
+        for index in 0..blanks.len() {
+            let left = blanks[index];
+            let right = blanks[(index + 1) % blanks.len()];
+            builder.push_quad(left, predicate, right, None).unwrap();
+            builder.push_quad(right, predicate, left, None).unwrap();
+        }
+        let cycle = builder.freeze().expect("valid reciprocal cycle");
+        // One candidate for each root's final known-label group gives 136 events.
+        // The 139-event ceiling detects a return to the 140-event full enumeration.
+        let mut complete = CanonicalizationControl::new(SearchPolicy::Finite(139), None);
+        let canonical = try_canonicalize(&cycle, &mut complete)
+            .expect("fixed-label groups admit the cycle within its finite ceiling");
+        assert_eq!(complete.receipts()[0].work.total(), 136);
+        assert_eq!(
+            canonical.nquads(),
+            concat!(
+                "_:c14n0 <http://example.org/link> _:c14n1 .\n",
+                "_:c14n0 <http://example.org/link> _:c14n2 .\n",
+                "_:c14n1 <http://example.org/link> _:c14n0 .\n",
+                "_:c14n1 <http://example.org/link> _:c14n3 .\n",
+                "_:c14n2 <http://example.org/link> _:c14n0 .\n",
+                "_:c14n2 <http://example.org/link> _:c14n3 .\n",
+                "_:c14n3 <http://example.org/link> _:c14n1 .\n",
+                "_:c14n3 <http://example.org/link> _:c14n2 .\n",
+            )
+        );
+        assert_eq!(
+            canonical.labels().collect::<BTreeMap<_, _>>(),
+            BTreeMap::from([
+                (blanks[0], "c14n0"),
+                (blanks[1], "c14n1"),
+                (blanks[2], "c14n3"),
+                (blanks[3], "c14n2"),
+            ])
+        );
+
+        // Two completed roots each save one final-group event, preserving the
+        // same descendant refusal after the first 24 events of the third root.
+        let mut control = CanonicalizationControl::new(SearchPolicy::Finite(92), None);
+        let first_position = control.position();
+        let error = canonical_relabel(&cycle, &mut control).expect_err("finite cycle refusal");
+        let CanonError::BudgetExceeded(budget) = error else {
+            panic!("expected a finite RDFC refusal");
+        };
+        let RdfcSearchContext::Permutation {
+            root_ordinal,
+            frame_ordinal,
+            depth: 2,
+            group,
+        } = budget.context
+        else {
+            panic!("the refused permutation is below the root and immediate parent");
+        };
+        assert_eq!(
+            group,
+            RdfcGroupStats {
+                occurrences: 1,
+                distinct: 1
+            }
+        );
+        let empty = RdfcGroupStats {
+            occurrences: 0,
+            distinct: 0,
+        };
+        let root = RdfcGroupObservation {
+            active: RdfcActiveGroup {
+                frame_ordinal: root_ordinal,
+                depth: 0,
+                group: RdfcGroupStats {
+                    occurrences: 2,
+                    distinct: 2,
+                },
+            },
+            labels: RdfcGroupLabels {
+                canonical: empty,
+                temporary: empty,
+                unissued: RdfcGroupStats {
+                    occurrences: 2,
+                    distinct: 2,
+                },
+            },
+            candidate: Some(RdfcCandidateProgress {
+                pending_child: true,
+                remaining_children: 1,
+            }),
+            has_chosen_path: true,
+        };
+        let expected = RdfcRefusalObservation {
+            first_degree_group: Some(RdfcRootProgress {
+                first_degree_group_size: 4,
+                completed_root_searches: 2,
+            }),
+            path: RdfcActivePath::Active {
+                root_group: RdfcGroupStats {
+                    occurrences: 2,
+                    distinct: 2,
+                },
+                largest_group: RdfcActiveGroup {
+                    frame_ordinal: root_ordinal,
+                    depth: 0,
+                    group: RdfcGroupStats {
+                        occurrences: 2,
+                        distinct: 2,
+                    },
+                },
+            },
+            groups: Some(RdfcGroupObservations {
+                at_refusal: RdfcGroupObservation {
+                    active: RdfcActiveGroup {
+                        frame_ordinal,
+                        depth: 2,
+                        group,
+                    },
+                    labels: RdfcGroupLabels {
+                        canonical: empty,
+                        temporary: group,
+                        unissued: empty,
+                    },
+                    candidate: None,
+                    has_chosen_path: false,
+                },
+                root,
+                largest: root,
+            }),
+        };
+        assert_eq!(
+            control.last_rdfc_refusal(),
+            Some((first_position, expected))
+        );
+
+        let empty = control.fork();
+        control.append_completed(empty);
+        assert_eq!(
+            control.last_rdfc_refusal(),
+            Some((first_position, expected))
+        );
+        let mut child = control.fork();
+        assert!(child.last_rdfc_refusal().is_none());
+        canonical_relabel(&cycle, &mut child).expect_err("the child has its own finite run");
+        let joined_position = control.position();
+        control.append_completed(child);
+        assert_eq!(
+            control.last_rdfc_refusal(),
+            Some((joined_position, expected))
+        );
+
+        let mut builder = RdfDatasetBuilder::new();
+        let (s, p, o) = (
+            iri(&mut builder, "s"),
+            iri(&mut builder, "p"),
+            iri(&mut builder, "o"),
+        );
+        builder.push_quad(s, p, o, None).unwrap();
+        let ground = builder.freeze().expect("valid ground graph");
+        let mut child = control.fork();
+        canonical_relabel(&ground, &mut child).expect("a ground graph needs no search");
+        control.append_completed(child);
+        assert!(
+            control.last_rdfc_refusal().is_none(),
+            "a successful last child clears prior evidence"
+        );
+        canonical_relabel(&cycle, &mut control).expect_err("a later actual refusal");
+        assert!(control.last_rdfc_refusal().is_some());
+        canonical_relabel(&ground, &mut control).expect("a later actual success");
+        assert!(
+            control.last_rdfc_refusal().is_none(),
+            "a new successful run clears prior evidence"
+        );
     }
 
     #[test]

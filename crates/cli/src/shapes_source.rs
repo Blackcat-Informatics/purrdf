@@ -221,7 +221,7 @@ pub(crate) fn shapes_error(
         ShapesError::Canonical(cause) => {
             return CliError::Canonical {
                 message: format!("{context}: {cause}"),
-                cause,
+                cause: Box::new(cause),
             };
         }
         ShapesError::RuleExecution(error) => {

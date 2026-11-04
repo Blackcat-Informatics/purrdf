@@ -130,6 +130,31 @@ const REGIME_HOSTS: [(RegimeHost, &str, &str); 6] = [
 ];
 
 #[test]
+fn canonical_materialization_refusal_retains_the_original_native_cause() {
+    let input = "_:x <http://example.org/link> _:y .\n\
+                 _:y <http://example.org/link> _:x .\n";
+    let mut control =
+        purrdf_core::CanonicalizationControl::new(purrdf_core::SearchPolicy::Finite(0), None);
+    let refused = materialize_to_nquads_string("rdfs", input, "", &mut control)
+        .expect_err("a symmetric blank pair requires a search frame");
+    let native = purrdf_validate::canonical::native_canonical_cause(&refused)
+        .expect("the shared host boundary retains its native canonicalizer cause");
+    let CanonicalServiceError::Canonical { cause, .. } = &refused else {
+        panic!("the finite refusal must retain a canonical cause");
+    };
+    assert!(std::ptr::eq(native, cause.as_ref()));
+    let purrdf_core::CanonError::BudgetExceeded(budget) = native else {
+        panic!("the original native cause must remain a finite search refusal");
+    };
+    assert_eq!(budget.limit, 0);
+    assert_eq!(budget.work.total(), 0);
+    assert!(matches!(
+        budget.context,
+        purrdf_core::RdfcSearchContext::InitialFrame { .. }
+    ));
+}
+
+#[test]
 fn a_materialization_refusal_names_the_hosts_knob_and_the_neighbour_completes() {
     // `rdfs` runs through the restricted chase and `owl-rl` through the semi-naive
     // evaluator, so both refusal paths are observed.
