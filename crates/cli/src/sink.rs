@@ -128,7 +128,7 @@ impl OutTarget {
         let path = std::path::PathBuf::from(out);
         // `File::create` is what `fs::write` does: create or truncate, follow
         // symlinks, keep existing permissions. The starting semantics are unchanged.
-        let file = std::fs::File::create(&path)?;
+        let file = std::fs::File::create(&path).map_err(CliError::OutputIo)?;
         // Only a REGULAR file may be unlinked on failure. A FIFO, a device node or
         // `/dev/stdout` would otherwise be removed by an error path, and a symlink
         // would lose the LINK while its target kept the half-written bytes.
@@ -178,19 +178,19 @@ impl OutTarget {
     /// error kind on stdout is a clean success; every other kind, and every kind on
     /// a file target, still propagates.
     ///
-    /// # This is the only flush
+    /// # The final target flush
     ///
     /// `TextSink::finish` drains what it has staged and deliberately does NOT flush
     /// the writer underneath it — "the owner of that writer owns its buffering", as
     /// it puts it. THIS type is that owner for both targets, and this method is where
-    /// the ownership is discharged. The two halves of that contract are written a
+    /// the ownership is discharged. A borrowed staging buffer must first be
+    /// explicitly drained and disarmed. The two halves of that contract are written a
     /// crate apart, so a reader of either one alone could reasonably conclude the
     /// other end was handling it and nobody was.
     ///
-    /// Nothing currently depends on it: a `File` is unbuffered, and stdout's
-    /// `LineWriter` flushes on drop. That is exactly why it is worth stating — the
-    /// invariant holds today by a property of the two targets that happen to be
-    /// wired up, not by anything that would fail if a buffered writer were added.
+    /// A borrowed `BufWriter` is explicitly drained and disarmed before this
+    /// handoff, including after failure; its destructor must never retry writes.
+    /// This owner retains the target's final flush and stdout classification.
     pub(crate) fn finish(mut self) -> Result<(), CliError> {
         if self.hung_up() {
             return Ok(());
@@ -203,7 +203,7 @@ impl OutTarget {
             {
                 Ok(())
             }
-            Err(error) => Err(error.into()),
+            Err(error) => Err(CliError::OutputIo(error)),
         }
     }
 
@@ -217,7 +217,7 @@ impl OutTarget {
     pub(crate) fn abandon(self, error: CliError) -> CliError {
         // A downstream reader that closed early did not fail: the serializer's write
         // error is the MECHANISM that stopped it, not a fault to report.
-        if self.hung_up() {
+        if self.hung_up() && !matches!(error, CliError::OutputPublication { .. }) {
             return CliError::DownstreamClosed;
         }
         if let Self::File {
@@ -227,11 +227,10 @@ impl OutTarget {
         } = self
             && std::fs::remove_file(&path).is_ok()
         {
-            return CliError::Runtime(format!(
-                "{error}; the partial output file `{}` was removed (its previous \
-                 contents were replaced when the write began)",
-                path.display()
-            ));
+            return CliError::PartialOutputRemoved {
+                original: Box::new(error),
+                path,
+            };
         }
         error
     }

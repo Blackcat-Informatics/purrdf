@@ -24,6 +24,8 @@
 
 use purrdf_testkit::vectors::{VectorFile, decode_str};
 
+pub mod word_lookup;
+
 /// The repository IRI corpus, `tests/vectors/corpus_iris.txt`: the 1,000 most
 /// frequent absolute IRIs in the repository's RDF test corpora, most frequent
 /// first.
