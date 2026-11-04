@@ -14,7 +14,7 @@
 //!
 //! # What a reader owes the law
 //!
-//! A dialect reader is a pure function from the document's text to a
+//! A dialect reader is a pure projection from admitted source syntax to a
 //! [`Reading`]: a title, a flat list of sections in document order, a
 //! flat list of units in document order, the concordance rows it could
 //! read, and the rows it could not. Its whole contract is:
@@ -77,7 +77,7 @@
 //! # Plugging in the next format
 //!
 //! A second structured format is a second module beside
-//! [`markdown`] with a `read(&str) -> Reading` of its own, and a
+//! [`markdown`] with a `read(&SyntaxDocument) -> Reading` of its own, and a
 //! profile whose stage description names it. Nothing else moves: the
 //! same units get the same split, the same identities, the same
 //! lattice, and the same claims. The seam is deliberately a plain

@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! HTML character references, independently implemented from the WHATWG
-//! reference submachine. This does not parse tags, change quotes, normalize
-//! line endings, or recursively decode its output.
+//! reference submachine, borrowed tag/attribute tokenization and opaque HTML forms. None normalizes
+//! line endings or recursively decodes its output.
 //!
 //! [`resolve`] implements the specified recovery and reports every reference
 //! error. [`resolve_strict`] makes acceptance atomic: an error returns only
@@ -18,6 +18,10 @@ use std::fmt;
 use std::ops::Range;
 
 mod entities;
+mod tag;
+pub use tag::{
+    Attribute, Opaque, OpaqueKind, Tag, TagKind, opaque_with_memory, tag, tag_with_memory,
+};
 
 /// The pinned HTML Standard revision defining the reference submachine.
 pub const SPEC_SNAPSHOT: &str = "a5e15011a00ddefd648c29e4d27734f3e7ff821f";
@@ -44,6 +48,9 @@ pub enum Mode {
     Text,
     /// HTML attribute rules, including ambiguous legacy-name suppression.
     Attribute,
+    /// CommonMark references: a semicolon is required, with at most seven
+    /// decimal or six hexadecimal digits in a numeric reference.
+    Markdown,
 }
 
 /// One complete decoded value and its original UTF-8 contributors.
@@ -265,6 +272,18 @@ pub enum ResolveIntoError {
     LayoutOverflow,
 }
 
+impl fmt::Display for ResolveIntoError {
+    fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Capacity => out.write_str("HTML reference destination capacity is insufficient"),
+            Self::LayoutOverflow => {
+                out.write_str("HTML reference layout exceeds addressable storage")
+            }
+        }
+    }
+}
+impl std::error::Error for ResolveIntoError {}
+
 impl purrdf_hash::error::StructuredError for ResolveIntoError {
     purrdf_hash::error_visit! {
         Capacity => "html-destination-capacity" {},
@@ -431,6 +450,26 @@ fn reference(
     let bytes = input.as_bytes();
     let after = start + 1;
     if bytes.get(after) == Some(&b'#') {
+        if mode == Mode::Markdown {
+            let hex = matches!(bytes.get(after + 1), Some(b'x' | b'X'));
+            let first = after + 1 + usize::from(hex);
+            let mut end = first;
+            while bytes.get(end).is_some_and(|b| {
+                if hex {
+                    b.is_ascii_hexdigit()
+                } else {
+                    b.is_ascii_digit()
+                }
+            }) {
+                end += 1;
+            }
+            if end == first
+                || end - first > if hex { 6 } else { 7 }
+                || bytes.get(end) != Some(&b';')
+            {
+                return (end, None);
+            }
+        }
         return numeric(bytes, start, diagnostics);
     }
     if !bytes.get(after).is_some_and(u8::is_ascii_alphanumeric) {
@@ -439,6 +478,9 @@ fn reference(
     if let Some((len, entry)) = named(&bytes[after..]) {
         let end = after + len;
         if bytes[end - 1] != b';' {
+            if mode == Mode::Markdown {
+                return (end, None);
+            }
             if mode == Mode::Attribute
                 && bytes
                     .get(end)

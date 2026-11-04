@@ -5,6 +5,15 @@
 # Generated payloads are projections of this ledger and Cargo.lock, never hand edited.
 
 [[material]]
+id = "visual-hashing-native"
+license = "MIT OR Apache-2.0 OR MulanPSL-2.0"
+source = "https://github.com/Blackcat-Informatics/visual-hashing/tree/519c5bbdb5e0ef4c6c70aa0b5cf42a8877f6e776"
+scope = "modified inherited emoji alphabet, spoken labels and randomart rendering; upstream BLAKE3 is excluded and shared native BLAKE3 supplies the XOF"
+paths = ["crates/lex/src/visual_fingerprint.rs", "crates/lex/src/visual_fingerprint/**", "vectors/emojihash/**", "vectors/randomart/**"]
+notices = ["LICENSE-MIT", "LICENSE-APACHE", "LICENSE-MULAN"]
+provenance = ["docs/provenance/visual-hashing.md"]
+
+[[material]]
 id = "structured-zstd-native"
 license = "Apache-2.0"
 source = "https://crates.io/crates/structured-zstd/0.0.49"
@@ -25,6 +34,7 @@ provenance = ["crates/zstd/PROVENANCE.md", "crates/zstd/UPSTREAM-SHA256.json"]
 # LICENSING.md describes the combined grant.
 "crates/lex/src/unicode_tables.rs" = "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0"
 "crates/lex/src/unicode/case_tables.rs" = "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0"
+"crates/lex/src/unicode/fold_tables.rs" = "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0"
 "crates/iri/src/idna_tables.rs" = "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0"
 "crates/rdf-core/src/xsd_regex/blocks.rs" = "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0"
 "crates/rdf-core/src/xsd_regex/xpath/unicode_tables.rs" = "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0"
@@ -50,7 +60,7 @@ id = "unicode"
 license = "Unicode-3.0"
 source = "https://www.unicode.org/Public/17.0.0/ucd/"
 scope = "generated and vendored Unicode data; terms apply in addition to the first-party grant"
-paths = ["crates/lex/src/unicode_tables.rs", "crates/lex/src/unicode/case_tables.rs", "crates/iri/src/idna_tables.rs", "crates/rdf-core/src/xsd_regex/blocks.rs", "crates/rdf-core/src/xsd_regex/xpath/unicode_tables.rs", "crates/rdf-core/src/xsd_regex/xpath/compatibility_tables.rs", "crates/text/src/unicode_tables.rs", "crates/jsonschema/src/ecma/property_tables.rs", "crates/jsonschema/src/ecma/unicode_ranges.rs", "crates/iri/unicode/**", "crates/rdf-core/vendor/unicode/**"]
+paths = ["crates/lex/src/unicode_tables.rs", "crates/lex/src/unicode/case_tables.rs", "crates/lex/src/unicode/fold_tables.rs", "crates/iri/src/idna_tables.rs", "crates/rdf-core/src/xsd_regex/blocks.rs", "crates/rdf-core/src/xsd_regex/xpath/unicode_tables.rs", "crates/rdf-core/src/xsd_regex/xpath/compatibility_tables.rs", "crates/text/src/unicode_tables.rs", "crates/jsonschema/src/ecma/property_tables.rs", "crates/jsonschema/src/ecma/unicode_ranges.rs", "crates/iri/unicode/**", "crates/rdf-core/vendor/unicode/**"]
 notices = ["LICENSES/Unicode-3.0.txt"]
 provenance = ["crates/iri/unicode/PROVENANCE.md", "LICENSING.md"]
 

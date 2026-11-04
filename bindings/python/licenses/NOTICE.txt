@@ -476,12 +476,13 @@ Source: registry+https://github.com/rust-lang/crates.io-index
 Notice: dependencies/universal-hash-0.6.1/LICENSE-APACHE
 Notice: dependencies/universal-hash-0.6.1/LICENSE-MIT
 
-visual-hashing-1.0.0: MIT OR Apache-2.0 OR MulanPSL-2.0
-Scope: resolved normal/build input, including target-specific alternatives
-Source: registry+https://github.com/rust-lang/crates.io-index
-Notice: dependencies/visual-hashing-1.0.0/LICENSE-APACHE
-Notice: dependencies/visual-hashing-1.0.0/LICENSE-MIT
-Notice: dependencies/visual-hashing-1.0.0/LICENSE-MULAN
+visual-hashing-native: MIT OR Apache-2.0 OR MulanPSL-2.0
+Scope: modified inherited emoji alphabet, spoken labels and randomart rendering; upstream BLAKE3 is excluded and shared native BLAKE3 supplies the XOF
+Source: https://github.com/Blackcat-Informatics/visual-hashing/tree/519c5bbdb5e0ef4c6c70aa0b5cf42a8877f6e776
+Evidence: docs/provenance/visual-hashing.md
+Notice: third-party/visual-hashing-native/0-LICENSE-MIT
+Notice: third-party/visual-hashing-native/1-LICENSE-APACHE
+Notice: third-party/visual-hashing-native/2-LICENSE-MULAN
 
 w3c-owl2: LicenseRef-W3C-Test-Suite
 Scope: source-only conformance data; original notices remain authoritative

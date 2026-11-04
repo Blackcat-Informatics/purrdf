@@ -129,6 +129,8 @@ pub enum CliError {
     FileIdentity(std::io::Error),
     /// Original checked word conversion, record or I/O refusal.
     WordId(Box<crate::word_id::Failure>),
+    /// Original native fingerprint or output refusal.
+    Fingerprint(crate::fingerprint::Failure),
     /// An argument / usage error (exit code 2).
     Usage(String),
     /// Any other runtime failure — parse, serialize, pack integrity, or I/O
@@ -195,6 +197,7 @@ impl CliError {
             | Self::GlobSetMatch(_)
             | Self::GlobRdf(_)
             | Self::GlobRdfStorage(_) => 1,
+            Self::Fingerprint(_) => 1,
             Self::DownstreamClosed => 0,
         }
     }
@@ -239,6 +242,7 @@ impl fmt::Display for CliError {
             Self::GlobIri(error) => error.fmt(f),
             Self::GlobRdf(error) => error.fmt(f),
             Self::GlobRdfStorage(error) => error.fmt(f),
+            Self::Fingerprint(error) => error.fmt(f),
             // Never printed: this variant exits 0 and reports nothing, which is the
             // whole point of a filter whose reader stopped reading.
             Self::DownstreamClosed => Ok(()),
@@ -267,6 +271,7 @@ impl std::error::Error for CliError {
             Self::GlobIri(error) => Some(error),
             Self::GlobRdf(error) => Some(&**error),
             Self::GlobRdfStorage(error) => Some(error),
+            Self::Fingerprint(error) => Some(error),
             _ => None,
         }
     }

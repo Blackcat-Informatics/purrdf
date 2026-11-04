@@ -33,6 +33,7 @@ the workspace share.
 
 | Module | What it holds | Specification |
 |---|---|---|
+| `visual_fingerprint` | Admitted emoji, spoken labels and randomart; typed full-digest presentation over the shared BLAKE3 XOF | Frozen visual-hashing 1.0.0 law and corpus; `docs/provenance/visual-hashing.md` |
 | `terminals` | The exact character classes `WS`, `PN_CHARS_BASE`, `PN_CHARS_U`, `PN_CHARS`, `VARNAME`, `IRIREF`'s forbidden set, XML `Char`, `NameStartChar`, `NameChar`, Unicode `White_Space`, and ECMA-262 `LineTerminator` and `\s`, each a range table proved sorted and disjoint at compile time | SPARQL 1.2 Query §19.8, RDF 1.2 Turtle §6.5, XML 1.0 (Fifth Edition) §2.2–2.3, RFC 8259 §7, ECMA-262 §12.2–12.3 and §22.2.2.9 |
 | `scan` | Chunked byte-class scanners over those tables (`find_first_trivia`, `find_first_iri_body_special`, `find_first_json_string_special`, `find_first_xml_special`) and `ByteClass`, the same kernel over a caller's own class | — |
 | `terminals` (escapes and `WS`) | `decode_uchar`, `echar_value`, `expand_uchars` and `decode_char_ref`, strict decoders of `UCHAR`, `ECHAR` and the XML `CharRef`; `skip_ws` and `trim_ws`, the four-scalar `WS` skip and trim; `is_ncname`; `in_ranges`, the one range-table search | RDF 1.2 Turtle §6.5, SPARQL 1.2 §19.8, XML 1.0 §4.1 `[66]`, Namespaces in XML 1.0 §3 |

@@ -196,7 +196,7 @@ deps = ["purrdf-core", "purrdf-hash", "purrdf-iri", "purrdf-lex"]
 
 [[crate]]
 name = "purrdf-markdown"
-deps = ["purrdf-core", "purrdf-hash"]
+deps = ["purrdf-core", "purrdf-hash", "purrdf-lex"]
 
 [[crate]]
 name = "purrdf-mime"

@@ -41,6 +41,7 @@
       "paths": [
         "crates/lex/src/unicode_tables.rs",
         "crates/lex/src/unicode/case_tables.rs",
+        "crates/lex/src/unicode/fold_tables.rs",
         "crates/iri/src/idna_tables.rs",
         "crates/rdf-core/src/xsd_regex/blocks.rs",
         "crates/rdf-core/src/xsd_regex/xpath/unicode_tables.rs",
