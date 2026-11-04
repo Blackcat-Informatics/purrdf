@@ -2164,6 +2164,7 @@ impl<Id: ViewTermId> IdIssuer<Id> {
 /// One suspended n-degree invocation. Child results resume its current path;
 /// none of these owners recursively contains another frame.
 struct NDegreeFrame<Id> {
+    identifier: Id,
     issuer: IdIssuer<Id>,
     related: std::collections::btree_map::IntoIter<HashHex, Vec<Id>>,
     data: String,
@@ -2211,6 +2212,125 @@ struct CanonState<'a, D: DatasetView> {
     stop: Option<&'a dyn crate::StopSignal>,
 }
 
+/// Related-ID multiplicity in the already-built group at a search refusal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RdfcGroupStats {
+    /// Related-ID occurrences, including repeated occurrences of the same ID.
+    pub occurrences: usize,
+    /// Distinct related IDs among those occurrences.
+    pub distinct: usize,
+}
+
+impl RdfcGroupStats {
+    /// Inspect terminal failed state without allocating or reading the source.
+    fn at_refusal<Id: Ord>(items: &mut [Id]) -> Self {
+        items.sort_unstable();
+        Self {
+            occurrences: items.len(),
+            distinct: usize::from(!items.is_empty())
+                + items.windows(2).filter(|pair| pair[0] != pair[1]).count(),
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for RdfcGroupStats {
+    purrdf_hash::error_visit! {
+        @record self { occurrences, distinct } => "rdfc-related-group" {
+            "occurrences" => Unsigned(self.occurrences as u128),
+            "distinct" => Unsigned(self.distinct as u128),
+        }
+    }
+}
+
+/// The attempted search step that reached a finite caller ceiling.
+///
+/// Blank ordinals index this run's sorted collected blank IDs. They are neither
+/// canonical labels nor source-document provenance, and need not agree across
+/// different input views. Depth is zero at the root. Group statistics inspect
+/// only an already-built group; a refused child has not built its own group.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RdfcSearchContext {
+    /// Initial frame entry: no related group has been built.
+    InitialFrame {
+        /// Root blank ordinal; also the attempted frame at depth zero.
+        root_ordinal: usize,
+    },
+    /// Child frame entry, attributed to its calling parent's active group.
+    ChildFrame {
+        /// Root blank ordinal for this n-degree invocation.
+        root_ordinal: usize,
+        /// Attempted child blank ordinal.
+        frame_ordinal: usize,
+        /// Attempted child's depth below the root.
+        depth: usize,
+        /// The calling parent's group, not an unbuilt child group.
+        parent_group: RdfcGroupStats,
+    },
+    /// Permutation attempt in the current frame's active group.
+    Permutation {
+        /// Root blank ordinal for this n-degree invocation.
+        root_ordinal: usize,
+        /// Current frame's blank ordinal.
+        frame_ordinal: usize,
+        /// Current frame's depth below the root.
+        depth: usize,
+        /// The current frame's active group.
+        group: RdfcGroupStats,
+    },
+}
+
+impl purrdf_hash::error::StructuredError for RdfcSearchContext {
+    purrdf_hash::error_visit! {
+        InitialFrame { root_ordinal } => "rdfc-initial-frame" {
+            "root_ordinal" => Unsigned(*root_ordinal as u128),
+            "related_group" => Absent,
+        },
+        ChildFrame { root_ordinal, frame_ordinal, depth, parent_group } => "rdfc-child-frame" {
+            "root_ordinal" => Unsigned(*root_ordinal as u128),
+            "frame_ordinal" => Unsigned(*frame_ordinal as u128),
+            "depth" => Unsigned(*depth as u128),
+            "parent_group" => Record(parent_group),
+        },
+        Permutation { root_ordinal, frame_ordinal, depth, group } => "rdfc-permutation" {
+            "root_ordinal" => Unsigned(*root_ordinal as u128),
+            "frame_ordinal" => Unsigned(*frame_ordinal as u128),
+            "depth" => Unsigned(*depth as u128),
+            "group" => Record(group),
+        },
+    }
+}
+
+impl std::fmt::Display for RdfcSearchContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InitialFrame { root_ordinal } => write!(
+                f,
+                "initial frame: root ordinal={root_ordinal}, frame ordinal={root_ordinal}, depth=0, related group unavailable"
+            ),
+            Self::ChildFrame {
+                root_ordinal,
+                frame_ordinal,
+                depth,
+                parent_group,
+            } => write!(
+                f,
+                "child frame: root ordinal={root_ordinal}, frame ordinal={frame_ordinal}, depth={depth}, parent group occurrences={}, distinct={}",
+                parent_group.occurrences, parent_group.distinct
+            ),
+            Self::Permutation {
+                root_ordinal,
+                frame_ordinal,
+                depth,
+                group,
+            } => write!(
+                f,
+                "permutation: root ordinal={root_ordinal}, frame ordinal={frame_ordinal}, depth={depth}, current group occurrences={}, distinct={}",
+                group.occurrences, group.distinct
+            ),
+        }
+    }
+}
+
 /// A caller-selected finite search ceiling was reached before canonicalization
 /// completed. The rejected event is excluded from the actual charged work.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2222,14 +2342,17 @@ pub struct BudgetExceeded {
     /// The number of distinct blank nodes in the input that triggered
     /// exhaustion (diagnostic only).
     pub blank_count: usize,
+    /// The refused step and the group available at that boundary.
+    pub context: RdfcSearchContext,
 }
 
 impl purrdf_hash::error::StructuredError for BudgetExceeded {
     purrdf_hash::error_visit! {
-        @record self { blank_count, limit, work } => "canonical-budget-exceeded" {
+        @record self { blank_count, limit, work, context } => "canonical-budget-exceeded" {
             "blank_count" => Unsigned(self.blank_count as u128),
             "limit" => Unsigned(u128::from(self.limit)),
             "charged_work" => Unsigned(u128::from(self.work.total())),
+            "context" => Record(&self.context),
         }
     }
 }
@@ -2238,10 +2361,11 @@ impl std::fmt::Display for BudgetExceeded {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "canonicalization reached the caller's finite search limit {} after {} charged events ({} blanks)",
+            "canonicalization reached the caller's finite search limit {} after {} charged events ({} blanks); {}",
             self.limit,
             self.work.total(),
-            self.blank_count
+            self.blank_count,
+            self.context
         )
     }
 }
@@ -2654,7 +2778,18 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         self.run.check_stop().map_err(|_| CanonError::Stopped)
     }
 
-    fn charge_search(&self, event: SearchEvent) -> Result<(), CanonError> {
+    fn blank_ordinal(&self, identifier: D::Id) -> usize {
+        // Every frame identifier came from the collected blank incidence map.
+        self.blanks
+            .binary_search(&identifier)
+            .expect("a search frame identifies a collected blank")
+    }
+
+    fn charge_search(
+        &self,
+        event: SearchEvent,
+        context: impl FnOnce() -> RdfcSearchContext,
+    ) -> Result<(), CanonError> {
         self.run.charge(event).map_err(|failure| match failure {
             SearchRefusal::Stopped => CanonError::Stopped,
             SearchRefusal::CounterCapacity => CanonError::CounterCapacity,
@@ -2666,6 +2801,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                     blank_count: self.blanks.len(),
                     limit,
                     work: self.run.work(),
+                    context: context(),
                 })
             }
         })
@@ -2816,9 +2952,13 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         identifier: D::Id,
         issuer: IdIssuer<D::Id>,
     ) -> Result<IssuedHash<D::Id>, CanonError<D::ReadError>> {
-        let mut frame = self.n_degree_frame(identifier, issuer)?;
+        let mut frame =
+            self.n_degree_frame(identifier, issuer, || RdfcSearchContext::InitialFrame {
+                root_ordinal: self.blank_ordinal(identifier),
+            })?;
         let mut parents: WorkList<NDegreeFrame<D::Id>, 8> = WorkList::default();
         loop {
+            let frame_identifier = frame.identifier;
             if let Some(group) = frame.group.as_mut() {
                 if let Some(mut candidate) = group.candidate.take() {
                     if let Some(related) = candidate.recursion.next() {
@@ -2827,7 +2967,16 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                         let child_issuer = candidate.issuer.clone();
                         candidate.pending = Some(related);
                         group.candidate = Some(candidate);
-                        let child = self.n_degree_frame(related, child_issuer)?;
+                        let child = self.n_degree_frame(related, child_issuer, || {
+                            RdfcSearchContext::ChildFrame {
+                                root_ordinal: self.blank_ordinal(identifier),
+                                frame_ordinal: self.blank_ordinal(related),
+                                depth: parents.len() + 1,
+                                parent_group: RdfcGroupStats::at_refusal(
+                                    &mut group.permutations.items,
+                                ),
+                            }
+                        })?;
                         parents.push(frame);
                         frame = child;
                         continue;
@@ -2845,8 +2994,15 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
 
                 if let Some(perm) = group.permutations.next() {
                     // Charge after obtaining each permutation, including pruned ones.
-                    self.charge_search(SearchEvent::RdfcPermutation)
-                        .map_err(CanonError::with_read_error)?;
+                    self.charge_search(SearchEvent::RdfcPermutation, || {
+                        RdfcSearchContext::Permutation {
+                            root_ordinal: self.blank_ordinal(identifier),
+                            frame_ordinal: self.blank_ordinal(frame_identifier),
+                            depth: parents.len(),
+                            group: RdfcGroupStats::at_refusal(&mut group.permutations.items),
+                        }
+                    })
+                    .map_err(CanonError::with_read_error)?;
                     let mut issuer = frame.issuer.clone();
                     let mut path = String::new();
                     let mut recursion = Vec::new();
@@ -2939,8 +3095,9 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         &self,
         identifier: D::Id,
         issuer: IdIssuer<D::Id>,
+        context: impl FnOnce() -> RdfcSearchContext,
     ) -> Result<NDegreeFrame<D::Id>, CanonError<D::ReadError>> {
-        self.charge_search(SearchEvent::RdfcFrame)
+        self.charge_search(SearchEvent::RdfcFrame, context)
             .map_err(CanonError::with_read_error)?;
 
         // §4.8 step 3: map related-blank hash → the related blanks bearing it.
@@ -2953,6 +3110,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         }
 
         Ok(NDegreeFrame {
+            identifier,
             issuer,
             related: hn.into_iter(),
             data: String::new(),
@@ -6261,6 +6419,69 @@ mod tests {
                 .try_update(Relaxed, Relaxed, |n| Some(n.saturating_sub(1)))
                 .expect("the update always supplies a value")
                 == 0
+        }
+    }
+
+    #[test]
+    fn relabel_refusal_attributes_initial_permutation_and_child_boundaries() {
+        let mut builder = RdfDatasetBuilder::new();
+        let predicate = iri(&mut builder, "link");
+        let x = builder.intern_blank("x", BlankScope::DEFAULT).unwrap();
+        let y = builder.intern_blank("y", BlankScope::DEFAULT).unwrap();
+        for name in ["g0", "g1", "g2"] {
+            let graph = iri(&mut builder, name);
+            builder.push_quad(x, predicate, y, Some(graph)).unwrap();
+            builder.push_quad(y, predicate, x, Some(graph)).unwrap();
+        }
+        let dataset = builder.freeze().expect("valid reciprocal graph fixture");
+        let stats = RdfcGroupStats {
+            occurrences: 3,
+            distinct: 1,
+        };
+        let boundaries = [
+            (
+                RdfcSearchContext::InitialFrame { root_ordinal: 0 },
+                "related group unavailable",
+            ),
+            (
+                RdfcSearchContext::Permutation {
+                    root_ordinal: 0,
+                    frame_ordinal: 0,
+                    depth: 0,
+                    group: stats,
+                },
+                "current group occurrences=3, distinct=1",
+            ),
+            (
+                RdfcSearchContext::ChildFrame {
+                    root_ordinal: 0,
+                    frame_ordinal: 1,
+                    depth: 1,
+                    parent_group: stats,
+                },
+                "parent group occurrences=3, distinct=1",
+            ),
+        ];
+        for (limit, (expected, visible_group)) in boundaries.into_iter().enumerate() {
+            let mut control =
+                CanonicalizationControl::new(SearchPolicy::Finite(limit as u64), None);
+            let error = canonical_relabel_with_mapping(&dataset, &mut control)
+                .expect_err("the selected search boundary must refuse");
+            assert!(
+                error.to_string().contains(visible_group),
+                "ordinary Display must retain group attribution through text wrappers"
+            );
+            let CanonError::BudgetExceeded(budget) = error else {
+                panic!("expected a finite search refusal");
+            };
+            assert_eq!(budget.limit, limit as u64);
+            assert_eq!(budget.work.total(), limit as u64);
+            assert_eq!(budget.blank_count, 2);
+            assert_eq!(budget.context, expected);
+            let receipt = &control.receipts()[0];
+            assert_eq!(receipt.work, budget.work);
+            assert_eq!(receipt.observed_refusal, Some(SearchRefusal::Limit));
+            assert!(!receipt.completed);
         }
     }
 
