@@ -154,7 +154,7 @@ predicates to fields and computing per-partition field totals is a projection
 over those facts. Reweighting or remapping does not tokenize text, reorder
 postings or mutate source identity. It changes ranking identity and the full
 answer fingerprint. The analyzer fingerprint identifies the compatibility
-caseless UAX29 pipeline and all of its Unicode table versions independently.
+caseless UAX 29 pipeline and all of its Unicode table versions independently.
 
 The corpus law names documents by `(graph, subject, language)`, partitions by
 `(graph, language)`, merges base direction, and excludes zero-token documents.
@@ -166,6 +166,44 @@ partition selection in their own host identity.
 The pure scorer accepts the full u64 population representation for external
 stores. The in-memory index retains its explicit u32 document/position address
 space; wider pure corpus statistics do not claim it can allocate that many rows.
+
+## Exact finite selection
+
+Finite ranking merges canonical posting heads and retains a bounded heap under
+the same `(score DESC, document ASC)` order as exhaustive ranking. Posting leaves
+and branches retain raw field extrema, including the minimum positive length and
+minimum length carrying a positive term frequency. Incremental replacement
+refolds every old and new term of a changed document, including unchanged term
+frequencies whose document length changed. Routing changes rebuild these facts;
+reweighting and corpus changes prepare fresh query certificates over them.
+
+For an active field, its minimum active length gives a lower native
+normalization. The maximum frequency divided by that normalization, followed by
+the native weight multiplication, bounds its pseudo-frequency. Native saturation
+is not monotone because it truncates its numerator before division. The envelope
+therefore uses the directed single quotient
+`floor((k1+1)*pseudo_upper/(pseudo_upper+k1))`, then the native IDF multiplication.
+The single quotient dominates the native truncated numerator and is monotone.
+If a bound intermediate exceeds the fixed-width wide kernel, the prepared term's
+genuine saturation ceiling supplies a looser bound without refusing actual input.
+
+Each range also requires a separate semantic certificate against the current
+corpus, field populations and term frequency. Independent extrema never become
+a synthetic document. An inconclusive certificate requires visiting eligible
+actual records through the shared scorer, even at zero weight or IDF. Membership
+exclusion precedes that scorer. Retained whole boundary leaves may conservatively
+cover extra records; this can require extra traversal, never an eager semantic
+refusal or an unsafe skip. Missing fields, malformed cursor metadata and failure
+to advance produce actionable errors. Actual read and admission failures retain
+their native causes and owners.
+
+A block or unread suffix is skipped only when its certified score upper bound
+is below the heap's worst score, or equal with every unread document later in
+canonical order. Unbounded ranking and all-undecided evidence retain exhaustive
+evaluation. Point scoring remains a direct lookup. `SearchObservations` counts
+actual score completions, decoded postings, examined leaf blocks and whole unread
+leaf blocks bypassed; these process counters accumulate modulo u64 and affect no
+identity or score.
 
 ## Vocabulary substring search decision
 

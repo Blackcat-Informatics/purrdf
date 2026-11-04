@@ -98,7 +98,7 @@
 //! predicate IRI is a [`TextError::Config`], and a needle asking about a document
 //! that does not exist is a [`TextError::Data`].
 
-use crate::query_workspace::{admitted, overflow, query_error};
+use crate::query_workspace::{admitted, data_error, overflow, query_error};
 use crate::{TextSource, source::SourceExt};
 use purrdf_sparql_eval::{
     AdmittedVec, NativeDiagnosticKind, WorkspaceAllocation, WorkspaceCapability,
@@ -795,9 +795,13 @@ fn rank_terms_owned<E: From<TextError>, P: CorpusProfile>(
     let Some(partition) = index.partition_key_owned(partition, workspace)? else {
         return Ok(AdmittedVec::new(workspace));
     };
-    let candidates = candidates_owned(index, partition, terms, work, workspace, membership)?;
     let keep = limit.map(|n| usize::try_from(n).unwrap_or(usize::MAX));
-    let ordered = order_owned(candidates, keep, workspace)?;
+    let ordered = if let Some(keep) = keep {
+        bounded_order_owned(index, partition, terms, keep, work, workspace, membership)?
+    } else {
+        let candidates = candidates_owned(index, partition, terms, work, workspace, membership)?;
+        order_owned(candidates, None, workspace)?
+    };
     let mut rows = admitted(AdmittedVec::with_capacity(ordered.len(), workspace))?;
     for (position, ByRank(candidate)) in ordered.into_iter().enumerate() {
         let rank = position.checked_add(1).ok_or_else(overflow)?;
@@ -816,6 +820,194 @@ fn rank_terms_owned<E: From<TextError>, P: CorpusProfile>(
         }))?;
     }
     Ok(rows)
+}
+
+/// Exact block-max document-at-a-time selection. Only query-term heads, range
+/// envelopes, retained payload guards and the bounded heap occupy query memory.
+fn bounded_order_owned<E: From<TextError>, P: CorpusProfile>(
+    index: &impl TextSource<P>,
+    partition: &PartitionKey<P>,
+    terms: &[&str],
+    keep: usize,
+    work: &mut ScoringWork,
+    workspace: &WorkspaceCapability,
+    membership: &mut impl FnMut(u32) -> Result<bool, E>,
+) -> Result<OwnedOrder, E> {
+    let corpus = index.prepared_corpus_owned(partition, workspace)?;
+    let query = prepare_terms_owned(index, partition, &corpus, terms, workspace)?;
+    let mut states = admitted(AdmittedVec::with_capacity(terms.len(), workspace))?;
+    let ceiling = keep.min(
+        usize::try_from(
+            index
+                .partition_stats(partition)
+                .expect("prepared partition")
+                .document_count(),
+        )
+        .unwrap_or(usize::MAX),
+    );
+    let mut wanted = 0usize;
+    for (ordinal, term) in terms.iter().enumerate() {
+        let (frequency, _) = query.term_statistics(ordinal).expect("prepared term");
+        wanted += usize::try_from(frequency)
+            .unwrap_or(usize::MAX)
+            .min(ceiling - wanted);
+        let state = index.open_ranked_postings(partition, term, workspace)?;
+        let window = index.checked_ranked_window(&state, workspace)?;
+        let walked = window.is_some();
+        if !walked {
+            work.posting_lists = work.posting_lists.checked_add(1).ok_or_else(overflow)?;
+        }
+        admitted(states.push((state, window, walked)))?;
+    }
+    let capacity = wanted
+        .checked_add(usize::from(wanted != 0))
+        .ok_or_else(overflow)?;
+    let mut allocation = None;
+    let mut values = Vec::new();
+    admitted(workspace.reserve_vec(&mut values, &mut allocation, capacity))?;
+    let mut heap: BinaryHeap<ByRank> = BinaryHeap::from(values);
+    while let Some(document) = states
+        .iter()
+        .filter_map(|(_, window, _)| window.as_ref().map(|w| w.document))
+        .min()
+    {
+        if wanted != 0 && heap.len() == wanted {
+            let worst = heap.peek().expect("full bounded heap").0;
+            let loses = |upper: Fixed| {
+                upper < worst.score || (upper == worst.score && document > worst.document)
+            };
+            let mut suffix = Fixed::ZERO;
+            let mut suffix_certified = true;
+            let end = states
+                .iter()
+                .filter_map(|(_, window, _)| window.as_ref().map(|w| w.block_end))
+                .min()
+                .expect("unread head");
+            let mut block = Fixed::ZERO;
+            let mut block_certified = true;
+            for (ordinal, (_, window, _)) in states.iter().enumerate() {
+                let Some(window) = window else {
+                    continue;
+                };
+                let bound = query.range_bound(ordinal, &window.suffix);
+                suffix = suffix
+                    .checked_add_with(bound.upper, workspace.is_bounded().then_some(workspace))?;
+                suffix_certified &= bound.certified;
+                if window.document <= end {
+                    let bound = query.range_bound(ordinal, &window.block);
+                    block = block.checked_add_with(
+                        bound.upper,
+                        workspace.is_bounded().then_some(workspace),
+                    )?;
+                    block_certified &= bound.certified;
+                }
+            }
+            let terminal = suffix_certified && loses(suffix);
+            if terminal || (block_certified && loses(block)) {
+                for (state, window, walked) in states.iter_mut() {
+                    if window
+                        .as_ref()
+                        .is_some_and(|w| terminal || w.document <= end)
+                    {
+                        let skipped = index.seek_ranked_postings(
+                            state,
+                            if terminal { None } else { end.checked_add(1) },
+                            workspace,
+                        )?;
+                        work.posting_blocks_skipped = work
+                            .posting_blocks_skipped
+                            .checked_add(skipped)
+                            .ok_or_else(overflow)?;
+                        *walked = false;
+                        *window = index.checked_ranked_window(state, workspace)?;
+                        if window.as_ref().is_some_and(|window| {
+                            terminal
+                                || end
+                                    .checked_add(1)
+                                    .is_none_or(|target| window.document < target)
+                        }) {
+                            return Err(data_error(
+                                "ranked posting seek did not reach its target",
+                                Some(workspace),
+                            )
+                            .into());
+                        }
+                    }
+                }
+                continue;
+            }
+        }
+        // Scope exclusion precedes required scoring/validation, including when
+        // metadata could not certify otherwise dominated records.
+        let eligible = membership(document)?;
+        let mut held = admitted(AdmittedVec::with_capacity(terms.len(), workspace))?;
+        for (ordinal, (state, window, walked)) in states.iter_mut().enumerate() {
+            if window.as_ref().is_none_or(|w| w.document != document) {
+                continue;
+            }
+            if eligible {
+                let (read_document, counts, first_block) = index
+                    .read_ranked_posting(state, workspace)?
+                    .ok_or_else(|| data_error("ranked cursor head is absent", Some(workspace)))?;
+                if read_document != document {
+                    return Err(data_error(
+                        "ranked cursor head changed within its snapshot",
+                        Some(workspace),
+                    )
+                    .into());
+                }
+                work.postings = work.postings.checked_add(1).ok_or_else(overflow)?;
+                work.posting_blocks_examined = work
+                    .posting_blocks_examined
+                    .checked_add(u64::from(first_block))
+                    .ok_or_else(overflow)?;
+                admitted(held.push((ordinal, counts)))?;
+            } else {
+                let skipped =
+                    index.seek_ranked_postings(state, document.checked_add(1), workspace)?;
+                work.posting_blocks_skipped = work
+                    .posting_blocks_skipped
+                    .checked_add(skipped)
+                    .ok_or_else(overflow)?;
+                *walked = false;
+            }
+            *window = index.checked_ranked_window(state, workspace)?;
+            if window
+                .as_ref()
+                .is_some_and(|window| window.document <= document)
+            {
+                return Err(data_error(
+                    "ranked posting cursor did not advance past its head",
+                    Some(workspace),
+                )
+                .into());
+            }
+            if window.is_none() && *walked {
+                work.posting_lists = work.posting_lists.checked_add(1).ok_or_else(overflow)?;
+                *walked = false;
+            }
+        }
+        if eligible {
+            let candidate = score_document(
+                index,
+                &query,
+                document,
+                held.iter()
+                    .map(|(ordinal, counts)| (*ordinal, counts.as_ref())),
+                work,
+                workspace,
+            )?;
+            if wanted != 0 {
+                heap.push(ByRank(candidate));
+                if heap.len() > wanted {
+                    heap.pop();
+                }
+            }
+        }
+    }
+    let mut values = heap.into_vec();
+    values.sort_unstable();
+    Ok(OwnedOrder { values, allocation })
 }
 
 /// One query term's retained predicate facts in one candidate document.
@@ -852,23 +1044,32 @@ fn candidates_owned<E: From<TextError>, P: CorpusProfile>(
     })?;
     let mut occurrences = admitted(AdmittedVec::with_capacity(occurrences_count, workspace))?;
     for (ordinal, term) in terms.iter().enumerate() {
-        for posting in index.field_postings_owned(partition, term, workspace) {
-            let (document, counts) = posting?;
+        let mut cursor = index.open_ranked_postings(partition, term, workspace)?;
+        let mut prior = None;
+        while let Some((document, counts, first_block)) =
+            index.read_ranked_posting(&mut cursor, workspace)?
+        {
+            work.postings = work.postings.checked_add(1).ok_or_else(overflow)?;
+            work.posting_blocks_examined = work
+                .posting_blocks_examined
+                .checked_add(u64::from(first_block))
+                .ok_or_else(overflow)?;
+            if prior.is_some_and(|prior| prior >= document) {
+                return Err(data_error(
+                    "ranked posting cursor did not advance past its head",
+                    Some(workspace),
+                )
+                .into());
+            }
+            prior = Some(document);
             admitted(occurrences.push(CandidateOccurrence {
                 document,
                 ordinal,
                 counts,
             }))?;
         }
+        work.posting_lists = work.posting_lists.checked_add(1).ok_or_else(overflow)?;
     }
-    work.posting_lists = work
-        .posting_lists
-        .checked_add(u64::try_from(terms.len()).map_err(|_| overflow())?)
-        .ok_or_else(overflow)?;
-    work.postings = work
-        .postings
-        .checked_add(u64::try_from(occurrences.len()).map_err(|_| overflow())?)
-        .ok_or_else(overflow)?;
     occurrences
         .as_mut_slice()
         .sort_unstable_by_key(|entry| (entry.document, entry.ordinal));
@@ -988,10 +1189,12 @@ pub(crate) struct ScoringWork {
     /// Posting lists walked from end to end: one per `(partition ranked, needle
     /// term)`.
     pub(crate) posting_lists: u64,
-    /// Individual postings those walks read.
+    /// Individual payload postings actually decoded by ranked traversal.
     pub(crate) postings: u64,
     /// Documents a score was computed for.
     pub(crate) documents_scored: u64,
+    pub(crate) posting_blocks_skipped: u64,
+    pub(crate) posting_blocks_examined: u64,
 }
 
 /// A document's score and matched-term count, computed **without ranking

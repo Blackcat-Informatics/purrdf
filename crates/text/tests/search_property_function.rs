@@ -1300,6 +1300,158 @@ fn caller_owned_sources_share_native_rank_position_and_dictionary_behavior() {
         rows(external_matches.longest_first(&workspace).unwrap().rows()),
         rows(native_matches.longest_first(&workspace).unwrap().rows())
     );
+
+    // Canonical score ties exercise terminal pruning, including independently
+    // admitted provider pages, against the exhaustive native result.
+    let subjects: Vec<_> = (0..128).map(|id| format!("tie{id:03}")).collect();
+    let inputs: Vec<_> = subjects
+        .iter()
+        .enumerate()
+        .map(|(id, subject)| {
+            (
+                subject.as_str(),
+                NOTE,
+                if id == 0 { "quick safe" } else { "quick other" },
+                None,
+            )
+        })
+        .collect();
+    let dataset = dataset_of(&inputs);
+    let index = Arc::new(TextIndex::from_dataset(&*dataset, &config_over(&[NOTE])).unwrap());
+    let columns = Arc::new(source_fixture::Columns::freeze(&index));
+    let query = "SELECT ?doc ?score ?rank ?lang ?matched WHERE { ?doc <http://example.org/pf#search> (\"quick\" ?score ?rank ?lang ?matched) }";
+    let full = answer(&dataset, &registry_of(SEARCH, index.clone()), query);
+    fn verify_pruning<S: TextSource<purrdf_text::GraphLanguage>>(
+        source: Arc<S>,
+        dataset: &RdfDataset,
+        query: &str,
+        full: &[Vec<String>],
+    ) {
+        let workspace = WorkspaceCapability::resident();
+        let relation = Arc::new(TextSearchRelation::from_source(source, &workspace).unwrap());
+        let observed = relation.observations();
+        let mut registry = PropertyFunctionRegistry::new();
+        registry.register(SEARCH, relation);
+        for depth in [1, 17, 130] {
+            let before = observed.documents_scored();
+            assert_eq!(
+                answer(dataset, &registry, &format!("{query} LIMIT {depth}")),
+                full[..depth.min(full.len())]
+            );
+            assert_eq!(
+                observed.documents_scored() - before,
+                depth.min(full.len()) as u64
+            );
+        }
+        assert!(observed.posting_blocks_skipped() > 0);
+        assert!(observed.posting_blocks_examined() > 0);
+    }
+    verify_pruning(index.clone(), &dataset, query, &full);
+    verify_pruning(columns.clone(), &dataset, query, &full);
+    // Shrinking length without changing quick's frequency must refold its old
+    // posting: the last canonical document now outranks the earlier ties.
+    let removed = dataset_of(&[(subjects[127].as_str(), NOTE, "quick other", None)]);
+    let added = dataset_of(&[(subjects[127].as_str(), NOTE, "quick", None)]);
+    let mut replacement = inputs.clone();
+    replacement[127].2 = "quick";
+    let replacement = dataset_of(&replacement);
+    let updated = index
+        .as_ref()
+        .clone()
+        .with_delta(&*replacement, &*added, &*removed)
+        .unwrap();
+    let fresh = TextIndex::from_dataset(&*replacement, &config_over(&[NOTE])).unwrap();
+    let terms = vec!["quick".to_owned()];
+    let exhaustive = purrdf_text::select(
+        &fresh,
+        &terms,
+        &PartitionFilter::unconstrained(),
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(exhaustive[0].document, 127);
+    assert_eq!(
+        purrdf_text::select(
+            &updated,
+            &terms,
+            &PartitionFilter::unconstrained(),
+            Some(1),
+            None
+        )
+        .unwrap(),
+        exhaustive[..1]
+    );
+    for fault in [1, 2, 3] {
+        columns
+            .cursor_fault
+            .store(fault, std::sync::atomic::Ordering::Relaxed);
+        assert!(
+            purrdf_text::select(
+                &*columns,
+                &["quick".to_owned()],
+                &PartitionFilter::unconstrained(),
+                Some(1),
+                None
+            )
+            .is_err()
+        );
+        if fault == 2 {
+            assert!(
+                purrdf_text::select(
+                    &*columns,
+                    &["quick".to_owned()],
+                    &PartitionFilter::unconstrained(),
+                    None,
+                    None
+                )
+                .is_err()
+            );
+        }
+    }
+
+    // Zero weight still validates eligible records that metadata cannot certify.
+    // A scope-excluded malformed record never reaches the actual scorer.
+    let profile = RankingProfile::new(
+        vec![RankingField::new("all", Fixed::ZERO, Fixed::ZERO).unwrap()],
+        vec![],
+        Some(0),
+    )
+    .unwrap();
+    let index = index
+        .as_ref()
+        .clone()
+        .with_ranking_profile(profile)
+        .unwrap();
+    let mut columns = source_fixture::Columns::freeze(&index);
+    columns.set_uncertified_frequency("quick", 127, 3);
+    let terms = vec!["quick".to_owned(), "safe".to_owned()];
+    assert!(
+        purrdf_text::select(
+            &columns,
+            &terms,
+            &PartitionFilter::unconstrained(),
+            Some(1),
+            None
+        )
+        .is_err()
+    );
+    let predicate = purrdf_core::TermValue::iri(NOTE);
+    let scopes = [ScopedTerm {
+        term: "safe",
+        predicate: &predicate,
+    }];
+    let selected = purrdf_text::select_scoped(
+        &columns,
+        &terms,
+        &PartitionFilter::unconstrained(),
+        &scopes,
+        Some(1),
+        None,
+    )
+    .unwrap();
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected[0].document, 0);
 }
 
 fn caller_owned_sources_pin_cursors_and_preserve_source_and_workspace_failures() {

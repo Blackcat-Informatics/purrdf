@@ -31,6 +31,20 @@ pub(crate) struct Positions {
 }
 
 #[derive(Debug)]
+struct RankedBlock {
+    documents: Vec<u32>,
+    fields: Vec<purrdf_text::FieldEnvelope>,
+    suffix: Vec<purrdf_text::FieldEnvelope>,
+}
+#[derive(Debug)]
+pub(crate) struct RankedPostings {
+    run: Option<(usize, usize)>,
+    block: usize,
+    at: usize,
+    examined: bool,
+}
+
+#[derive(Debug)]
 pub(crate) struct Columns {
     config: TextIndexConfig,
     ranking: RankingProfile,
@@ -43,16 +57,41 @@ pub(crate) struct Columns {
     document_partitions: Vec<usize>,
     terms: Vec<String>,
     counts: BTreeMap<String, BTreeMap<u32, Vec<(u32, u64)>>>,
+    ranked: BTreeMap<(usize, usize), Vec<RankedBlock>>,
     positions: BTreeMap<(String, u32), Vec<u32>>,
     tokens: BTreeMap<u32, Vec<TokenOccurrence>>,
     occurrence_order: Vec<u32>,
     bounds: OnceLock<TextSourceBounds>,
     pub fail_reads: AtomicBool,
+    pub cursor_fault: AtomicU64,
     pub page_bytes: AtomicU64,
     pub observed_workspace: Mutex<Option<WorkspaceCapability>>,
 }
 
 impl Columns {
+    /// Model a provider whose changed page requires native record validation.
+    pub(crate) fn set_uncertified_frequency(&mut self, term: &str, document: u32, frequency: u64) {
+        self.counts
+            .get_mut(term)
+            .unwrap()
+            .get_mut(&document)
+            .unwrap()[0]
+            .1 = frequency;
+        let term = self
+            .terms
+            .binary_search_by(|word| word.as_str().cmp(term))
+            .unwrap();
+        for (&(_, word), blocks) in &mut self.ranked {
+            if word != term {
+                continue;
+            }
+            for block in blocks {
+                for field in block.fields.iter_mut().chain(&mut block.suffix) {
+                    field.consistent = false;
+                }
+            }
+        }
+    }
     /// Import fixture facts once. No TextIndex is retained or consulted by reads.
     pub(crate) fn freeze(index: &TextIndex) -> Self {
         let workspace = WorkspaceCapability::resident();
@@ -87,11 +126,13 @@ impl Columns {
             document_partitions: Vec::new(),
             terms: index.terms().map(str::to_owned).collect(),
             counts: BTreeMap::new(),
+            ranked: BTreeMap::new(),
             positions: BTreeMap::new(),
             tokens: BTreeMap::new(),
             occurrence_order: Vec::new(),
             bounds: OnceLock::new(),
             fail_reads: AtomicBool::new(false),
+            cursor_fault: AtomicU64::new(0),
             page_bytes: AtomicU64::new(0),
             observed_workspace: Mutex::new(None),
         };
@@ -133,6 +174,38 @@ impl Columns {
                     .unwrap()
                     .unwrap(),
             );
+        }
+        // Import immutable block facts once, alongside the fixture's other
+        // columns. Query reads use only the independent columns below.
+        for (partition, (key, ..)) in columns.partitions.iter().enumerate() {
+            for (term, word) in columns.terms.iter().enumerate() {
+                let mut cursor = index.open_ranked_postings(key, word, &workspace).unwrap();
+                let mut blocks = Vec::new();
+                while let Some(window) = index.ranked_window(&cursor, &workspace).unwrap() {
+                    let documents = columns.counts[word]
+                        .range(window.document..=window.block_end)
+                        .filter(|(document, _)| {
+                            columns.document_partitions[**document as usize] == partition
+                        })
+                        .map(|(&document, _)| document)
+                        .collect();
+                    blocks.push(RankedBlock {
+                        documents,
+                        fields: window.block.into_iter().collect(),
+                        suffix: window.suffix.into_iter().collect(),
+                    });
+                    index
+                        .seek_ranked_postings(
+                            &mut cursor,
+                            window.block_end.checked_add(1),
+                            &workspace,
+                        )
+                        .unwrap();
+                }
+                if !blocks.is_empty() {
+                    columns.ranked.insert((partition, term), blocks);
+                }
+            }
         }
         columns
             .bounds
@@ -197,6 +270,122 @@ impl TextSource<GraphLanguage> for Columns {
     type Frequencies<'a> = Counts;
     type Term<'a> = &'a str;
     type Positions = Positions;
+    type RankedPostings = RankedPostings;
+
+    fn open_ranked_postings(
+        &self,
+        partition: &PartitionKey,
+        term: &str,
+        workspace: &WorkspaceCapability,
+    ) -> Result<RankedPostings, TextError> {
+        self.read(workspace)?;
+        let run = self
+            .partition(partition)
+            .zip(
+                self.terms
+                    .binary_search_by(|word| word.as_str().cmp(term))
+                    .ok(),
+            )
+            .filter(|key| self.ranked.contains_key(key));
+        Ok(RankedPostings {
+            run,
+            block: 0,
+            at: 0,
+            examined: false,
+        })
+    }
+    fn ranked_window(
+        &self,
+        cursor: &RankedPostings,
+        workspace: &WorkspaceCapability,
+    ) -> Result<Option<purrdf_text::RankedWindow>, TextError> {
+        self.read(workspace)?;
+        let Some(key) = cursor.run else {
+            return Ok(None);
+        };
+        let Some(block) = self.ranked[&key].get(cursor.block) else {
+            return Ok(None);
+        };
+        let copy = |facts: &[purrdf_text::FieldEnvelope]| -> Result<AdmittedVec<_>, TextError> {
+            let mut out = AdmittedVec::with_capacity(facts.len(), workspace)
+                .map_err(|error| TextError::workspace_failure(&error))?;
+            for &fact in facts {
+                out.push(fact)
+                    .map_err(|error| TextError::workspace_failure(&error))?;
+            }
+            Ok(out)
+        };
+        Ok(Some(purrdf_text::RankedWindow {
+            document: if self.cursor_fault.load(Ordering::Relaxed) == 1 {
+                block.documents.last().unwrap() + 1
+            } else {
+                block.documents[cursor.at]
+            },
+            block_end: *block.documents.last().unwrap(),
+            block: copy(&block.fields)?,
+            suffix: copy(&block.suffix)?,
+        }))
+    }
+    fn read_ranked_posting(
+        &self,
+        cursor: &mut RankedPostings,
+        workspace: &WorkspaceCapability,
+    ) -> Result<Option<(u32, Counts, bool)>, TextError> {
+        self.read(workspace)?;
+        let Some(key) = cursor.run else {
+            return Ok(None);
+        };
+        let Some(block) = self.ranked[&key].get(cursor.block) else {
+            return Ok(None);
+        };
+        let document = block.documents[cursor.at];
+        let counts = self.page(&self.counts[&self.terms[key.1]][&document], workspace)?;
+        let first = !cursor.examined;
+        if self.cursor_fault.load(Ordering::Relaxed) == 2 {
+            return Ok(Some((document, counts, first)));
+        }
+        cursor.examined = true;
+        cursor.at += 1;
+        if cursor.at == block.documents.len() {
+            cursor.block += 1;
+            cursor.at = 0;
+            cursor.examined = false;
+        }
+        Ok(Some((document, counts, first)))
+    }
+    fn seek_ranked_postings(
+        &self,
+        cursor: &mut RankedPostings,
+        target: Option<u32>,
+        workspace: &WorkspaceCapability,
+    ) -> Result<u64, TextError> {
+        self.read(workspace)?;
+        if self.cursor_fault.load(Ordering::Relaxed) == 3 {
+            return Ok(0);
+        }
+        let Some(key) = cursor.run else {
+            return Ok(0);
+        };
+        let blocks = &self.ranked[&key];
+        let mut skipped = 0;
+        while let Some(block) = blocks.get(cursor.block) {
+            if target.is_some_and(|target| *block.documents.last().unwrap() >= target) {
+                cursor.at = cursor.at.max(
+                    block
+                        .documents
+                        .partition_point(|document| *document < target.unwrap()),
+                );
+                return Ok(skipped);
+            }
+            if cursor.at == 0 && !cursor.examined {
+                skipped += 1;
+            }
+            cursor.block += 1;
+            cursor.at = 0;
+            cursor.examined = false;
+        }
+        Ok(skipped)
+    }
 
     fn config(&self) -> &TextIndexConfig {
         &self.config
