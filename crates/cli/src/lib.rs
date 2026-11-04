@@ -538,6 +538,7 @@ fn dispatch_with_request(
             canonical,
         ),
         Command::Reason {
+            yamlld_input_options,
             regime,
             rules,
             report,
@@ -552,6 +553,7 @@ fn dispatch_with_request(
             output,
         } => reason::run(
             *regime,
+            yamlld_input_options.as_deref(),
             rules.as_deref(),
             &cli_materialize_limits(*max_stored_facts, *max_join_steps, *max_term_arena_bytes),
             imports,
@@ -604,6 +606,7 @@ fn dispatch_with_request(
         )
         .map(|()| CliOutcome::Complete),
         Command::Consistency {
+            yamlld_input_options,
             proof,
             check_proof,
             step_cap,
@@ -614,6 +617,7 @@ fn dispatch_with_request(
             input,
         } => consistency::run(
             &consistency::ConsistencyOptions {
+                yamlld_input_options: yamlld_input_options.as_deref(),
                 input,
                 imports,
                 from: *from,

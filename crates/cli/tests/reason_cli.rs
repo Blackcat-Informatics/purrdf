@@ -35,6 +35,104 @@
 mod support;
 use support::{path, purrdf, run, stderr, write_file};
 
+/// Selection reaches materialization; invalid controls cannot publish closure or report.
+#[test]
+fn configured_yamlld_input_reaches_reason_closure() {
+    use support::{code, stdout};
+    let dir = purrdf_testkit::temp_dir!().expect("temporary inputs");
+    let input = write_file(
+        dir.path(),
+        "input.yamlld",
+        "'@id': https://example.org/first\nhttps://example.org/p: one\n---\n'@id': https://example.org/second\nhttps://example.org/p: two\n",
+    );
+    let config = write_file(
+        dir.path(),
+        "all.json",
+        r#"{"version":1,"yaml_ld":{"extract_all_scripts":true}}"#,
+    );
+    let report_path = path(dir.path(), "report.txt");
+    let report_arg = format!("--report={report_path}");
+    for (controls, second) in [(None, false), (Some(config.as_str()), true)] {
+        let mut args = vec![
+            "reason",
+            "--regime",
+            "simple",
+            "--to",
+            "nquads",
+            &report_arg,
+        ];
+        if let Some(controls) = controls {
+            args.extend(["--yamlld-input-options", controls]);
+        }
+        args.extend([input.as_str(), "-"]);
+        let selected = run(&args);
+        assert_eq!(code(&selected), 0, "{}", stderr(&selected));
+        assert!(stdout(&selected).contains("<https://example.org/first>"));
+        assert_eq!(
+            stdout(&selected).contains("<https://example.org/second>"),
+            second
+        );
+    }
+    let closure = write_file(dir.path(), "closure.nq", "unchanged closure");
+    std::fs::write(&report_path, "unchanged report").unwrap();
+    let limited = write_file(
+        dir.path(),
+        "limited.json",
+        r#"{"version":1,"yaml_ld":{"syntax":{"max_input_bytes":0}}}"#,
+    );
+    let refused = run(&[
+        "reason",
+        "--regime",
+        "simple",
+        "--yamlld-input-options",
+        &limited,
+        &report_arg,
+        &input,
+        &closure,
+    ]);
+    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+    assert!(stderr(&refused).contains("native-yaml-input-limit"));
+    assert_eq!(stdout(&refused), "");
+    assert_eq!(
+        std::fs::read_to_string(&closure).unwrap(),
+        "unchanged closure"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&report_path).unwrap(),
+        "unchanged report"
+    );
+
+    let malformed = write_file(dir.path(), "malformed.json", "{");
+    let missing = path(dir.path(), "missing.yamlld");
+    let rules = path(dir.path(), "missing.xml");
+    let imports = format!("https://example.org/import={missing}");
+    let refused = run(&[
+        "reason",
+        "--regime",
+        "rif",
+        "--rules",
+        &rules,
+        "--import",
+        &imports,
+        "--yamlld-input-options",
+        &malformed,
+        &report_arg,
+        &missing,
+        &closure,
+    ]);
+    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+    assert!(stderr(&refused).contains("rdf-input-options"));
+    assert_eq!(stdout(&refused), "");
+    assert_eq!(
+        std::fs::read_to_string(&closure).unwrap(),
+        "unchanged closure"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&report_path).unwrap(),
+        "unchanged report"
+    );
+}
+
 /// The rdf:type IRI, spelled out (the inferred-triple assertions key on it).
 const RDF_TYPE: &str = "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>";
 

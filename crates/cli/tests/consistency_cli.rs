@@ -39,6 +39,76 @@ use std::process::Output;
 mod support;
 use support::{code, purrdf, run, stderr, stdout, write_file};
 
+/// Only primary document selection changes the ontology reaching the decision seam.
+#[test]
+fn configured_yamlld_input_reaches_consistency_primary() {
+    use support::path;
+    let dir = purrdf_testkit::temp_dir!().expect("temporary inputs");
+    let input = write_file(
+        dir.path(),
+        "input.yamlld",
+        "'@id': https://example.org/a\n'@type': http://www.w3.org/2002/07/owl#Thing\n---\n'@id': https://example.org/a\n'@type': http://www.w3.org/2002/07/owl#Nothing\n",
+    );
+    let config = write_file(
+        dir.path(),
+        "all.json",
+        r#"{"version":1,"yaml_ld":{"extract_all_scripts":true}}"#,
+    );
+    for (controls, verdict) in [(None, true), (Some(config.as_str()), false)] {
+        let receipt = path(
+            dir.path(),
+            if verdict {
+                "first-receipt.json"
+            } else {
+                "all-receipt.json"
+            },
+        );
+        let mut args = vec![
+            "consistency",
+            "--canonical-search",
+            "unlimited",
+            "--canonicalization-receipts",
+            &receipt,
+        ];
+        if let Some(controls) = controls {
+            args.extend(["--yamlld-input-options", controls]);
+        }
+        args.push(&input);
+        let selected = run(&args);
+        assert_eq!(code(&selected), 0, "{}", stderr(&selected));
+        assert!(stdout(&selected).starts_with(&format!("consistency {verdict}\n")));
+        assert!(stdout(&selected).contains("\ncompleteness decided\n"));
+    }
+
+    let limited = write_file(
+        dir.path(),
+        "limited.json",
+        r#"{"version":1,"yaml_ld":{"syntax":{"max_input_bytes":0}}}"#,
+    );
+    let refused = run(&["consistency", "--yamlld-input-options", &limited, &input]);
+    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+    assert!(stderr(&refused).contains("native-yaml-input-limit"));
+    assert_eq!(stdout(&refused), "");
+
+    let malformed = write_file(dir.path(), "malformed.json", "{");
+    let missing = path(dir.path(), "missing.yamlld");
+    let proof = path(dir.path(), "missing.proof");
+    let imports = format!("https://example.org/import={missing}");
+    let refused = run(&[
+        "consistency",
+        "--yamlld-input-options",
+        &malformed,
+        "--import",
+        &imports,
+        "--check-proof",
+        &proof,
+        &missing,
+    ]);
+    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+    assert!(stderr(&refused).contains("rdf-input-options"));
+    assert_eq!(stdout(&refused), "");
+}
+
 /// The seventeen-triple equivalence-over-untyped-restrictions ontology, verbatim — see
 /// `crates/validate/tests/dl_consistency_search_budget.rs`.
 const ORDINARY_ONTOLOGY: &str = r"

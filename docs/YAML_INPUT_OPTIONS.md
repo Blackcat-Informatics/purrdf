@@ -74,6 +74,10 @@ documents retain their existing input policy. The flag is also valid with
 retain their existing base resolution. Projection configuration and assets keep
 their existing input policy; YAML controls are admitted before either is read.
 `lift` reads a carrier archive and does not accept YAML input controls.
+`reason` and `consistency` accept the flag for primary `IN` only. Imports retain
+their existing controls and `--from` scoping. Reason admits the options before RIF
+rule acquisition; consistency retains its lossless N-Quads crossing and existing
+proof/check-proof behavior. `entails` retains its current two-input policy.
 Every selected input must be YAML-LD; pack, GTS and other native formats are
 refused before data acquisition. The bounded named options file is validated
 before primary data, premise imports or rule documents are read; it does not

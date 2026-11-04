@@ -832,6 +832,7 @@ pub(crate) fn serialize_input_to_nquads(
     path: &str,
     format: SourceFormat,
     base: Option<&str>,
+    input_options: Option<&[u8]>,
     canonical: &mut crate::canonical::Request,
 ) -> Result<SerializeOutcome, CliError> {
     struct NQuadsOp;
@@ -858,5 +859,5 @@ pub(crate) fn serialize_input_to_nquads(
         }
     }
 
-    run_over_input(path, format, base, None, NQuadsOp, canonical)
+    run_over_input(path, format, base, input_options, NQuadsOp, canonical)
 }

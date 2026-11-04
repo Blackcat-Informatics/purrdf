@@ -457,7 +457,7 @@ fn read_as_nquads(
     let format = format::resolve(options.from, path)?;
     // A pack crosses the N-Quads boundary as a zero-copy `PackView`, not a rebuilt
     // owned dataset; a text source parses to an `RdfDataset`.
-    let outcome = source::serialize_input_to_nquads(path, format, options.base, canonical)?;
+    let outcome = source::serialize_input_to_nquads(path, format, options.base, None, canonical)?;
     if outcome.statement_rows_dropped > 0 || outcome.directional_literals_dropped > 0 {
         return Err(CliError::Runtime(format!(
             "{what} {path}: reading this document into the entailment boundary's N-Quads \
