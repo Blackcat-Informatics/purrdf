@@ -1,0 +1,32 @@
+diff --git crates/rdf-wasm/js/tests/roundtrip.test.mjs crates/rdf-wasm/js/tests/roundtrip.test.mjs
+index dd7ae26f8..3d4b27df9 100644
+--- crates/rdf-wasm/js/tests/roundtrip.test.mjs
++++ crates/rdf-wasm/js/tests/roundtrip.test.mjs
+@@ -252,8 +252,8 @@ test("datasetToStream → streamToDataset round-trips via the Sink", async () =>
+   assert.equal(rebuilt.size, 1);
+ });
+ 
+-test("an unsupported format is a rejected error", () => {
+-  assert.throws(() => Dataset.parse("", "yaml-ld"));
++test("an unsupported format crosses the wasm boundary as a JavaScript Error", () => {
++  assert.throws(() => Dataset.parse("", "application/x-purrdf-unsupported"), { name: "Error", message: /unsupported RDF format/ });
+ });
+ 
+ // RDF-1.2 directional-literal datatype reporting: the engine STORES rdf:langString
+diff --git docs/WASM_TESTING.md docs/WASM_TESTING.md
+index 05e535671..ca6eba4b9 100644
+--- docs/WASM_TESTING.md
++++ docs/WASM_TESTING.md
+@@ -32,6 +32,12 @@ as text, and keeps an owned native cause readable after its dataset wrapper is
+ freed. Native Rust owns the underlying reserved-vocabulary refusal semantics.
+ Run only this named package case for those host obligations.
+ 
++The packaged case `an unsupported format crosses the wasm boundary as a JavaScript
++Error` in `roundtrip.test.mjs` exercises the format resolver's wasm-only
++`JsError` construction/import and the JavaScript exception name and message.
++It uses an unregistered media type; native Rust owns format classification and
++YAML-LD empty-stream semantics. Run only this named case for that host obligation.
++
+ The packaged case `wasm_shacl_apply_rules: maxStoredFacts reaches the evaluator
+ and names the host control` checks BigInt argument transport, a JavaScript Error
+ and its host-specific control name, and returned string ownership. Its fixture

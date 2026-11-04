@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1021-expose-configured-yaml-ld-input-through",
+  "branch": "paudley/1021-expose-configured-yaml-ld-input-through",
+  "base_ref": "5714d3f1ad063259c9910c7b5caf0034b87875a1",
+  "head": "62a49ca8da3c26f6936464237e8e1736a0d279f6",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/1021-expose-configured-yaml-ld-input-through/.stage/1021-qualified-carrier-integration/sync/20261104T141603-745023c8320745909bee906745b52799",
+  "conflicts": [],
+  "status": "completed",
+  "base": "5714d3f1ad063259c9910c7b5caf0034b87875a1",
+  "merge_bases": [
+    "80d3ed5af60feba3bf66facb4d356ab7bdc70439"
+  ],
+  "merge_index": "62e478881820e36153dcc87c81ec670f19c61820cbd42b901a308c8b999b6970",
+  "candidate_tree": "1d4794e229390be6f796567cbf49ed8c3496617d",
+  "candidate_patch": "candidate-2ffccf884ad847dd92b2929a71eaf4d0.patch",
+  "validation_records": [],
+  "commit": "b7eeef6584d15e8a9d76b83af26023b1017dee3c",
+  "tree": "1d4794e229390be6f796567cbf49ed8c3496617d"
+}
