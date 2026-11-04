@@ -229,7 +229,7 @@ pub(crate) fn map_error<E: std::error::Error + 'static>(
     match cause {
         Some(cause) => CliError::Canonical {
             message: mapped.to_string(),
-            cause,
+            cause: Box::new(cause),
         },
         None => mapped,
     }

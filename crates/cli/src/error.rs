@@ -124,7 +124,7 @@ pub enum CliError {
     /// Original native canonicalization refusal and its owned payload admission.
     Canonical {
         message: String,
-        cause: purrdf_core::CanonError,
+        cause: Box<purrdf_core::CanonError>,
     },
     /// Evidence output failed; any original refusal remains owned and visible.
     ReceiptPublication {
@@ -221,7 +221,7 @@ impl fmt::Display for CliError {
 impl std::error::Error for CliError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Canonical { cause, .. } => Some(cause),
+            Self::Canonical { cause, .. } => Some(cause.as_ref()),
             Self::OutputPublication { original, .. } => Some(&**original),
             Self::ReceiptPublication {
                 original: Some(original),
@@ -245,7 +245,7 @@ impl CliError {
         match purrdf_validate::canonical::native_canonical_cause(&error) {
             Some(cause) => Self::Canonical {
                 message: error.to_string(),
-                cause: cause.clone(),
+                cause: Box::new(cause.clone()),
             },
             None => Self::Runtime(error.to_string()),
         }
