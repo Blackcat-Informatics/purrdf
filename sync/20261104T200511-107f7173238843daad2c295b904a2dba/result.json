@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1040-expose-native-yaml-source-export-and",
+  "branch": "paudley/1040-expose-native-yaml-source-export-and",
+  "base_ref": "origin/main",
+  "head": "5d582c6d4d5b212a3720bf3795434ffe58d846d2",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/1040-expose-native-yaml-source-export-and/.stage/expose-native-yaml-source-export-and/sync/20261104T200511-107f7173238843daad2c295b904a2dba",
+  "conflicts": [],
+  "status": "fast_forward",
+  "base": "3e7f23e27d3be78b4b2e9c60a26dcacc78d285dc",
+  "merge_bases": [
+    "5d582c6d4d5b212a3720bf3795434ffe58d846d2"
+  ],
+  "commit": "3e7f23e27d3be78b4b2e9c60a26dcacc78d285dc"
+}
