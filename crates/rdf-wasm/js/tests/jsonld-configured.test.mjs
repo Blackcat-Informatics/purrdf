@@ -39,7 +39,7 @@ test("configured YAML input crosses wasm-bindgen with native error records", () 
   const all = Dataset.parse(source, "yamlld", "https://example.org/", false, options);
   assert.equal(first.size, 1); assert.equal(all.size, 2);
   assert.equal(all.rememberEmptyGraphs, false);
-  assert.match(all.serialize("nquads"), /https:\/\/example.org\/second/);
+  assert.ok(all.serialize("nquads").includes("<https://example.org/second>"));
   for (const [input, format, config, code] of [
     [source, "yamlld", '{"version":1,"yaml_ld":{"syntax":{"max_input_bytes":0}}}', "native-yaml-input-limit"],
     ["42: value\n", "yamlld", options, "mapping-key-error"],
