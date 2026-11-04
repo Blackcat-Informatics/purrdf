@@ -2963,7 +2963,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                     unreachable!("only a finite policy can refuse its logical ceiling")
                 };
                 let (context, path, groups) = context();
-                self.run.observe_rdfc_refusal(RdfcRefusalObservation {
+                self.run.observe_rdfc_refusal(&RdfcRefusalObservation {
                     first_degree_group: None,
                     path,
                     groups,

@@ -320,8 +320,8 @@ impl<'a> SearchRun<'a> {
         }
     }
 
-    pub(super) fn observe_rdfc_refusal(&self, observation: RdfcRefusalObservation) {
-        self.rdfc_refusal.set(Some(observation));
+    pub(super) fn observe_rdfc_refusal(&self, observation: &RdfcRefusalObservation) {
+        self.rdfc_refusal.set(Some(*observation));
     }
 
     pub(super) fn observe_rdfc_root_progress(&self, progress: RdfcRootProgress) {
