@@ -298,11 +298,9 @@ pub(crate) fn read_raw_bytes_bounded(path: &str, maximum: usize) -> Result<Vec<u
         if read > remaining {
             return Err(RawReadError::Limit { maximum });
         }
-        let required = bytes.len() + read;
         memory
-            .reserve(&mut bytes, required)
+            .extend(&mut bytes, chunk[..read].iter().copied())
             .map_err(RawReadError::Storage)?;
-        bytes.extend_from_slice(&chunk[..read]);
     }
 }
 
