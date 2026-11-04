@@ -355,8 +355,14 @@
  * `purrdf_parse` gains nullable `input_options` bytes and `input_options_len`
  * after `source_name`. Pass null and zero for the existing default behavior.
  * Rebuild all consumers against the new header; options select Basic only.
+ *
+ * # `0.19.0` → `0.20.0`: native YAML source carrier pair
+ *
+ * Adds `purrdf_yaml_source_export` and `purrdf_yaml_source_reconstruct` with
+ * existing dataset/buffer ownership. The `purrdf_parse` signature stays unchanged.
+ * The native-cause accessor also exposes original YAML source refusals.
  */
-#define PURRDF_ABI_MINOR 19
+#define PURRDF_ABI_MINOR 20
 
 /**
  * ABI patch version. Reset to `0` by the MINOR bump documented above.
@@ -2447,9 +2453,10 @@ const char *purrdf_error_execution_receipt_json(const PurrdfError *error);
 const char *purrdf_error_canonicalization_json(const PurrdfError *error);
 
 /**
- * Borrow the original canonicalization cause's closed native fields as JSON.
+ * Borrow the original native cause's closed fields as JSON.
  * The original native cause and its admission grant remain owned until error_free.
- * Null means this error has no native canonicalization cause.
+ * Null means no native cause record is available. An inspection failure is
+ * reported explicitly by the error status/message and diagnostic, never as success.
  * # Safety
  * `error` must be null or a live error handle. The text lives until that handle is freed.
  */
@@ -4890,6 +4897,59 @@ int32_t purrdf_xsd_value_compare(const char *left_lexical,
                                  uint8_t *out_comparable,
                                  int32_t *out_order,
                                  PurrdfError **out_error);
+
+/**
+ * Export original YAML bytes to a frozen dataset and its computed stream root.
+ *
+ * `profile_json` is mandatory version-one profile JSON. Source and profile are
+ * borrowed only during this synchronous call. On success both results are owned
+ * independently: release the dataset with `purrdf_dataset_free`, and the root
+ * with `purrdf_buffer_free`. The root buffer contains exact UTF-8 IRI bytes,
+ * without a trailing NUL or newline. Both handles are prepared before either
+ * output is published. Valid output slots are cleared before input processing;
+ * failure publishes neither result. Host handle/buffer controls and the native
+ * profile, parser, partition and projection accounts remain separate.
+ *
+ * # Safety
+ * Non-null source/profile pointers must be readable for their admitted lengths.
+ * Null inputs are rejected even at zero length; oversized lengths are rejected
+ * before constructing a slice. Non-null `source_iri` points to a live
+ * NUL-terminated C string whose UTF-8 is checked. Non-null output/error slots
+ * are writable and initially empty. Aliasing error slots are rejected by status alone,
+ * without writing an error through the aliased pointer. No allocator abort can
+ * be converted to a returned status by the existing FFI panic guard.
+ */
+int32_t purrdf_yaml_source_export(const uint8_t *source,
+                                  size_t source_len,
+                                  const char *source_iri,
+                                  const uint8_t *profile_json,
+                                  size_t profile_len,
+                                  PurrdfDataset **out_dataset,
+                                  PurrdfBuffer **out_root,
+                                  PurrdfError **out_error);
+
+/**
+ * Reconstruct exact verified YAML source bytes from an existing frozen dataset.
+ *
+ * Supply the exact expected root and matching explicit profile. The returned
+ * source has no added newline or NUL and lives independently of the input
+ * dataset/profile/root. Release it with `purrdf_buffer_free`. Caller RDF storage,
+ * native decode/reparse/reprojection, and host buffer control are separate.
+ * Valid output slots are cleared before work; no source is published on refusal.
+ *
+ * # Safety
+ * Non-null `dataset` is a live dataset handle; non-null `root` points to a live
+ * NUL-terminated C string whose UTF-8 is checked. Non-null profile bytes are
+ * readable for their admitted length. Non-null output/error slots are writable
+ * and initially empty. Null required inputs and outputs are rejected; an
+ * aliased error slot is rejected without writing it.
+ */
+int32_t purrdf_yaml_source_reconstruct(const PurrdfDataset *dataset,
+                                       const char *root,
+                                       const uint8_t *profile_json,
+                                       size_t profile_len,
+                                       PurrdfBuffer **out_source,
+                                       PurrdfError **out_error);
 
 #ifdef __cplusplus
 }  // extern "C"

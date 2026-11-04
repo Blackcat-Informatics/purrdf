@@ -3,22 +3,11 @@
 
 //! One native allocation account for scanners, parser frames and syntax products.
 
-use crate::allocation::{Admission, Memory, OrderedTable, StorageError};
+use crate::allocation::{Ceiling, Memory, OrderedTable, StorageError};
 
 pub(super) struct Allocations {
     limit: Option<usize>,
     live: usize,
-}
-
-pub(super) struct Ceiling(usize);
-impl Admission for Ceiling {
-    fn resize(&mut self, live: usize) -> Result<(), StorageError> {
-        if live > self.0 {
-            Err(StorageError::AdmissionFailed)
-        } else {
-            Ok(())
-        }
-    }
 }
 
 impl Allocations {

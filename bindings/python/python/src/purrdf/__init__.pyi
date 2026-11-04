@@ -1667,6 +1667,19 @@ def gts_to_parquet(
 ) -> GtsExportResult: ...
 
 # A Python handle to a frozen, immutable RDF 1.2 dataset.
+class YamlSourceExport:
+    @property
+    def root(self) -> str: ...
+    @property
+    def dataset(self) -> RdfDataset: ...
+
+def yaml_source_export(
+    source: bytes, *, source_iri: str, profile_json: bytes
+) -> YamlSourceExport: ...
+def yaml_source_reconstruct(
+    dataset: RdfDataset, *, root: str, profile_json: bytes
+) -> bytes: ...
+
 class RdfDataset:
     # `base` is the document base relative IRI references resolve against, exactly
     # as on the module-level `parse` and `Store.load`.

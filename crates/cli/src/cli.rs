@@ -388,6 +388,11 @@ pub(crate) struct GlobRdfArgs {
 /// The pipeline subcommands.
 #[derive(Subcommand, Debug)]
 pub(crate) enum Command {
+    /// Export and reconstruct exact YAML presentation through RDF metadata.
+    YamlSource {
+        #[command(subcommand)]
+        command: crate::yaml_source::Command,
+    },
     /// Convert complete checked BLAKE3 word identities with explicit formats.
     WordId {
         /// Encode, decode, inspect or stream an ordered batch.
@@ -2838,6 +2843,7 @@ impl Cli {
             paths.push(path.clone());
         }
         match &self.cmd {
+            Command::YamlSource { command } => paths.extend(command.paths()),
             Command::Glob { pattern, .. } => {
                 paths.push(PathBuf::from(pattern));
             }

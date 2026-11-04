@@ -3,9 +3,13 @@
 
 //! Source-preserving lexical admission and native scalar editing boundaries.
 
+use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
+#[global_allocator]
+static GLOBAL: CountingAllocator = CountingAllocator;
+
 use purrdf_lex::yaml::{
-    self, Attachment, CollectionStyle, EmitError, EmitLimits, EmitStyle, ErrorKind, NodeKind,
-    ScalarContext, ScalarStyle, SyntaxLimits, TriviaKind,
+    self, Attachment, CollectionStyle, EmitError, EmitLimits, EmitPolicy, EmitStyle, ErrorKind,
+    EscapeSet, NodeKind, PlainMode, ScalarContext, ScalarStyle, SyntaxLimits, TriviaKind,
 };
 
 #[test]
@@ -846,6 +850,59 @@ fn scalar_edits_share_native_escaping_report_fallback_and_preadmit_output() {
             .is_ok()
         );
     }
+    let exact_policy = EmitPolicy {
+        plain: PlainMode::Lexical,
+        escapes: EscapeSet::from_names("\\\"nrt0").unwrap(),
+    };
+    let exact_text = "\u{2028}\u{feff}\n";
+    let exact = yaml::emit_scalar_exact(
+        exact_text,
+        EmitStyle::DoubleQuoted,
+        ScalarContext::Flow,
+        exact_policy,
+        limits,
+    )
+    .unwrap();
+    let exact_limits = EmitLimits {
+        max_output_bytes: exact.text.len(),
+        max_allocation_bytes: exact.text.len(),
+    };
+    assert!(
+        yaml::emit_scalar_exact(
+            exact_text,
+            EmitStyle::DoubleQuoted,
+            ScalarContext::Flow,
+            exact_policy,
+            exact_limits
+        )
+        .is_ok()
+    );
+    assert!(matches!(
+        yaml::emit_scalar_exact(
+            exact_text,
+            EmitStyle::DoubleQuoted,
+            ScalarContext::Flow,
+            exact_policy,
+            EmitLimits {
+                max_output_bytes: exact.text.len() - 1,
+                ..exact_limits
+            }
+        ),
+        Err(EmitError::Output { .. })
+    ));
+    assert!(matches!(
+        yaml::emit_scalar_exact(
+            exact_text,
+            EmitStyle::DoubleQuoted,
+            ScalarContext::Flow,
+            exact_policy,
+            EmitLimits {
+                max_allocation_bytes: 0,
+                ..exact_limits
+            }
+        ),
+        Err(EmitError::Allocation { .. })
+    ));
     assert!(matches!(
         yaml::emit_scalar(
             "x",
@@ -1008,5 +1065,269 @@ fn core_projection_retains_eager_refusal_order_and_scalar_key_law() {
             .unwrap_err()
             .kind(),
         ErrorKind::Input { .. }
+    ));
+}
+
+#[test]
+fn scalar_lexical_eligibility_shares_context_boundaries_without_allocation() {
+    let block = ScalarContext::Block {
+        parent_indentation: 0,
+        indentation: 2,
+    };
+    let rows = [
+        ("true", block, true),
+        ("0x1F", block, true),
+        (".inf", block, true),
+        ("true", ScalarContext::Flow, true),
+        ("0x1F", ScalarContext::Flow, true),
+        (".inf", ScalarContext::Flow, true),
+        ("---", ScalarContext::Root, false),
+        ("...", ScalarContext::Root, false),
+        ("---suffix", ScalarContext::Root, true),
+        ("...suffix", ScalarContext::Root, true),
+        ("---", block, true),
+        ("...", block, true),
+        ("--- a", block, true),
+        ("---", ScalarContext::Flow, true),
+        ("...", ScalarContext::Flow, true),
+        ("---", ScalarContext::Key, true),
+        ("...", ScalarContext::Key, true),
+        ("--- a", ScalarContext::Key, false),
+        ("a:b", ScalarContext::Flow, true),
+        ("a?b", ScalarContext::Flow, true),
+        ("a,b", block, true),
+        ("a,b", ScalarContext::Flow, false),
+        ("a:", ScalarContext::Key, true),
+        (":", ScalarContext::Key, true),
+        ("-", ScalarContext::Key, true),
+        ("?", ScalarContext::Key, true),
+        ("a:", block, false),
+        ("a: b", ScalarContext::Flow, false),
+        ("a #b", block, false),
+        ("a\tb", ScalarContext::Flow, true),
+        ("a\t", block, false),
+        ("a\nb", block, false),
+        ("\u{feff}text", ScalarContext::Root, false),
+        ("\u{feff}text", block, false),
+        ("\u{feff}text", ScalarContext::Flow, false),
+        ("\u{feff}text", ScalarContext::Key, false),
+        ("a\u{feff}b", ScalarContext::Root, false),
+        ("a\u{feff}b", block, false),
+        ("", block, false),
+        ("\0", block, false),
+    ];
+    let window = CurrentThreadWindow::open();
+    let observed = rows
+        .map(|(text, context, _)| yaml::plain_lexical_allowed(std::hint::black_box(text), context));
+    let measured = window.close();
+    assert_eq!(measured.allocations, 0);
+    assert_eq!(measured.requested_bytes, 0);
+    let policy = EmitPolicy {
+        plain: PlainMode::Lexical,
+        escapes: EscapeSet::ALL,
+    };
+    let limits = EmitLimits {
+        max_output_bytes: 4096,
+        max_allocation_bytes: 4096,
+    };
+    for ((text, context, expected), observed) in rows.into_iter().zip(observed) {
+        assert_eq!(observed, expected, "{text:?} in {context:?}");
+        if !expected {
+            continue;
+        }
+        let emitted =
+            yaml::emit_scalar_exact(text, EmitStyle::Plain, context, policy, limits).unwrap();
+        assert_eq!(emitted.text, text);
+        assert_eq!(emitted.style, EmitStyle::Plain);
+        let source = match context {
+            ScalarContext::Root => emitted.text,
+            ScalarContext::Block { .. } => format!("value: {}", emitted.text),
+            ScalarContext::Flow => format!("[{}]", emitted.text),
+            ScalarContext::Key => format!("{}: value", emitted.text),
+        };
+        let doc = yaml::read_syntax(&source, SyntaxLimits::DEFAULT).unwrap();
+        assert!(doc.nodes().any(|(_, node)| matches!(&node.kind, NodeKind::Scalar(scalar) if scalar.text == text && scalar.style == ScalarStyle::Plain)), "{source:?}");
+        if context == ScalarContext::Key {
+            let flow = format!("{{{text}: value}}");
+            let doc = yaml::read_syntax(&flow, SyntaxLimits::DEFAULT).unwrap();
+            assert!(doc.nodes().any(
+                |(_, node)| matches!(&node.kind, NodeKind::Scalar(scalar) if scalar.text == text)
+            ));
+        }
+    }
+}
+
+#[test]
+fn scalar_exact_quotes_use_only_permitted_escapes_and_refuse_lossy_styles() {
+    let limits = EmitLimits {
+        max_output_bytes: 4096,
+        max_allocation_bytes: 4096,
+    };
+    let policy = EmitPolicy {
+        plain: PlainMode::Lexical,
+        escapes: EscapeSet::from_names("\\\"nrt0").unwrap(),
+    };
+    let text = "\0\\\"\n\r\t\u{2028}\u{2029}\u{feff}\u{85}";
+    let emitted = yaml::emit_scalar_exact(
+        text,
+        EmitStyle::DoubleQuoted,
+        ScalarContext::Root,
+        policy,
+        limits,
+    )
+    .unwrap();
+    assert_eq!(
+        emitted.text,
+        "\"\\0\\\\\\\"\\n\\r\\t\u{2028}\u{2029}\u{feff}\u{85}\""
+    );
+    assert_eq!(emitted.style, EmitStyle::DoubleQuoted);
+    assert_eq!(yaml::read(&emitted.text).unwrap().as_str(), Some(text));
+    let hexadecimal = EmitPolicy {
+        escapes: EscapeSet::from_names("u").unwrap(),
+        ..policy
+    };
+    let text = "\n\"";
+    let emitted = yaml::emit_scalar_exact(
+        text,
+        EmitStyle::DoubleQuoted,
+        ScalarContext::Root,
+        hexadecimal,
+        limits,
+    )
+    .unwrap();
+    assert_eq!(emitted.text, "\"\\u000A\\u0022\"");
+    assert_eq!(yaml::read(&emitted.text).unwrap().as_str(), Some(text));
+    let single = "it's\u{2028}\u{feff}\u{85}\t";
+    let raw = EmitPolicy {
+        escapes: EscapeSet::NONE,
+        ..policy
+    };
+    let emitted = yaml::emit_scalar_exact(
+        single,
+        EmitStyle::SingleQuoted,
+        ScalarContext::Root,
+        raw,
+        limits,
+    )
+    .unwrap();
+    assert_eq!(emitted.text, "'it''s\u{2028}\u{feff}\u{85}\t'");
+    assert_eq!(yaml::read(&emitted.text).unwrap().as_str(), Some(single));
+    let literal = yaml::emit_scalar_exact(
+        "\ttext\n",
+        EmitStyle::Literal,
+        ScalarContext::Root,
+        raw,
+        limits,
+    )
+    .unwrap();
+    assert!(literal.text.starts_with("|2\n  "));
+    assert_eq!(
+        yaml::read(&literal.text).unwrap().as_str(),
+        Some("\ttext\n")
+    );
+    for (text, style, context, policy) in [
+        ("x", EmitStyle::Auto, ScalarContext::Root, policy),
+        (
+            "true",
+            EmitStyle::Plain,
+            ScalarContext::Flow,
+            EmitPolicy {
+                plain: PlainMode::CoreString,
+                ..policy
+            },
+        ),
+        ("a\nb", EmitStyle::SingleQuoted, ScalarContext::Flow, policy),
+        ("x", EmitStyle::Literal, ScalarContext::Flow, policy),
+        (
+            "a\u{feff}b",
+            EmitStyle::Plain,
+            ScalarContext::Block {
+                parent_indentation: 0,
+                indentation: 2,
+            },
+            policy,
+        ),
+        (
+            "a\u{feff}b",
+            EmitStyle::Literal,
+            ScalarContext::Root,
+            policy,
+        ),
+    ] {
+        assert!(
+            matches!(yaml::emit_scalar_exact(text, style, context, policy, limits), Err(EmitError::Style { requested }) if requested == style)
+        );
+    }
+    assert!(
+        yaml::emit_scalar_exact(
+            "a b",
+            EmitStyle::SingleQuoted,
+            ScalarContext::Flow,
+            policy,
+            limits
+        )
+        .is_ok()
+    );
+    assert!(
+        yaml::emit_scalar_exact(
+            "a\nb",
+            EmitStyle::DoubleQuoted,
+            ScalarContext::Flow,
+            policy,
+            limits
+        )
+        .is_ok()
+    );
+    assert!(matches!(
+        yaml::emit_scalar_exact(
+            "é\u{7}",
+            EmitStyle::DoubleQuoted,
+            ScalarContext::Flow,
+            policy,
+            limits
+        ),
+        Err(EmitError::Escape {
+            offset: 2,
+            character: '\u{7}'
+        })
+    ));
+    assert!(
+        yaml::emit_scalar_exact(
+            "é\0",
+            EmitStyle::DoubleQuoted,
+            ScalarContext::Flow,
+            policy,
+            limits
+        )
+        .is_ok()
+    );
+    assert!(matches!(
+        yaml::emit_scalar_exact(
+            "\n",
+            EmitStyle::DoubleQuoted,
+            ScalarContext::Flow,
+            raw,
+            limits
+        ),
+        Err(EmitError::Escape {
+            offset: 0,
+            character: '\n'
+        })
+    ));
+    assert_eq!(
+        yaml::emit_scalar_exact(
+            " ",
+            EmitStyle::DoubleQuoted,
+            ScalarContext::Flow,
+            raw,
+            limits
+        )
+        .unwrap()
+        .text,
+        "\" \""
+    );
+    assert!(matches!(
+        EscapeSet::from_names("q"),
+        Err(EmitError::EscapeName { name: 'q' })
     ));
 }

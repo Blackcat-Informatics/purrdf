@@ -229,11 +229,78 @@ fn display_path(path: &str) -> &str {
 /// `Box<dyn Read>` because the two arms are different types and the parser only needs
 /// `Read`; the one virtual call per 64 KiB refill is not a measurable cost against
 /// tokenizing the bytes it returns.
-fn open_raw_stream(path: &str) -> Result<Box<dyn Read>, CliError> {
+fn open_raw_stream(path: &str) -> std::io::Result<Box<dyn Read>> {
     if path == "-" {
         Ok(Box::new(std::io::stdin().lock()))
     } else {
         Ok(Box::new(std::fs::File::open(path)?))
+    }
+}
+
+/// Original raw acquisition refusal, before transport decoding or parsing.
+#[derive(Debug)]
+pub enum RawReadError {
+    /// Original file or standard-input failure.
+    Io(std::io::Error),
+    /// Original physical buffer admission/allocation refusal.
+    Storage(purrdf_lex::allocation::StorageError),
+    /// Input contained more bytes than the caller admitted.
+    Limit {
+        /// Maximum source bytes, independent of buffer capacity.
+        maximum: usize,
+    },
+}
+impl std::fmt::Display for RawReadError {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(cause) => cause.fmt(out),
+            Self::Storage(cause) => cause.fmt(out),
+            Self::Limit { maximum } => write!(out, "raw input exceeds {maximum} bytes"),
+        }
+    }
+}
+impl std::error::Error for RawReadError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io(cause) => Some(cause),
+            Self::Storage(cause) => Some(cause),
+            Self::Limit { .. } => None,
+        }
+    }
+}
+impl purrdf_hash::error::StructuredError for RawReadError {
+    purrdf_hash::error_visit! {
+        Io(cause) => "raw-input-io" { "cause" => Cause(cause) },
+        Storage(cause) => "raw-input-storage" { "cause" => Cause(cause) },
+        Limit { maximum } => "raw-input-limit" { "maximum" => ByteCount(*maximum as u128) },
+    }
+}
+
+/// Acquire at most `maximum` raw bytes, probing one further byte without retaining it.
+/// The content limit is separate from Vec capacity and other phase accounts.
+pub(crate) fn read_raw_bytes_bounded(path: &str, maximum: usize) -> Result<Vec<u8>, RawReadError> {
+    use purrdf_lex::allocation::{Memory, Resident};
+    let mut input = open_raw_stream(path).map_err(RawReadError::Io)?;
+    let mut bytes = Vec::new();
+    let mut resident = Resident;
+    let mut memory = Memory::new(&mut resident);
+    let mut chunk = [0_u8; 8192];
+    loop {
+        let remaining = maximum - bytes.len();
+        let requested = remaining.saturating_add(1).min(chunk.len());
+        let read = match input.read(&mut chunk[..requested]) {
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            other => other.map_err(RawReadError::Io)?,
+        };
+        if read == 0 {
+            return Ok(bytes);
+        }
+        if read > remaining {
+            return Err(RawReadError::Limit { maximum });
+        }
+        memory
+            .extend(&mut bytes, chunk[..read].iter().copied())
+            .map_err(RawReadError::Storage)?;
     }
 }
 

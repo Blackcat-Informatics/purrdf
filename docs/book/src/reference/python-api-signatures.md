@@ -682,10 +682,10 @@ class Store(_QuadStore):
     def __init__(self, *, remember_empty_graphs: bool=True) -> None:
         ...
 
-    def load(self, input: bytes | str | None=..., format: RdfFormat | None=..., *, path: str | None=..., base: str | None=...) -> list[tuple[str, str]]:
+    def load(self, input: bytes | str | None=..., format: RdfFormat | None=..., *, path: str | None=..., base: str | None=..., input_options: str | None=...) -> list[tuple[str, str]]:
         ...
 
-    def bulk_load(self, input: bytes | str | None=..., format: RdfFormat | None=..., *, path: str | None=..., base: str | None=...) -> list[tuple[str, str]]:
+    def bulk_load(self, input: bytes | str | None=..., format: RdfFormat | None=..., *, path: str | None=..., base: str | None=..., input_options: str | None=...) -> list[tuple[str, str]]:
         ...
 
     def add(self, quad: Quad) -> None:
@@ -716,7 +716,7 @@ class MutableDataset(_QuadStore):
     def __init__(self, *, remember_empty_graphs: bool=True) -> None:
         ...
 
-    def load(self, input: bytes | str | None=..., format: RdfFormat | None=..., *, path: str | None=..., base: str | None=...) -> list[tuple[str, str]]:
+    def load(self, input: bytes | str | None=..., format: RdfFormat | None=..., *, path: str | None=..., base: str | None=..., input_options: str | None=...) -> list[tuple[str, str]]:
         ...
 
     def add(self, quad: Quad) -> bool:
@@ -759,7 +759,7 @@ class Dataset:
     def __len__(self) -> int:
         ...
 
-def parse(input: bytes | str, format: RdfFormat, *, base: str | None=...) -> list[Quad]:
+def parse(input: bytes | str, format: RdfFormat, *, base: str | None=..., input_options: str | None=...) -> list[Quad]:
     ...
 
 @overload
@@ -1135,6 +1135,19 @@ def gts_to_duckdb(data: bytes, path: str, *, blob_limits: _GtsBlobPolicy) -> Gts
 
 def gts_to_parquet(data: bytes, out_dir: str, *, blob_limits: _GtsBlobPolicy) -> GtsExportResult:
     ...
+
+class YamlSourceExport:
+    @property
+    def root(self) -> str: ...
+    @property
+    def dataset(self) -> RdfDataset: ...
+
+def yaml_source_export(
+    source: bytes, *, source_iri: str, profile_json: bytes
+) -> YamlSourceExport: ...
+def yaml_source_reconstruct(
+    dataset: RdfDataset, *, root: str, profile_json: bytes
+) -> bytes: ...
 
 class RdfDataset:
 

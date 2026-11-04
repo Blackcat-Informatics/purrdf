@@ -65,7 +65,13 @@ impl PurrdfDataset {
 /// handle pointer. Every handle libpurrdf returns is minted here, so every handle
 /// is a `Box` allocation that [`free_handle`] can reclaim with the matching layout.
 pub(crate) fn into_handle<T>(value: T) -> *mut T {
-    Box::into_raw(Box::new(value))
+    publish_handle(Box::new(value))
+}
+
+/// Publish an already prepared owned control without another allocation.
+/// Its Box layout is the same layout reclaimed by [`free_handle`].
+pub(crate) fn publish_handle<T>(prepared: Box<T>) -> *mut T {
+    Box::into_raw(prepared)
 }
 
 /// Reclaim and drop a handle minted by [`into_handle`]; a null pointer is a no-op.
@@ -75,7 +81,8 @@ pub(crate) fn into_handle<T>(value: T) -> *mut T {
 /// panic in `T`'s destructor is caught here rather than unwinding into C.
 ///
 /// # Safety
-/// `handle` must be null or a pointer returned by [`into_handle`] for this `T` and
+/// `handle` must be null or a pointer returned by [`into_handle`] or
+/// [`publish_handle`] for this `T` and
 /// not already freed.
 pub(crate) unsafe fn free_handle<T>(handle: *mut T) {
     ffi_guard!((), {

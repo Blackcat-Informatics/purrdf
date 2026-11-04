@@ -363,6 +363,7 @@ deps = [
     "purrdf-sparql-eval",
     "purrdf-sparql-results",
     "purrdf-xsd",
+    "purrdf-yaml",
 ]
 
 [[crate]]
@@ -403,6 +404,7 @@ name = "purrdf-capi"
 deps = [
     "purrdf",
     "purrdf-core",
+    "purrdf-lex",
     "purrdf-sparql-eval",
     "purrdf-sparql-results",
     "purrdf-validate",
