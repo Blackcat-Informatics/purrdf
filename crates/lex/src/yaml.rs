@@ -51,6 +51,14 @@
 //! keys to be unique), `.inf` and `.nan`, and a second document. A stream with
 //! no document reads as `null`.
 //!
+//! [`read_stream`] instead constructs every document in source order under
+//! explicit [`StreamLimits`]. No-document streams return an empty vector;
+//! explicit empty documents contribute null values. The allocation and expanded
+//! node bounds cover the complete retained stream, while anchor bindings and
+//! directives reset between documents. Later failures return no partial result.
+//! This API uses the same documented scalar rules as [`read_with`]; it does not
+//! select a different schema or introduce YAML-LD processing options.
+//!
 //! The reader is graded against the official yaml-test-suite
 //! (`crates/lex/tests/yaml_test_suite.rs`, over the vendored
 //! `vectors/yaml-test-suite`): every valid case inside the subset reads as the
@@ -72,7 +80,7 @@ mod resolve;
 mod syntax;
 mod write;
 
-pub use read::{Error, ErrorKind, Limits, read, read_with};
+pub use read::{Error, ErrorKind, Limits, StreamLimits, read, read_stream, read_with};
 pub use syntax::{
     Attachment, BlockHeader, Chomping, CollectionStyle, NodeId, NodeKind, Position,
     ProjectionLimits, ScalarStyle, Span, SyntaxDocument, SyntaxEntry, SyntaxEscape, SyntaxLimits,
