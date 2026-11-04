@@ -10,29 +10,38 @@ use purrdf_lex::yaml::{
 
 #[test]
 fn lexical_sample_retains_spelling_comments_styles_and_original_coordinates() {
-    let source = "# retained notice\r\ntitle: 'quoted é' # retained tail\r\n\r\nvalues: [0x1F, true, null, ~, .inf]\r\nnested:\r\n  item: \"escaped\\\\value\"\r\n";
+    let source = "# retained notice\r\ntitle: 'quoted é' # retained tail\r\n\r\nvalues: [0x1F, 007, +007, 1e400, 0x100000000000000000000000000000001, true, null, ~, .inf]\r\nnested:\r\n  item: \"escaped\\\\value\"\r\n";
     let doc = yaml::read_syntax(source, SyntaxLimits::DEFAULT).unwrap();
-    assert_eq!(doc.source(), source);
+    assert_eq!(yaml::SyntaxDocument::source(&doc), source);
     assert_ne!(
-        doc.source_id(),
+        yaml::SyntaxDocument::source_id(&doc),
         yaml::read_syntax(&source.replace("\r\n", "\n"), SyntaxLimits::DEFAULT)
             .unwrap()
             .source_id()
     );
-    let scalars: Vec<_> = doc
-        .nodes()
+    let scalars: Vec<_> = yaml::SyntaxDocument::nodes(&doc)
         .filter_map(|(id, node)| match &node.kind {
             NodeKind::Scalar(s) => Some((id, s)),
             _ => None,
         })
         .collect();
-    for spelling in ["0x1F", "true", "null", "~", ".inf"] {
+    for spelling in [
+        "0x1F",
+        "007",
+        "+007",
+        "1e400",
+        "0x100000000000000000000000000000001",
+        "true",
+        "null",
+        "~",
+        ".inf",
+    ] {
         let (_, scalar) = scalars
             .iter()
             .find(|(_, scalar)| scalar.text == spelling)
             .unwrap();
         assert_eq!(scalar.style, ScalarStyle::Plain);
-        assert_eq!(doc.raw(scalar.raw), Some(spelling));
+        assert_eq!(yaml::SyntaxDocument::raw(&doc, scalar.raw), Some(spelling));
     }
     let (title, scalar) = scalars
         .iter()
@@ -40,8 +49,7 @@ fn lexical_sample_retains_spelling_comments_styles_and_original_coordinates() {
         .unwrap();
     assert_eq!(scalar.style, ScalarStyle::SingleQuoted);
     assert_eq!(doc.raw(scalar.raw), Some("'quoted é'"));
-    let comments: Vec<_> = doc
-        .trivia()
+    let comments: Vec<_> = yaml::SyntaxDocument::trivia(&doc)
         .iter()
         .filter(|t| t.kind == TriviaKind::Comment)
         .collect();
@@ -57,7 +65,7 @@ fn lexical_sample_retains_spelling_comments_styles_and_original_coordinates() {
         }
     )));
     let at = source.find(" # retained tail").unwrap();
-    let position = doc.position(at).unwrap();
+    let position = yaml::SyntaxDocument::position(&doc, at).unwrap();
     assert_eq!((position.line, position.column), (2, 18));
     assert_eq!(
         doc.to_core(yaml::ProjectionLimits::DEFAULT)
@@ -76,6 +84,12 @@ fn native_properties_alias_identity_and_scalar_metadata_need_no_local_grammar() 
     let (target, anchored) = doc.nodes().find(|(_, node)| node.anchor.is_some()).unwrap();
     assert_eq!(doc.raw(anchored.anchor.unwrap()), Some("&a"));
     assert_eq!(doc.raw(anchored.tag.unwrap()), Some("!e!record"));
+    assert_eq!(
+        anchored.explicit_tag,
+        Some(yaml::ExplicitTag::Specific(
+            "tag:example.org,2026:record".into()
+        ))
+    );
     let aliases: Vec<_> = doc
         .nodes()
         .filter_map(|(_, node)| match node.kind {
@@ -180,6 +194,245 @@ fn native_properties_alias_identity_and_scalar_metadata_need_no_local_grammar() 
         complex.node(complex.root()).unwrap().kind,
         NodeKind::Mapping { .. }
     ));
+}
+
+#[test]
+fn syntax_stream_retains_absolute_envelopes_and_one_aggregate_arena() {
+    let limits = yaml::SyntaxStreamLimits {
+        syntax: SyntaxLimits::DEFAULT,
+        max_documents: 8,
+    };
+    for source in ["", "# notice\r\n", "# notice\n...\n"] {
+        let stream = yaml::read_syntax_stream(source, limits).unwrap();
+        assert_eq!(stream.documents(), &[]);
+        assert_eq!(stream.source(), source);
+        assert_eq!(stream.nodes().count(), 0);
+    }
+    let source =
+        "\u{feff}# prologue\r\n%TAG !e! tag:example.org,2026:\r\n--- !e!record &a [é, *a]\r\n";
+    let error = yaml::read_syntax_stream(source, limits).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::CyclicAlias);
+    assert_eq!(error.offset(), source.find("*a").unwrap());
+
+    let source = "\u{feff}# prologue\r\n%TAG !e! tag:example.org,2026:\r\n--- !e!record &a [é]\r\n... # end\r\n---\r\n--- [last]\r\n";
+    let stream = yaml::read_syntax_stream(source, limits).unwrap();
+    assert_eq!(stream.source(), source);
+    assert_eq!(
+        stream.source_id(),
+        yaml::read_syntax_stream(source, limits)
+            .unwrap()
+            .source_id()
+    );
+    let documents = stream.documents();
+    assert_eq!(documents.len(), 3);
+    assert_eq!(documents[0].span.start, 0);
+    assert_eq!(documents[0].span.end, documents[1].span.start);
+    assert_eq!(documents[1].span.end, documents[2].span.start);
+    assert_eq!(documents[2].span.end, source.len());
+    assert_eq!(
+        stream.raw(documents[0].prologue),
+        Some("\u{feff}# prologue\r\n%TAG !e! tag:example.org,2026:\r\n")
+    );
+    assert_eq!(stream.raw(documents[0].start_marker.unwrap()), Some("---"));
+    assert_eq!(stream.raw(documents[0].end_marker.unwrap()), Some("..."));
+    assert_eq!(documents[1].end_marker, None);
+    let empty = stream.node(documents[1].root).unwrap();
+    assert!(
+        matches!(&empty.kind, NodeKind::Scalar(s) if s.text.is_empty() && s.style == ScalarStyle::Empty)
+    );
+    let first = stream.node(documents[0].root).unwrap();
+    assert_eq!(
+        first.explicit_tag,
+        Some(yaml::ExplicitTag::Specific(
+            "tag:example.org,2026:record".into()
+        ))
+    );
+    assert_eq!(stream.position(source.find("é").unwrap()).unwrap().line, 3);
+    assert!(
+        stream
+            .trivia()
+            .iter()
+            .any(|t| stream.raw(t.span) == Some("# end"))
+    );
+
+    let count = stream.nodes().count() as u64;
+    let mut bounded = limits;
+    bounded.syntax.max_occurrences = count;
+    assert!(yaml::read_syntax_stream(source, bounded).is_ok());
+    bounded.syntax.max_occurrences = count - 1;
+    assert_eq!(
+        yaml::read_syntax_stream(source, bounded)
+            .unwrap_err()
+            .kind(),
+        ErrorKind::Nodes { limit: count - 1 }
+    );
+    bounded = limits;
+    bounded.max_documents = 2;
+    let error = yaml::read_syntax_stream(source, bounded).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Documents { limit: 2 });
+    assert_eq!(error.offset(), documents[2].start_marker.unwrap().start);
+    bounded = limits;
+    bounded.syntax.max_input_bytes = source.len() - 1;
+    assert!(matches!(
+        yaml::read_syntax_stream(source, bounded)
+            .unwrap_err()
+            .kind(),
+        ErrorKind::Input { .. }
+    ));
+    bounded = limits;
+    bounded.syntax.max_depth = 0;
+    assert_eq!(
+        yaml::read_syntax_stream(source, bounded)
+            .unwrap_err()
+            .kind(),
+        ErrorKind::Depth { limit: 0 }
+    );
+    bounded = limits;
+    bounded.syntax.max_allocation_bytes = 0;
+    assert_eq!(
+        yaml::read_syntax_stream(source, bounded)
+            .unwrap_err()
+            .kind(),
+        ErrorKind::Allocation { limit: 0 }
+    );
+    // Each document fits alone; retaining decoded scalar bytes and metadata
+    // across the stream exhausts the same allocation account.
+    let one = format!("--- '{}'\n", "x".repeat(1024));
+    bounded = limits;
+    bounded.syntax.max_allocation_bytes = 16 << 10;
+    bounded.max_documents = 32;
+    assert!(yaml::read_syntax_stream(&one, bounded).is_ok());
+    assert_eq!(
+        yaml::read_syntax_stream(&one.repeat(32), bounded)
+            .unwrap_err()
+            .kind(),
+        ErrorKind::Allocation { limit: 16 << 10 }
+    );
+    assert_eq!(
+        yaml::read_syntax_stream("--- good\n--- [broken", limits)
+            .unwrap_err()
+            .line(),
+        2
+    );
+    assert_eq!(
+        yaml::read_syntax("--- first\n--- second", SyntaxLimits::DEFAULT)
+            .unwrap_err()
+            .kind(),
+        ErrorKind::MultipleDocuments
+    );
+}
+
+#[test]
+fn lexical_anchor_shadowing_and_explicit_tags_are_document_local() {
+    let source = "[&a old, *a, &a [&a inner, *a], *a]";
+    let doc = yaml::read_syntax(source, SyntaxLimits::DEFAULT).unwrap();
+    let aliases: Vec<_> = doc
+        .nodes()
+        .filter_map(|(_, node)| match node.kind {
+            NodeKind::Alias { target, .. } => Some(target),
+            _ => None,
+        })
+        .collect();
+    let text = |id| match &doc.node(id).unwrap().kind {
+        NodeKind::Scalar(s) => s.text.as_str(),
+        _ => panic!("scalar anchor"),
+    };
+    assert_eq!(
+        aliases.iter().map(|id| text(*id)).collect::<Vec<_>>(),
+        ["old", "inner", "inner"]
+    );
+    for source in ["&a [*a]", "[&a old, &a [*a]]"] {
+        let error = yaml::read_syntax(source, SyntaxLimits::DEFAULT).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::CyclicAlias);
+        assert_eq!(error.offset(), source.find("*a").unwrap());
+        assert_eq!(
+            yaml::read(source).unwrap_err().kind(),
+            ErrorKind::CyclicAlias
+        );
+    }
+    let limits = yaml::SyntaxStreamLimits {
+        syntax: SyntaxLimits::DEFAULT,
+        max_documents: 4,
+    };
+    assert_eq!(
+        yaml::read_syntax_stream("--- &a old\n--- *a", limits)
+            .unwrap_err()
+            .kind(),
+        ErrorKind::UnknownAlias
+    );
+    for (directive, spelling, expected) in [
+        (
+            "%TAG !e! tag:yaml.org,2002:",
+            "!e!str",
+            "tag:yaml.org,2002:str",
+        ),
+        (
+            "%TAG !e! tag:yaml.org,2002:%73",
+            "!e!tr",
+            "tag:yaml.org,2002:str",
+        ),
+        (
+            "%TAG !! tag:example.org,2026:",
+            "!!str",
+            "tag:example.org,2026:str",
+        ),
+        (
+            "%TAG ! tag:example.org,2026:",
+            "!record",
+            "tag:example.org,2026:record",
+        ),
+    ] {
+        let source = format!("{directive}\n--- {spelling} value");
+        let doc = yaml::read_syntax(&source, SyntaxLimits::DEFAULT).unwrap();
+        let root = doc.node(doc.root()).unwrap();
+        assert_eq!(doc.raw(root.tag.unwrap()), Some(spelling));
+        assert_eq!(
+            root.explicit_tag,
+            Some(yaml::ExplicitTag::Specific(expected.into()))
+        );
+    }
+    assert_eq!(
+        yaml::read("%TAG !e! tag:yaml.org,2002:\n--- !e!str 007").unwrap(),
+        purrdf_lex::json::Value::from("007")
+    );
+    assert_eq!(
+        yaml::read("!<tag:yaml.org,2002:%73tr> 007").unwrap(),
+        purrdf_lex::json::Value::from("007")
+    );
+    assert_eq!(
+        yaml::read_syntax("!<tag:example.org,%FF> value", SyntaxLimits::DEFAULT)
+            .unwrap_err()
+            .kind(),
+        ErrorKind::Tag
+    );
+    assert_eq!(
+        yaml::read("%TAG !! tag:example.org,2026:\n--- !!str value")
+            .unwrap_err()
+            .kind(),
+        ErrorKind::Tag
+    );
+    assert_eq!(
+        yaml::read_syntax_stream(
+            "%TAG !e! tag:example.org,2026:\n--- !e!record first\n--- !e!record second",
+            limits
+        )
+        .unwrap_err()
+        .kind(),
+        ErrorKind::UnknownTagHandle
+    );
+    let doc = yaml::read_syntax(
+        "[! value, !<tag:example.org,2026:record> value, value]",
+        SyntaxLimits::DEFAULT,
+    )
+    .unwrap();
+    assert!(
+        doc.nodes()
+            .any(|(_, node)| node.explicit_tag == Some(yaml::ExplicitTag::NonSpecific))
+    );
+    assert!(doc.nodes().any(|(_, node)| node.explicit_tag
+        == Some(yaml::ExplicitTag::Specific(
+            "tag:example.org,2026:record".into()
+        ))));
 }
 
 #[test]

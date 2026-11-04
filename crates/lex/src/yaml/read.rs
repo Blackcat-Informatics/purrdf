@@ -21,6 +21,13 @@ pub struct Limits {
     /// The most nodes the document may denote, every node an alias expands to
     /// included, so an alias bomb is refused before it is built.
     pub max_nodes: u64,
+    /// Aggregate scalar-classification and numeric-conversion work units.
+    /// One input byte, packed radix digit, divided word or output/validation
+    /// byte costs one unit. The account is shared by every stream document.
+    pub max_numeric_work: u64,
+    /// Aggregate bytes of newly materialized numeric spellings. Alias copies
+    /// remain governed by the node and allocation bounds.
+    pub max_numeric_bytes: usize,
     /// Whether anchors and aliases are accepted. YAML-LD's JSON profile
     /// refuses them.
     pub aliases: bool,
@@ -34,11 +41,13 @@ pub struct Limits {
 }
 
 impl Limits {
-    /// 128 open collections, 1,048,576 nodes, aliases accepted, scalar keys
-    /// refused.
+    /// 128 open collections, 1,048,576 nodes, 67,108,864 numeric work units,
+    /// 32 MiB of numeric spellings, aliases accepted, scalar keys refused.
     pub const DEFAULT: Self = Self {
         max_depth: 128,
         max_nodes: 1 << 20,
+        max_numeric_work: 1 << 26,
+        max_numeric_bytes: 32 << 20,
         aliases: true,
         scalar_keys: false,
     };
@@ -48,6 +57,21 @@ impl Default for Limits {
     fn default() -> Self {
         Self::DEFAULT
     }
+}
+
+/// Explicit bounds for construction of a complete ordered YAML stream.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StreamLimits {
+    /// Semantic rules and bounds. `max_nodes` covers the entire stream,
+    /// including every expanded alias; collection depth is local to a document.
+    pub core: Limits,
+    /// Maximum number of documents, including explicitly empty documents.
+    pub max_documents: usize,
+    /// Maximum original UTF-8 bytes, checked before allocation.
+    pub max_input_bytes: usize,
+    /// Maximum additional live native bytes, including all retained documents,
+    /// the result vector, parser scratch and anchor/alias copies.
+    pub max_allocation_bytes: usize,
 }
 
 /// What is wrong with a YAML document.
@@ -65,6 +89,11 @@ pub enum ErrorKind {
     Alias,
     /// An alias names no anchor defined before it.
     UnknownAlias,
+    /// An alias names a node whose anchor is still being constructed.
+    /// The native reader supports acyclic aliases only.
+    CyclicAlias,
+    /// A shorthand tag uses a handle not declared in this document.
+    UnknownTagHandle,
     /// A mapping key that is not a string: a number, a boolean, `null`, an
     /// empty key (all accepted under [`Limits::scalar_keys`]), or a collection.
     NonStringKey,
@@ -72,10 +101,25 @@ pub enum ErrorKind {
     DuplicateKey,
     /// `.inf`, `-.inf` or `.nan`, which JSON cannot hold.
     NonFinite,
+    /// Scalar classification or numeric preparation exhausted its work account.
+    NumericWork {
+        /// Original construction-wide work allowance.
+        limit: u64,
+    },
+    /// Newly materialized numeric spellings exceed their aggregate byte bound.
+    NumericOutput {
+        /// Original construction-wide spelling-byte allowance.
+        limit: usize,
+    },
     /// A malformed double-quoted escape, or one that names no character.
     Escape,
     /// A second document in the stream.
     MultipleDocuments,
+    /// More documents than [`StreamLimits::max_documents`] allows.
+    Documents {
+        /// The cap that was exceeded.
+        limit: usize,
+    },
     /// More collections open at once than [`Limits::max_depth`] allows.
     Depth {
         /// The cap that was exceeded.
@@ -109,6 +153,8 @@ pub struct Error {
     column: usize,
 }
 
+crate::variant_from!(ErrorKind { Storage(StorageError) });
+
 impl purrdf_hash::error::StructuredError for ErrorKind {
     purrdf_hash::error_visit! {
         Syntax(expected) => "yaml-syntax" { "expected" => Text(expected) },
@@ -116,11 +162,16 @@ impl purrdf_hash::error::StructuredError for ErrorKind {
         Tag => "yaml-tag" {},
         Alias => "yaml-alias-disabled" {},
         UnknownAlias => "yaml-unknown-alias" {},
+        CyclicAlias => "yaml-cyclic-alias" {},
+        UnknownTagHandle => "yaml-unknown-tag-handle" {},
         NonStringKey => "yaml-non-string-key" {},
         DuplicateKey => "yaml-duplicate-key" {},
         NonFinite => "yaml-non-finite" {},
+        NumericWork { limit } => "yaml-numeric-work-limit" { "limit" => Unsigned(u128::from(*limit)) },
+        NumericOutput { limit } => "yaml-numeric-output-limit" { "limit" => ByteCount(*limit as u128) },
         Escape => "yaml-escape" {},
         MultipleDocuments => "yaml-multiple-documents" {},
+        Documents { limit } => "yaml-document-limit" { "limit" => Unsigned(*limit as u128) },
         Depth { limit } => "yaml-depth-limit" { "limit" => Unsigned(*limit as u128) },
         Nodes { limit } => "yaml-node-limit" { "limit" => Unsigned(u128::from(*limit)) },
         Input { limit } => "yaml-input-limit" { "limit" => ByteCount(*limit as u128) },
@@ -196,11 +247,18 @@ impl fmt::Display for Error {
             }
             ErrorKind::Alias => f.write_str("anchors and aliases are not accepted here"),
             ErrorKind::UnknownAlias => f.write_str("the alias names no anchor defined before it"),
+            ErrorKind::CyclicAlias => f.write_str("the alias names an anchor still being constructed; only acyclic aliases are supported"),
+            ErrorKind::UnknownTagHandle => f.write_str("the tag handle is not declared in this document"),
             ErrorKind::NonStringKey => f.write_str("a mapping key must be a string"),
             ErrorKind::DuplicateKey => f.write_str("a mapping repeats a key"),
             ErrorKind::NonFinite => f.write_str("JSON cannot hold an infinite or NaN number"),
+            ErrorKind::NumericWork { limit } => write!(f, "numeric work exceeds {limit} units"),
+            ErrorKind::NumericOutput { limit } => {
+                write!(f, "numeric spellings exceed {limit} bytes")
+            }
             ErrorKind::Escape => f.write_str("a malformed escape"),
             ErrorKind::MultipleDocuments => f.write_str("the stream holds more than one document"),
+            ErrorKind::Documents { limit } => write!(f, "more than {limit} documents"),
             ErrorKind::Depth { limit } => write!(f, "more than {limit} nested collections"),
             ErrorKind::Nodes { limit } => write!(f, "more than {limit} nodes"),
             ErrorKind::Input { limit } => write!(f, "input exceeds {limit} bytes"),
@@ -239,14 +297,14 @@ enum Frame<B: Builder> {
         items: Vec<B::Node>,
         /// After `-`: the item node is next.
         open: bool,
-        anchor: Option<String>,
+        anchor: Option<Anchor>,
     },
     Mapping {
         indent: usize,
         start: usize,
         object: B::Mapping,
         slot: Slot<B::Key>,
-        anchor: Option<String>,
+        anchor: Option<Anchor>,
     },
 }
 
@@ -262,7 +320,16 @@ enum Line {
     Inline,
 }
 
-/// An anchor waiting for its node.
+/// A declaration token travels with its node until completion.
+struct Anchor {
+    name: String,
+    declaration: usize,
+}
+struct Binding<N> {
+    declaration: usize,
+    ready: Option<(N, u64)>,
+}
+
 /// A YAML 1.2 core-schema tag (§10.3), or the non-specific `!`: the tags the
 /// JSON data model can honour.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -280,7 +347,7 @@ pub(super) enum Tag {
 
 /// A node's properties (§6.9), waiting for their node.
 struct Properties {
-    anchor: Option<String>,
+    anchor: Option<Anchor>,
     tag: Option<(Tag, usize)>,
     /// Where the first property starts.
     at: usize,
@@ -288,10 +355,10 @@ struct Properties {
     spans: super::build::PropertySpans,
 }
 
-type PropertyParts = (Option<String>, Option<(Tag, usize)>);
+type PropertyParts = (Option<Anchor>, Option<(Tag, usize)>);
 
 /// The anchor and tag of `properties`.
-fn split(properties: Option<Properties>) -> (Option<String>, Option<(Tag, usize)>) {
+fn split(properties: Option<Properties>) -> PropertyParts {
     properties.map_or((None, None), |properties| {
         (properties.anchor, properties.tag)
     })
@@ -301,14 +368,14 @@ fn split(properties: Option<Properties>) -> (Option<String>, Option<(Tag, usize)
 enum Flow<B: Builder> {
     Sequence {
         items: Vec<B::Node>,
-        anchor: Option<String>,
+        anchor: Option<Anchor>,
         start: usize,
         /// Whether an entry is complete and `,` or `]` is next.
         after_item: bool,
     },
     Mapping {
         object: B::Mapping,
-        anchor: Option<String>,
+        anchor: Option<Anchor>,
         start: usize,
         key: Option<(B::Key, usize)>,
         state: FlowMap,
@@ -333,8 +400,8 @@ pub(super) struct Parser<'a, B: Builder> {
     nodes: u64,
     depth: usize,
     /// Each anchor's node and how many nodes it holds.
-    anchors: OrderedTable<String, (B::Node, u64)>,
-    handles: OrderedTable<String, ()>,
+    anchors: OrderedTable<String, Binding<B::Node>>,
+    handles: OrderedTable<String, String>,
     stack: Vec<Frame<B>>,
     builder: B,
     last_scalar_end: usize,
@@ -345,6 +412,11 @@ pub(super) struct Parser<'a, B: Builder> {
     /// The last position located: its offset, line start and column, so
     /// locating the cursor as it advances costs the bytes it crossed.
     located: Cell<(usize, usize, usize)>,
+    /// A consumed document-prefix BOM is not an indentation column. Keep its
+    /// original line origin for backwards location lookups within that document.
+    bom_line: Option<usize>,
+    document_start: Option<super::syntax::Span>,
+    prologue_end: usize,
 }
 
 const fn is_break(byte: Option<u8>) -> bool {
@@ -416,6 +488,12 @@ impl<'a, B: Builder> Parser<'a, B> {
                 .map_or(0, |index| index + 1);
             (start, self.text[start..at].chars().count())
         };
+        let located = if self.bom_line == Some(located.0) && at >= located.0 + '\u{feff}'.len_utf8()
+        {
+            (located.0 + '\u{feff}'.len_utf8(), located.1 - 1)
+        } else {
+            located
+        };
         self.located.set((at, located.0, located.1));
         located
     }
@@ -470,7 +548,8 @@ impl<'a, B: Builder> Parser<'a, B> {
     /// or starts a line).
     fn at_comment(&self) -> bool {
         self.peek() == Some(b'#')
-            && (self.pos == 0 || matches!(self.bytes[self.pos - 1], b' ' | b'\t' | b'\n' | b'\r'))
+            && (self.pos == self.line_start(self.pos)
+                || matches!(self.bytes[self.pos - 1], b' ' | b'\t' | b'\n' | b'\r'))
     }
 
     /// Skip spaces, tabs, comments and line breaks: whether a line break was
@@ -611,7 +690,7 @@ impl<'a, B: Builder> Parser<'a, B> {
     /// Recognize one tag (§6.9.1) before the builder judges its semantics.
     fn tag(&mut self) -> Result<Tag, Error> {
         let at = self.pos;
-        let name = if self.bytes[at..].starts_with(b"!<") {
+        let (expanded, decode_from) = if self.bytes[at..].starts_with(b"!<") {
             let close = self.text[at + 2..].find('>').ok_or_else(|| {
                 self.error(ErrorKind::Syntax("the `>` that closes a verbatim tag"), at)
             })?;
@@ -620,7 +699,7 @@ impl<'a, B: Builder> Parser<'a, B> {
             if !tag_uri(body, false) {
                 return Err(self.error(ErrorKind::Tag, at));
             }
-            body.strip_prefix("tag:yaml.org,2002:")
+            (admit!(self, self.builder.allocations().string(body)), 0)
         } else {
             self.pos += 1;
             while !self.blank_at(self.pos) && !is_flow_indicator(self.peek()) {
@@ -638,6 +717,12 @@ impl<'a, B: Builder> Parser<'a, B> {
                         self.pos,
                     ));
                 }
+                self.builder
+                    .tag(
+                        super::syntax::Span::new(at, self.pos),
+                        super::syntax::ExplicitTag::NonSpecific,
+                    )
+                    .map_err(|(kind, at)| self.error(kind, at))?;
                 return Ok(Tag::NonSpecific);
             }
             let (handle, suffix) = if let Some(suffix) = spelling.strip_prefix("!!") {
@@ -648,18 +733,25 @@ impl<'a, B: Builder> Parser<'a, B> {
             } else {
                 ("!", &spelling[1..])
             };
-            let named = handle != "!" && handle != "!!";
-            if (named
-                && (!tag_handle(handle)
-                    || self
-                        .handles
-                        .get_by(|candidate| handle.cmp(candidate.as_str()))
-                        .is_none()))
-                || !tag_uri(suffix, true)
-            {
+            if !tag_handle(handle) || !tag_uri(suffix, true) {
                 return Err(self.error(ErrorKind::Tag, at));
             }
-            (handle == "!!").then_some(suffix)
+            let prefix = match self
+                .handles
+                .get_by(|candidate| handle.cmp(candidate.as_str()))
+            {
+                Some(prefix) => prefix.as_str(),
+                None if handle == "!!" => "tag:yaml.org,2002:",
+                None if handle == "!" => "!",
+                None => return Err(self.error(ErrorKind::UnknownTagHandle, at)),
+            };
+            let mut expanded = admit!(self, self.builder.allocations().string(prefix));
+            let decode_from = expanded.len();
+            admit!(
+                self,
+                self.builder.allocations().push_str(&mut expanded, suffix)
+            );
+            (expanded, decode_from)
         };
         if !self.blank_at(self.pos) && !matches!(self.peek(), Some(b',' | b']' | b'}')) {
             return Err(self.error(
@@ -667,7 +759,8 @@ impl<'a, B: Builder> Parser<'a, B> {
                 self.pos,
             ));
         }
-        let tag = match name {
+        let expanded = self.decode_tag(expanded, decode_from, at)?;
+        let tag = match expanded.strip_prefix("tag:yaml.org,2002:") {
             Some("str") => Tag::Str,
             Some("int") => Tag::Int,
             Some("float") => Tag::Float,
@@ -678,7 +771,22 @@ impl<'a, B: Builder> Parser<'a, B> {
             _ if B::LEXICAL => Tag::Other,
             _ => return Err(self.error(ErrorKind::Tag, at)),
         };
+        self.builder
+            .tag(
+                super::syntax::Span::new(at, self.pos),
+                super::syntax::ExplicitTag::Specific(expanded),
+            )
+            .map_err(|(kind, at)| self.error(kind, at))?;
         Ok(tag)
+    }
+
+    /// Prefixes are decoded at declaration; decode only the newly read suffix.
+    fn decode_tag(&self, text: String, from: usize, at: usize) -> Result<String, Error> {
+        let mut bytes = text.into_bytes();
+        let length = crate::percent::decode_in_place(&mut bytes[from..])
+            .map_err(|_| self.error(ErrorKind::Tag, at))?;
+        bytes.truncate(from + length);
+        String::from_utf8(bytes).map_err(|_| self.error(ErrorKind::Tag, at))
     }
 
     /// The properties waiting for their node, those of several lines joined
@@ -755,7 +863,12 @@ impl<'a, B: Builder> Parser<'a, B> {
             if entry.anchor.is_some() {
                 return Err(self.error(ErrorKind::Syntax("one anchor per node"), at));
             }
-            entry.anchor = Some(self.name()?);
+            let name = self.name()?;
+            self.declare_anchor(&name, at)?;
+            entry.anchor = Some(Anchor {
+                name,
+                declaration: at,
+            });
             entry.spans.anchor = Some(super::syntax::Span::new(at, self.pos));
         } else {
             if entry.tag.is_some() {
@@ -801,13 +914,23 @@ impl<'a, B: Builder> Parser<'a, B> {
         let size = self
             .anchors
             .get(&name)
+            .ok_or_else(|| self.error(ErrorKind::UnknownAlias, at))?
+            .ready
+            .as_ref()
             .map(|(_, size)| *size)
-            .ok_or_else(|| self.error(ErrorKind::UnknownAlias, at))?;
+            .ok_or_else(|| self.error(ErrorKind::CyclicAlias, at))?;
         self.count(self.builder.alias_cost(size), at)?;
         let value = self
             .builder
             .alias(
-                &self.anchors.get(&name).expect("a checked anchor").0,
+                &self
+                    .anchors
+                    .get(&name)
+                    .expect("a checked anchor")
+                    .ready
+                    .as_ref()
+                    .expect("a completed anchor")
+                    .0,
                 &name,
                 at,
                 self.pos,
@@ -819,8 +942,18 @@ impl<'a, B: Builder> Parser<'a, B> {
         Ok(value)
     }
 
-    fn register(&mut self, anchor: Option<String>, value: &B::Node) -> Result<(), Error> {
+    fn register(&mut self, anchor: Option<Anchor>, value: &B::Node) -> Result<(), Error> {
         if let Some(name) = anchor {
+            if self
+                .anchors
+                .get(&name.name)
+                .is_some_and(|binding| binding.declaration != name.declaration)
+            {
+                return self
+                    .builder
+                    .discard_text(name.name)
+                    .map_err(|(kind, at)| self.error(kind, at));
+            }
             let named = self
                 .builder
                 .copy_node(value, self.pos)
@@ -830,19 +963,27 @@ impl<'a, B: Builder> Parser<'a, B> {
         Ok(())
     }
 
-    /// Define the anchor `name` as `value`.
-    fn anchor(&mut self, name: String, value: B::Node) -> Result<(), Error> {
-        let size = self.builder.size(&value);
-        if let Some(stored) = self.anchors.get_mut(&name) {
-            let (old, _) = mem::replace(stored, (value, size));
-            self.builder
-                .discard_node(old)
-                .map_err(|(kind, at)| self.error(kind, at))?;
-            self.builder
-                .discard_text(name)
-                .map_err(|(kind, at)| self.error(kind, at))?;
+    /// Shadow immediately, before any part of the declared node is parsed.
+    fn declare_anchor(&mut self, name: &str, declaration: usize) -> Result<(), Error> {
+        if let Some(binding) = self
+            .anchors
+            .get_mut_by(|candidate| name.cmp(candidate.as_str()))
+        {
+            let old = mem::replace(
+                binding,
+                Binding {
+                    declaration,
+                    ready: None,
+                },
+            );
+            if let Some((old, _)) = old.ready {
+                self.builder
+                    .discard_node(old)
+                    .map_err(|(kind, at)| self.error(kind, at))?;
+            }
             return Ok(());
         }
+        let key = admit!(self, self.builder.allocations().string(name));
         admit!(
             self,
             self.builder.allocations().reserve_index(&mut self.anchors)
@@ -851,8 +992,36 @@ impl<'a, B: Builder> Parser<'a, B> {
             self,
             self.builder
                 .allocations()
-                .memory(|memory| self.anchors.insert(name, (value, size), memory))
+                .memory(|memory| self.anchors.insert(
+                    key,
+                    Binding {
+                        declaration,
+                        ready: None
+                    },
+                    memory
+                ))
         );
+        Ok(())
+    }
+
+    /// Complete only the declaration that is still current under this name.
+    fn anchor(&mut self, anchor: Anchor, value: B::Node) -> Result<(), Error> {
+        let size = self.builder.size(&value);
+        let binding = self
+            .anchors
+            .get_mut(&anchor.name)
+            .expect("a declared anchor");
+        if binding.declaration == anchor.declaration {
+            debug_assert!(binding.ready.is_none());
+            binding.ready = Some((value, size));
+        } else {
+            self.builder
+                .discard_node(value)
+                .map_err(|(kind, at)| self.error(kind, at))?;
+        }
+        self.builder
+            .discard_text(anchor.name)
+            .map_err(|(kind, at)| self.error(kind, at))?;
         Ok(())
     }
 
@@ -2529,7 +2698,7 @@ impl<'a, B: Builder> Parser<'a, B> {
     fn directive(
         &mut self,
         yaml_seen: &mut bool,
-        handles: &mut OrderedTable<String, ()>,
+        handles: &mut OrderedTable<String, String>,
     ) -> Result<(), Error> {
         let at = self.pos;
         self.skip_to_line_end();
@@ -2581,12 +2750,17 @@ impl<'a, B: Builder> Parser<'a, B> {
                     return Err(refuse("a URI tag prefix with valid percent escapes"));
                 }
                 let handle = admit!(self, self.builder.allocations().string(handle));
+                if handles.get(&handle).is_some() {
+                    return Err(refuse("one `%TAG` directive per handle"));
+                }
+                let prefix = admit!(self, self.builder.allocations().string(prefix));
+                let prefix = self.decode_tag(prefix, 0, at)?;
                 admit!(self, self.builder.allocations().reserve_index(handles));
                 if admit!(
                     self,
                     self.builder
                         .allocations()
-                        .memory(|memory| handles.insert(handle, (), memory))
+                        .memory(|memory| handles.insert(handle, prefix, memory))
                 )
                 .is_some()
                 {
@@ -2598,14 +2772,19 @@ impl<'a, B: Builder> Parser<'a, B> {
         }
     }
 
-    fn document(&mut self) -> Result<B::Node, Error> {
-        if self.text.starts_with('\u{feff}') {
-            self.pos = 3;
+    fn take_bom(&mut self) {
+        self.bom_line = Some(self.pos);
+        self.pos += '\u{feff}'.len_utf8();
+    }
+
+    fn document(&mut self, stream: bool) -> Result<B::Node, Error> {
+        if self.pos == 0 && self.text.starts_with('\u{feff}') {
+            self.take_bom();
         }
         // The prologue: comments, directives, and the document start marker.
         let mut directives = false;
         let mut yaml_directive = false;
-        let mut tag_handles: OrderedTable<String, ()> = OrderedTable::default();
+        let mut tag_handles: OrderedTable<String, String> = OrderedTable::default();
         let mut line = Line::Fresh;
         loop {
             self.skip_separation()?;
@@ -2618,10 +2797,14 @@ impl<'a, B: Builder> Parser<'a, B> {
                 continue;
             }
             if self.at_marker() && self.bytes[self.pos] == b'-' {
+                self.document_start = Some(super::syntax::Span::new(self.pos, self.pos + 3));
+                self.prologue_end = self.pos;
                 self.pos += 3;
                 line = Line::Inline;
             } else if directives {
                 return Err(self.error(ErrorKind::Syntax("`---` after the directives"), self.pos));
+            } else {
+                self.prologue_end = self.pos;
             }
             break;
         }
@@ -2666,22 +2849,82 @@ impl<'a, B: Builder> Parser<'a, B> {
             }
             self.close_top()?;
         }
-        // Only comments may follow the document (after an optional `...`).
-        if self.pos < self.bytes.len()
-            && self.bytes[self.pos..].starts_with(b"...")
-            && self.at_marker()
-        {
-            self.pos += 3;
-            self.skip_separation()?;
-        }
-        if self.pos < self.bytes.len() {
-            return Err(self.error(ErrorKind::MultipleDocuments, self.pos));
+        if !stream {
+            // Preserve the single-document refusal before publishing its root.
+            if self.pos < self.bytes.len()
+                && self.bytes[self.pos..].starts_with(b"...")
+                && self.at_marker()
+            {
+                self.pos += 3;
+                self.skip_separation()?;
+            }
+            if self.pos < self.bytes.len() {
+                return Err(self.error(ErrorKind::MultipleDocuments, self.pos));
+            }
         }
         match self.stack.pop() {
             Some(Frame::Root(Some(value))) => Ok(value),
             Some(Frame::Root(None)) => self.null(self.pos),
             _ => unreachable!("only the root frame remains"),
         }
+    }
+
+    fn end_marker(&mut self) -> Result<(), Error> {
+        self.pos += 3;
+        self.skip_inline_space();
+        if !matches!(self.peek(), None | Some(b'\n' | b'\r' | b'#')) {
+            return Err(self.error(ErrorKind::Syntax("a line ending after `...`"), self.pos));
+        }
+        self.skip_separation()?;
+        Ok(())
+    }
+
+    // Stream material is not itself an empty document. Explicit `---` is.
+    fn stream_prefix(&mut self) -> Result<bool, Error> {
+        loop {
+            self.skip_separation()?;
+            if (self.pos == 0 || matches!(self.bytes.get(self.pos - 1), Some(b'\r' | b'\n')))
+                && self.text[self.pos..].starts_with('\u{feff}')
+            {
+                self.take_bom();
+            } else if self.at_marker() && self.peek() == Some(b'.') {
+                self.end_marker()?;
+            } else {
+                return Ok(self.pos < self.bytes.len());
+            }
+        }
+    }
+
+    fn clear_document(&mut self) -> Result<(), Error> {
+        while let Some((name, binding)) = self.anchors.pop_first() {
+            if let Some((value, _)) = binding.ready {
+                self.builder
+                    .discard_node(value)
+                    .map_err(|(kind, at)| self.error(kind, at))?;
+            }
+            self.builder
+                .discard_text(name)
+                .map_err(|(kind, at)| self.error(kind, at))?;
+        }
+        while let Some((name, prefix)) = self.handles.pop_first() {
+            self.builder
+                .discard_text(name)
+                .map_err(|(kind, at)| self.error(kind, at))?;
+            self.builder
+                .discard_text(prefix)
+                .map_err(|(kind, at)| self.error(kind, at))?;
+        }
+        let anchors = mem::take(&mut self.anchors);
+        let handles = mem::take(&mut self.handles);
+        admit!(
+            self,
+            self.builder.allocations().memory(|memory| {
+                anchors.release(memory)?;
+                handles.release(memory)
+            })
+        );
+        self.last_scalar_end = self.pos;
+        Ok(())
     }
 }
 
@@ -2714,32 +2957,129 @@ pub fn read_with(text: &str, limits: Limits) -> Result<Value, Error> {
     parse(
         text,
         limits,
-        CoreBuilder {
-            limits,
-            allocations: super::admission::Allocations::legacy(),
-        },
+        CoreBuilder::new(limits, super::admission::Allocations::legacy()),
     )
     .map(|(node, _)| node.value)
 }
 
+/// Construct every document using the existing reader's scalar, tag, mapping
+/// and alias rules, in source order, under one allocation and node account.
+///
+/// Empty/comment-only streams and standalone end markers contain no documents;
+/// `---` with an omitted root constructs a null document. Anchor bindings and
+/// directives are local to each document. Original offsets remain stream-wide.
+/// No documents are returned unless the entire stream succeeds.
+///
+/// # Errors
+///
+/// [`Error`] at the original absolute position of a syntax, semantic or resource
+/// refusal, including refusals in later documents. Single-document [`read_with`]
+/// retains its existing `MultipleDocuments` policy and error precedence.
+pub fn read_stream(text: &str, limits: StreamLimits) -> Result<Vec<Value>, Error> {
+    input_limit(text, limits.max_input_bytes)?;
+    let builder = CoreBuilder::new(
+        limits.core,
+        super::admission::Allocations::bounded(limits.max_allocation_bytes),
+    );
+    parse_stream(
+        text,
+        limits.core,
+        builder,
+        limits.max_documents,
+        |node, _| node.value,
+    )
+    .map(|(documents, _)| documents)
+}
+
+/// Shared stream driver; each retained record is admitted beside its builder's
+/// occurrences or Core products, without publishing a partial vector.
+pub(super) struct DocumentBoundary {
+    pub(super) span: super::syntax::Span,
+    pub(super) prologue: super::syntax::Span,
+    pub(super) start_marker: Option<super::syntax::Span>,
+    pub(super) end_marker: Option<super::syntax::Span>,
+}
+
+pub(super) fn parse_stream<B: Builder, R>(
+    text: &str,
+    limits: Limits,
+    builder: B,
+    max_documents: usize,
+    mut record: impl FnMut(B::Node, DocumentBoundary) -> R,
+) -> Result<(Vec<R>, B), Error> {
+    let mut parser = parser(text, limits, builder);
+    let mut documents = Vec::new();
+    loop {
+        let prefix = parser.pos;
+        if !parser.stream_prefix()? {
+            break;
+        }
+        if documents.len() >= max_documents {
+            return Err(parser.error(
+                ErrorKind::Documents {
+                    limit: max_documents,
+                },
+                parser.pos,
+            ));
+        }
+        admit!(
+            parser,
+            parser
+                .builder
+                .allocations()
+                .push(&mut parser.stack, Frame::Root(None))
+        );
+        parser.document_start = None;
+        let node = parser.document(true)?;
+        // Preserve Core stream refusal order: admit the retained result slot
+        // and release document-local state before examining its end marker.
+        admit!(
+            parser,
+            parser
+                .builder
+                .allocations()
+                .memory(|memory| memory.reserve_for_push(&mut documents))
+        );
+        parser.clear_document()?;
+        let end_marker = if parser.at_marker() && parser.peek() == Some(b'.') {
+            let marker = super::syntax::Span::new(parser.pos, parser.pos + 3);
+            parser.end_marker()?;
+            Some(marker)
+        } else {
+            None
+        };
+        let boundaries = DocumentBoundary {
+            span: super::syntax::Span::new(prefix, parser.pos),
+            prologue: super::syntax::Span::new(prefix, parser.prologue_end),
+            start_marker: parser.document_start,
+            end_marker,
+        };
+        documents.push(record(node, boundaries));
+    }
+    admit!(
+        parser,
+        parser.builder.allocations().discard_vec(parser.stack)
+    );
+    Ok((documents, parser.builder))
+}
+
+fn input_limit(text: &str, limit: usize) -> Result<(), Error> {
+    if text.len() > limit {
+        return Err(Error::new(text, ErrorKind::Input { limit }, 0));
+    }
+    Ok(())
+}
+
 /// Run the one grammar with an admitted product builder.
 pub(super) fn project(text: &str, limits: super::syntax::ProjectionLimits) -> Result<Value, Error> {
-    if text.len() > limits.max_input_bytes {
-        return Err(Error::new(
-            text,
-            ErrorKind::Input {
-                limit: limits.max_input_bytes,
-            },
-            0,
-        ));
-    }
+    input_limit(text, limits.max_input_bytes)?;
     parse(
         text,
         limits.core,
-        CoreBuilder {
-            limits: limits.core,
-            allocations: super::admission::Allocations::bounded(limits.max_allocation_bytes),
-        },
+        CoreBuilder::new(
+            limits.core,
+            super::admission::Allocations::bounded(limits.max_allocation_bytes),
+        ),
     )
     .map(|(node, _)| node.value)
 }
@@ -2748,15 +3088,27 @@ pub(super) fn project(text: &str, limits: super::syntax::ProjectionLimits) -> Re
 pub(super) fn parse<B: Builder>(
     text: &str,
     limits: Limits,
-    mut builder: B,
+    builder: B,
 ) -> Result<(B::Node, B), Error> {
-    let mut stack = Vec::new();
-    let ceiling = builder.allocation_limit();
-    builder
-        .allocations()
-        .push(&mut stack, Frame::Root(None))
-        .map_err(|cause| Error::storage(text, ceiling, cause, 0))?;
-    let mut parser = Parser {
+    let mut parser = parser(text, limits, builder);
+    admit!(
+        parser,
+        parser
+            .builder
+            .allocations()
+            .push(&mut parser.stack, Frame::Root(None))
+    );
+    let node = parser.document(false)?;
+    parser.clear_document()?;
+    admit!(
+        parser,
+        parser.builder.allocations().discard_vec(parser.stack)
+    );
+    Ok((node, parser.builder))
+}
+
+fn parser<B: Builder>(text: &str, limits: Limits, builder: B) -> Parser<'_, B> {
+    Parser {
         text,
         bytes: text.as_bytes(),
         pos: 0,
@@ -2765,45 +3117,16 @@ pub(super) fn parse<B: Builder>(
         depth: 0,
         anchors: OrderedTable::default(),
         handles: OrderedTable::default(),
-        stack,
+        stack: Vec::new(),
         pending: None,
         later: None,
         located: Cell::new((0, 0, 0)),
+        bom_line: None,
+        document_start: None,
+        prologue_end: 0,
         builder,
         last_scalar_end: 0,
-    };
-    let node = parser.document()?;
-    let ceiling = parser.builder.allocation_limit();
-    while let Some((name, (value, _))) = parser.anchors.pop_first() {
-        parser
-            .builder
-            .discard_node(value)
-            .map_err(|(kind, at)| Error::new(text, kind, at))?;
-        parser
-            .builder
-            .discard_text(name)
-            .map_err(|(kind, at)| Error::new(text, kind, at))?;
     }
-    while let Some((name, ())) = parser.handles.pop_first() {
-        parser
-            .builder
-            .discard_text(name)
-            .map_err(|(kind, at)| Error::new(text, kind, at))?;
-    }
-    parser
-        .builder
-        .allocations()
-        .memory(|memory| {
-            parser.anchors.release(memory)?;
-            parser.handles.release(memory)
-        })
-        .map_err(|cause| Error::storage(text, ceiling, cause, parser.pos))?;
-    parser
-        .builder
-        .allocations()
-        .discard_vec(parser.stack)
-        .map_err(|cause| Error::storage(text, ceiling, cause, parser.pos))?;
-    Ok((node, parser.builder))
 }
 
 pub(super) fn position(text: &str, at: usize) -> (usize, usize) {

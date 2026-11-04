@@ -312,10 +312,37 @@ fn decode_with(text: &str, plus_is_space: bool) -> Result<Cow<'_, str>, PercentE
     {
         return Ok(Cow::Borrowed(text));
     }
-    let mut out = Vec::with_capacity(bytes.len());
+    let mut out = bytes.to_vec();
+    let length = decode_bytes(&mut out, plus_is_space)?;
+    out.truncate(length);
+    String::from_utf8(out)
+        .map(Cow::Owned)
+        .map_err(|error| PercentError::NotUtf8 {
+            valid_up_to: error.utf8_error().valid_up_to(),
+        })
+}
+
+/// Decode percent triplets into the same borrowed byte buffer, without allocation.
+/// The returned length selects the decoded UTF-8 prefix; the remaining bytes
+/// are unspecified. `+` stays literal. The caller owns storage admission.
+///
+/// # Errors
+/// Returns malformed triplets or invalid decoded UTF-8. On refusal the buffer
+/// may already contain a decoded prefix and must not be treated as valid text.
+pub fn decode_in_place(bytes: &mut [u8]) -> Result<usize, PercentError> {
+    let written = decode_bytes(bytes, false)?;
+    core::str::from_utf8(&bytes[..written])
+        .map(|_| written)
+        .map_err(|error| PercentError::NotUtf8 {
+            valid_up_to: error.valid_up_to(),
+        })
+}
+
+fn decode_bytes(bytes: &mut [u8], plus_is_space: bool) -> Result<usize, PercentError> {
     let mut at = 0;
+    let mut written = 0;
     while at < bytes.len() {
-        match bytes[at] {
+        let byte = match bytes[at] {
             b'%' => {
                 let digit = |k: usize| {
                     bytes
@@ -326,24 +353,22 @@ fn decode_with(text: &str, plus_is_space: bool) -> Result<Cow<'_, str>, PercentE
                 let (Some(high), Some(low)) = (digit(1), digit(2)) else {
                     return Err(PercentError::Malformed { offset: at });
                 };
-                out.push((high << 4) | low);
                 at += 3;
+                (high << 4) | low
             }
             b'+' if plus_is_space => {
-                out.push(b' ');
                 at += 1;
+                b' '
             }
             byte => {
-                out.push(byte);
                 at += 1;
+                byte
             }
-        }
+        };
+        bytes[written] = byte;
+        written += 1;
     }
-    String::from_utf8(out)
-        .map(Cow::Owned)
-        .map_err(|error| PercentError::NotUtf8 {
-            valid_up_to: error.utf8_error().valid_up_to(),
-        })
+    Ok(written)
 }
 
 /// `text` with every `%XX` triplet (either case) decoded to its byte, the

@@ -7,7 +7,166 @@
 //! tightened rule is shown to leave its valid neighbour alone.
 
 use purrdf_lex::json::write_compact;
-use purrdf_lex::yaml::{ErrorKind, read};
+use purrdf_lex::yaml::{ErrorKind, Limits, StreamLimits, read, read_stream};
+
+fn stream_limits() -> StreamLimits {
+    StreamLimits {
+        core: Limits::DEFAULT,
+        max_documents: 64,
+        max_input_bytes: 1 << 20,
+        max_allocation_bytes: 8 << 20,
+    }
+}
+
+#[test]
+fn yaml_stream_boundaries_distinguish_absence_from_empty_documents() {
+    for (source, expected) in [
+        ("", "[]"),
+        ("\u{feff} # comment\r\n...\r\n", "[]"),
+        ("---", "[null]"),
+        ("---\n---\n", "[null,null]"),
+        ("null", "[null]"),
+        ("a\n--- b", r#"["a","b"]"#),
+        ("a\n... # end\nb", r#"["a","b"]"#),
+        ("a\n...\n\u{feff}--- b", r#"["a","b"]"#),
+        (
+            "\u{feff}%YAML 1.2\n---\na: x\nb: y\n...\n---",
+            r#"[{"a":"x","b":"y"},null]"#,
+        ),
+        ("--- |\n ---\n ...\n--- [x]\n", r#"["---\n...\n",["x"]]"#),
+    ] {
+        let documents = read_stream(source, stream_limits()).unwrap();
+        assert_eq!(
+            write_compact(&purrdf_lex::json::Value::Array(documents)),
+            expected,
+            "{source:?}"
+        );
+    }
+    for source in ["a\n... b", "a\n---\n[broken", "a\n---\n%YAML 1.2\n"] {
+        assert!(read_stream(source, stream_limits()).is_err(), "{source:?}");
+    }
+    // Legacy callers still refuse the next document before examining its body.
+    assert_eq!(refused("a\n---\n[broken"), ErrorKind::MultipleDocuments);
+    assert_eq!(ok(" # no document\n...\n"), "null");
+    assert_eq!(
+        ok("\u{feff}%YAML 1.2\n---\na: x\nb: y"),
+        r#"{"a":"x","b":"y"}"#
+    );
+}
+
+#[test]
+fn yaml_stream_documents_isolate_anchors_directives_and_absolute_errors() {
+    let source = "%YAML 1.2\n%TAG !e! tag:example.com,2026:\n--- [&a old, *a]\n...\n%YAML 1.2\n%TAG !e! tag:example.com,2026:\n--- [&a new, *a]";
+    let documents = read_stream(source, stream_limits()).unwrap();
+    assert_eq!(
+        write_compact(&purrdf_lex::json::Value::Array(documents)),
+        r#"[["old","old"],["new","new"]]"#
+    );
+    let source = "--- &a α\r\n---\r\n*a";
+    let error = read_stream(source, stream_limits()).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::UnknownAlias);
+    assert_eq!(
+        (error.offset(), error.line(), error.column()),
+        (source.rfind('*').unwrap(), 3, 1)
+    );
+    let source = "--- α\r\n--- {key: x, key: y}";
+    let error = read_stream(source, stream_limits()).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::DuplicateKey);
+    assert_eq!(error.line(), 2);
+    assert!(error.offset() > source.find('\n').unwrap());
+}
+
+#[test]
+fn yaml_stream_admission_includes_all_retained_documents_and_alias_copies() {
+    let mut limits = stream_limits();
+    limits.max_documents = 0;
+    limits.max_allocation_bytes = 0;
+    assert_eq!(
+        read_stream("# empty\n...", limits).unwrap(),
+        Vec::<purrdf_lex::json::Value>::new()
+    );
+    assert_eq!(
+        read_stream("---", limits).unwrap_err().kind(),
+        ErrorKind::Documents { limit: 0 }
+    );
+    let mut limits = stream_limits();
+    limits.max_documents = 1;
+    let error = read_stream("---\n---", limits).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::Documents { limit: 1 });
+    assert_eq!((error.offset(), error.line(), error.column()), (4, 2, 1));
+    let mut limits = stream_limits();
+    limits.core.max_nodes = 5;
+    assert_eq!(
+        read_stream("[&a x, *a]\n---\n[&a x, *a]", limits)
+            .unwrap_err()
+            .kind(),
+        ErrorKind::Nodes { limit: 5 }
+    );
+    let mut limits = stream_limits();
+    limits.core.max_depth = 1;
+    assert_eq!(
+        read_stream("a\n---\n[[x]]", limits).unwrap_err().kind(),
+        ErrorKind::Depth { limit: 1 }
+    );
+    let mut limits = stream_limits();
+    limits.max_input_bytes = 0;
+    assert_eq!(
+        read_stream(" ", limits).unwrap_err().kind(),
+        ErrorKind::Input { limit: 0 }
+    );
+    // Calibrate the public result's admission boundary without pinning native
+    // parser-frame or Vec layouts. Its slot refusal precedes end-marker syntax.
+    let mut limits = stream_limits();
+    let (mut lower, mut upper) = (0, limits.max_allocation_bytes);
+    while lower < upper {
+        let middle = lower.midpoint(upper);
+        limits.max_allocation_bytes = middle;
+        if read_stream("a", limits).is_ok() {
+            upper = middle;
+        } else {
+            lower = middle + 1;
+        }
+    }
+    limits.max_allocation_bytes = lower - 1;
+    assert_eq!(
+        read_stream("a\n... b", limits).unwrap_err().kind(),
+        ErrorKind::Allocation { limit: lower - 1 }
+    );
+    let mut limits = stream_limits();
+    limits.max_allocation_bytes = 64 << 10;
+    let document = format!("--- '{}'\n", "x".repeat(8 << 10));
+    assert!(read_stream(&document, limits).is_ok());
+    assert_eq!(
+        read_stream(&document.repeat(32), limits)
+            .unwrap_err()
+            .kind(),
+        ErrorKind::Allocation { limit: 64 << 10 }
+    );
+    // Work and produced numeric spelling bytes are cumulative across document
+    // boundaries. Refusing the second document must return no partial vector.
+    let mut limits = stream_limits();
+    limits.core.max_numeric_bytes = 2;
+    assert!(read_stream("12", limits).is_ok());
+    let error = read_stream("12\r\n---\r\n34", limits).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::NumericOutput { limit: 2 });
+    assert_eq!((error.offset(), error.line(), error.column()), (9, 3, 1));
+    let mut limits = stream_limits();
+    // One decimal byte is classified, copied, then validated: three units.
+    limits.core.max_numeric_work = 3;
+    assert!(read_stream("1", limits).is_ok());
+    let error = read_stream("1\n---\n2", limits).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::NumericWork { limit: 3 });
+    assert_eq!((error.offset(), error.line(), error.column()), (6, 3, 1));
+    let mut limits = stream_limits();
+    // Classification and radix packing fit; repeated word division does not.
+    limits.core.max_numeric_work = 300;
+    assert!(matches!(
+        read_stream(&format!("0x1{}", "f".repeat(96)), limits)
+            .unwrap_err()
+            .kind(),
+        ErrorKind::NumericWork { limit: 300 }
+    ));
+}
 
 fn ok(text: &str) -> String {
     match read(text) {

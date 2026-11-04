@@ -40,15 +40,6 @@ impl Allocations {
     pub(super) const fn live(&self) -> usize {
         self.live
     }
-    pub(super) fn format(
-        &mut self,
-        value: &impl core::fmt::Display,
-    ) -> Result<String, StorageError> {
-        if self.limit.is_none() {
-            return Ok(value.to_string());
-        }
-        self.memory(|memory| memory.format(value))
-    }
     pub(super) fn release_bytes(&mut self, bytes: usize) -> Result<(), StorageError> {
         if self.limit.is_none() {
             return Ok(());
@@ -59,6 +50,12 @@ impl Allocations {
         &mut self,
         body: impl FnOnce(&mut Memory<'_, Ceiling>) -> Result<T, StorageError>,
     ) -> Result<T, StorageError> {
+        self.try_memory(body)
+    }
+    pub(super) fn try_memory<T, E>(
+        &mut self,
+        body: impl FnOnce(&mut Memory<'_, Ceiling>) -> Result<T, E>,
+    ) -> Result<T, E> {
         let mut ceiling = Ceiling(self.limit.unwrap_or(usize::MAX));
         let mut memory = Memory::resume(&mut ceiling, self.live);
         let result = body(&mut memory);

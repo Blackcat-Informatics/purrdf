@@ -20,7 +20,9 @@ use std::ops::Range;
 mod entities;
 mod tag;
 pub use tag::{
-    Attribute, Opaque, OpaqueKind, Tag, TagKind, opaque_with_memory, tag, tag_with_memory,
+    Attribute, AuthoringTagState, Opaque, OpaqueKind, Tag, TagKind,
+    authoring_attribute_with_memory, comment_body_with_memory, opaque_with_memory, tag,
+    tag_with_memory,
 };
 
 /// The pinned HTML Standard revision defining the reference submachine.

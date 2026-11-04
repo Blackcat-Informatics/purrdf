@@ -67,6 +67,15 @@ impl Default for SyntaxLimits {
     }
 }
 
+/// Aggregate lexical stream bounds; depth remains local to each document.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SyntaxStreamLimits {
+    /// Input, occurrence, allocation and alias controls for the complete stream.
+    pub syntax: SyntaxLimits,
+    /// Maximum retained document roots, including explicit empty documents.
+    pub max_documents: usize,
+}
+
 /// A UTF-8 byte range in its owning document's original source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Span {
@@ -199,8 +208,19 @@ pub struct SyntaxNode {
     pub anchor: Option<Span>,
     /// Authored tag property, with its original handle/spelling.
     pub tag: Option<Span>,
+    /// Explicit lexical tag identity after handle expansion; absent for an
+    /// untagged node. This does not apply implicit Core-schema resolution.
+    pub explicit_tag: Option<ExplicitTag>,
     /// Explicit-key indicator, when this node is a key.
     pub explicit_key: Option<Span>,
+}
+/// Explicit tag identity, independent of its authored property spelling.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ExplicitTag {
+    /// The bare `!` property.
+    NonSpecific,
+    /// A specific tag name with its document-local handle expanded.
+    Specific(String),
 }
 /// One native escape occurrence inside a quoted scalar.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -253,15 +273,115 @@ pub struct Trivia {
 /// existing key law. Complex keys remain ordered syntactic nodes.
 #[derive(Debug)]
 pub struct SyntaxDocument<'a> {
+    root: NodeId,
+    arena: SyntaxArena<'a>,
+}
+impl<'a> SyntaxDocument<'a> {
+    /// Original UTF-8, including line endings, comments, BOM and markers.
+    pub const fn source(&self) -> &'a str {
+        self.arena.source()
+    }
+    /// BLAKE3 identity of the exact original bytes, including line endings.
+    pub const fn source_id(&self) -> Digest32 {
+        self.arena.source_id()
+    }
+    /// The root occurrence, including an omitted empty-document scalar.
+    pub const fn root(&self) -> NodeId {
+        self.root
+    }
+    /// Borrow an occurrence belonging to this document.
+    pub fn node(&self, id: NodeId) -> Option<&SyntaxNode> {
+        self.arena.node(id)
+    }
+    /// Occurrences in grammar-completion order, with stable local handles.
+    pub fn nodes(&self) -> impl Iterator<Item = (NodeId, &SyntaxNode)> {
+        self.arena.nodes()
+    }
+    /// Ordered trivia with native leading/trailing associations.
+    pub fn trivia(&self) -> &[Trivia] {
+        self.arena.trivia()
+    }
+    /// Original directive spans in source order.
+    pub fn directives(&self) -> &[Span] {
+        self.arena.directives()
+    }
+    /// Decoded quoted escape occurrences in source order.
+    pub fn escapes(&self) -> &[SyntaxEscape] {
+        self.arena.escapes()
+    }
+    /// Slice an original UTF-8 range; invalid boundaries are refused.
+    pub fn raw(&self, span: Span) -> Option<&'a str> {
+        self.arena.raw(span)
+    }
+    /// Locate a source byte, with CRLF/bare-CR and Unicode character columns.
+    pub fn position(&self, offset: usize) -> Option<Position> {
+        self.arena.position(offset)
+    }
+    /// Project through the same eager Core builder used by legacy readers.
+    /// # Errors
+    /// Returns the positioned eager Core refusal, including semantic alias,
+    /// input and live native allocation bounds. No partial tree is returned.
+    pub fn to_core(&self, limits: ProjectionLimits) -> Result<crate::json::Value, Error> {
+        read::project(self.source(), limits)
+    }
+    /// Whether a key has the plain merge spelling (or an explicit merge tag).
+    pub fn is_merge_key(&self, id: NodeId) -> bool {
+        self.arena.is_merge_key(id)
+    }
+}
+impl<'a> core::ops::Deref for SyntaxDocument<'a> {
+    type Target = SyntaxArena<'a>;
+    fn deref(&self) -> &Self::Target {
+        &self.arena
+    }
+}
+
+/// One document's root and exact absolute source envelope.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SyntaxDocumentRoot {
+    /// Root occurrence in the stream-wide arena.
+    pub root: NodeId,
+    /// Complete consumed document range, including its prologue and end marker.
+    pub span: Span,
+    /// Original bytes preceding the explicit start marker or implicit content.
+    pub prologue: Span,
+    /// Explicit `---`, excluding subsequent separation.
+    pub start_marker: Option<Span>,
+    /// Explicit `...`, excluding subsequent separation.
+    pub end_marker: Option<Span>,
+}
+
+/// Ordered documents sharing one original source and occurrence/trivia arena.
+/// Empty streams have no roots. Only acyclic aliases are admitted.
+#[derive(Debug)]
+pub struct SyntaxStream<'a> {
+    documents: Vec<SyntaxDocumentRoot>,
+    arena: SyntaxArena<'a>,
+}
+impl SyntaxStream<'_> {
+    /// Ordered document envelopes; an explicit empty document has a scalar root.
+    pub fn documents(&self) -> &[SyntaxDocumentRoot] {
+        &self.documents
+    }
+}
+impl<'a> core::ops::Deref for SyntaxStream<'a> {
+    type Target = SyntaxArena<'a>;
+    fn deref(&self) -> &Self::Target {
+        &self.arena
+    }
+}
+
+/// Shared source, occurrences and trivia for a document or complete stream.
+#[derive(Debug)]
+pub struct SyntaxArena<'a> {
     source: &'a str,
     identity: Digest32,
-    root: NodeId,
     nodes: Vec<SyntaxNode>,
     trivia: Vec<Trivia>,
     directives: Vec<Span>,
     escapes: Vec<SyntaxEscape>,
 }
-impl<'a> SyntaxDocument<'a> {
+impl<'a> SyntaxArena<'a> {
     /// Original UTF-8, including line endings, comments, BOM and markers.
     pub const fn source(&self) -> &'a str {
         self.source
@@ -269,10 +389,6 @@ impl<'a> SyntaxDocument<'a> {
     /// BLAKE3 identity of the exact original bytes, including line endings.
     pub const fn source_id(&self) -> Digest32 {
         self.identity
-    }
-    /// The root occurrence, including an omitted empty-document scalar.
-    pub const fn root(&self) -> NodeId {
-        self.root
     }
     /// Borrow an occurrence belonging to this document.
     pub fn node(&self, id: NodeId) -> Option<&SyntaxNode> {
@@ -313,23 +429,13 @@ impl<'a> SyntaxDocument<'a> {
             column,
         })
     }
-    /// Project through the same eager Core builder used by legacy readers.
-    /// # Errors
-    /// Returns the positioned eager Core refusal, including semantic alias,
-    /// input and live native allocation bounds. No partial tree is returned.
-    pub fn to_core(&self, limits: ProjectionLimits) -> Result<crate::json::Value, Error> {
-        read::project(self.source, limits)
-    }
     /// Whether a key has the plain merge spelling (or an explicit merge tag).
     pub fn is_merge_key(&self, id: NodeId) -> bool {
         let Some(node) = self.node(id) else {
             return false;
         };
         matches!(&node.kind, NodeKind::Scalar(scalar) if scalar.style == ScalarStyle::Plain && scalar.text == "<<")
-            || node
-                .tag
-                .and_then(|span| self.raw(span))
-                .is_some_and(|tag| tag == "!!merge" || tag == "!<tag:yaml.org,2002:merge>")
+            || matches!(&node.explicit_tag, Some(ExplicitTag::Specific(tag)) if tag == "tag:yaml.org,2002:merge")
     }
 }
 
@@ -343,6 +449,7 @@ pub(super) struct SyntaxBuilder<'a> {
     allocations: Allocations,
     nodes: Vec<SyntaxNode>,
     properties: OrderedTable<(usize, bool), PropertySpans>,
+    tags: OrderedTable<Span, ExplicitTag>,
     blocks: OrderedTable<usize, BlockHeader>,
     comments: OrderedTable<Span, bool>,
     directives: Vec<Span>,
@@ -390,6 +497,7 @@ impl SyntaxBuilder<'_> {
             .map(|span| span.start)
             .fold(at, usize::min);
         let id = NodeId(self.nodes.len());
+        let explicit_tag = properties.tag.and_then(|span| self.tags.remove(&span));
         self.allocations
             .push(
                 &mut self.nodes,
@@ -398,6 +506,7 @@ impl SyntaxBuilder<'_> {
                     kind,
                     anchor: properties.anchor,
                     tag: properties.tag,
+                    explicit_tag,
                     explicit_key: None,
                 },
             )
@@ -461,10 +570,19 @@ impl Builder for SyntaxBuilder<'_> {
     type Node = NodeId;
     type Key = NodeId;
     type Mapping = SyntaxMap;
+    fn tag(&mut self, span: Span, tag: ExplicitTag) -> Result<(), Refusal> {
+        self.allocations
+            .memory(|memory| self.tags.insert(span, tag, memory))
+            .map_err(|cause| self.refuse(cause, span.start))?;
+        Ok(())
+    }
     fn decorate(&mut self, id: &NodeId, spans: PropertySpans) -> Result<(), Refusal> {
         let node = &mut self.nodes[id.0];
         node.anchor = spans.anchor;
         node.tag = spans.tag;
+        if let Some(tag) = spans.tag.and_then(|span| self.tags.remove(&span)) {
+            node.explicit_tag = Some(tag);
+        }
         node.span.start = spans
             .anchor
             .into_iter()
@@ -696,6 +814,50 @@ impl Builder for SyntaxBuilder<'_> {
 /// Refuses malformed syntax, repeated scalar keys, disabled aliases, and any
 /// exhausted input, occurrence, depth or native allocation limit.
 pub fn read_syntax(source: &str, limits: SyntaxLimits) -> Result<SyntaxDocument<'_>, Error> {
+    let (parser_limits, builder) = prepare(source, limits)?;
+    let (root, builder) = read::parse(source, parser_limits, builder)?;
+    let arena = builder
+        .finish(&[])
+        .map_err(|(kind, at)| Error::new(source, kind, at))?;
+    Ok(SyntaxDocument { root, arena })
+}
+
+/// Read a complete ordered stream into one admitted lexical arena.
+///
+/// All source coordinates are absolute. Empty/comment-only streams have no
+/// roots; explicit empty documents have an empty plain scalar. Anchors and tag
+/// directives reset between documents. In-progress aliases are refused: this
+/// source model supports an acyclic subset, without applying implicit tags or
+/// claiming complete Core representation-key equality or YAML-LD composition.
+///
+/// # Errors
+/// Returns the original positioned syntax, alias or aggregate admission refusal.
+/// No partial stream is returned if any later document fails.
+pub fn read_syntax_stream(
+    source: &str,
+    limits: SyntaxStreamLimits,
+) -> Result<SyntaxStream<'_>, Error> {
+    let (parser_limits, builder) = prepare(source, limits.syntax)?;
+    let (documents, builder) = read::parse_stream(
+        source,
+        parser_limits,
+        builder,
+        limits.max_documents,
+        |root, boundary| SyntaxDocumentRoot {
+            root,
+            span: boundary.span,
+            prologue: boundary.prologue,
+            start_marker: boundary.start_marker,
+            end_marker: boundary.end_marker,
+        },
+    )?;
+    let arena = builder
+        .finish(&documents)
+        .map_err(|(kind, at)| Error::new(source, kind, at))?;
+    Ok(SyntaxStream { documents, arena })
+}
+
+fn prepare(source: &str, limits: SyntaxLimits) -> Result<(Limits, SyntaxBuilder<'_>), Error> {
     if source.len() > limits.max_input_bytes {
         return Err(Error::new(
             source,
@@ -711,6 +873,7 @@ pub fn read_syntax(source: &str, limits: SyntaxLimits) -> Result<SyntaxDocument<
         allocations: Allocations::bounded(limits.max_allocation_bytes),
         nodes: Vec::new(),
         properties: OrderedTable::default(),
+        tags: OrderedTable::default(),
         blocks: OrderedTable::default(),
         comments: OrderedTable::default(),
         directives: Vec::new(),
@@ -722,22 +885,22 @@ pub fn read_syntax(source: &str, limits: SyntaxLimits) -> Result<SyntaxDocument<
         max_nodes: u64::MAX,
         aliases: limits.aliases,
         scalar_keys: true,
+        ..Limits::DEFAULT
     };
-    let (root, builder) = read::parse(source, parser_limits, builder)?;
-    builder
-        .finish(root)
-        .map_err(|(kind, at)| Error::new(source, kind, at))
+    Ok((parser_limits, builder))
 }
 
 impl<'a> SyntaxBuilder<'a> {
-    fn finish(mut self, root: NodeId) -> Result<SyntaxDocument<'a>, Refusal> {
+    fn finish(mut self, documents: &[SyntaxDocumentRoot]) -> Result<SyntaxArena<'a>, Refusal> {
         // Only committed leaves delimit trivia gaps. No scalar grammar is
         // repeated here, and a hash inside a committed scalar remains content.
         let properties = core::mem::take(&mut self.properties);
         let blocks = core::mem::take(&mut self.blocks);
+        let tags = core::mem::take(&mut self.tags);
         self.allocations
             .memory(|memory| {
                 properties.release(memory)?;
+                tags.release(memory)?;
                 blocks.release(memory)
             })
             .map_err(|cause| self.refuse(cause, 0))?;
@@ -879,16 +1042,28 @@ impl<'a> SyntaxBuilder<'a> {
         starts.sort_unstable_by_key(|(span, id)| (span.start, span.end, *id));
         ends.sort_unstable_by_key(|(span, id)| (span.end, span.start, *id));
         for entry in &mut trivia {
+            let document = documents
+                .get(documents.partition_point(|doc| doc.span.end <= entry.span.start))
+                .filter(|doc| doc.span.start <= entry.span.start);
             if entry.kind == TriviaKind::BlockHeaderComment {
                 let end = leaves.partition_point(|(span, _)| span.start <= entry.span.start);
-                if let Some((_, id)) = end.checked_sub(1).and_then(|index| leaves.get(index)) {
+                if let Some((_, id)) = end
+                    .checked_sub(1)
+                    .and_then(|index| leaves.get(index))
+                    .filter(|(span, _)| document.is_none_or(|doc| span.start >= doc.span.start))
+                {
                     entry.attachment = Attachment::Trailing(*id);
                     continue;
                 }
             }
             let previous = ends.partition_point(|(span, _)| span.end <= entry.span.start);
-            let prior = previous.checked_sub(1).and_then(|index| ends.get(index));
-            let next = starts.get(starts.partition_point(|(span, _)| span.start < entry.span.end));
+            let prior = previous
+                .checked_sub(1)
+                .and_then(|index| ends.get(index))
+                .filter(|(span, _)| document.is_none_or(|doc| span.start >= doc.span.start));
+            let next = starts
+                .get(starts.partition_point(|(span, _)| span.start < entry.span.end))
+                .filter(|(span, _)| document.is_none_or(|doc| span.start < doc.span.end));
             entry.attachment = if entry.kind == TriviaKind::Comment {
                 let line_start = self.source[..entry.span.start]
                     .rfind(['\r', '\n'])
@@ -916,10 +1091,9 @@ impl<'a> SyntaxBuilder<'a> {
             })
             .map_err(|cause| self.refuse(cause, 0))?;
         self.escapes.sort_unstable_by_key(|escape| escape.span);
-        Ok(SyntaxDocument {
+        Ok(SyntaxArena {
             source: self.source,
             identity: Digest32::new(*purrdf_hash::blake3::hash(self.source.as_bytes()).as_bytes()),
-            root,
             nodes: self.nodes,
             trivia,
             directives: self.directives,

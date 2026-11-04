@@ -108,19 +108,43 @@ fn blank(text: &str) -> bool {
     text.bytes().all(|b| matches!(b, b' ' | b'\t'))
 }
 fn heading(text: &str, from: usize, end: usize) -> Option<(u32, super::Span)> {
+    authoring_heading(text, from, end, super::Policy::Standard)
+}
+pub(super) fn authoring_heading(
+    text: &str,
+    from: usize,
+    end: usize,
+    policy: super::Policy,
+) -> Option<(u32, super::Span)> {
     let b = text.as_bytes();
     let mut at = from;
     while at < end && b[at] == b'#' {
         at += 1;
     }
     let count = at - from;
-    if count == 0 || count > 6 || at < end && !matches!(b[at], b' ' | b'\t') {
+    if count == 0
+        || count > 6
+        || (policy == super::Policy::Authoring && at == end)
+        || at < end && !matches!(b[at], b' ' | b'\t')
+    {
         return None;
     }
     while at < end && matches!(b[at], b' ' | b'\t') {
         at += 1;
     }
-    let mut last = end;
+    let mut last = if policy == super::Policy::Authoring {
+        let trimmed = text[at..end].trim_matches(purrdf_lex::terminals::is_unicode_white_space);
+        if trimmed.is_empty() {
+            return None;
+        }
+        at = end
+            - text[at..end]
+                .trim_start_matches(purrdf_lex::terminals::is_unicode_white_space)
+                .len();
+        at + trimmed.len()
+    } else {
+        end
+    };
     while last > at && matches!(b[last - 1], b' ' | b'\t') {
         last -= 1;
     }
@@ -134,6 +158,14 @@ fn heading(text: &str, from: usize, end: usize) -> Option<(u32, super::Span)> {
         }
     } else {
         last = hashes;
+    }
+    if policy == super::Policy::Authoring {
+        let title = text[at..last].trim_matches(purrdf_lex::terminals::is_unicode_white_space);
+        let begin = last
+            - text[at..last]
+                .trim_start_matches(purrdf_lex::terminals::is_unicode_white_space)
+                .len();
+        return Some((count as u32, span(begin, begin + title.len())));
     }
     Some((count as u32, span(at, last)))
 }
@@ -160,11 +192,19 @@ fn list(text: &str, at: usize, end: usize) -> Option<(usize, Option<u64>)> {
     Some((next, number))
 }
 fn rule(text: &str, origin: usize, budget: &mut Budget<'_>) -> Result<bool, SyntaxError> {
+    rule_policy(text, origin, super::Policy::Standard, budget)
+}
+fn rule_policy(
+    text: &str,
+    origin: usize,
+    policy: super::Policy,
+    budget: &mut Budget<'_>,
+) -> Result<bool, SyntaxError> {
     let mut marker = None;
     let mut count = 0;
     for (offset, b) in text.bytes().enumerate() {
         budget.tick(origin + offset, 1)?;
-        if matches!(b, b' ' | b'\t') {
+        if b == b' ' || policy == super::Policy::Standard && b == b'\t' {
             continue;
         }
         if !matches!(b, b'-' | b'*' | b'_') || marker.is_some_and(|m| m != b) {
@@ -385,6 +425,9 @@ pub(super) fn read(
     doc: &mut SyntaxDocument<'_>,
     budget: &mut Budget<'_>,
 ) -> Result<(), SyntaxError> {
+    if doc.policy == super::Policy::Authoring {
+        return read_authoring(doc, budget);
+    }
     let text = doc.source;
     let b = text.as_bytes();
     let mut at = 0;
@@ -393,16 +436,11 @@ pub(super) fn read(
     let mut paragraph: Option<usize> = None;
     while at < text.len() {
         let start = at;
-        let end = purrdf_lex::scan::find_byte2(&b[start..], b'\n', b'\r')
-            .map_or(text.len(), |i| start + i);
-        at = after_line_ending(text, end);
+        let (end, next) = physical_line(text, start, doc.policy);
+        at = next;
         budget.tick(start, at - start + 1)?;
         let line = doc.lines.len();
-        let payload_start = if start == 0 && text.starts_with('\u{feff}') {
-            3
-        } else {
-            start
-        };
+        let payload_start = super::payload_start(text, start);
         let slicing_source = span(
             payload_start,
             end + usize::from(at == end + 2 && b.get(end) == Some(&b'\r')),
@@ -464,8 +502,8 @@ pub(super) fn read(
                 } => {
                     let (probe, columns) = indent(text, from, end, 4, budget)?;
                     let marker = probe.at;
-                    let run = b[marker..end].iter().take_while(|c| **c == byte).count();
-                    let closing = columns <= 3 && run >= count && blank(&text[marker + run..end]);
+                    let closing = columns <= 3
+                        && fence_closes(text, marker, end, byte, count, super::Policy::Standard);
                     let stripped = indent(text, from, end, leading, budget)?.0;
                     let content = if closing {
                         span(end, end)
@@ -657,166 +695,156 @@ pub(super) fn read(
             virtual_spaces = probe.pending;
             eligible = false;
             new_kind = Some(BlockKind::IndentedCode);
-        } else {
-            let fence = b.get(marker).copied().filter(|c| matches!(c, b'`' | b'~'));
-            let count = fence.map_or(0, |c| {
-                b[marker..end].iter().take_while(|v| **v == c).count()
+        } else if columns <= 3
+            && let Some((fence, count, info)) =
+                fence_start(text, marker, end, super::Policy::Standard)
+        {
+            let id = add(
+                doc,
+                budget,
+                start,
+                end,
+                parent,
+                BlockKind::FencedCode {
+                    marker: span(marker, marker + count),
+                    info,
+                    closed: false,
+                },
+                line,
+            )?;
+            open = Some(Open::Fence {
+                id,
+                byte: fence,
+                count,
+                indent: columns,
+                depth: containers.len(),
             });
-            if columns <= 3
-                && count >= 3
-                && !(fence == Some(b'`') && text[marker + count..end].contains('`'))
-            {
-                let info_start = marker + count;
-                let info = text[info_start..end].trim_matches([' ', '\t']);
-                let info_at = info_start + text[info_start..end].len()
-                    - text[info_start..end].trim_start_matches([' ', '\t']).len();
-                let id = add(
-                    doc,
-                    budget,
-                    start,
-                    end,
-                    parent,
-                    BlockKind::FencedCode {
-                        marker: span(marker, marker + count),
-                        info: span(info_at, info_at + info.len()),
-                        closed: false,
-                    },
-                    line,
-                )?;
-                open = Some(Open::Fence {
+            content = span(end, end);
+            virtual_spaces = 0;
+            eligible = false;
+            paragraph = None;
+        } else if columns <= 3
+            && let Some(HtmlStart {
+                close,
+                blank: blank_end,
+                comment,
+            }) = html_close(&text[marker..end], paragraph.is_none(), marker, budget)?
+        {
+            let done = close.is_some_and(|s| contains_ascii(&text[marker..end], s));
+            let id = add(
+                doc,
+                budget,
+                start,
+                end,
+                parent,
+                BlockKind::Html {
+                    comment,
+                    opaque: close.is_some(),
+                    closed: done,
+                },
+                line,
+            )?;
+            if !done {
+                open = Some(Open::Html {
                     id,
-                    byte: fence.expect("fence run"),
-                    count,
-                    indent: columns,
-                    depth: containers.len(),
-                });
-                content = span(end, end);
-                virtual_spaces = 0;
-                eligible = false;
-                paragraph = None;
-            } else if columns <= 3
-                && let Some(HtmlStart {
                     close,
                     blank: blank_end,
-                    comment,
-                }) = html_close(&text[marker..end], paragraph.is_none(), marker, budget)?
-            {
-                let done = close.is_some_and(|s| contains_ascii(&text[marker..end], s));
-                let id = add(
-                    doc,
-                    budget,
-                    start,
-                    end,
-                    parent,
-                    BlockKind::Html {
-                        comment,
-                        opaque: close.is_some(),
-                        closed: done,
-                    },
-                    line,
-                )?;
-                if !done {
-                    open = Some(Open::Html {
-                        id,
-                        close,
-                        blank: blank_end,
-                        depth: containers.len(),
-                    });
-                }
-                eligible = false;
-                paragraph = None;
-            } else if columns <= 3
-                && let Some(h) = heading(text, marker, end)
-            {
-                head = Some(h);
-                new_kind = Some(BlockKind::Heading {
-                    level: h.0,
-                    text: h.1,
+                    depth: containers.len(),
                 });
-                paragraph = None;
-            } else if columns <= 3
-                && paragraph.is_some()
-                && text[marker..end]
-                    .trim_end_matches([' ', '\t'])
-                    .bytes()
-                    .all(|c| c == b[marker])
-                && matches!(b.get(marker), Some(b'=' | b'-'))
-                && !text[marker..end].is_empty()
-            {
-                let mut id = paragraph.take().expect("open paragraph");
-                let level = if b[marker] == b'=' { 1 } else { 2 };
-                let definitions = doc.definitions.len();
-                let first = super::inline::definitions(doc, id, budget)?;
-                if first > doc.blocks[id].lines.start {
-                    doc.blocks[id].kind = BlockKind::ReferenceDefinitions {
-                        definitions: definitions..doc.definitions.len(),
-                    };
-                    doc.blocks[id].lines.end = first;
-                    doc.blocks[id].source.end = doc.lines[first - 1].newline.end;
-                }
-                if first == line {
-                    // Definitions alone cannot provide a Setext heading title.
-                    if rule(&text[marker..end], marker, budget)? {
-                        new_kind = Some(BlockKind::Rule);
-                        eligible = false;
-                    } else {
-                        paragraph = Some(add(
-                            doc,
-                            budget,
-                            start,
-                            end,
-                            parent,
-                            BlockKind::Paragraph,
-                            line,
-                        )?);
-                    }
-                } else {
-                    let title = span(
-                        doc.lines[first].content.start as usize,
-                        doc.lines[line - 1].content.end as usize,
-                    );
-                    let kind = BlockKind::Heading { level, text: title };
-                    if first > doc.blocks[id].lines.start {
-                        id = add(
-                            doc,
-                            budget,
-                            doc.lines[first].source.start as usize,
-                            end,
-                            parent,
-                            kind,
-                            first,
-                        )?;
-                    } else {
-                        doc.blocks[id].kind = kind;
-                    }
-                    doc.sliced[first].heading = Some((level, title));
-                    doc.sliced[first].source.end =
-                        (end + usize::from(at == end + 2 && b.get(end) == Some(&b'\r'))) as u64;
-                    doc.sliced[first].eligible = true;
-                    for continuation in &mut doc.sliced[first + 1..line] {
-                        budget.tick(continuation.source.start as usize, 1)?;
-                        continuation.eligible = false;
-                    }
-                    extend(doc, id, end, line);
-                    eligible = false;
-                }
-            } else if columns <= 3 && rule(&text[marker..end], marker, budget)? {
-                new_kind = Some(BlockKind::Rule);
-                eligible = false;
-                paragraph = None;
-            } else if let Some(id) = paragraph {
-                extend(doc, id, end, line);
-            } else {
-                paragraph = Some(add(
-                    doc,
-                    budget,
-                    start,
-                    end,
-                    parent,
-                    BlockKind::Paragraph,
-                    line,
-                )?);
             }
+            eligible = false;
+            paragraph = None;
+        } else if columns <= 3
+            && let Some(h) = heading(text, marker, end)
+        {
+            head = Some(h);
+            new_kind = Some(BlockKind::Heading {
+                level: h.0,
+                text: h.1,
+            });
+            paragraph = None;
+        } else if columns <= 3
+            && paragraph.is_some()
+            && text[marker..end]
+                .trim_end_matches([' ', '\t'])
+                .bytes()
+                .all(|c| c == b[marker])
+            && matches!(b.get(marker), Some(b'=' | b'-'))
+            && !text[marker..end].is_empty()
+        {
+            let mut id = paragraph.take().expect("open paragraph");
+            let level = if b[marker] == b'=' { 1 } else { 2 };
+            let definitions = doc.definitions.len();
+            let first = super::inline::definitions(doc, id, budget)?;
+            if first > doc.blocks[id].lines.start {
+                doc.blocks[id].kind = BlockKind::ReferenceDefinitions {
+                    definitions: definitions..doc.definitions.len(),
+                };
+                doc.blocks[id].lines.end = first;
+                doc.blocks[id].source.end = doc.lines[first - 1].newline.end;
+            }
+            if first == line {
+                // Definitions alone cannot provide a Setext heading title.
+                if rule(&text[marker..end], marker, budget)? {
+                    new_kind = Some(BlockKind::Rule);
+                    eligible = false;
+                } else {
+                    paragraph = Some(add(
+                        doc,
+                        budget,
+                        start,
+                        end,
+                        parent,
+                        BlockKind::Paragraph,
+                        line,
+                    )?);
+                }
+            } else {
+                let title = span(
+                    doc.lines[first].content.start as usize,
+                    doc.lines[line - 1].content.end as usize,
+                );
+                let kind = BlockKind::Heading { level, text: title };
+                if first > doc.blocks[id].lines.start {
+                    id = add(
+                        doc,
+                        budget,
+                        doc.lines[first].source.start as usize,
+                        end,
+                        parent,
+                        kind,
+                        first,
+                    )?;
+                } else {
+                    doc.blocks[id].kind = kind;
+                }
+                doc.sliced[first].heading = Some((level, title));
+                doc.sliced[first].source.end =
+                    (end + usize::from(at == end + 2 && b.get(end) == Some(&b'\r'))) as u64;
+                doc.sliced[first].eligible = true;
+                for continuation in &mut doc.sliced[first + 1..line] {
+                    budget.tick(continuation.source.start as usize, 1)?;
+                    continuation.eligible = false;
+                }
+                extend(doc, id, end, line);
+                eligible = false;
+            }
+        } else if columns <= 3 && rule(&text[marker..end], marker, budget)? {
+            new_kind = Some(BlockKind::Rule);
+            eligible = false;
+            paragraph = None;
+        } else if let Some(id) = paragraph {
+            extend(doc, id, end, line);
+        } else {
+            paragraph = Some(add(
+                doc,
+                budget,
+                start,
+                end,
+                parent,
+                BlockKind::Paragraph,
+                line,
+            )?);
         }
         if let Some((_, title)) = head {
             content = title;
@@ -871,4 +899,265 @@ pub(super) fn read(
         *closed = true;
     }
     budget.release(containers)
+}
+
+fn physical_line(text: &str, start: usize, policy: super::Policy) -> (usize, usize) {
+    if policy == super::Policy::Authoring {
+        let raw_end = purrdf_lex::scan::find_byte(&text.as_bytes()[start..], b'\n')
+            .map_or(text.len(), |i| start + i);
+        let end = raw_end - usize::from(text[start..raw_end].ends_with('\r'));
+        return (end, raw_end + usize::from(raw_end < text.len()));
+    }
+    let end = purrdf_lex::scan::find_byte2(&text.as_bytes()[start..], b'\n', b'\r')
+        .map_or(text.len(), |i| start + i);
+    (end, after_line_ending(text, end))
+}
+fn fence_start(
+    text: &str,
+    marker: usize,
+    end: usize,
+    policy: super::Policy,
+) -> Option<(u8, usize, super::Span)> {
+    let byte = *text
+        .as_bytes()
+        .get(marker)
+        .filter(|b| matches!(b, b'`' | b'~'))?;
+    let count = text.as_bytes()[marker..end]
+        .iter()
+        .take_while(|b| **b == byte)
+        .count();
+    if count < 3 || byte == b'`' && text[marker + count..end].contains('`') {
+        return None;
+    }
+    let raw = &text[marker + count..end];
+    let info = if policy == super::Policy::Authoring {
+        raw.trim_matches(purrdf_lex::terminals::is_unicode_white_space)
+    } else {
+        raw.trim_matches([' ', '\t'])
+    };
+    let leading = if policy == super::Policy::Authoring {
+        raw.len()
+            - raw
+                .trim_start_matches(purrdf_lex::terminals::is_unicode_white_space)
+                .len()
+    } else {
+        raw.len() - raw.trim_start_matches([' ', '\t']).len()
+    };
+    let offset = marker + count + leading;
+    Some((byte, count, span(offset, offset + info.len())))
+}
+fn fence_closes(
+    text: &str,
+    marker: usize,
+    end: usize,
+    byte: u8,
+    count: usize,
+    policy: super::Policy,
+) -> bool {
+    let run = text.as_bytes()[marker..end]
+        .iter()
+        .take_while(|b| **b == byte)
+        .count();
+    run >= count
+        && if policy == super::Policy::Authoring {
+            text[marker + run..end]
+                .trim_matches(purrdf_lex::terminals::is_unicode_white_space)
+                .is_empty()
+        } else {
+            blank(&text[marker + run..end])
+        }
+}
+struct AuthoringMarker {
+    at: usize,
+    end: usize,
+    quote: bool,
+    number: Option<u64>,
+}
+// Physical authoring prefixes use literal spaces, without Standard's lazy
+// continuation or tab-column interpretation. Marker and fence grammar is shared.
+fn extend_authoring(
+    doc: &mut SyntaxDocument<'_>,
+    mut id: usize,
+    end: usize,
+    line: usize,
+    budget: &mut Budget<'_>,
+) -> Result<(), SyntaxError> {
+    loop {
+        budget.tick(doc.blocks[id].source.start as usize, 1)?;
+        doc.blocks[id].source.end = end as u64;
+        doc.blocks[id].lines.end = line + 1;
+        let Some(parent) = doc.blocks[id].parent else {
+            return Ok(());
+        };
+        id = parent;
+    }
+}
+fn read_authoring(
+    doc: &mut SyntaxDocument<'_>,
+    budget: &mut Budget<'_>,
+) -> Result<(), SyntaxError> {
+    let text = doc.source;
+    let mut at = 0;
+    let mut lists: Vec<(usize, usize)> = Vec::new();
+    let mut open: Option<(usize, u8, usize, usize)> = None;
+    let mut previous_blank = true;
+    while at < text.len() {
+        let start = at;
+        let (end, next) = physical_line(text, start, doc.policy);
+        at = next;
+        budget.tick(start, (at - start).saturating_mul(4).saturating_add(1))?;
+        let line = doc.lines.len();
+        let payload = super::payload_start(text, start);
+        let raw = &text[payload..end];
+        let is_blank = raw
+            .trim_matches(purrdf_lex::terminals::is_unicode_white_space)
+            .is_empty();
+        let mut markers = Vec::new();
+        let mut content = payload;
+        if !is_blank {
+            let mut prefixes = 0;
+            loop {
+                // The authoring grammar inspects 64 prefixes plus one overflow
+                // probe in fenced text. Keep that fixed lookahead independent
+                // of caller admission: a later marker must not expose code.
+                if open.is_some() && prefixes == 65 {
+                    break;
+                }
+                let probe = end - text[content..end].trim_start_matches(' ').len();
+                if rule_policy(&text[probe..end], probe, super::Policy::Authoring, budget)? {
+                    break;
+                }
+                let (mark_end, quote, number) = if text.as_bytes().get(probe) == Some(&b'>') {
+                    (probe + 1, true, None)
+                } else if let Some((finish, number)) = list(text, probe, end)
+                    && (finish == end || text.as_bytes()[finish] == b' ')
+                {
+                    (finish, false, number)
+                } else {
+                    break;
+                };
+                // Fence content ignores prefix depth. Ordinary prefixes refuse
+                // at the first source marker crossing the caller's ceiling.
+                if open.is_none() {
+                    budget.limit(
+                        probe,
+                        "containers",
+                        markers.len() + 1,
+                        budget.limits.containers,
+                    )?;
+                }
+                prefixes += 1;
+                if open.is_none() {
+                    budget.push(
+                        &mut markers,
+                        AuthoringMarker {
+                            at: probe,
+                            end: mark_end,
+                            quote,
+                            number,
+                        },
+                    )?;
+                }
+                content = mark_end;
+                if quote {
+                    if text.as_bytes().get(content) == Some(&b' ') {
+                        content += 1;
+                    }
+                } else {
+                    content = end - text[content..end].trim_start_matches(' ').len();
+                }
+            }
+        }
+        if let Some((id, byte, count, allowance)) = open {
+            let marker = end - text[content..end].trim_start_matches(' ').len();
+            let closing = marker - content <= allowance
+                && fence_closes(text, marker, end, byte, count, super::Policy::Authoring);
+            extend_authoring(doc, id, at, line, budget)?;
+            if closing {
+                if let BlockKind::FencedCode { closed, .. } = &mut doc.blocks[id].kind {
+                    *closed = true;
+                }
+                open = None;
+            }
+        } else if is_blank {
+            previous_blank = true;
+        } else {
+            let first_list = markers
+                .iter()
+                .find(|marker| !marker.quote)
+                .map(|marker| marker.at - payload);
+            if let Some(first) = first_list {
+                while lists.last().is_some_and(|(column, _)| *column >= first) {
+                    lists.pop();
+                }
+            } else if previous_blank {
+                let indentation = raw.len() - raw.trim_start_matches(' ').len();
+                while lists
+                    .last()
+                    .is_some_and(|(column, _)| indentation < column + 2)
+                {
+                    lists.pop();
+                }
+            }
+            let depth = lists.len() + markers.len();
+            let over = depth.saturating_sub(budget.limits.containers);
+            let crossing = markers.len().saturating_sub(over.min(markers.len()));
+            let origin = markers.get(crossing).map_or(start, |marker| marker.at);
+            budget.limit(origin, "containers", depth, budget.limits.containers)?;
+            let mut parent = lists.last().map(|(_, id)| *id);
+            for marker in &markers {
+                let kind = if marker.quote {
+                    BlockKind::Quote
+                } else {
+                    BlockKind::ListItem {
+                        marker: span(marker.at, marker.end),
+                        number: marker.number,
+                    }
+                };
+                let id = add(doc, budget, start, end, parent, kind, line)?;
+                parent = Some(id);
+                if !marker.quote {
+                    budget.push(&mut lists, (marker.at - payload, id))?;
+                }
+            }
+            previous_blank = false;
+            let allowance = lists
+                .last()
+                .map_or(3, |(column, _)| column.saturating_add(5));
+            let marker = end - text[content..end].trim_start_matches(' ').len();
+            if marker - content <= allowance
+                && let Some((byte, count, info)) =
+                    fence_start(text, marker, end, super::Policy::Authoring)
+            {
+                let id = add(
+                    doc,
+                    budget,
+                    start,
+                    end,
+                    parent,
+                    BlockKind::FencedCode {
+                        marker: span(marker, marker + count),
+                        info,
+                        closed: false,
+                    },
+                    line,
+                )?;
+                open = Some((id, byte, count, allowance));
+            }
+        }
+        for (_, id) in &lists {
+            extend_authoring(doc, *id, at, line, budget)?;
+        }
+        budget.push(
+            &mut doc.lines,
+            ContentLine {
+                source: span(start, end),
+                content: span(content, end),
+                virtual_spaces: 0,
+                newline: span(end, at),
+            },
+        )?;
+        budget.release(markers)?;
+    }
+    budget.release(lists)
 }

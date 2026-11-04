@@ -8,6 +8,22 @@
 //! Its borrowed [`SyntaxDocument`] carries a byte identity and explicit input,
 //! live allocation, occurrence and depth bounds. [`SyntaxDocument::to_core`]
 //! projects through the same parser and eager builder as [`read_with`].
+//! [`read_syntax_stream`] retains ordered document roots and exact absolute
+//! prologues, envelopes and start/end markers in one [`SyntaxArena`]. Its explicit
+//! [`SyntaxStreamLimits`] admit the complete input, document metadata, decoded
+//! text, occurrences, trivia and parser state under aggregate bounds. An absent
+//! stream has no documents; an explicit empty document has an empty scalar root.
+//! No later failure publishes a partial stream.
+//!
+//! Explicit tags retain their raw span and a separate lexical identity:
+//! document-local handles expand their admitted `%TAG` prefixes, percent escapes
+//! decode as UTF-8, and the bare `!` remains non-specific. Untagged nodes have no
+//! explicit identity. Unknown handles are refused; unsupported specific tags
+//! survive lexically for a later semantic projection to judge. Anchor names
+//! shadow at declaration and reset per document. Only acyclic aliases are
+//! supported: an alias to an in-progress anchor has its own positioned refusal.
+//! Scalar-key uniqueness remains the lexical text/raw-tag law, rather than a
+//! complete Core representation-key equality or YAML-LD composition proof.
 //! [`emit_scalar`] shares the native quoting and escape bodies with [`write`](fn@write),
 //! reports the actual safe style, and admits its complete measured output before
 //! writing. Layout-policy consumers can use it without a local scalar encoder.
@@ -33,9 +49,10 @@
 //!   `\P`. The reference emitter wrote those characters raw inside a
 //!   single-quoted or literal scalar, where a YAML 1.2 reader keeps them as
 //!   content and misreads the indentation that follows them.
-//! * **A string a YAML 1.2 reader would take for a number is quoted even when
-//!   `serde_yaml` would have read it as a string**: a float spelling beyond the
-//!   `binary64` range (`1e400`) is single-quoted.
+//! * **Strings use exact Core-schema classification for quoting.** Numeric
+//!   spellings such as `007`, `1e400` and arbitrarily wide unsigned octal or
+//!   hexadecimal forms are quoted. Binary (`0b101`) and signed radix-looking
+//!   spellings (`-0x1F`) remain plain strings.
 //!
 //! # The reader
 //!
@@ -51,32 +68,48 @@
 //! keys to be unique), `.inf` and `.nan`, and a second document. A stream with
 //! no document reads as `null`.
 //!
+//! [`read_stream`] instead constructs every document in source order under
+//! explicit [`StreamLimits`]. No-document streams return an empty vector;
+//! explicit empty documents contribute null values. The allocation and expanded
+//! node bounds cover the complete retained stream, while anchor bindings and
+//! directives reset between documents. Later failures return no partial result.
+//! This API uses the same documented scalar rules as [`read_with`]; it does not
+//! select a different schema or introduce YAML-LD processing options.
+//!
 //! The reader is graded against the official yaml-test-suite
 //! (`crates/lex/tests/yaml_test_suite.rs`, over the vendored
 //! `vectors/yaml-test-suite`): every valid case inside the subset reads as the
 //! suite's JSON, every invalid case is refused, and every valid case outside it
 //! is refused by one of the kinds above, never read wrongly.
 //!
-//! Plain scalars resolve by the core schema as `serde_yaml` applies it, except that a number
-//! keeps its lexeme where the lexeme is a JSON number (`1.50` stays `1.50`) and
-//! is otherwise respelt as the JSON number it denotes (`0x1F` is `31`, `+.5` is
-//! `0.5`), and that a float spelling beyond the `binary64` range is a number, not
-//! a string. Mapping keys stay in document order. Nesting is bounded by
+//! Plain scalars resolve by the YAML 1.2.2 Core schema: signed decimal digits,
+//! unsigned octal and hexadecimal integers, and finite decimal/exponent forms
+//! keep their numeric type at arbitrary width. JSON-compatible number lexemes
+//! retain their spelling (`1.50` stays `1.50`); other forms are normalized
+//! exactly (`007` is `7`, `0x1F` is `31`, `+.5` is `0.5`). No machine float is
+//! used. [`Limits::max_numeric_work`] bounds classification and conversion;
+//! [`Limits::max_numeric_bytes`] bounds newly materialized numeric spellings.
+//! Both accounts cover the complete stream; aliases remain governed by node
+//! and allocation bounds. Exhaustion is a positioned typed refusal. Lexical
+//! syntax retains the authored spelling before projection.
+//! Mapping keys stay in document order. Nesting is bounded by
 //! [`Limits::max_depth`], and neither direction spends a machine-stack frame
 //! per nesting level.
 
 mod admission;
 mod build;
+mod number;
 mod read;
 mod resolve;
 mod syntax;
 mod write;
 
-pub use read::{Error, ErrorKind, Limits, read, read_with};
+pub use read::{Error, ErrorKind, Limits, StreamLimits, read, read_stream, read_with};
 pub use syntax::{
-    Attachment, BlockHeader, Chomping, CollectionStyle, NodeId, NodeKind, Position,
-    ProjectionLimits, ScalarStyle, Span, SyntaxDocument, SyntaxEntry, SyntaxEscape, SyntaxLimits,
-    SyntaxNode, SyntaxScalar, Trivia, TriviaKind, read_syntax,
+    Attachment, BlockHeader, Chomping, CollectionStyle, ExplicitTag, NodeId, NodeKind, Position,
+    ProjectionLimits, ScalarStyle, Span, SyntaxArena, SyntaxDocument, SyntaxDocumentRoot,
+    SyntaxEntry, SyntaxEscape, SyntaxLimits, SyntaxNode, SyntaxScalar, SyntaxStream,
+    SyntaxStreamLimits, Trivia, TriviaKind, read_syntax, read_syntax_stream,
 };
 pub use write::{
     EmitError, EmitLimits, EmitStyle, EmittedScalar, ScalarContext, emit_scalar, write,

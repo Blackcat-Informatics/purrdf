@@ -36,7 +36,6 @@ const SERDE_YAML_BYTES: &[(&str, &str)] = &[
     ("{\"k\":\"1.\"}", "k: '1.'\n"),
     ("{\"k\":\"0x1F\"}", "k: '0x1F'\n"),
     ("{\"k\":\"0o17\"}", "k: '0o17'\n"),
-    ("{\"k\":\"0b101\"}", "k: '0b101'\n"),
     ("{\"k\":\"007\"}", "k: '007'\n"),
     ("{\"k\":\"-007\"}", "k: '-007'\n"),
     ("{\"k\":\"00\"}", "k: '00'\n"),
@@ -234,6 +233,12 @@ fn the_documented_departures_from_serde_yaml_read_back() {
         // A float spelling beyond binary64 is quoted; serde_yaml left it plain
         // because its resolver read it as a string.
         (r#"["1e400"]"#, "- '1e400'\n"),
+        // Exact Core resolution quotes wide numeric strings and leaves binary
+        // and signed radix-looking strings plain.
+        (
+            r#"["0x100000000000000000000000000000001","+007","0b101","-0x1F"]"#,
+            "- '0x100000000000000000000000000000001'\n- '+007'\n- 0b101\n- -0x1F\n",
+        ),
     ] {
         let value = json(input);
         assert_eq!(write(&value), written, "{input}");
@@ -309,14 +314,33 @@ fn plain_scalars_resolve_by_the_core_schema_and_keep_json_lexemes() {
     let value = read(concat!(
         "n: [~, null, '', !!null '']\n",
         "b: [true, False, TRUE, yes, no, on]\n",
-        "i: [0, -0, 7, +5, -3, 0x1F, 0o17, 0b101, 007, 12:30]\n",
-        "f: [1.50, .5, -.5, 1., 1e3, 1.5E-3, +1.5]\n",
+        "i: [0, -0, 7, +5, -3, 0x1F, 0o17, 0b101, 007, -007, +007, 12:30, -0x1F, +0o17]\n",
+        "f: [1.50, .5, -.5, 1., 1e3, 1.5E-3, +1.5, 1e400]\n",
         "s: [inf, nan, 0x, 1_000, 'true', \"1\"]\n",
     ))
     .unwrap();
     assert_eq!(
         json::write_compact(&value),
-        r#"{"n":[null,null,"",null],"b":[true,false,true,"yes","no","on"],"i":[0,-0,7,5,-3,31,15,5,"007","12:30"],"f":[1.50,0.5,-0.5,1.0,1e3,1.5E-3,1.5],"s":["inf","nan","0x","1_000","true","1"]}"#
+        r#"{"n":[null,null,"",null],"b":[true,false,true,"yes","no","on"],"i":[0,-0,7,5,-3,31,15,"0b101",7,-7,7,"12:30","-0x1F","+0o17"],"f":[1.50,0.5,-0.5,1.0,1e3,1.5E-3,1.5,1e400],"s":["inf","nan","0x","1_000","true","1"]}"#
+    );
+    // Both radix paths exceed u128; octal packing
+    // also crosses word boundaries at digit positions not divisible by three.
+    let wide = "340282366920938463463374607431768211457";
+    for source in [
+        "0x100000000000000000000000000000001".to_owned(),
+        format!("0o4{}1", "0".repeat(41)),
+        format!("+000{wide}"),
+    ] {
+        assert_eq!(read(&source).unwrap().as_number().unwrap().lexeme(), wide);
+    }
+    let long = format!("1{}", "0".repeat(4000));
+    assert_eq!(
+        read(&format!("+{long}"))
+            .unwrap()
+            .as_number()
+            .unwrap()
+            .lexeme(),
+        long
     );
 }
 

@@ -10,17 +10,20 @@ use purrdf_lex::html::{Mode, resolution_layout, resolve_preallocated};
 use std::borrow::Cow;
 use std::ops::Range;
 
-struct Input {
-    text: String,
-    map: Vec<usize>,
+pub(super) struct Input {
+    pub(super) text: String,
+    pub(super) map: Vec<usize>,
+    pub(super) ends: Vec<usize>,
 }
 impl Input {
-    fn source(&self, range: Range<usize>) -> Span {
+    pub(super) fn source(&self, range: Range<usize>) -> Span {
         let start = self.map[range.start];
         let end = if range.is_empty() {
             start
-        } else {
+        } else if self.ends.is_empty() {
             self.map[range.end - 1] + 1
+        } else {
+            self.ends[range.end - 1]
         };
         span(start, end)
     }
@@ -34,6 +37,7 @@ fn input(
     let mut result = Input {
         text: String::new(),
         map: Vec::new(),
+        ends: Vec::new(),
     };
     for index in lines {
         if eligible_only && !doc.sliced[index].eligible {
@@ -59,8 +63,9 @@ fn input(
     budget.push(&mut result.map, end)?;
     Ok(result)
 }
-fn release(input: Input, budget: &mut Budget<'_>) -> Result<(), SyntaxError> {
+pub(super) fn release(input: Input, budget: &mut Budget<'_>) -> Result<(), SyntaxError> {
     budget.release(input.map)?;
+    budget.release(input.ends)?;
     budget.memory(|m| m.release_string(input.text))
 }
 #[derive(Clone, Copy)]
@@ -68,17 +73,21 @@ enum ValueSyntax {
     Markdown,
     ReferenceLabel,
     HtmlAttribute,
+    EscapesOnly,
+    Raw,
 }
 impl ValueSyntax {
     fn mode(self) -> Mode {
-        if matches!(self, Self::HtmlAttribute) {
+        if matches!(self, Self::EscapesOnly | Self::Raw) {
+            Mode::Plain
+        } else if matches!(self, Self::HtmlAttribute) {
             Mode::Attribute
         } else {
             Mode::Markdown
         }
     }
     fn escapes(self) -> bool {
-        !matches!(self, Self::HtmlAttribute)
+        !matches!(self, Self::HtmlAttribute | Self::Raw)
     }
     fn limit(self, budget: &Budget<'_>) -> usize {
         if matches!(self, Self::ReferenceLabel) {
@@ -101,12 +110,12 @@ fn append_references(
         text.len()
             .checked_mul(3)
             .ok_or_else(|| SyntaxError::Storage {
-                position: super::position(budget.source, at),
+                position: budget.position(at),
                 cause: purrdf_lex::allocation::StorageError::SizeOverflow,
             })?,
     )?;
     let layout = resolution_layout(text, mode).map_err(|cause| SyntaxError::Reference {
-        position: super::position(budget.source, at),
+        position: budget.position(at),
         cause,
     })?;
     let bytes = if layout.replaced {
@@ -118,7 +127,7 @@ fn append_references(
         .len()
         .checked_add(bytes)
         .ok_or_else(|| SyntaxError::Storage {
-            position: super::position(budget.source, at),
+            position: budget.position(at),
             cause: purrdf_lex::allocation::StorageError::SizeOverflow,
         })?;
     budget.limit(at, "decoded link part bytes", next, limit)?;
@@ -135,7 +144,7 @@ fn append_references(
     })?;
     let resolution = resolve_preallocated(text, mode, layout, decoded, sources, diagnostics)
         .map_err(|cause| SyntaxError::Reference {
-            position: super::position(budget.source, at),
+            position: budget.position(at),
             cause,
         })?;
     budget.release(resolution.decoded.sources)?;
@@ -156,6 +165,12 @@ fn decode<'a>(
     let limit = syntax.limit(budget);
     let mode = syntax.mode();
     let escapes = syntax.escapes();
+    budget.limit(
+        raw.start as usize,
+        "link part bytes",
+        raw.len() as usize,
+        limit,
+    )?;
     budget.limit(raw.start as usize, "link part bytes", text.len(), limit)?;
     budget.tick(raw.start as usize, text.len())?;
     let original = &source[raw.range()];
@@ -234,7 +249,11 @@ fn part<'a>(
         doc.source,
         input.source(range.clone()),
         &input.text[range],
-        ValueSyntax::Markdown,
+        if doc.policy == super::Policy::Authoring {
+            ValueSyntax::EscapesOnly
+        } else {
+            ValueSyntax::Markdown
+        },
         budget,
     )
 }
@@ -248,7 +267,11 @@ fn label_part<'a>(
         doc.source,
         input.source(range.clone()),
         &input.text[range],
-        ValueSyntax::ReferenceLabel,
+        if doc.policy == super::Policy::Authoring {
+            ValueSyntax::EscapesOnly
+        } else {
+            ValueSyntax::ReferenceLabel
+        },
         budget,
     )
 }
@@ -321,6 +344,7 @@ fn destination(
     start: usize,
     budget: &mut Budget<'_>,
     origin: usize,
+    policy: super::Policy,
 ) -> Result<Option<(Range<usize>, usize)>, SyntaxError> {
     let b = text.as_bytes();
     let mut at = start;
@@ -339,13 +363,22 @@ fn destination(
             budget.limits.link_part_bytes,
         )?;
         match b[at] {
-            b'\\' if b.get(at + 1).is_some_and(u8::is_ascii_punctuation) => {
+            b'\\'
+                if b.get(at + 1).is_some_and(|b| {
+                    policy == super::Policy::Authoring || b.is_ascii_punctuation()
+                }) =>
+            {
                 at += 2;
                 continue;
             }
             b'>' if angle => return Ok(Some((from..at, at + 1))),
-            b'<' | b'\n' | b'\r' if angle => return Ok(None),
-            c if !angle && (space(c) || c < 32) => break,
+            b'<' | b'\n' if angle => return Ok(None),
+            b'\r' if angle && policy == super::Policy::Standard => return Ok(None),
+            c if !angle
+                && (space(c) || c < 32 || policy == super::Policy::Authoring && c == 127) =>
+            {
+                break;
+            }
             b'(' if !angle => {
                 depth += 1;
                 budget.limit(origin, "inline nesting", depth, budget.limits.nesting)?;
@@ -371,6 +404,7 @@ fn title(
     start: usize,
     budget: &mut Budget<'_>,
     origin: usize,
+    policy: super::Policy,
 ) -> Result<Option<(Range<usize>, usize)>, SyntaxError> {
     let b = text.as_bytes();
     let Some(&quote @ (b'"' | b'\'' | b'(')) = b.get(start) else {
@@ -386,14 +420,17 @@ fn title(
             at - start - 1,
             budget.limits.link_part_bytes,
         )?;
-        if b[at] == b'\\' && b.get(at + 1).is_some_and(u8::is_ascii_punctuation) {
+        if b[at] == b'\\'
+            && b.get(at + 1)
+                .is_some_and(|b| policy == super::Policy::Authoring || b.is_ascii_punctuation())
+        {
             at += 2;
             continue;
         }
         if b[at] == close {
             return Ok(Some((start + 1..at, at + 1)));
         }
-        if b[at] == b'(' && quote == b'(' {
+        if policy == super::Policy::Standard && b[at] == b'(' && quote == b'(' {
             return Ok(None);
         }
         at += 1;
@@ -461,7 +498,7 @@ fn definition(
     }
     let begin = skip(text, end + 2);
     let origin = input.map[begin.min(input.map.len() - 1)];
-    let Some((dest, next)) = destination(text, begin, budget, origin)? else {
+    let Some((dest, next)) = destination(text, begin, budget, origin, doc.policy)? else {
         return Ok(None);
     };
     if dest.is_empty() && text.as_bytes().get(begin) != Some(&b'<') {
@@ -469,7 +506,7 @@ fn definition(
     }
     let after = skip(text, next);
     let parsed_title = if after > next {
-        title(text, after, budget, origin)?
+        title(text, after, budget, origin, doc.policy)?
     } else {
         None
     };
@@ -608,7 +645,7 @@ struct Bracket {
     image: bool,
     active: bool,
 }
-fn occurrences(
+pub(super) fn occurrences(
     doc: &mut SyntaxDocument<'_>,
     input: &Input,
     table: &HashTable<(u64, usize)>,
@@ -627,7 +664,7 @@ fn occurrences(
         }
         let mut opaque = None;
         let mut recorded = false;
-        if b[at] == b'`' {
+        if doc.policy == super::Policy::Standard && b[at] == b'`' {
             let run = b[at..].iter().take_while(|c| **c == b'`').count();
             if let Some(end) =
                 super::code_span_end(text, at + run, run, |at| input.map[at], budget)?
@@ -638,7 +675,7 @@ fn occurrences(
                 at += run;
                 continue;
             }
-        } else if b[at] == b'<' {
+        } else if doc.policy == super::Policy::Standard && b[at] == b'<' {
             let end = if let Some(end) = opaque_html(doc, input, at, true, budget)? {
                 Some(end)
             } else {
@@ -695,12 +732,22 @@ fn occurrences(
             let mut target = None;
             if b.get(end) == Some(&b'(') {
                 let start = skip(text, end + 1);
-                if let Some((dest, next)) =
-                    destination(text, start, budget, input.map[start.min(text.len())])?
-                {
+                if let Some((dest, next)) = destination(
+                    text,
+                    start,
+                    budget,
+                    input.map[start.min(text.len())],
+                    doc.policy,
+                )? {
                     let after = skip(text, next);
-                    let title = if after > next {
-                        title(text, after, budget, input.map[after.min(text.len())])?
+                    let title = if after > next || doc.policy == super::Policy::Authoring {
+                        title(
+                            text,
+                            after,
+                            budget,
+                            input.map[after.min(text.len())],
+                            doc.policy,
+                        )?
                     } else {
                         None
                     };
@@ -717,7 +764,7 @@ fn occurrences(
                     }
                 }
             }
-            if target.is_none() {
+            if target.is_none() && doc.policy == super::Policy::Standard {
                 let mut label = begin + 1..at;
                 if b.get(end) == Some(&b'[') {
                     let mut close = end + 1;
@@ -785,7 +832,7 @@ fn occurrences(
         }
         at += text[at..].chars().next().expect("inline scalar").len_utf8();
     }
-    if prose < text.len() {
+    if doc.policy == super::Policy::Standard && prose < text.len() {
         self::prose(doc, input, prose, text.len(), budget)?;
     }
     budget.release(brackets)
@@ -906,4 +953,123 @@ pub(super) fn read(
     let bytes = hash_table_retained_bound(&table).expect("admitted native table layout");
     drop(table);
     budget.memory(|m| m.release_bytes(bytes))
+}
+
+pub(super) fn authoring_attributes<'a>(
+    doc: &SyntaxDocument<'a>,
+    input: &Input,
+    links: &mut Vec<super::authoring::AuthoringLink<'a>>,
+    budget: &mut Budget<'_>,
+) -> Result<(), SyntaxError> {
+    use super::authoring::{AuthoringLink, AuthoringLinkForm};
+    let mut state = purrdf_lex::html::AuthoringTagState::default();
+    loop {
+        budget.tick(input.map[0], 0)?;
+        let Some(attr) = budget.memory(|m| {
+            purrdf_lex::html::authoring_attribute_with_memory(&input.text, &mut state, m)
+        })?
+        else {
+            break;
+        };
+        let range = attr.value_source.expect("authoring target value");
+        let raw = input.source(range);
+        let destination = decode(
+            doc.source,
+            raw,
+            attr.value.expect("authoring target spelling"),
+            ValueSyntax::Raw,
+            budget,
+        )?;
+        budget.push(
+            links,
+            AuthoringLink {
+                source: input.source(attr.source),
+                form: if attr.name.eq_ignore_ascii_case("href") {
+                    AuthoringLinkForm::Href
+                } else {
+                    AuthoringLinkForm::Src
+                },
+                destination,
+                title: None,
+            },
+        )?;
+    }
+    Ok(())
+}
+
+pub(super) fn authoring_definition<'a>(
+    doc: &SyntaxDocument<'a>,
+    input: &Input,
+    links: &mut Vec<super::authoring::AuthoringLink<'a>>,
+    budget: &mut Budget<'_>,
+) -> Result<(), SyntaxError> {
+    use super::authoring::{AuthoringLink, AuthoringLinkForm};
+    let text = &input.text;
+    budget.tick(input.map[0], text.len().saturating_mul(4))?;
+    let payload = super::payload_start(doc.source, input.map[0]) - input.map[0];
+    let from = text.len() - text[payload..].trim_start_matches(' ').len();
+    if from - payload > 3 || text.as_bytes().get(from) != Some(&b'[') {
+        return Ok(());
+    }
+    let Some(label_end) = text[from + 1..].find("]:").map(|at| at + from + 1) else {
+        return Ok(());
+    };
+    let label = &text[from + 1..label_end];
+    if label
+        .trim_matches(purrdf_lex::terminals::is_unicode_white_space)
+        .is_empty()
+        || label.starts_with('^')
+    {
+        return Ok(());
+    }
+    let after = label_end + 2;
+    let start = text.len()
+        - text[after..]
+            .trim_start_matches(purrdf_lex::terminals::is_unicode_white_space)
+            .len();
+    let angle = text.as_bytes().get(start) == Some(&b'<');
+    let begin = start + usize::from(angle);
+    let end = text[begin..]
+        .find(|c: char| {
+            if angle {
+                c == '>'
+            } else {
+                purrdf_lex::terminals::is_unicode_white_space(c)
+            }
+        })
+        .map_or(text.len(), |at| begin + at);
+    if begin == end {
+        return Ok(());
+    }
+    let destination = part(doc, input, begin..end, budget)?;
+    let after = if angle && text.as_bytes().get(end) == Some(&b'>') {
+        end + 1
+    } else {
+        end
+    };
+    let title_start = skip(text, after);
+    let parsed_title = if title_start > after {
+        title(
+            text,
+            title_start,
+            budget,
+            input.map[title_start],
+            doc.policy,
+        )?
+    } else {
+        None
+    };
+    let finish = parsed_title.as_ref().map_or(after, |(_, end)| *end);
+    let title = parsed_title
+        .map(|(range, _)| part(doc, input, range, budget))
+        .transpose()?;
+    budget.push(
+        links,
+        AuthoringLink {
+            source: input.source(from..finish),
+            form: AuthoringLinkForm::ReferenceDefinition,
+            destination,
+            title,
+        },
+    )
 }

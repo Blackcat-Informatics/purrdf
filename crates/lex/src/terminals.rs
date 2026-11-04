@@ -1628,6 +1628,20 @@ pub fn decode_char_ref(body: &[u8]) -> Option<char> {
     char::from_u32(code).filter(|&c| is_xml_char(c))
 }
 
+/// Physical-line Markdown authoring attribute-name policy: Unicode Alphabetic
+/// or Numeric, plus `_`, `-`, `:` and `.`. This is intentionally the authoring
+/// clause, not the CommonMark ASCII tag-name or W3C PN_CHARS production.
+#[must_use]
+pub fn is_authoring_html_name(c: char) -> bool {
+    c.is_alphanumeric() || matches!(c, '_' | '-' | ':' | '.')
+}
+/// Physical-line Markdown authoring tag head: Unicode Alphabetic. A slash is
+/// handled separately as the closing-tag marker by the shared HTML scanner.
+#[must_use]
+pub fn is_authoring_html_tag_start(c: char) -> bool {
+    c.is_alphabetic()
+}
+
 #[cfg(test)]
 mod escape_and_trivia_tests {
     use super::{

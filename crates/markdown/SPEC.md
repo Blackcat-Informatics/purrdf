@@ -159,8 +159,9 @@ A **byte order mark** (U+FEFF) at byte zero of the source is a statement
 about the encoding. Structure detection MUST skip it, so a document that
 opens with one states the same structure as the document that does not,
 and MUST NOT otherwise account for it: every span still counts the
-source's own bytes, so the mark falls before the first span and it is one
-scalar of the scalar count. At any other offset U+FEFF is ordinary
+source's own bytes. The mark precedes the first detected content or structural
+marker and remains one scalar of the scalar count; original physical-line and
+fenced-block envelopes retain it. At any other offset U+FEFF is ordinary
 content and stays inside the unit that holds it.
 
 ### 2.1 Headings and movements
@@ -256,6 +257,63 @@ a typed resource, original position and limit, or original native cause.
 No partial syntax model is returned. `analyze_with_limits` selects those
 syntax controls; existing `analyze` explicitly retains allocator-only
 syntax admission. Both project the same native syntax implementation.
+
+### 2.4 Physical-line authoring projection
+
+`authoring(source, limits)` returns a distinct `AuthoringDocument`. It cannot
+be passed to `analyze_syntax`; the structural dialect revision and RDF output
+remain unchanged. The projection retains original physical payload and newline
+spans, raw fence/container structure, and admitted interpreted text. A span
+covering removed comments is an envelope; its associated interpreted value is
+authoritative rather than a request to parse the source again.
+
+Authoring physical lines split at LF and retain a preceding CR as part of the
+original CRLF terminator; a final CR is also kept outside the final payload.
+Bare CR inside a payload stays on that physical line, including within code
+spans and angle destinations. Source positions use this same line rule.
+An initial byte order mark is skipped for structure recognition; physical line
+spans and interpreted prose retain it at its original offset. A byte order mark
+at any later offset remains ordinary content.
+Fences are recognized before comments and remain opaque. A fence retains the
+opening list-column allowance until it closes. Its closing-prefix lookahead
+inspects at most 65 quote/list markers (the authoring profile's 64 levels plus
+one overflow probe), independently of caller admission. This fixed grammar
+policy prevents a later hidden marker from unexpectedly exposing fenced text. Outside fences,
+comments end only at `-->` and may continue across lines and excluded fences.
+Matched backtick spans protect comment markers on that physical line. Comments
+are removed by concatenation. ATX headings are then read from physical text,
+behind at most three literal spaces, with required space/tab after one through
+six hashes and a nonempty initial title. Unicode White_Space trims the title;
+closing hashes follow the authoring space/tab rule. Quote/list prefixes do not
+create physical headings. Setext does not create authoring headings.
+
+For prose and links, each matched physical-line code span becomes one space;
+unmatched runs remain text. Indentation, ordinary HTML and physical container
+prefixes remain in prose. Links join consecutive originally nonblank, nonfenced
+lines, stripping only quote prefixes; headings isolate Markdown link chunks.
+Comment-only and code-only nonblank lines do not reset chunks. Multiline inline
+links and images are reported separately as split links.
+
+Markdown destinations and titles unescape ASCII punctuation and preserve
+character references. Reference definition destinations remain observable,
+including duplicates and labels longer than CommonMark's label ceiling; labels
+beginning with `^` are excluded. Reference uses are not resolved. HTML href/src
+values remain literal. The authoring tag head is Unicode Alphabetic, and its
+name characters are Unicode Alphabetic or Numeric plus `_`, `-`, `:` and `.`;
+this intentionally differs from CommonMark's ASCII HTML tag grammar. Tolerant
+attribute inspection does not require a complete tag. Quoted values spanning
+physical lines are excluded, a value may begin on a later line, and trailing
+slashes are removed from unquoted interpreted values while their source spans
+retain them. Original source bounds, storage, work and component bounds cover
+all scratch views and retained output, with typed atomic refusal.
+
+A finite authoring admission for a 1 MiB document uses `source_bytes = 1048576`,
+`containers = 64`, `link_part_bytes = 4096`, and `nesting = source_bytes`.
+The last bound admits every possible inline opener within that source bound
+without confusing inline nesting with the separate quote/list ceiling. Callers
+must also choose finite `auxiliary_bytes` and `work` ceilings; construction can
+refuse scratch storage even when the final retained model would fit. No limit
+is silently relaxed and there is no unbounded authoring preset.
 
 ## 3. The split law
 
