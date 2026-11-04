@@ -122,7 +122,8 @@ mod ranking;
 mod relation;
 mod score;
 mod source;
-pub use source::{IndexPositions, TextSource};
+pub use index::IndexRankedPostings;
+pub use source::{IndexPositions, RankedWindow, TextSource};
 pub mod segment;
 pub mod stem;
 mod surface;
@@ -165,6 +166,7 @@ pub use term_bytes::{FINGERPRINT_BYTES, fingerprint_terms};
 pub const ANALYZER_PROFILE_ID: &str = "purrdf-profiled-text-v4";
 
 pub use ranking::{
-    BoundedScore, FieldInput, INDEX_CORPUS_PROFILE_ID, PreparedCorpus, PreparedQuery,
-    RANKING_PROFILE_ID, RANKING_PROFILE_VERSION, RankingField, RankingProfile, ScoreBound,
+    BoundedScore, FieldEnvelope, FieldInput, INDEX_CORPUS_PROFILE_ID, PreparedCorpus,
+    PreparedQuery, RANKING_PROFILE_ID, RANKING_PROFILE_VERSION, RankingField, RankingProfile,
+    ScoreBound,
 };

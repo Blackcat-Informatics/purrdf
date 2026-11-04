@@ -13,6 +13,21 @@ use purrdf_core::TermValue;
 use purrdf_sparql_eval::{AdmittedVec, WorkspaceCapability};
 use std::ops::Deref;
 
+/// One unread posting head and corpus-independent bounds for its physical block
+/// and remaining partition suffix. All vectors retain the supplied admission.
+#[derive(Debug)]
+pub struct RankedWindow {
+    /// Earliest unread canonical document.
+    pub document: u32,
+    /// Last canonical document in the current block, inclusive.
+    pub block_end: u32,
+    /// Raw envelopes covering this block. A conservative retained superset is
+    /// permitted; uncertifiable supersets require visiting eligible records.
+    pub block: AdmittedVec<crate::ranking::FieldEnvelope>,
+    /// Raw envelopes covering the unread partition suffix.
+    pub suffix: AdmittedVec<crate::ranking::FieldEnvelope>,
+}
+
 /// A pinned source snapshot. Document identifiers and partition ordinals use the
 /// native canonical order, independently of the provider's physical addresses.
 ///
@@ -40,6 +55,37 @@ pub trait TextSource<P: CorpusProfile>: std::fmt::Debug + Send + Sync + 'static 
         Self: 'a;
     /// Owned positional walk state; no borrow of the snapshot is retained.
     type Positions: Default + std::fmt::Debug + Send + 'static;
+    /// Owned ranked posting state over retained block facts and seek indexes.
+    type RankedPostings: std::fmt::Debug + Send + 'static;
+
+    /// Open a partition-restricted ranked cursor without walking its payloads.
+    fn open_ranked_postings(
+        &self,
+        partition: &PartitionKey<P>,
+        term: &str,
+        workspace: &WorkspaceCapability,
+    ) -> Result<Self::RankedPostings, TextError>;
+    /// Inspect the current head and retained range facts; no posting payload walk.
+    fn ranked_window(
+        &self,
+        cursor: &Self::RankedPostings,
+        workspace: &WorkspaceCapability,
+    ) -> Result<Option<RankedWindow>, TextError>;
+    /// Decode the head and advance. The boolean marks the first payload read in
+    /// a physical leaf block. Returned guards remain valid after later advances.
+    fn read_ranked_posting(
+        &self,
+        cursor: &mut Self::RankedPostings,
+        workspace: &WorkspaceCapability,
+    ) -> Result<Option<(u32, Self::Frequencies<'_>, bool)>, TextError>;
+    /// Seek to the first unread document >= target, or exhaust for `None`.
+    /// Return the number of wholly unread physical payload blocks bypassed.
+    fn seek_ranked_postings(
+        &self,
+        cursor: &mut Self::RankedPostings,
+        target: Option<u32>,
+        workspace: &WorkspaceCapability,
+    ) -> Result<u64, TextError>;
 
     /// The immutable analysis and selected-predicate configuration.
     fn config(&self) -> &TextIndexConfig<P>;
@@ -182,6 +228,43 @@ pub trait TextSource<P: CorpusProfile>: std::fmt::Debug + Send + Sync + 'static 
 
 /// Native derived operations. Providers implement facts, never scoring or analysis.
 pub(crate) trait SourceExt<P: CorpusProfile>: TextSource<P> {
+    fn checked_ranked_window(
+        &self,
+        cursor: &Self::RankedPostings,
+        workspace: &WorkspaceCapability,
+    ) -> Result<Option<RankedWindow>, TextError> {
+        let window = self.ranked_window(cursor, workspace)?;
+        if let Some(window) = &window {
+            let fields = self.ranking_profile().fields().len();
+            let valid = |field: &crate::ranking::FieldEnvelope| {
+                field.minimum_length <= field.maximum_length
+                    && (field.maximum_frequency == 0) == field.minimum_active_length.is_none()
+                    && (field.maximum_length == 0) == field.minimum_positive_length.is_none()
+                    && field.minimum_positive_length.is_none_or(|length| {
+                        length > 0
+                            && length >= field.minimum_length
+                            && length <= field.maximum_length
+                    })
+                    && (field.minimum_length == 0
+                        || field.minimum_positive_length == Some(field.minimum_length))
+                    && field.minimum_active_length.is_none_or(|length| {
+                        length >= field.minimum_length && length <= field.maximum_length
+                    })
+                    && (!field.consistent || field.maximum_frequency <= field.maximum_length)
+            };
+            if window.document > window.block_end
+                || window.block.len() != fields
+                || window.suffix.len() != fields
+                || !window.block.iter().chain(window.suffix.iter()).all(valid)
+            {
+                return Err(data_error(
+                    "ranked posting window has malformed bounds",
+                    Some(workspace),
+                ));
+            }
+        }
+        Ok(window)
+    }
     fn required_document(
         &self,
         document: u32,
@@ -263,50 +346,23 @@ pub(crate) trait SourceExt<P: CorpusProfile>: TextSource<P> {
         let document_row = self
             .read_document(document, workspace)?
             .ok_or_else(|| data_error("field input names an absent document", Some(workspace)))?;
-        let ranking = self.ranking_profile();
-        let mut fields = FieldInputs::new(ranking.fields().len(), workspace)?;
-        for (facts, frequency) in [
-            (document_row.predicate_lengths(), false),
-            (frequencies, true),
-        ] {
-            for &(predicate, count) in facts {
-                let predicate_ordinal = predicate;
-                let predicate_term = self
+        assemble_fields_owned(
+            document,
+            document_row.predicate_lengths(),
+            frequencies,
+            self.ranking_profile().fields().len(),
+            workspace,
+            |predicate| {
+                let predicate = self
                     .config()
                     .predicates()
                     .get(predicate as usize)
                     .ok_or_else(|| {
                         data_error("posting names an absent predicate", Some(workspace))
                     })?;
-                let field = ranking.field_for(predicate_term)?;
-                let value = if frequency {
-                    &mut fields[field].term_frequency
-                } else {
-                    &mut fields[field].length
-                };
-                *value = value.checked_add(count).ok_or_else(|| {
-                    let cause = if frequency {
-                        crate::arithmetic::ArithmeticRefusal::FieldFrequency {
-                            document,
-                            predicate: predicate_ordinal,
-                            current: *value,
-                            added: count,
-                        }
-                    } else {
-                        crate::arithmetic::ArithmeticRefusal::FieldLength {
-                            field,
-                            current: *value,
-                            added: count,
-                        }
-                    };
-                    crate::query_workspace::arithmetic_error(
-                        cause,
-                        workspace.is_bounded().then_some(workspace),
-                    )
-                })?;
-            }
-        }
-        Ok(fields)
+                self.ranking_profile().field_for(predicate)
+            },
+        )
     }
     fn term_frequency_in_predicate_owned(
         &self,
@@ -333,6 +389,49 @@ pub(crate) trait SourceExt<P: CorpusProfile>: TextSource<P> {
     }
 }
 impl<P: CorpusProfile, S: TextSource<P>> SourceExt<P> for S {}
+
+/// One field assembly shared by actual scoring and retained native summaries.
+pub(crate) fn assemble_fields_owned(
+    document: u32,
+    lengths: &[(u32, u64)],
+    frequencies: &[(u32, u64)],
+    field_count: usize,
+    workspace: &WorkspaceCapability,
+    mut route: impl FnMut(u32) -> Result<usize, TextError>,
+) -> Result<FieldInputs, TextError> {
+    let mut fields = FieldInputs::new(field_count, workspace)?;
+    for (facts, frequency) in [(lengths, false), (frequencies, true)] {
+        for &(predicate, count) in facts {
+            let field = route(predicate)?;
+            let value = if frequency {
+                &mut fields[field].term_frequency
+            } else {
+                &mut fields[field].length
+            };
+            *value = value.checked_add(count).ok_or_else(|| {
+                let cause = if frequency {
+                    crate::arithmetic::ArithmeticRefusal::FieldFrequency {
+                        document,
+                        predicate,
+                        current: *value,
+                        added: count,
+                    }
+                } else {
+                    crate::arithmetic::ArithmeticRefusal::FieldLength {
+                        field,
+                        current: *value,
+                        added: count,
+                    }
+                };
+                crate::query_workspace::arithmetic_error(
+                    cause,
+                    workspace.is_bounded().then_some(workspace),
+                )
+            })?;
+        }
+    }
+    Ok(fields)
+}
 
 /// The positional alias bound's single saturating recurrence.
 pub(crate) fn accumulate_phrase(bound: &mut u64, suffix: &mut u64, count: u64, contiguous: bool) {
@@ -417,6 +516,38 @@ impl<P: CorpusProfile> TextSource<P> for TextIndex<P> {
     type Frequencies<'a> = &'a [(u32, u64)];
     type Term<'a> = &'a str;
     type Positions = IndexPositions;
+    type RankedPostings = crate::index::IndexRankedPostings;
+
+    fn open_ranked_postings(
+        &self,
+        partition: &PartitionKey<P>,
+        term: &str,
+        workspace: &WorkspaceCapability,
+    ) -> Result<Self::RankedPostings, TextError> {
+        self.open_ranked_native(partition, term, workspace)
+    }
+    fn ranked_window(
+        &self,
+        cursor: &Self::RankedPostings,
+        workspace: &WorkspaceCapability,
+    ) -> Result<Option<RankedWindow>, TextError> {
+        self.ranked_window_native(cursor, workspace)
+    }
+    fn read_ranked_posting(
+        &self,
+        cursor: &mut Self::RankedPostings,
+        workspace: &WorkspaceCapability,
+    ) -> Result<Option<(u32, Self::Frequencies<'_>, bool)>, TextError> {
+        self.read_ranked_native(cursor, workspace)
+    }
+    fn seek_ranked_postings(
+        &self,
+        cursor: &mut Self::RankedPostings,
+        target: Option<u32>,
+        workspace: &WorkspaceCapability,
+    ) -> Result<u64, TextError> {
+        self.seek_ranked_native(cursor, target, workspace)
+    }
 
     fn config(&self) -> &TextIndexConfig<P> {
         self.config()

@@ -737,8 +737,7 @@ pub struct TextSearchRelation<P: CorpusProfile = GraphLanguage, S: TextSource<P>
 /// measurable time, so a timing assertion would pass over an implementation that
 /// ranks the whole index and one that does not.
 ///
-/// Both counters are monotone for the life of the relation and are never reset
-/// here. A caller that wants a delta reads the value before and after, which is
+/// Counters accumulate modulo u64 and are never reset here. A caller that wants a delta reads the value before and after, which is
 /// the reading that composes: a reset would race with any other invocation of a
 /// relation the registry may run across workers.
 ///
@@ -757,8 +756,10 @@ pub struct SearchObservations {
     rankings: AtomicU64,
     /// How many posting lists the ranker has walked end to end.
     posting_lists_walked: AtomicU64,
-    /// How many postings those walks have read.
+    /// How many posting payloads ranked traversal decoded.
     postings_walked: AtomicU64,
+    posting_blocks_skipped: AtomicU64,
+    posting_blocks_examined: AtomicU64,
     /// How many documents a score has been computed for, by either scorer.
     documents_scored: AtomicU64,
     /// How many invocations were answered by the point scorer.
@@ -804,17 +805,27 @@ impl SearchObservations {
         self.posting_lists_walked.load(Ordering::Relaxed)
     }
 
-    /// How many individual **postings** the ranker's walks have read — the sum,
-    /// over every list [`Self::posting_lists_walked`] counts, of that list's
-    /// length in the partition ranked. This is the number that grows with the
-    /// corpus, which is why it is counted rather than inferred.
+    /// How many posting payloads ranked traversal actually decoded, including
+    /// bounded traversal. Retained metadata reads and bypassed payloads are excluded.
     #[must_use]
     pub fn postings_walked(&self) -> u64 {
         self.postings_walked.load(Ordering::Relaxed)
     }
 
+    /// Physical posting leaf blocks bypassed without decoding their payloads.
+    #[must_use]
+    pub fn posting_blocks_skipped(&self) -> u64 {
+        self.posting_blocks_skipped.load(Ordering::Relaxed)
+    }
+
+    /// Physical posting leaf blocks whose payloads ranked traversal examined.
+    #[must_use]
+    pub fn posting_blocks_examined(&self) -> u64 {
+        self.posting_blocks_examined.load(Ordering::Relaxed)
+    }
+
     /// How many documents a **score** has been computed for, by the ranker (every
-    /// candidate of every partition it ranked) and by the point scorer (each
+    /// evaluated candidate of a partition) and by the point scorer (each
     /// document of the bound subject holding a needle term) alike.
     #[must_use]
     pub fn documents_scored(&self) -> u64 {
@@ -838,6 +849,10 @@ impl SearchObservations {
             .fetch_add(work.postings, Ordering::Relaxed);
         self.documents_scored
             .fetch_add(work.documents_scored, Ordering::Relaxed);
+        self.posting_blocks_skipped
+            .fetch_add(work.posting_blocks_skipped, Ordering::Relaxed);
+        self.posting_blocks_examined
+            .fetch_add(work.posting_blocks_examined, Ordering::Relaxed);
     }
 }
 

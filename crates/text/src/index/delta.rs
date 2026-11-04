@@ -252,9 +252,16 @@ impl<P: CorpusProfile> TextIndex<P> {
                 .terms
                 .binary_search_by(|entry| entry.term.as_str().cmp(word));
             let prior = position.ok().map(|at| self.terms[at].clone());
-            let mut postings = prior
-                .as_ref()
-                .map_or_else(super::Table::default, |entry| entry.postings.clone());
+            let added = partial.term_entry(word);
+            let mut postings = prior.as_ref().map_or_else(
+                || {
+                    added
+                        .expect("a new term has its partial postings")
+                        .postings
+                        .empty_like()
+                },
+                |entry| entry.postings.clone(),
+            );
             for document in old_documents {
                 let at = postings
                     .binary_search_by(|posting| {
@@ -263,7 +270,6 @@ impl<P: CorpusProfile> TextIndex<P> {
                     .expect("a removed token has its original posting");
                 postings = postings.remove(at)?;
             }
-            let added = partial.term_entry(word);
             if let Some(entry) = added {
                 for posting in entry.postings.iter() {
                     let at = postings

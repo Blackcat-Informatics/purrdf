@@ -78,6 +78,9 @@ use std::cmp::Ordering;
 use std::collections::BTreeSet;
 
 mod delta;
+mod posting_bounds;
+pub use posting_bounds::IndexRankedPostings;
+use posting_bounds::{PostingPolicy, PostingTable};
 
 use crate::SurfaceIndex;
 use crate::{CorpusProfile, GraphFree, GraphLanguage};
@@ -711,7 +714,7 @@ struct TermEntry<P: CorpusProfile> {
     /// The analyzed term text.
     term: Shared<String>,
     /// Postings ordered by `(partition, document)`.
-    postings: Table<Shared<Posting<P>>>,
+    postings: PostingTable<P>,
 }
 
 // ---------------------------------------------------------------------------
@@ -943,8 +946,9 @@ impl<P: CorpusProfile> TextIndex<P> {
     }
 
     /// Apply a complete ranking profile without re-tokenizing or rebuilding
-    /// postings. Predicate-level facts remain authoritative; only field lengths,
-    /// corpus totals and the answer fingerprint are recomputed.
+    /// posting payloads. Predicate-level facts remain authoritative; field
+    /// lengths, corpus totals and the answer fingerprint are recomputed. A
+    /// routing change also refolds posting envelopes from those retained facts.
     ///
     /// # Errors
     /// Refuses incomplete predicate routing or a merged field longer than the
@@ -1236,6 +1240,26 @@ impl<P: CorpusProfile> TextIndex<P> {
             .iter()
             .map(|predicate| self.ranking.field_for(predicate))
             .collect::<Result<_, _>>()?;
+        if self.terms.iter().any(|entry| {
+            !entry
+                .postings
+                .policy()
+                .matches(&self.predicate_fields, self.ranking.fields().len())
+        }) {
+            let mut routing = token_streams::handles(self.predicate_fields.len())?;
+            routing.extend_from_slice(&self.predicate_fields);
+            let policy = PostingPolicy::new(routing, self.ranking.fields().len())?;
+            let mut entries = token_streams::handles(self.terms.len())?;
+            for entry in self.terms.iter() {
+                let mut postings = token_streams::handles(entry.postings.len())?;
+                postings.extend(entry.postings.iter().cloned());
+                entries.push(share_index(TermEntry {
+                    term: entry.term.clone(),
+                    postings: Table::from_streams_with_summary(postings, policy.clone())?,
+                })?);
+            }
+            self.terms = Table::from_streams(entries)?;
+        }
         self.partitions = Table::default();
         let documents = self.documents.clone();
         let mut field_lengths = Vec::with_capacity(documents.len());
@@ -1862,7 +1886,7 @@ impl<P: CorpusProfile> TextIndex<P> {
         &self,
         partition: &PartitionKey<P>,
         term: &str,
-    ) -> Slice<'_, Shared<Posting<P>>> {
+    ) -> Slice<'_, Shared<Posting<P>>, PostingPolicy> {
         let Some(entry) = self.term_entry(term) else {
             return Slice::empty();
         };
@@ -1884,7 +1908,7 @@ impl<P: CorpusProfile> TextIndex<P> {
         partition: &PartitionKey<P>,
         term: &str,
         workspace: &purrdf_sparql_eval::WorkspaceCapability,
-    ) -> Result<Slice<'_, Shared<Posting<P>>>, purrdf_sparql_eval::EvalError> {
+    ) -> Result<Slice<'_, Shared<Posting<P>>, PostingPolicy>, purrdf_sparql_eval::EvalError> {
         let Some(entry) = self.term_entry(term) else {
             return Ok(Slice::empty());
         };
@@ -1930,7 +1954,12 @@ impl<P: CorpusProfile> TextIndex<P> {
                 })
             })
             .collect::<Result<_, _>>()?;
-        let (terms, token_streams) = build_terms(&documents, dictionary, &table)?;
+        let mut routing = token_streams::handles(config.predicates.len())?;
+        for predicate in &config.predicates {
+            routing.push(ranking.field_for(predicate)?);
+        }
+        let policy = PostingPolicy::new(routing, ranking.fields().len())?;
+        let (terms, token_streams) = build_terms(&documents, dictionary, &table, &policy)?;
         let table = Table::from_streams(table)?;
         let occurrence_order = build_occurrence_order(&table)?;
         let subject_order = build_subject_order(&table)?;
@@ -2688,6 +2717,7 @@ fn build_terms<P: CorpusProfile>(
     documents: &[AnalyzedDocument<P>],
     dictionary: &[String],
     table: &[Shared<Document<P>>],
+    policy: &PostingPolicy,
 ) -> Result<BuiltTerms<P>, TextError> {
     let mut order: Vec<u32> = (0..dictionary.len() as u32).collect();
     order.sort_by(|&left, &right| dictionary[left as usize].cmp(&dictionary[right as usize]));
@@ -2757,7 +2787,7 @@ fn build_terms<P: CorpusProfile>(
         list.sort_by(|a, b| compare_posting_documents(&a.document, &b.document));
         entries.push(share_index(TermEntry {
             term,
-            postings: Table::from_streams(list)?,
+            postings: Table::from_streams_with_summary(list, policy.clone())?,
         })?);
     }
     Ok((entries, token_streams))
