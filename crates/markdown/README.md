@@ -154,18 +154,18 @@ Sliced under `Vocabulary::under("urn:example:doc:")` with the profile
 shortened to its first eight characters):
 
 ```text
-<urn:example:doc:unit:sha256:3f052451…> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <urn:example:doc:Unit> .
-<urn:example:doc:unit:sha256:3f052451…> <urn:example:doc:byteEnd> "122"^^<http://www.w3.org/2001/XMLSchema#integer> .
-<urn:example:doc:unit:sha256:3f052451…> <urn:example:doc:byteStart> "78"^^<http://www.w3.org/2001/XMLSchema#integer> .
-<urn:example:doc:unit:sha256:3f052451…> <urn:example:doc:contentDigest> "a8591bee…"^^<http://www.w3.org/2001/XMLSchema#hexBinary> .
-<urn:example:doc:unit:sha256:3f052451…> <urn:example:doc:document> <urn:example:book> .
-<urn:example:doc:unit:sha256:3f052451…> <urn:example:doc:lineage> "The Book > the crossing"^^<urn:example:doc:lineagePath> .
-<urn:example:doc:unit:sha256:3f052451…> <urn:example:doc:ordinal> "1"^^<http://www.w3.org/2001/XMLSchema#integer> .
-<urn:example:doc:unit:sha256:3f052451…> <urn:example:doc:scalarEnd> "120"^^<http://www.w3.org/2001/XMLSchema#integer> .
-<urn:example:doc:unit:sha256:3f052451…> <urn:example:doc:scalarStart> "76"^^<http://www.w3.org/2001/XMLSchema#integer> .
-<urn:example:doc:unit:sha256:3f052451…> <urn:example:doc:section> <urn:example:doc:section:sha256:a1b06eb0…> .
-<urn:example:doc:unit:sha256:3f052451…> <urn:example:doc:text> "2. Two sovereign stars share one trajectory." .
-<urn:example:doc:unit:sha256:3f052451…> <urn:example:doc:verse> "2"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<urn:example:doc:unit:sha256:efa94c4f…> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <urn:example:doc:Unit> .
+<urn:example:doc:unit:sha256:efa94c4f…> <urn:example:doc:byteEnd> "122"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<urn:example:doc:unit:sha256:efa94c4f…> <urn:example:doc:byteStart> "78"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<urn:example:doc:unit:sha256:efa94c4f…> <urn:example:doc:contentDigest> "a8591bee…"^^<http://www.w3.org/2001/XMLSchema#hexBinary> .
+<urn:example:doc:unit:sha256:efa94c4f…> <urn:example:doc:document> <urn:example:book> .
+<urn:example:doc:unit:sha256:efa94c4f…> <urn:example:doc:lineage> "The Book > the crossing"^^<urn:example:doc:lineagePath> .
+<urn:example:doc:unit:sha256:efa94c4f…> <urn:example:doc:ordinal> "1"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<urn:example:doc:unit:sha256:efa94c4f…> <urn:example:doc:scalarEnd> "120"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<urn:example:doc:unit:sha256:efa94c4f…> <urn:example:doc:scalarStart> "76"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<urn:example:doc:unit:sha256:efa94c4f…> <urn:example:doc:section> <urn:example:doc:section:sha256:216f0c78…> .
+<urn:example:doc:unit:sha256:efa94c4f…> <urn:example:doc:text> "2. Two sovereign stars share one trajectory." .
+<urn:example:doc:unit:sha256:efa94c4f…> <urn:example:doc:verse> "2"^^<http://www.w3.org/2001/XMLSchema#integer> .
 ```
 
 The byte span and the scalar span differ by two because the document's
@@ -190,11 +190,11 @@ carries the row's source, and names the unit it is an edge of — and then
 the asserted edge itself.
 
 ```text
-<urn:example:doc:citation:sha256:35c6474e…> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <urn:example:doc:unit:sha256:3f052451…> <urn:example:doc:cites> "the-crossing"^^<urn:example:doc:anchor> )>> .
-<urn:example:doc:citation:sha256:35c6474e…> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <urn:example:doc:Citation> .
-<urn:example:doc:citation:sha256:35c6474e…> <urn:example:doc:canonSource> "atlas/crossing.logic.ttl"^^<urn:example:doc:path> .
-<urn:example:doc:citation:sha256:35c6474e…> <urn:example:doc:unit> <urn:example:doc:unit:sha256:3f052451…> .
-<urn:example:doc:unit:sha256:3f052451…> <urn:example:doc:cites> "the-crossing"^^<urn:example:doc:anchor> .
+<urn:example:doc:citation:sha256:93d5d5f5…> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <urn:example:doc:unit:sha256:efa94c4f…> <urn:example:doc:cites> "the-crossing"^^<urn:example:doc:anchor> )>> .
+<urn:example:doc:citation:sha256:93d5d5f5…> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <urn:example:doc:Citation> .
+<urn:example:doc:citation:sha256:93d5d5f5…> <urn:example:doc:canonSource> "atlas/crossing.logic.ttl"^^<urn:example:doc:path> .
+<urn:example:doc:citation:sha256:93d5d5f5…> <urn:example:doc:unit> <urn:example:doc:unit:sha256:efa94c4f…> .
+<urn:example:doc:unit:sha256:efa94c4f…> <urn:example:doc:cites> "the-crossing"^^<urn:example:doc:anchor> .
 ```
 
 `<<( … )>>` is the RDF 1.2 **triple term** — the non-asserting form, the
@@ -373,16 +373,10 @@ verse number and section.
 
 A heading, a movement marker, and a verse number are read behind a leading
 run of **up to three spaces**, so `   # Title` is a heading and `  1. one`
-is verse 1. Four or more leading spaces open no marker: the line is
-ordinary content and falls into the paragraph around it. That is not a
-refusal and it is not a code block — the dialect states none; it declines
-to read a marker that far in, which is where CommonMark puts its
-indented-code threshold. A **tab** in the leading run opens no marker
-either, wherever in the run it falls: CommonMark expands a tab to the next
-four-column tab stop, so nought to three spaces followed by a tab reaches
-column four exactly, and the law says so directly rather than expanding
-anything.
-
+is verse 1. Four indentation columns open code outside an
+active paragraph; tabs advance to four-column stops. Fenced code and HTML
+comments also mask heading and link recognition. Quote/list containers
+retain original-byte envelopes and expose separate content/newline spans.
 The run is read for recognition only. The leading spaces stay inside the
 unit's span and inside its verbatim literal, and a heading's title, a
 movement's name, and a verse number are what they would be had the run
@@ -396,6 +390,30 @@ the same structure as the one that does not. Every span still counts the
 document's own bytes, so the mark falls before the first span and a unit's
 literal is always the verbatim bytes of its span. At any other offset the mark
 is ordinary content.
+
+## Native source syntax and migration
+
+`syntax(text, limits)` returns blocks, container parents, code content lines,
+headings, inline code/comments/HTML, resolved links/images, reference
+definitions and prose ranges over the original UTF-8 source. Destinations,
+titles and HTML `href`/`src` values carry decoded text alongside raw spans;
+multiline syntax remains visible to caller policy. The shared scanner owns
+recognition. `analyze_syntax` projects an already admitted model without
+parsing again; `analyze_with_limits` performs both steps with caller-selected
+syntax limits. `analyze` retains its existing allocator-only admission policy.
+
+Limits cover input bytes, native allocation, work, containers, inline nesting
+and raw/decoded destination/title bytes. A refusal carries its resource and
+source position, and publishes no partial syntax. RAF can supply its own
+1 MiB, 64-container and 4096-byte component limits without making those
+values universal grammar rules.
+
+Dialect revision 2 is bound into `chunking_bytes`, and therefore both profile
+identities. Moving from the earlier line reader requires re-slicing original
+bytes, rebuilding projections and deriving new chunking-stage and embedding
+family identities. Re-embed the newly addressed units; preserve historical
+artifacts under their original identities. Changing a caller's profile label
+or relabeling old vectors is not a migration. See SPEC §5 for the identity law.
 
 ## Errors
 
