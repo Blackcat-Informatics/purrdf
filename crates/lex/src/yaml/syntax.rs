@@ -722,6 +722,7 @@ pub fn read_syntax(source: &str, limits: SyntaxLimits) -> Result<SyntaxDocument<
         max_nodes: u64::MAX,
         aliases: limits.aliases,
         scalar_keys: true,
+        ..Limits::DEFAULT
     };
     let (root, builder) = read::parse(source, parser_limits, builder)?;
     builder

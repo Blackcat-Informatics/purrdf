@@ -301,16 +301,12 @@ fn mag_divmod_small(
 
 /// The one small-divisor quotient loop, retaining its admitted destination.
 fn mag_divmod_small_in_place(quotient: &mut Mag, divisor: u64) -> u64 {
-    debug_assert_ne!(divisor, 0, "division by zero");
-    let d = u128::from(divisor);
-    let mut rem: u128 = 0;
-    for slot in quotient.iter_mut().rev() {
-        let cur = (rem << 64) | u128::from(*slot);
-        *slot = (cur / d) as u64;
-        rem = cur % d;
-    }
-    mag_trim(quotient);
-    rem as u64
+    // Canonical divisor magnitudes have a nonzero sole word; decimal rendering
+    // supplies the fixed positive decimal group base.
+    let divisor = core::num::NonZeroU64::new(divisor).expect("nonzero small divisor");
+    let (length, remainder) = purrdf_lex::integer_text::div_rem_word(quotient, divisor);
+    quotient.resize(length, 0);
+    remainder
 }
 
 /// Writes a sub-limb left shift into initialized storage.

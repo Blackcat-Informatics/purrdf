@@ -10,7 +10,7 @@ use purrdf_lex::yaml::{
 
 #[test]
 fn lexical_sample_retains_spelling_comments_styles_and_original_coordinates() {
-    let source = "# retained notice\r\ntitle: 'quoted é' # retained tail\r\n\r\nvalues: [0x1F, true, null, ~, .inf]\r\nnested:\r\n  item: \"escaped\\\\value\"\r\n";
+    let source = "# retained notice\r\ntitle: 'quoted é' # retained tail\r\n\r\nvalues: [0x1F, 007, +007, 1e400, 0x100000000000000000000000000000001, true, null, ~, .inf]\r\nnested:\r\n  item: \"escaped\\\\value\"\r\n";
     let doc = yaml::read_syntax(source, SyntaxLimits::DEFAULT).unwrap();
     assert_eq!(doc.source(), source);
     assert_ne!(
@@ -26,7 +26,17 @@ fn lexical_sample_retains_spelling_comments_styles_and_original_coordinates() {
             _ => None,
         })
         .collect();
-    for spelling in ["0x1F", "true", "null", "~", ".inf"] {
+    for spelling in [
+        "0x1F",
+        "007",
+        "+007",
+        "1e400",
+        "0x100000000000000000000000000000001",
+        "true",
+        "null",
+        "~",
+        ".inf",
+    ] {
         let (_, scalar) = scalars
             .iter()
             .find(|(_, scalar)| scalar.text == spelling)

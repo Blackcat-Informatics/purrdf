@@ -124,6 +124,30 @@ fn yaml_stream_admission_includes_all_retained_documents_and_alias_copies() {
             .kind(),
         ErrorKind::Allocation { limit: 64 << 10 }
     );
+    // Work and produced numeric spelling bytes are cumulative across document
+    // boundaries. Refusing the second document must return no partial vector.
+    let mut limits = stream_limits();
+    limits.core.max_numeric_bytes = 2;
+    assert!(read_stream("12", limits).is_ok());
+    let error = read_stream("12\r\n---\r\n34", limits).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::NumericOutput { limit: 2 });
+    assert_eq!((error.offset(), error.line(), error.column()), (9, 3, 1));
+    let mut limits = stream_limits();
+    // One decimal byte is classified, copied, then validated: three units.
+    limits.core.max_numeric_work = 3;
+    assert!(read_stream("1", limits).is_ok());
+    let error = read_stream("1\n---\n2", limits).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::NumericWork { limit: 3 });
+    assert_eq!((error.offset(), error.line(), error.column()), (6, 3, 1));
+    let mut limits = stream_limits();
+    // Classification and radix packing fit; repeated word division does not.
+    limits.core.max_numeric_work = 300;
+    assert!(matches!(
+        read_stream(&format!("0x1{}", "f".repeat(96)), limits)
+            .unwrap_err()
+            .kind(),
+        ErrorKind::NumericWork { limit: 300 }
+    ));
 }
 
 fn ok(text: &str) -> String {

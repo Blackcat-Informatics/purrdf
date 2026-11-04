@@ -954,6 +954,23 @@ fingerprints = ["rule:div-ceil-by-hand"]
 names = []
 
 [[job]]
+id = "unsigned-word-division"
+summary = "In-place unsigned division of borrowed little-endian words by one nonzero word"
+home = "purrdf_lex::integer_text::div_rem_word"
+entry_points = []
+spec = "Base-2^64 long division with a u128 partial dividend, returning the significant quotient length and remainder without allocation"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(div_rem_word)$']
+
+[[job]]
 id = "wide-arith"
 summary = "Exact u128 arithmetic past u128: the 256-bit product, the wide division, the fused a × b / c with truncated and ceiling rounding, and the greatest common divisor"
 home = "purrdf_xsd::wide::mul_div"

@@ -21,6 +21,13 @@ pub struct Limits {
     /// The most nodes the document may denote, every node an alias expands to
     /// included, so an alias bomb is refused before it is built.
     pub max_nodes: u64,
+    /// Aggregate scalar-classification and numeric-conversion work units.
+    /// One input byte, packed radix digit, divided word or output/validation
+    /// byte costs one unit. The account is shared by every stream document.
+    pub max_numeric_work: u64,
+    /// Aggregate bytes of newly materialized numeric spellings. Alias copies
+    /// remain governed by the node and allocation bounds.
+    pub max_numeric_bytes: usize,
     /// Whether anchors and aliases are accepted. YAML-LD's JSON profile
     /// refuses them.
     pub aliases: bool,
@@ -34,11 +41,13 @@ pub struct Limits {
 }
 
 impl Limits {
-    /// 128 open collections, 1,048,576 nodes, aliases accepted, scalar keys
-    /// refused.
+    /// 128 open collections, 1,048,576 nodes, 67,108,864 numeric work units,
+    /// 32 MiB of numeric spellings, aliases accepted, scalar keys refused.
     pub const DEFAULT: Self = Self {
         max_depth: 128,
         max_nodes: 1 << 20,
+        max_numeric_work: 1 << 26,
+        max_numeric_bytes: 32 << 20,
         aliases: true,
         scalar_keys: false,
     };
@@ -87,6 +96,16 @@ pub enum ErrorKind {
     DuplicateKey,
     /// `.inf`, `-.inf` or `.nan`, which JSON cannot hold.
     NonFinite,
+    /// Scalar classification or numeric preparation exhausted its work account.
+    NumericWork {
+        /// Original construction-wide work allowance.
+        limit: u64,
+    },
+    /// Newly materialized numeric spellings exceed their aggregate byte bound.
+    NumericOutput {
+        /// Original construction-wide spelling-byte allowance.
+        limit: usize,
+    },
     /// A malformed double-quoted escape, or one that names no character.
     Escape,
     /// A second document in the stream.
@@ -129,6 +148,8 @@ pub struct Error {
     column: usize,
 }
 
+crate::variant_from!(ErrorKind { Storage(StorageError) });
+
 impl purrdf_hash::error::StructuredError for ErrorKind {
     purrdf_hash::error_visit! {
         Syntax(expected) => "yaml-syntax" { "expected" => Text(expected) },
@@ -139,6 +160,8 @@ impl purrdf_hash::error::StructuredError for ErrorKind {
         NonStringKey => "yaml-non-string-key" {},
         DuplicateKey => "yaml-duplicate-key" {},
         NonFinite => "yaml-non-finite" {},
+        NumericWork { limit } => "yaml-numeric-work-limit" { "limit" => Unsigned(u128::from(*limit)) },
+        NumericOutput { limit } => "yaml-numeric-output-limit" { "limit" => ByteCount(*limit as u128) },
         Escape => "yaml-escape" {},
         MultipleDocuments => "yaml-multiple-documents" {},
         Documents { limit } => "yaml-document-limit" { "limit" => Unsigned(*limit as u128) },
@@ -220,6 +243,10 @@ impl fmt::Display for Error {
             ErrorKind::NonStringKey => f.write_str("a mapping key must be a string"),
             ErrorKind::DuplicateKey => f.write_str("a mapping repeats a key"),
             ErrorKind::NonFinite => f.write_str("JSON cannot hold an infinite or NaN number"),
+            ErrorKind::NumericWork { limit } => write!(f, "numeric work exceeds {limit} units"),
+            ErrorKind::NumericOutput { limit } => {
+                write!(f, "numeric spellings exceed {limit} bytes")
+            }
             ErrorKind::Escape => f.write_str("a malformed escape"),
             ErrorKind::MultipleDocuments => f.write_str("the stream holds more than one document"),
             ErrorKind::Documents { limit } => write!(f, "more than {limit} documents"),
@@ -2805,10 +2832,7 @@ pub fn read_with(text: &str, limits: Limits) -> Result<Value, Error> {
     parse(
         text,
         limits,
-        CoreBuilder {
-            limits,
-            allocations: super::admission::Allocations::legacy(),
-        },
+        CoreBuilder::new(limits, super::admission::Allocations::legacy()),
     )
     .map(|(node, _)| node.value)
 }
@@ -2828,10 +2852,10 @@ pub fn read_with(text: &str, limits: Limits) -> Result<Value, Error> {
 /// retains its existing `MultipleDocuments` policy and error precedence.
 pub fn read_stream(text: &str, limits: StreamLimits) -> Result<Vec<Value>, Error> {
     input_limit(text, limits.max_input_bytes)?;
-    let builder = CoreBuilder {
-        limits: limits.core,
-        allocations: super::admission::Allocations::bounded(limits.max_allocation_bytes),
-    };
+    let builder = CoreBuilder::new(
+        limits.core,
+        super::admission::Allocations::bounded(limits.max_allocation_bytes),
+    );
     let mut parser = parser(text, limits.core, builder);
     let mut documents = Vec::new();
     while parser.stream_prefix()? {
@@ -2883,10 +2907,10 @@ pub(super) fn project(text: &str, limits: super::syntax::ProjectionLimits) -> Re
     parse(
         text,
         limits.core,
-        CoreBuilder {
-            limits: limits.core,
-            allocations: super::admission::Allocations::bounded(limits.max_allocation_bytes),
-        },
+        CoreBuilder::new(
+            limits.core,
+            super::admission::Allocations::bounded(limits.max_allocation_bytes),
+        ),
     )
     .map(|(node, _)| node.value)
 }
