@@ -480,6 +480,7 @@ fn dispatch_with_request(
             canonical,
         ),
         Command::Update {
+            yamlld_input_options,
             now,
             entropy_seed,
             data,
@@ -503,6 +504,7 @@ fn dispatch_with_request(
             graph_existence,
         } => update::run(
             &update::UpdateOptions {
+                yamlld_input_options: yamlld_input_options.as_deref(),
                 now: now.as_deref(),
                 entropy_seed: entropy_seed.as_deref(),
                 geo: selected_geo,

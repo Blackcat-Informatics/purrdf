@@ -735,10 +735,18 @@ pub(crate) fn load_dataset(
     path: &str,
     format: SourceFormat,
     base: Option<&str>,
+    input_options: Option<&[u8]>,
     canonical: &mut crate::canonical::Request,
 ) -> Result<Arc<RdfDataset>, CliError> {
-    load_dataset_reporting(path, format, base, TransportPolicy::Detect, canonical)
-        .map(|(dataset, _)| dataset)
+    load_dataset_reporting(
+        path,
+        format,
+        base,
+        TransportPolicy::Detect,
+        input_options,
+        canonical,
+    )
+    .map(|(dataset, _)| dataset)
 }
 
 /// [`load_dataset`] plus the ledger of what reading this source dropped.
@@ -750,11 +758,17 @@ pub(crate) fn load_dataset_reporting(
     format: SourceFormat,
     base: Option<&str>,
     policy: TransportPolicy,
+    input_options: Option<&[u8]>,
     canonical: &mut crate::canonical::Request,
 ) -> Result<(Arc<RdfDataset>, LossLedger), CliError> {
+    if input_options.is_some() && !matches!(format, SourceFormat::Native(_)) {
+        return Err(CliError::Usage(
+            "YAML-LD input options require YAML-LD input".into(),
+        ));
+    }
     match format {
         SourceFormat::Native(rdf_format) => Ok((
-            load_native(path, rdf_format, base, policy, None)?,
+            load_native(path, rdf_format, base, policy, input_options)?,
             LossLedger::new(),
         )),
         SourceFormat::Pack => {
@@ -764,6 +778,29 @@ pub(crate) fn load_dataset_reporting(
         }
         SourceFormat::Gts => load_gts(path, policy),
     }
+}
+
+/// Admit formats and read one bounded, named YAML-LD options file before data I/O.
+pub(crate) fn read_yamlld_input_options(
+    path: &std::path::Path,
+    formats: &[SourceFormat],
+) -> Result<Vec<u8>, CliError> {
+    if formats
+        .iter()
+        .any(|format| *format != SourceFormat::Native(NativeRdfFormat::YamlLd))
+    {
+        return Err(CliError::Usage(
+            "--yamlld-input-options requires every input to be YAML-LD".into(),
+        ));
+    }
+    let file = std::fs::File::open(path)
+        .map_err(|error| CliError::Runtime(format!("{}: {error}", path.display())))?;
+    let mut bytes = Vec::new();
+    file.take((purrdf_validate::rdf_input::MAX_OPTIONS_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|error| CliError::Runtime(format!("{}: {error}", path.display())))?;
+    purrdf_validate::rdf_input::options(&bytes).map_err(CliError::native)?;
+    Ok(bytes)
 }
 
 /// Serialize the input at `path` (text, pack, or GTS) to N-Quads over its view.

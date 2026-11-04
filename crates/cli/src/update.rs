@@ -17,6 +17,8 @@ use crate::{ledger, sink, source};
 
 /// The resolved `update` flags.
 pub(crate) struct UpdateOptions<'a> {
+    /// Explicit Basic controls for the primary data document only.
+    pub(crate) yamlld_input_options: Option<&'a std::path::Path>,
     /// Raw supplied time, decoded before UPDATE source I/O.
     pub(crate) now: Option<&'a str>,
     /// Raw supplied initial request seed.
@@ -71,7 +73,17 @@ pub(crate) fn run(
             })?;
     let source_format = format::resolve(options.from, options.data)?;
     let target_format = format::resolve_target(options.to, options.output, "the --to target")?;
-    let mut dataset = source::load_dataset(options.data, source_format, options.base, canonical)?;
+    let input_options = options
+        .yamlld_input_options
+        .map(|path| source::read_yamlld_input_options(path, &[source_format]))
+        .transpose()?;
+    let mut dataset = source::load_dataset(
+        options.data,
+        source_format,
+        options.base,
+        input_options.as_deref(),
+        canonical,
+    )?;
     // The same engine `query` builds: one law for the whole request, and a native
     // resource refusal is an `Err` that applies nothing and writes no dataset.
     let engine = purrdf_validate::xpath_regex::sparql_engine(options.xpath_regex);
