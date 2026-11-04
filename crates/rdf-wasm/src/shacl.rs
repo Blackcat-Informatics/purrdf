@@ -2342,10 +2342,13 @@ pub(crate) mod tests {
                 assert!(error.presentation_json().is_none());
             }
         }
-        assert!(
-            JobError::message(SHACL_CODE, "invalid shapes")
-                .diagnostic_json()
-                .is_none()
+        assert_eq!(
+            JobError::message(SHACL_CODE, "invalid shapes").diagnostic_json(),
+            Some(
+                RdfDiagnostic::error(SHACL_CODE, "invalid shapes")
+                    .to_json()
+                    .to_string()
+            )
         );
     }
 
