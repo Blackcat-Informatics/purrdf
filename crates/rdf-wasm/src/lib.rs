@@ -113,6 +113,10 @@ mod stream;
 mod term;
 mod xpath_regex;
 mod xsd;
+mod yaml_source;
+pub use yaml_source::{
+    YamlSourceCause, YamlSourceExport, yaml_source_export, yaml_source_reconstruct,
+};
 
 #[cfg(target_arch = "wasm32")]
 pub use async_query::purrdf_jspi_run;

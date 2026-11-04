@@ -3,15 +3,10 @@
 
 //! Explicit synchronous canonical-search requests and immutable receipt envelopes.
 
+use crate::host::reflect_set as set_property;
 use purrdf_core::CanonicalizationControl;
 use purrdf_validate::canonical::{execute, native_canonical_cause, parse_policy, receipts_json};
 use wasm_bindgen::prelude::*;
-
-#[wasm_bindgen]
-extern "C" {
-    #[wasm_bindgen(catch, js_namespace = Reflect, js_name = set)]
-    fn set_property(target: &JsValue, key: &JsValue, value: &JsValue) -> Result<bool, JsValue>;
-}
 
 /// An original native cause that retains its immutable payload and admission owner.
 #[wasm_bindgen]

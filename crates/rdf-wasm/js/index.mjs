@@ -139,6 +139,10 @@ import init, {
   version,
   xsdCanonicalLexical,
   xsdValueCompare,
+  yamlSourceExport,
+  yamlSourceReconstruct,
+  YamlSourceCause,
+  YamlSourceExport,
 } from "./pkg/purrdf_wasm.js";
 import {
   assertAsyncQueries,
@@ -1774,4 +1778,8 @@ export {
   version,
   xsdCanonicalLexical,
   xsdValueCompare,
+  yamlSourceExport,
+  yamlSourceReconstruct,
+  YamlSourceCause,
+  YamlSourceExport,
 };
