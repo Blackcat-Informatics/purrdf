@@ -190,7 +190,7 @@ fn ranked_chinese_technical_queries_meet_explicit_precision_and_recall() {
     let mut relevant_total = 0;
     for &(query, relevant) in queries {
         let terms = index.analyzer().terms(query).expect("valid text analysis");
-        let rows = rank_partition(&index, &partition, &terms, Some(relevant.len() as u64))
+        let rows = rank_partition(&*index, &partition, &terms, Some(relevant.len() as u64))
             .expect("exact integer BM25 ranking");
         let hits = rows
             .iter()
@@ -262,13 +262,13 @@ fn dictionary_and_rdf_insertion_order_preserve_ranked_answers_and_identities() {
         let partition = PartitionKey::new(None, None);
         assert_eq!(
             rank_partition(
-                &left,
+                &*left,
                 &partition,
                 &left.analyzer().terms(query).expect("valid text analysis"),
                 None
             ),
             rank_partition(
-                &right,
+                &*right,
                 &partition,
                 &right.analyzer().terms(query).expect("valid text analysis"),
                 None
@@ -362,7 +362,7 @@ fn supplementary_han_and_unknown_units_remain_searchable() {
     let partition = PartitionKey::new(None, None);
     for query in ["𠮷田", "𠀀", "\u{31350}"] {
         let matches = rank_partition(
-            &index,
+            &*index,
             &partition,
             &index.analyzer().terms(query).expect("valid text analysis"),
             None,
