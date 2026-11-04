@@ -3713,74 +3713,68 @@ summary = "`json::json_escape_body`, the JSON results string escape: the escape 
 
 [[site]]
 id = "markdown.lines"
-summary = "`dialect::markdown::lines`, the line split over a chunked `\\n` scan (`find_line_feed`, a one-run `ByteClass`); `lines` is inlined through `read` into `analyze`"
+summary = "`syntax::block::read` splits original LF/CR lines through the shared `purrdf_lex::scan::find_byte2`; `analyze` remains the slicing caller"
 
-  # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v2.
+  # The production scanner is the same out-of-line Lex kernel measured above.
   [[site.measure]]
   label = "scan sse2"
   configs = ["x86_64"]
-  crate = "purrdf_markdown"
-  symbol = "purrdf_markdown::dialect::markdown::find_line_feed"
-  min_vector_ops = 1
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_byte2"
+  min_vector_ops = 15
   require_mnemonics = ["pcmpeqb", "pmovmskb"]
   max_fma = 0
   forbid_relaxed = true
 
-  # The same shape, VEX-encoded. Measured v2.
   [[site.measure]]
   label = "scan avx2"
   configs = ["x86_64-v3"]
-  crate = "purrdf_markdown"
-  symbol = "purrdf_markdown::dialect::markdown::find_line_feed"
-  min_vector_ops = 1
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_byte2"
+  min_vector_ops = 9
   require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
   max_fma = 0
   forbid_relaxed = true
 
-  # With AVX-512 in the build the compares write mask registers (`%k`). Measured v1.
   [[site.measure]]
-  label = "scan avx512 masks"
+  label = "scan avx512"
   configs = ["x86_64-v4"]
-  crate = "purrdf_markdown"
-  symbol = "purrdf_markdown::dialect::markdown::find_line_feed"
-  min_vector_ops = 0
-  require_mnemonics = ["vpcmpeqb %k"]
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_byte2"
+  min_vector_ops = 6
+  require_mnemonics = ["vpcmpeqb", "vptest"]
   max_fma = 0
   forbid_relaxed = true
 
-  # NEON byte compares; `addp` folds the lanes. Measured v2 (aarch64), v2 (aarch64-neoverse-v1).
   [[site.measure]]
   label = "scan neon"
   configs = ["aarch64", "aarch64-neoverse-v1"]
-  crate = "purrdf_markdown"
-  symbol = "purrdf_markdown::dialect::markdown::find_line_feed"
-  min_vector_ops = 1
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_byte2"
+  min_vector_ops = 14
   require_mnemonics = ["cmeq .16b", "addp"]
   max_fma = 0
   forbid_relaxed = true
 
-  # Baseline wasm32 has no vector instructions: the lane loop is straight-line scalar code, same result. Measured v0.
   [[site.measure]]
   label = "scan scalar"
   configs = ["wasm32"]
-  crate = "purrdf_markdown"
-  symbol = "purrdf_markdown::dialect::markdown::find_line_feed"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_byte2"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
 
-  # Packed byte compares. Measured v2.
   [[site.measure]]
   label = "scan simd128"
   configs = ["wasm32-simd128"]
-  crate = "purrdf_markdown"
-  symbol = "purrdf_markdown::dialect::markdown::find_line_feed"
-  min_vector_ops = 1
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_byte2"
+  min_vector_ops = 8
   require_mnemonics = ["i8x16.eq", "v128.any_true"]
   max_fma = 0
   forbid_relaxed = true
 
-  # The call site: one scanner call per line, and the line's span pushed.
   [[site.measure]]
   label = "call site (in analyze)"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]

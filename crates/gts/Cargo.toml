@@ -45,9 +45,6 @@ purrdf-lex = { workspace = true }
 # profiles' `modified` timestamps; `src/rfc3339.rs` names the profiles' reading
 # of it. A wasm32-clean leaf, so the edge adds nothing below it.
 purrdf-xsd = { workspace = true }
-# emojihash + randomart visual fingerprints, published from
-# Blackcat-Informatics/visual-hashing.
-visual-hashing = { workspace = true }
 # Data-parallel BLAKE3 verification: per-frame content ids across a segment,
 # whole segments across a file, and native BLAKE3 subtrees for large payloads.
 # On targets without threads (wasm32) rayon degrades to inline-sequential

@@ -64,6 +64,7 @@ pub mod collections;
 pub mod content_alias;
 pub mod content_id;
 pub mod content_store;
+pub use purrdf_lex::visual_fingerprint;
 // The cover law: verbatim byte spans back into the document they cover,
 // byte for byte -- the decode half of every ordered codec (the Markdown
 // slicer first among them), kept in the kernel so two formats cannot

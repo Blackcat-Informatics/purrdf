@@ -659,7 +659,7 @@ fn a_possible_lookup_scores_one_document_whatever_the_corpus_holds() {
     for filler in [20_usize, 2_000] {
         let index = grown_index(filler);
         let candidates = select(
-            &index,
+            &*index,
             &Analyzer::empty_lexicon()
                 .terms(needle)
                 .expect("valid text analysis"),

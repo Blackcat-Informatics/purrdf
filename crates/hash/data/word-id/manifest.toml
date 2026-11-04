@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+scheme = "b3w1"
+prefix_scheme = "b3p1"
+words = 4096
+alphabet_blake3 = "39a51de1fc00b10225ceeae54f6a7c1cd3ad7f191af0f92f5eb044132c534c05"
+generated_data_blake3 = "61509c503cbc0db8d393edb3124b30eb0f22607e78a0cfdb0c72345dc4bc7109"
+source_blake3 = "5d0101780829f897a3a2526c11d04913e899648ee9d8ff14489e7ea9193e302c"
+source = "https://www.eff.org/files/2016/07/18/eff_large_wordlist.txt"
+license = "CC-BY-4.0"
+selection = "eff-levenshtein-token-greedy-v1"
+tokenizer_version = "OpenAI tiktoken 0.12.0"
+cl100k_blake3 = "65afa6a4947e558c7e52ca1dc682285a6aff053a60ce9ba951bf154da0cb980f"
+o200k_blake3 = "77500c1d2b9e0f606d2ab99ff39e9ebaed9221b4531c6d83a503c36def0b8be8"

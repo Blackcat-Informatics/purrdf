@@ -623,12 +623,6 @@ distinct = "internal to clap's terminal output; PurRDF has no command-line parse
 holder = "clap"
 metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
 
-[packages.visual-hashing]
-category = "runtime"
-reason = "emojihash and randomart key fingerprints for GTS"
-distinct = "emojihash and randomart key-fingerprint rendering for GTS; its BLAKE3 is private to those renderers, PurRDF calls only the renderers, and PurRDF has no fingerprint renderer of its own"
-metrics = { direct = true, exclusive_closure = 1, release = true, wasm = true, build_script = false, proc_macro = false }
-
 [packages.wasm-bindgen]
 category = "binding"
 reason = "JavaScript bindings for purrdf-wasm, SPARQL host clock and entropy, and the testkit wasm runner"

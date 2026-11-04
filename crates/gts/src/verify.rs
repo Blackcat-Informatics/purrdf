@@ -19,7 +19,7 @@ use purrdf_lex::cbor::Value;
 
 use crate::FastMap;
 use crate::cose::{Algorithm, VerifyingKeyRef, verify_signatures_with_resolver};
-use crate::emojihash::{emojihash, emojihash_labels, randomart};
+use crate::emojihash::{Request, render_bytes};
 use crate::model::{Diagnostic, Graph};
 use crate::openpgp::parse_transport_key;
 use crate::policy::{
@@ -173,7 +173,7 @@ impl VerifyOptions {
 #[derive(Clone, Debug, Default)]
 pub struct VerificationResult {
     /// True when no cryptographic errors, unresolved signatures, or profile
-    /// policy errors were found under the supplied options.
+    /// policy or native key-presentation errors were found under the supplied options.
     pub ok: bool,
     /// Key id used for verification, either embedded or derived from the
     /// out-of-band OpenPGP fingerprint.
@@ -324,9 +324,22 @@ pub fn verify_file_with_options(data: &[u8], options: &VerifyOptions) -> Verific
     let mut result = verify_graph_with_keyring(graph, &keyring, options);
     result.kid = Some(kid);
     result.fingerprint = Some(fingerprint);
-    result.emojihash = Some(emojihash(&raw_public, 11));
-    result.emojihash_labels = Some(emojihash_labels(&raw_public, 11));
-    result.randomart = Some(randomart(&raw_public, "GTS transport"));
+    match Request::new(11, "GTS transport")
+        .and_then(|request| render_bytes(&raw_public, request, purrdf_lex::allocation::Resident))
+    {
+        Ok(rendering) => {
+            let (emoji, spoken, art) = rendering.into_strings();
+            result.emojihash = Some(emoji);
+            result.emojihash_labels = Some(spoken);
+            result.randomart = Some(art);
+        }
+        Err(cause) => {
+            result.ok = false;
+            result
+                .errors
+                .push(VerificationError::VisualFingerprint(cause));
+        }
+    }
     result
 }
 

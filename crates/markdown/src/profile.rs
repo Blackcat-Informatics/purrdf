@@ -611,14 +611,18 @@ impl Profile {
         format!(
             "{name}\n\
              version {version}\n\
-             section ATX ^#{{1,6}}[ \\t] ; title trimmed, trailing # trimmed ; seven hashes are prose\n\
+             native Markdown dialect revision {dialect_revision} ; one shared source-syntax scanner\n\
+             containers quote/list ; fenced and indented code, HTML blocks/comments mask block markers\n\
+             reference definitions use raw labels of at most 999 characters without unescaped brackets ; matching folds C/F and collapses only space, tab and line endings\n\
+             code/comment blocks and reference definition lines are structure, never units ; native thematic breaks admit space-or-tab-separated repeated -, * or _\n\
+             section ATX ^#{{1,6}} followed by space, tab or line end ; title trimmed ; closing hashes require preceding space-or-tab ; Setext headings exclude leading reference definitions ; seven hashes are prose\n\
              movement ^\u{2042}[ \\t] ; name trimmed, one surrounding * or _ pair removed\n\
              unit verse ^\\d+\\.[ \\t] ; the number is a u64 or the line is prose\n\
-             unit paragraph blank-line ; rule ^(-{{3,}}|\\*{{3,}})$ and table row ^\\| close a unit\n\
+             unit paragraph native eligible lines ; blank lines, native thematic breaks and table rows close a unit\n\
              a table row is the content of no unit, a concordance in force or not\n\
              structure is read on a line's trimmed text ; CRLF states its LF twin's structure\n\
              a heading, a movement or a verse is read behind up to 3 leading spaces\n\
-             4 or more leading spaces, or a tab in that run, is no marker but ordinary content\n\
+             4 or more leading columns opens indented code outside an active paragraph ; tabs use four-column stops\n\
              U+FEFF at byte zero is encoding, elsewhere content ; every span counts the document's own bytes\n\
              max_bytes {max_bytes}\n\
              overlap {overlap}\n\
@@ -629,6 +633,7 @@ impl Profile {
              never inside a scalar ; never across a heading\n",
             name = self.name,
             version = self.version,
+            dialect_revision = crate::syntax::DIALECT_REVISION,
             max_bytes = self.max_bytes,
             overlap = self.overlap,
         )

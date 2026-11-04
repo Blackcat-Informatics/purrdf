@@ -95,6 +95,7 @@ mod convert;
 mod describe;
 mod entails;
 mod error;
+mod fingerprint;
 mod format;
 mod glob;
 mod glob_rdf;
@@ -120,6 +121,8 @@ mod sink;
 mod source;
 mod update;
 mod validate;
+mod word_id;
+pub use word_id::Failure as WordIdFailure;
 
 // The one derivation of a filesystem input's RFC-8089 `file://` retrieval IRI, re-exported
 // so the integration tests assert against the pipeline's own function instead of keeping a
@@ -191,6 +194,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
         && matches!(
             &cli.cmd,
             Command::GlobRdf(_)
+                | Command::WordId { .. }
                 | Command::Glob { .. }
                 | Command::GlobSet { .. }
                 | Command::Geo { .. }
@@ -252,6 +256,31 @@ fn dispatch_with_request(
         })
         .transpose()?;
     match &cli.cmd {
+        Command::WordId { command } => {
+            cli::refuse_document_flags(
+                &ledger_target,
+                jsonld_options.as_ref(),
+                "word-id accepts no loss ledger",
+                "word-id accepts no JSON-LD options",
+            )?;
+            word_id::run(command)?;
+            Ok(CliOutcome::Complete)
+        }
+        Command::Fingerprint {
+            digest,
+            symbols,
+            max_bytes,
+            max_work,
+        } => {
+            cli::refuse_document_flags(
+                &ledger_target,
+                jsonld_options.as_ref(),
+                "fingerprint presents a digest and has no RDF loss ledger",
+                "fingerprint presents a digest and accepts no JSON-LD options",
+            )?;
+            fingerprint::run(digest, *symbols, *max_bytes, *max_work)?;
+            Ok(CliOutcome::Complete)
+        }
         Command::GlobRdf(args) => {
             cli::refuse_document_flags(
                 &ledger_target,

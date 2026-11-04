@@ -6,29 +6,66 @@
 
 use super::{Shared, TextError, TokenStream};
 use crate::query_workspace::{CapacityFailure, overflow};
+use purrdf_sparql_eval::WorkspaceCapability;
 
 const LEAF: usize = 32;
-// An AVL tree over a usize-sized sequence has height below twice usize::BITS.
 const PATH: usize = usize::BITS as usize * 2;
-type Link<T> = Option<Shared<Node<T>>>;
+type Link<T, S = ()> = Option<Shared<Node<T, S>>>;
 
-#[derive(Clone, Debug)]
-pub(crate) struct Table<T> {
-    root: Link<T>,
+/// A concrete table's associative retained facts. Unit keeps ordinary tables unchanged.
+pub(crate) trait Summary<T>: Clone + std::fmt::Debug {
+    type Value: std::fmt::Debug;
+    fn blocks(&self, value: &Self::Value) -> u64;
+    fn leaf(&self, items: &[T], workspace: &WorkspaceCapability) -> Result<Self::Value, TextError>;
+    fn branch(
+        &self,
+        left: &Self::Value,
+        right: &Self::Value,
+        workspace: &WorkspaceCapability,
+    ) -> Result<Self::Value, TextError>;
+}
+impl<T> Summary<T> for () {
+    type Value = ();
+    fn blocks(&self, (): &()) -> u64 {
+        0
+    }
+    fn leaf(&self, _: &[T], _: &WorkspaceCapability) -> Result<(), TextError> {
+        Ok(())
+    }
+    fn branch(&self, (): &(), (): &(), _: &WorkspaceCapability) -> Result<(), TextError> {
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
-enum Node<T> {
-    Leaf(Vec<T>),
+pub(crate) struct Table<T, A: Summary<T> = ()> {
+    root: Link<T, A::Value>,
+    policy: A,
+}
+impl<T, A: Summary<T>> Clone for Table<T, A> {
+    fn clone(&self) -> Self {
+        Self {
+            root: self.root.clone(),
+            policy: self.policy.clone(),
+        }
+    }
+}
+
+#[derive(Debug)]
+enum Node<T, S = ()> {
+    Leaf {
+        items: Vec<T>,
+        summary: S,
+    },
     Branch {
         left: Shared<Self>,
         right: Shared<Self>,
         len: usize,
         height: u8,
+        summary: S,
     },
 }
-
-fn allocate<T>(node: Node<T>) -> Result<Shared<Node<T>>, TextError> {
+fn allocate<T, S>(node: Node<T, S>) -> Result<Shared<Node<T, S>>, TextError> {
     #[cfg(test)]
     NODE_BUILDS.set(NODE_BUILDS.get() + 1);
     Shared::try_new(node).map_err(|_| {
@@ -37,8 +74,7 @@ fn allocate<T>(node: Node<T>) -> Result<Shared<Node<T>>, TextError> {
         })
     })
 }
-
-fn handles<T>(capacity: usize) -> Result<Vec<T>, TextError> {
+pub(super) fn handles<T>(capacity: usize) -> Result<Vec<T>, TextError> {
     let mut result = Vec::new();
     result.try_reserve_exact(capacity).map_err(|_| {
         TextError::Capacity(CapacityFailure::Allocator {
@@ -47,7 +83,6 @@ fn handles<T>(capacity: usize) -> Result<Vec<T>, TextError> {
     })?;
     Ok(result)
 }
-
 fn copy_handles<'a, T: Clone + 'a>(output: &mut Vec<T>, input: impl IntoIterator<Item = &'a T>) {
     for item in input {
         #[cfg(test)]
@@ -55,18 +90,22 @@ fn copy_handles<'a, T: Clone + 'a>(output: &mut Vec<T>, input: impl IntoIterator
         output.push(item.clone());
     }
 }
-
-impl<T> Node<T> {
+impl<T, S> Node<T, S> {
     fn len(&self) -> usize {
         match self {
-            Self::Leaf(items) => items.len(),
+            Self::Leaf { items, .. } => items.len(),
             Self::Branch { len, .. } => *len,
         }
     }
     fn height(&self) -> u8 {
         match self {
-            Self::Leaf(_) => 1,
+            Self::Leaf { .. } => 1,
             Self::Branch { height, .. } => *height,
+        }
+    }
+    fn summary(&self) -> &S {
+        match self {
+            Self::Leaf { summary, .. } | Self::Branch { summary, .. } => summary,
         }
     }
     fn children(&self) -> (&Shared<Self>, &Shared<Self>) {
@@ -76,102 +115,250 @@ impl<T> Node<T> {
         (left, right)
     }
 }
-
-fn branch<T>(left: Shared<Node<T>>, right: Shared<Node<T>>) -> Result<Shared<Node<T>>, TextError> {
+fn leaf<T, A: Summary<T>>(
+    items: Vec<T>,
+    policy: &A,
+) -> Result<Shared<Node<T, A::Value>>, TextError> {
+    let summary = policy.leaf(&items, &WorkspaceCapability::resident())?;
+    allocate(Node::Leaf { items, summary })
+}
+fn branch<T, A: Summary<T>>(
+    left: Shared<Node<T, A::Value>>,
+    right: Shared<Node<T, A::Value>>,
+    policy: &A,
+) -> Result<Shared<Node<T, A::Value>>, TextError> {
     let len = left.len().checked_add(right.len()).ok_or_else(overflow)?;
     let height = left
         .height()
         .max(right.height())
         .checked_add(1)
         .ok_or_else(overflow)?;
+    let summary = policy.branch(
+        left.summary(),
+        right.summary(),
+        &WorkspaceCapability::resident(),
+    )?;
     allocate(Node::Branch {
         left,
         right,
         len,
         height,
+        summary,
     })
 }
-
-fn balance<T>(left: Shared<Node<T>>, right: Shared<Node<T>>) -> Result<Shared<Node<T>>, TextError> {
+fn balance<T, A: Summary<T>>(
+    left: Shared<Node<T, A::Value>>,
+    right: Shared<Node<T, A::Value>>,
+    policy: &A,
+) -> Result<Shared<Node<T, A::Value>>, TextError> {
     if left.height() > right.height() + 1 {
         let (a, b) = left.children();
         if a.height() >= b.height() {
-            return branch(a.clone(), branch(b.clone(), right)?);
+            return branch(a.clone(), branch(b.clone(), right, policy)?, policy);
         }
         let (b0, b1) = b.children();
-        return branch(branch(a.clone(), b0.clone())?, branch(b1.clone(), right)?);
+        return branch(
+            branch(a.clone(), b0.clone(), policy)?,
+            branch(b1.clone(), right, policy)?,
+            policy,
+        );
     }
     if right.height() > left.height() + 1 {
         let (a, b) = right.children();
         if b.height() >= a.height() {
-            return branch(branch(left, a.clone())?, b.clone());
+            return branch(branch(left, a.clone(), policy)?, b.clone(), policy);
         }
         let (a0, a1) = a.children();
-        return branch(branch(left, a0.clone())?, branch(a1.clone(), b.clone())?);
+        return branch(
+            branch(left, a0.clone(), policy)?,
+            branch(a1.clone(), b.clone(), policy)?,
+            policy,
+        );
     }
-    branch(left, right)
+    branch(left, right, policy)
 }
-
-fn join<T: Clone>(left: Link<T>, right: Link<T>) -> Result<Link<T>, TextError> {
+fn join<T: Clone, A: Summary<T>>(
+    left: Link<T, A::Value>,
+    right: Link<T, A::Value>,
+    policy: &A,
+) -> Result<Link<T, A::Value>, TextError> {
     let (Some(left), Some(right)) = (left.as_ref(), right.as_ref()) else {
         return Ok(left.or(right));
     };
     if left.height() > right.height() + 1 {
         let (a, b) = left.children();
-        let inner = join(Some(b.clone()), Some(right.clone()))?
+        let inner = join(Some(b.clone()), Some(right.clone()), policy)?
             .expect("joining nonempty trees stays nonempty");
-        return balance(a.clone(), inner).map(Some);
+        return balance(a.clone(), inner, policy).map(Some);
     }
     if right.height() > left.height() + 1 {
         let (a, b) = right.children();
-        let inner = join(Some(left.clone()), Some(a.clone()))?
+        let inner = join(Some(left.clone()), Some(a.clone()), policy)?
             .expect("joining nonempty trees stays nonempty");
-        return balance(inner, b.clone()).map(Some);
+        return balance(inner, b.clone(), policy).map(Some);
     }
-    if let (Node::Leaf(a), Node::Leaf(b)) = (&**left, &**right)
+    if let (Node::Leaf { items: a, .. }, Node::Leaf { items: b, .. }) = (&**left, &**right)
         && a.len() + b.len() <= LEAF
     {
         let mut items = handles(a.len() + b.len())?;
         copy_handles(&mut items, a.iter().chain(b));
-        return allocate(Node::Leaf(items)).map(Some);
+        return leaf(items, policy).map(Some);
     }
-    branch(left.clone(), right.clone()).map(Some)
+    branch(left.clone(), right.clone(), policy).map(Some)
+}
+impl<T, A: Summary<T> + Default> Default for Table<T, A> {
+    fn default() -> Self {
+        Self {
+            root: None,
+            policy: A::default(),
+        }
+    }
 }
 
-impl<T> Default for Table<T> {
-    fn default() -> Self {
-        Self { root: None }
+impl<T: Clone> Table<T> {
+    pub(crate) fn from_streams(streams: Vec<T>) -> Result<Self, TextError> {
+        Self::from_streams_with_summary(streams, ())
     }
 }
 
 pub(super) type TokenTable = Table<TokenStream>;
 
-impl<T: Clone> Table<T> {
+impl<T: Clone, A: Summary<T>> Table<T, A> {
+    pub(crate) fn policy(&self) -> &A {
+        &self.policy
+    }
+    pub(crate) fn empty_like(&self) -> Self {
+        Self {
+            root: None,
+            policy: self.policy.clone(),
+        }
+    }
+
+    /// Physical leaf bounds. Callers restrict boundary leaves to their partition.
+    pub(crate) fn leaf_bounds(&self, index: usize) -> (usize, usize) {
+        assert!(index < self.len());
+        let mut node = self.root.as_deref().expect("nonempty table");
+        let mut start = 0;
+        loop {
+            match node {
+                Node::Leaf { items, .. } => return (start, start + items.len()),
+                Node::Branch { left, right, .. } => {
+                    if index < start + left.len() {
+                        node = left;
+                    } else {
+                        start += left.len();
+                        node = right;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Fold retained subtrees. Boundary leaves retain a conservative superset,
+    /// so query metadata reads never decode or reassemble posting payloads.
+    pub(crate) fn range_summary(
+        &self,
+        start: usize,
+        end: usize,
+        workspace: &WorkspaceCapability,
+    ) -> Result<A::Value, TextError> {
+        fn fold<T: Clone, A: Summary<T>>(
+            node: &Node<T, A::Value>,
+            offset: usize,
+            start: usize,
+            end: usize,
+            policy: &A,
+            out: &mut A::Value,
+            workspace: &WorkspaceCapability,
+        ) -> Result<(), TextError> {
+            let stop = offset + node.len();
+            if end <= offset || stop <= start {
+                return Ok(());
+            }
+            if start <= offset && stop <= end {
+                *out = policy.branch(out, node.summary(), workspace)?;
+            } else {
+                match node {
+                    Node::Leaf { .. } => *out = policy.branch(out, node.summary(), workspace)?,
+                    Node::Branch { left, right, .. } => {
+                        fold(left, offset, start, end, policy, out, workspace)?;
+                        fold(
+                            right,
+                            offset + left.len(),
+                            start,
+                            end,
+                            policy,
+                            out,
+                            workspace,
+                        )?;
+                    }
+                }
+            }
+            Ok(())
+        }
+        assert!(start <= end && end <= self.len());
+        let mut out = self.policy.leaf(&[], workspace)?;
+        if let Some(root) = &self.root {
+            fold(root, 0, start, end, &self.policy, &mut out, workspace)?;
+        }
+        Ok(out)
+    }
+
+    /// Count only whole physical leaves contained in a bypassed ordinal range.
+    pub(crate) fn blocks_in_range(&self, start: usize, end: usize) -> u64 {
+        fn count<T, A: Summary<T>>(
+            node: &Node<T, A::Value>,
+            offset: usize,
+            start: usize,
+            end: usize,
+            policy: &A,
+        ) -> u64 {
+            let stop = offset + node.len();
+            if end <= offset || stop <= start {
+                return 0;
+            }
+            if start <= offset && stop <= end {
+                return policy.blocks(node.summary());
+            }
+            match node {
+                Node::Leaf { .. } => 0,
+                Node::Branch { left, right, .. } => {
+                    count(left, offset, start, end, policy)
+                        + count(right, offset + left.len(), start, end, policy)
+                }
+            }
+        }
+        self.root
+            .as_deref()
+            .map_or(0, |root| count(root, 0, start, end, &self.policy))
+    }
     #[cfg(test)]
     pub(crate) fn height(&self) -> u8 {
         self.root.as_ref().map_or(0, |node| node.height())
     }
-    pub(crate) fn from_streams(streams: Vec<T>) -> Result<Self, TextError> {
+    pub(crate) fn from_streams_with_summary(streams: Vec<T>, policy: A) -> Result<Self, TextError> {
         let count = streams.len();
         let mut input = streams.into_iter();
-        fn build<T: Clone>(
+        fn build<T: Clone, A: Summary<T>>(
             count: usize,
             input: &mut impl Iterator<Item = T>,
-        ) -> Result<Link<T>, TextError> {
+            policy: &A,
+        ) -> Result<Link<T, A::Value>, TextError> {
             if count == 0 {
                 return Ok(None);
             }
             if count <= LEAF {
                 let mut items = handles(count)?;
                 items.extend(input.take(count));
-                return allocate(Node::Leaf(items)).map(Some);
+                return leaf(items, policy).map(Some);
             }
-            let left = build(count / 2, input)?;
-            let right = build(count - count / 2, input)?;
-            join(left, right)
+            let left = build(count / 2, input, policy)?;
+            let right = build(count - count / 2, input, policy)?;
+            join(left, right, policy)
         }
         Ok(Self {
-            root: build(count, &mut input)?,
+            root: build(count, &mut input, &policy)?,
+            policy,
         })
     }
 
@@ -262,24 +449,29 @@ impl<T: Clone> Table<T> {
     }
 
     pub(crate) fn replace(&self, index: usize, value: T) -> Result<Self, TextError> {
-        fn replace<T: Clone>(
-            node: &Shared<Node<T>>,
+        fn replace<T: Clone, A: Summary<T>>(
+            node: &Shared<Node<T, A::Value>>,
             index: usize,
             value: T,
-        ) -> Result<Shared<Node<T>>, TextError> {
+            policy: &A,
+        ) -> Result<Shared<Node<T, A::Value>>, TextError> {
             match &**node {
-                Node::Leaf(items) => {
+                Node::Leaf { items, .. } => {
                     let mut next = handles(items.len())?;
                     copy_handles(&mut next, &items[..index]);
                     next.push(value);
                     copy_handles(&mut next, &items[index + 1..]);
-                    allocate(Node::Leaf(next))
+                    leaf(next, policy)
                 }
                 Node::Branch { left, right, .. } => {
                     if index < left.len() {
-                        branch(replace(left, index, value)?, right.clone())
+                        branch(replace(left, index, value, policy)?, right.clone(), policy)
                     } else {
-                        branch(left.clone(), replace(right, index - left.len(), value)?)
+                        branch(
+                            left.clone(),
+                            replace(right, index - left.len(), value, policy)?,
+                            policy,
+                        )
                     }
                 }
             }
@@ -294,11 +486,13 @@ impl<T: Clone> Table<T> {
                 self.root.as_ref().expect("a nonempty table has its root"),
                 index,
                 value,
+                &self.policy,
             )?),
+            policy: self.policy.clone(),
         })
     }
 
-    pub(crate) fn slice(&self, start: usize, end: usize) -> Slice<'_, T> {
+    pub(crate) fn slice(&self, start: usize, end: usize) -> Slice<'_, T, A> {
         assert!(start <= end && end <= self.len(), "index-owned table range");
         Slice {
             table: Some(self),
@@ -307,7 +501,7 @@ impl<T: Clone> Table<T> {
         }
     }
 
-    fn range(&self, start: usize, end: usize) -> Iter<'_, T> {
+    fn range(&self, start: usize, end: usize) -> Iter<'_, T, A::Value> {
         let mut result = Iter {
             pending: [None; PATH],
             depth: 0,
@@ -321,7 +515,7 @@ impl<T: Clone> Table<T> {
         let mut index = start;
         loop {
             match node {
-                Node::Leaf(items) => {
+                Node::Leaf { items, .. } => {
                     result.leaf = items[index..].iter();
                     return result;
                 }
@@ -346,7 +540,7 @@ impl<T: Clone> Table<T> {
         }
         loop {
             match node {
-                Node::Leaf(items) => return items.get(index),
+                Node::Leaf { items, .. } => return items.get(index),
                 Node::Branch { left, right, .. } => {
                     if index < left.len() {
                         node = left;
@@ -366,49 +560,59 @@ impl<T: Clone> Table<T> {
             ));
         }
         self.len().checked_add(1).ok_or_else(overflow)?;
-        fn insert<T: Clone>(
-            node: &Shared<Node<T>>,
+        fn insert<T: Clone, A: Summary<T>>(
+            node: &Shared<Node<T, A::Value>>,
             index: usize,
             value: T,
-        ) -> Result<Link<T>, TextError> {
+            policy: &A,
+        ) -> Result<Link<T, A::Value>, TextError> {
             match &**node {
-                Node::Leaf(items) => {
+                Node::Leaf { items, .. } => {
                     let mut next = handles(items.len() + 1)?;
                     copy_handles(&mut next, &items[..index]);
                     next.push(value);
                     copy_handles(&mut next, &items[index..]);
                     if next.len() <= LEAF {
-                        return allocate(Node::Leaf(next)).map(Some);
+                        return leaf(next, policy).map(Some);
                     }
                     let mut right = handles(next.len() / 2)?;
                     let middle = next.len() - next.len() / 2;
                     right.extend(next.drain(middle..));
                     join(
-                        Some(allocate(Node::Leaf(next))?),
-                        Some(allocate(Node::Leaf(right))?),
+                        Some(leaf(next, policy)?),
+                        Some(leaf(right, policy)?),
+                        policy,
                     )
                 }
                 Node::Branch { left, right, .. } => {
                     if index <= left.len() {
-                        join(insert(left, index, value)?, Some(right.clone()))
+                        join(
+                            insert(left, index, value, policy)?,
+                            Some(right.clone()),
+                            policy,
+                        )
                     } else {
                         join(
                             Some(left.clone()),
-                            insert(right, index - left.len(), value)?,
+                            insert(right, index - left.len(), value, policy)?,
+                            policy,
                         )
                     }
                 }
             }
         }
         let root = match &self.root {
-            Some(root) => insert(root, index, value)?,
+            Some(root) => insert(root, index, value, &self.policy)?,
             None => {
                 let mut items = handles(1)?;
                 items.push(value);
-                Some(allocate(Node::Leaf(items))?)
+                Some(leaf(items, &self.policy)?)
             }
         };
-        Ok(Self { root })
+        Ok(Self {
+            root,
+            policy: self.policy.clone(),
+        })
     }
 
     pub(crate) fn remove(&self, index: usize) -> Result<Self, TextError> {
@@ -417,22 +621,30 @@ impl<T: Clone> Table<T> {
                 "token table removal is outside the document space",
             ));
         }
-        fn remove<T: Clone>(node: &Shared<Node<T>>, index: usize) -> Result<Link<T>, TextError> {
+        fn remove<T: Clone, A: Summary<T>>(
+            node: &Shared<Node<T, A::Value>>,
+            index: usize,
+            policy: &A,
+        ) -> Result<Link<T, A::Value>, TextError> {
             match &**node {
-                Node::Leaf(items) => {
+                Node::Leaf { items, .. } => {
                     if items.len() == 1 {
                         return Ok(None);
                     }
                     let mut next = handles(items.len() - 1)?;
                     copy_handles(&mut next, &items[..index]);
                     copy_handles(&mut next, &items[index + 1..]);
-                    allocate(Node::Leaf(next)).map(Some)
+                    leaf(next, policy).map(Some)
                 }
                 Node::Branch { left, right, .. } => {
                     if index < left.len() {
-                        join(remove(left, index)?, Some(right.clone()))
+                        join(remove(left, index, policy)?, Some(right.clone()), policy)
                     } else {
-                        join(Some(left.clone()), remove(right, index - left.len())?)
+                        join(
+                            Some(left.clone()),
+                            remove(right, index - left.len(), policy)?,
+                            policy,
+                        )
                     }
                 }
             }
@@ -441,28 +653,30 @@ impl<T: Clone> Table<T> {
             root: remove(
                 self.root.as_ref().expect("a nonempty table has its root"),
                 index,
+                &self.policy,
             )?,
+            policy: self.policy.clone(),
         })
     }
 
-    pub(crate) fn iter(&self) -> Iter<'_, T> {
+    pub(crate) fn iter(&self) -> Iter<'_, T, A::Value> {
         self.range(0, self.len())
     }
 }
 
-pub(crate) struct Slice<'a, T> {
-    table: Option<&'a Table<T>>,
+pub(crate) struct Slice<'a, T, A: Summary<T> = ()> {
+    table: Option<&'a Table<T, A>>,
     start: usize,
     end: usize,
 }
-impl<T> Copy for Slice<'_, T> {}
-impl<T> Clone for Slice<'_, T> {
+impl<T, A: Summary<T>> Copy for Slice<'_, T, A> {}
+impl<T, A: Summary<T>> Clone for Slice<'_, T, A> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<'a, T: Clone> Slice<'a, T> {
+impl<'a, T: Clone, A: Summary<T>> Slice<'a, T, A> {
     pub(crate) fn binary_search_by(
         &self,
         compare: impl FnMut(&T) -> core::cmp::Ordering,
@@ -490,7 +704,7 @@ impl<'a, T: Clone> Slice<'a, T> {
         }
         self.table?.get(self.start + at)
     }
-    pub(crate) fn iter(&self) -> Iter<'a, T> {
+    pub(crate) fn iter(&self) -> Iter<'a, T, A::Value> {
         self.table.map_or_else(
             || Iter {
                 pending: [None; PATH],
@@ -503,7 +717,7 @@ impl<'a, T: Clone> Slice<'a, T> {
     }
 }
 
-impl<T: Clone> core::ops::Index<usize> for Table<T> {
+impl<T: Clone, A: Summary<T>> core::ops::Index<usize> for Table<T, A> {
     type Output = T;
     fn index(&self, index: usize) -> &Self::Output {
         self.get(index).expect("index-owned token document")
@@ -511,14 +725,14 @@ impl<T: Clone> core::ops::Index<usize> for Table<T> {
 }
 
 #[derive(Clone)]
-pub(crate) struct Iter<'a, T> {
-    pending: [Option<&'a Node<T>>; PATH],
+pub(crate) struct Iter<'a, T, S = ()> {
+    pending: [Option<&'a Node<T, S>>; PATH],
     depth: usize,
     leaf: core::slice::Iter<'a, T>,
     remaining: usize,
 }
 
-impl<'a, T> Iterator for Iter<'a, T> {
+impl<'a, T, S> Iterator for Iter<'a, T, S> {
     type Item = &'a T;
     fn next(&mut self) -> Option<Self::Item> {
         if self.remaining == 0 {
@@ -535,7 +749,7 @@ impl<'a, T> Iterator for Iter<'a, T> {
                 .expect("an active token path has its node");
             loop {
                 match node {
-                    Node::Leaf(items) => {
+                    Node::Leaf { items, .. } => {
                         self.leaf = items.iter();
                         break;
                     }
@@ -552,8 +766,8 @@ impl<'a, T> Iterator for Iter<'a, T> {
         (self.remaining, Some(self.remaining))
     }
 }
-impl<T> ExactSizeIterator for Iter<'_, T> {}
-impl<T> core::iter::FusedIterator for Iter<'_, T> {}
+impl<T, S> ExactSizeIterator for Iter<'_, T, S> {}
+impl<T, S> core::iter::FusedIterator for Iter<'_, T, S> {}
 
 #[cfg(test)]
 std::thread_local! {
@@ -586,7 +800,7 @@ mod tests {
 
     fn invariants(node: &Node<TokenStream>) -> (usize, u8) {
         match node {
-            Node::Leaf(items) => {
+            Node::Leaf { items, .. } => {
                 assert!((1..=LEAF).contains(&items.len()));
                 (items.len(), 1)
             }
@@ -595,6 +809,7 @@ mod tests {
                 right,
                 len,
                 height,
+                ..
             } => {
                 let (a, ha) = invariants(left);
                 let (b, hb) = invariants(right);

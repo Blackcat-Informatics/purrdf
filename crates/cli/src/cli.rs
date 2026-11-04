@@ -388,6 +388,27 @@ pub(crate) struct GlobRdfArgs {
 /// The pipeline subcommands.
 #[derive(Subcommand, Debug)]
 pub(crate) enum Command {
+    /// Convert complete checked BLAKE3 word identities with explicit formats.
+    WordId {
+        /// Encode, decode, inspect or stream an ordered batch.
+        #[command(subcommand)]
+        command: crate::word_id::Command,
+    },
+    /// Present a full BLAKE3 identity with native emoji, spoken labels and randomart.
+    Fingerprint {
+        /// Complete 64-digit hexadecimal digest; either case is accepted.
+        #[arg(long)]
+        digest: String,
+        /// Positive number of emoji and corresponding spoken labels.
+        #[arg(long)]
+        symbols: usize,
+        /// Inclusive live UTF-8 rendering-storage allowance.
+        #[arg(long)]
+        max_bytes: usize,
+        /// Inclusive native parse, scan and output-copy work allowance.
+        #[arg(long)]
+        max_work: u64,
+    },
     /// Execute an RDF-authored plan and emit its description and membership provenance.
     GlobRdf(GlobRdfArgs),
     /// Return every matching index from an ordered compiled pattern set.
@@ -3116,7 +3137,8 @@ impl Cli {
                 paths.push(PathBuf::from(&args.plan));
                 paths.push(PathBuf::from(&args.input));
             }
-            Command::GlobSet { .. } => {}
+            Command::GlobSet { .. } | Command::Fingerprint { .. } => {}
+            Command::WordId { command } => command.paths(&mut paths),
         }
         paths
     }

@@ -252,6 +252,24 @@ purrdf_lex::constructors! {
 }
 
 impl TextError {
+    /// Preserve a refusal returned by a native workspace allocation operation.
+    ///
+    /// # Panics
+    /// Panics if `error` is not a workspace allocation refusal. Source read
+    /// errors belong in [`Self::source_read_owned`] instead.
+    pub fn workspace_failure(error: &purrdf_sparql_eval::EvalError) -> Self {
+        Self::Capacity(crate::CapacityFailure::from_workspace(error))
+    }
+
+    /// Retain a provider's original typed read failure under the query owner.
+    /// Admission refusal is preserved as a capacity failure.
+    pub fn source_read_owned(
+        cause: impl purrdf_hash::error::NativeError + 'static,
+        workspace: &purrdf_sparql_eval::WorkspaceCapability,
+    ) -> Self {
+        crate::query_workspace::source_error_with(cause, workspace)
+    }
+
     /// Retain an explicit caller-provided configuration message.
     pub fn config(what: impl core::fmt::Display) -> Self {
         crate::configuration::ConfigurationRefusal::CallerMessage(what.to_string()).into_error()

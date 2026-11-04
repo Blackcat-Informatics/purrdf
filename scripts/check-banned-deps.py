@@ -110,11 +110,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-
 # Package name -> first-party replacement. Banned on ANY edge (runtime, build,
 # dev/test, transitive) because a first-party replacement exists for every
 # edge kind; reintroduction anywhere in the resolved Cargo.lock closure fails.
 BANNED_ANY_EDGE: dict[str, str] = {
+    "visual-hashing": "purrdf_lex::visual_fingerprint (admitted native rendering over shared BLAKE3)",
     "structured-zstd": "purrdf_zstd (shared native frame codec and FastCOVER trainer)",
     "hashbrown": "purrdf_core::hash::table (shared native probes and transactional growth)",
     "petgraph": "purrdf_core::graph::tarjan_scc (the first-party iterative Tarjan SCC)",

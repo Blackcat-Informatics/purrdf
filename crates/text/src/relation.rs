@@ -44,6 +44,7 @@ use crate::score::{
     CandidateSelection, distinct_terms_owned, matches_predicate, score_located_owned,
     select_counted_membership_owned,
 };
+use crate::{TextSource, source::SourceExt};
 use purrdf_sparql_eval::{
     AdmittedPfRow, AdmittedVec, NativeDiagnostic, NativeDiagnosticKind, WorkspaceCapability,
     WorkspaceCursor, WorkspaceTerm,
@@ -374,33 +375,56 @@ fn language_matches<P: CorpusProfile>(language: &Constraint<&str>, key: &Partiti
 // Partition grouping, shared by both row bounds
 // ---------------------------------------------------------------------------
 
-/// The partitions of `keys` grouped by language, as index lists.
-///
-/// Built by sorting rather than by hashing, so the grouping — and therefore
-/// every row bound derived from it — is a pure function of the index's
-/// contents.
-fn language_groups<P: CorpusProfile>(keys: &[PartitionKey<P>]) -> Vec<Vec<usize>> {
-    let mut order: Vec<usize> = (0..keys.len()).collect();
-    order.sort_by(|&left, &right| keys[left].language().cmp(&keys[right].language()));
+type BoundPartition<'a, P> = (usize, &'a PartitionKey<P>, u64);
 
-    let mut groups: Vec<Vec<usize>> = Vec::new();
-    for at in order {
-        match groups.last_mut() {
-            Some(group) if keys[group[0]].language() == keys[at].language() => group.push(at),
-            _ => groups.push(vec![at]),
+fn bound_partitions<'a, P: CorpusProfile>(
+    source: &'a impl TextSource<P>,
+    workspace: &WorkspaceCapability,
+) -> Result<AdmittedVec<BoundPartition<'a, P>>, TextError> {
+    let mut keys = AdmittedVec::new(workspace);
+    for (ordinal, (key, stats)) in source.partitions().enumerate() {
+        if stats.document_count() != 0 {
+            admitted(keys.push((ordinal, key, stats.document_count())))?;
         }
     }
-    groups
+    Ok(keys)
 }
 
-/// How many distinct graphs the index's partitions name, counting the default
-/// graph as one of them.
-fn distinct_graphs<P: CorpusProfile>(keys: &[PartitionKey<P>]) -> u64 {
-    let mut graphs: Vec<Option<&TermValue>> =
-        keys.iter().map(PartitionKey::graph_coordinate).collect();
-    graphs.sort_unstable();
-    graphs.dedup();
-    graphs.len() as u64
+fn group_languages<P: CorpusProfile>(keys: &mut [BoundPartition<'_, P>]) {
+    keys.sort_unstable_by(|(_, left, _), (_, right, _)| left.language().cmp(&right.language()));
+}
+
+fn distinct_graphs<P: CorpusProfile>(
+    keys: &[BoundPartition<'_, P>],
+    workspace: &WorkspaceCapability,
+) -> Result<u64, TextError> {
+    graph_count(keys, |left, right| match (left, right) {
+        (None, None) => Ok(true),
+        (Some(a), Some(b)) => admitted(workspace.terms_equal(a, b)),
+        _ => Ok(false),
+    })
+}
+
+fn resident_graph_count<P: CorpusProfile>(keys: &[BoundPartition<'_, P>]) -> u64 {
+    match graph_count(keys, |left, right| {
+        Ok::<_, std::convert::Infallible>(left == right)
+    }) {
+        Ok(count) => count,
+        Err(never) => match never {},
+    }
+}
+
+fn graph_count<P: CorpusProfile, E>(
+    keys: &[BoundPartition<'_, P>],
+    mut equal: impl FnMut(Option<&TermValue>, Option<&TermValue>) -> Result<bool, E>,
+) -> Result<u64, E> {
+    let mut graphs = u64::from(!keys.is_empty());
+    for pair in keys.windows(2) {
+        if !equal(pair[0].1.graph_coordinate(), pair[1].1.graph_coordinate())? {
+            graphs = graphs.saturating_add(1);
+        }
+    }
+    Ok(graphs)
 }
 
 // ---------------------------------------------------------------------------
@@ -451,7 +475,7 @@ fn distinct_graphs<P: CorpusProfile>(keys: &[PartitionKey<P>]) -> u64 {
 /// Nothing here reads a clock, a counter or an RNG. The value is a pure
 /// function of the index's content, so two processes that built the same index
 /// from the same rows attest the same generation and a reader may compare them.
-pub(crate) fn index_generation<P: CorpusProfile>(index: &TextIndex<P>) -> Arc<str> {
+pub(crate) fn index_generation<P: CorpusProfile>(index: &impl TextSource<P>) -> Arc<str> {
     Arc::from(purrdf_hash::hex::encode(&index.fingerprint()))
 }
 
@@ -461,8 +485,8 @@ pub(crate) fn index_generation<P: CorpusProfile>(index: &TextIndex<P>) -> Arc<st
 
 /// The maxima [`TextSearchRelation::rows_per_invocation`] is computed from,
 /// measured once at relation construction.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct SearchBounds {
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SearchBounds {
     /// Every document admitted to a scoring population.
     documents: u64,
     /// Every partition with a positive scoring population.
@@ -477,36 +501,52 @@ struct SearchBounds {
 }
 
 impl SearchBounds {
-    /// Measure `index`.
-    fn of<P: CorpusProfile>(index: &TextIndex<P>) -> Self {
-        let (keys, documents_in): (Vec<_>, Vec<_>) = index
+    fn measure<P: CorpusProfile>(
+        index: &impl TextSource<P>,
+        workspace: &WorkspaceCapability,
+    ) -> Result<Self, TextError> {
+        let mut keys = bound_partitions(index, workspace)?;
+        let graphs = distinct_graphs(&keys, workspace)?;
+        group_languages(keys.as_mut_slice());
+        Ok(Self::summarize(&keys, graphs))
+    }
+
+    fn resident<P: CorpusProfile>(index: &TextIndex<P>) -> Self {
+        let mut keys: Vec<_> = index
             .partitions()
-            .filter(|(_, stats)| stats.document_count() != 0)
-            .map(|(key, stats)| (key.clone(), stats.document_count()))
-            .unzip();
-        let groups = language_groups(&keys);
+            .enumerate()
+            .filter(|(_, (_, stats))| stats.document_count() != 0)
+            .map(|(ordinal, (key, stats))| (ordinal, key, stats.document_count()))
+            .collect();
+        let graphs = resident_graph_count(&keys);
+        group_languages(&mut keys);
+        Self::summarize(&keys, graphs)
+    }
+
+    fn summarize<P: CorpusProfile>(keys: &[BoundPartition<'_, P>], graphs: u64) -> Self {
+        let mut documents_per_language = 0_u64;
+        let mut partitions_per_language = 0_u64;
+        let mut at = 0;
+        while at < keys.len() {
+            let start = at;
+            let language = keys[at].1.language();
+            let mut documents = 0_u64;
+            while at < keys.len() && keys[at].1.language() == language {
+                documents = documents.saturating_add(keys[at].2);
+                at += 1;
+            }
+            documents_per_language = documents_per_language.max(documents);
+            partitions_per_language = partitions_per_language.max((at - start) as u64);
+        }
         Self {
-            documents: documents_in
+            documents: keys
                 .iter()
-                .copied()
+                .map(|(_, _, count)| *count)
                 .fold(0_u64, u64::saturating_add),
             partitions: keys.len() as u64,
-            graphs: distinct_graphs(&keys),
-            partitions_per_language: groups
-                .iter()
-                .map(|group| group.len() as u64)
-                .max()
-                .unwrap_or(0),
-            documents_per_language: groups
-                .iter()
-                .map(|group| {
-                    group
-                        .iter()
-                        .map(|&at| documents_in[at])
-                        .fold(0_u64, u64::saturating_add)
-                })
-                .max()
-                .unwrap_or(0),
+            graphs,
+            partitions_per_language,
+            documents_per_language,
         }
     }
 
@@ -543,7 +583,46 @@ impl SearchBounds {
     }
 }
 
-/// Ranked retrieval over a frozen [`TextIndex`], as a SPARQL relation.
+/// Exact native relation bounds prepared once for one immutable source generation.
+/// Providers can retain this value with their persistent snapshot and return it
+/// from `TextSource::relation_bounds` without walking postings at registration.
+#[derive(Clone, Copy, Debug)]
+pub struct TextSourceBounds {
+    fingerprint: [u8; 32],
+    search: SearchBounds,
+    occurrence: OccurrenceBounds,
+    phrase: u64,
+}
+impl TextSourceBounds {
+    /// Measure the native bounds once, using the supplied preparation workspace.
+    /// This performs source reads and preserves their original failures.
+    pub fn measure<P: CorpusProfile>(
+        source: &impl TextSource<P>,
+        workspace: &WorkspaceCapability,
+    ) -> Result<Self, TextError> {
+        Ok(Self {
+            fingerprint: source.fingerprint(),
+            search: SearchBounds::measure(source, workspace)?,
+            occurrence: OccurrenceBounds::measure(source, workspace)?,
+            phrase: crate::source::phrase_bound(source, workspace)?,
+        })
+    }
+    /// Exact native upper bound on positional alias derivations.
+    pub const fn phrase_rows(&self) -> u64 {
+        self.phrase
+    }
+
+    fn validate<P: CorpusProfile>(&self, source: &impl TextSource<P>) -> Result<(), TextError> {
+        if self.fingerprint != source.fingerprint() {
+            return Err(TextError::data(
+                "text relation bounds belong to another source generation",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Ranked retrieval over an immutable [`TextSource`], as a SPARQL relation.
 ///
 /// One subject-side argument and five object-side ones, so a call reads
 ///
@@ -630,10 +709,11 @@ impl SearchBounds {
 /// query — the same answer on the main thread and on a fork-join worker, and
 /// the same answer on `wasm32-unknown-unknown` as on a native build. That is
 /// what the stable class asserts, so the relation may run across workers.
-#[derive(Clone, Debug)]
-pub struct TextSearchRelation<P: CorpusProfile = GraphLanguage> {
+#[derive(Debug)]
+pub struct TextSearchRelation<P: CorpusProfile = GraphLanguage, S: TextSource<P> = TextIndex<P>> {
     /// The index every invocation is answered from.
-    index: Arc<TextIndex<P>>,
+    index: Arc<S>,
+    profile: core::marker::PhantomData<P>,
     /// The declared modes, materialized once so [`PropertyFunction::modes`]
     /// can hand out a slice.
     modes: [BindingPattern; 2],
@@ -657,8 +737,7 @@ pub struct TextSearchRelation<P: CorpusProfile = GraphLanguage> {
 /// measurable time, so a timing assertion would pass over an implementation that
 /// ranks the whole index and one that does not.
 ///
-/// Both counters are monotone for the life of the relation and are never reset
-/// here. A caller that wants a delta reads the value before and after, which is
+/// Counters accumulate modulo u64 and are never reset here. A caller that wants a delta reads the value before and after, which is
 /// the reading that composes: a reset would race with any other invocation of a
 /// relation the registry may run across workers.
 ///
@@ -677,8 +756,10 @@ pub struct SearchObservations {
     rankings: AtomicU64,
     /// How many posting lists the ranker has walked end to end.
     posting_lists_walked: AtomicU64,
-    /// How many postings those walks have read.
+    /// How many posting payloads ranked traversal decoded.
     postings_walked: AtomicU64,
+    posting_blocks_skipped: AtomicU64,
+    posting_blocks_examined: AtomicU64,
     /// How many documents a score has been computed for, by either scorer.
     documents_scored: AtomicU64,
     /// How many invocations were answered by the point scorer.
@@ -724,17 +805,27 @@ impl SearchObservations {
         self.posting_lists_walked.load(Ordering::Relaxed)
     }
 
-    /// How many individual **postings** the ranker's walks have read — the sum,
-    /// over every list [`Self::posting_lists_walked`] counts, of that list's
-    /// length in the partition ranked. This is the number that grows with the
-    /// corpus, which is why it is counted rather than inferred.
+    /// How many posting payloads ranked traversal actually decoded, including
+    /// bounded traversal. Retained metadata reads and bypassed payloads are excluded.
     #[must_use]
     pub fn postings_walked(&self) -> u64 {
         self.postings_walked.load(Ordering::Relaxed)
     }
 
+    /// Physical posting leaf blocks bypassed without decoding their payloads.
+    #[must_use]
+    pub fn posting_blocks_skipped(&self) -> u64 {
+        self.posting_blocks_skipped.load(Ordering::Relaxed)
+    }
+
+    /// Physical posting leaf blocks whose payloads ranked traversal examined.
+    #[must_use]
+    pub fn posting_blocks_examined(&self) -> u64 {
+        self.posting_blocks_examined.load(Ordering::Relaxed)
+    }
+
     /// How many documents a **score** has been computed for, by the ranker (every
-    /// candidate of every partition it ranked) and by the point scorer (each
+    /// evaluated candidate of a partition) and by the point scorer (each
     /// document of the bound subject holding a needle term) alike.
     #[must_use]
     pub fn documents_scored(&self) -> u64 {
@@ -758,19 +849,23 @@ impl SearchObservations {
             .fetch_add(work.postings, Ordering::Relaxed);
         self.documents_scored
             .fetch_add(work.documents_scored, Ordering::Relaxed);
+        self.posting_blocks_skipped
+            .fetch_add(work.posting_blocks_skipped, Ordering::Relaxed);
+        self.posting_blocks_examined
+            .fetch_add(work.posting_blocks_examined, Ordering::Relaxed);
     }
 }
 
 /// One document of a bound subject that holds at least one needle term, with the
 /// postings the membership lookups located for it.
-struct Holding<'i> {
+struct Holding<F> {
     /// The document id.
     document: u32,
     /// Stable ordinal of its partition in the immutable caller index.
     partition: usize,
     /// `(term ordinal, predicate frequencies)` for each distinct needle term the
     /// document holds, in ascending ordinal order — what the point scorer reads.
-    located: AdmittedVec<(usize, &'i [(u32, u64)])>,
+    located: AdmittedVec<(usize, F)>,
 }
 
 /// One row a [`SearchCursor`] will emit, before it is rendered.
@@ -831,7 +926,29 @@ impl TextSearchRelation<GraphLanguage> {
     pub const MATCHED: usize = SEARCH_MATCHED;
 }
 
+impl<P: CorpusProfile, S: TextSource<P>> Clone for TextSearchRelation<P, S> {
+    fn clone(&self) -> Self {
+        Self {
+            index: self.index.clone(),
+            generation: self.generation.clone(),
+            observations: self.observations.clone(),
+            profile: core::marker::PhantomData,
+            modes: self.modes,
+            bounds: self.bounds,
+        }
+    }
+}
+
 impl<P: CorpusProfile> TextSearchRelation<P> {
+    /// Construct the native relation over an already validated resident index.
+    #[must_use]
+    pub fn new(index: Arc<TextIndex<P>>) -> Self {
+        let bounds = SearchBounds::resident(&index);
+        Self::build(index, bounds)
+    }
+}
+
+impl<P: CorpusProfile, S: TextSource<P>> TextSearchRelation<P, S> {
     /// A ranked-retrieval relation over `index`.
     ///
     /// The row bounds this relation declares are measured here, once, rather
@@ -840,12 +957,18 @@ impl<P: CorpusProfile> TextSearchRelation<P> {
     /// for exactly the same reason: it is the index fingerprint in lowercase hex,
     /// so one rendering is interned once and every invocation attests a pointer to
     /// it rather than a fresh copy.
-    #[must_use]
-    pub fn new(index: Arc<TextIndex<P>>) -> Self {
-        let bounds = SearchBounds::of(&index);
-        let generation = index_generation(&index);
+    pub fn from_source(index: Arc<S>, workspace: &WorkspaceCapability) -> Result<Self, TextError> {
+        let measured = index.relation_bounds(workspace)?;
+        measured.validate(&*index)?;
+        let bounds = measured.search;
+        Ok(Self::build(index, bounds))
+    }
+
+    fn build(index: Arc<S>, bounds: SearchBounds) -> Self {
+        let generation = index_generation(&*index);
         Self {
             index,
+            profile: core::marker::PhantomData,
             modes: [
                 BindingPattern::from_code(SEARCH_MODE),
                 BindingPattern::from_code(SEARCH_CANDIDATE_MODE),
@@ -856,9 +979,9 @@ impl<P: CorpusProfile> TextSearchRelation<P> {
         }
     }
 
-    /// The index this relation answers from.
+    /// The immutable source this relation answers from.
     #[must_use]
-    pub fn index(&self) -> &TextIndex<P> {
+    pub fn index(&self) -> &S {
         &self.index
     }
 
@@ -1147,14 +1270,21 @@ impl<P: CorpusProfile> TextSearchRelation<P> {
         language: &Constraint<&str>,
         workspace: &WorkspaceCapability,
         predicate: Option<&TermValue>,
-    ) -> Result<AdmittedVec<Holding<'_>>, TextError> {
-        let documents = admitted(self.index.documents_with_subject_owned(subject, workspace))?;
+    ) -> Result<AdmittedVec<Holding<S::Frequencies<'_>>>, TextError> {
+        let documents = self
+            .index
+            .documents_with_subject_owned(subject, workspace)?;
         let mut held = admitted(AdmittedVec::with_capacity(documents.len(), workspace))?;
         for &document in &documents {
-            let Some(key) = admitted(self.index.partition_key_of_owned(document, workspace))?
-            else {
-                continue;
-            };
+            let key = self
+                .index
+                .partition_key_of_owned(document, workspace)?
+                .ok_or_else(|| {
+                    crate::query_workspace::data_error(
+                        "source subject index names an absent document partition",
+                        Some(workspace),
+                    )
+                })?;
             if !language_matches(language, key) {
                 continue;
             }
@@ -1163,32 +1293,33 @@ impl<P: CorpusProfile> TextSearchRelation<P> {
                 self.observations
                     .membership_lookups
                     .fetch_add(1, Ordering::Relaxed);
-                if let Some(counts) = admitted(
-                    self.index
-                        .posted_frequencies_owned(document, term, workspace),
-                )? {
+                if let Some(counts) = self
+                    .index
+                    .posted_frequencies_owned(document, term, workspace)?
+                {
                     admitted(located.push((ordinal, counts)))?;
                 }
             }
             if !located.is_empty()
                 && matches_predicate(
-                    &self.index,
+                    &*self.index,
                     document,
                     terms.iter().copied(),
                     predicate,
                     workspace,
                 )?
             {
-                let partition =
-                    admitted(self.index.partition_ordinal_of_owned(document, workspace))?
-                        .ok_or_else(|| {
-                            query_error(
-                                workspace,
-                                NativeDiagnosticKind::Internal,
-                                format_args!("text index document {document} has no partition"),
-                            )
-                            .unwrap_or_else(|failure| failure)
-                        })?;
+                let partition = self
+                    .index
+                    .partition_ordinal_of_owned(document, workspace)?
+                    .ok_or_else(|| {
+                        query_error(
+                            workspace,
+                            NativeDiagnosticKind::Internal,
+                            format_args!("text index document {document} has no partition"),
+                        )
+                        .unwrap_or_else(|failure| failure)
+                    })?;
                 admitted(held.push(Holding {
                     document,
                     partition,
@@ -1204,7 +1335,7 @@ impl<P: CorpusProfile> TextSearchRelation<P> {
     fn scored_in_place_owned(
         &self,
         terms: &[&str],
-        holdings: &[Holding<'_>],
+        holdings: &[Holding<S::Frequencies<'_>>],
         workspace: &WorkspaceCapability,
     ) -> Result<AdmittedVec<Hit>, TextError> {
         self.observations
@@ -1215,7 +1346,7 @@ impl<P: CorpusProfile> TextSearchRelation<P> {
             let mut hits = admitted(AdmittedVec::with_capacity(holdings.len(), workspace))?;
             for holding in holdings {
                 let (score, matched) = score_located_owned(
-                    &self.index,
+                    &*self.index,
                     holding.document,
                     terms,
                     &holding.located,
@@ -1248,13 +1379,13 @@ impl<P: CorpusProfile> TextSearchRelation<P> {
         self.observations.rankings.fetch_add(1, Ordering::Relaxed);
         let mut work = ScoringWork::default();
         let result = select_counted_membership_owned(
-            &self.index,
+            &*self.index,
             needle.iter().map(QueryString::as_str),
             CandidateSelection {
                 partitions: matches,
                 candidates: |document| {
                     matches_predicate(
-                        &self.index,
+                        &*self.index,
                         document,
                         needle.iter().map(QueryString::as_str),
                         predicate,
@@ -1285,13 +1416,13 @@ impl<P: CorpusProfile> TextSearchRelation<P> {
         // selection. Unknown rows are scored once alongside established rows;
         // a limited established prefix cannot hide the rest of that partition.
         let result = select_counted_membership_owned(
-            &self.index,
+            &*self.index,
             needle.iter().map(QueryString::as_str),
             CandidateSelection {
                 partitions: matches,
                 candidates: |document| {
                     if !matches_predicate(
-                        &self.index,
+                        &*self.index,
                         document,
                         needle.iter().map(QueryString::as_str),
                         selection.predicate,
@@ -1299,13 +1430,16 @@ impl<P: CorpusProfile> TextSearchRelation<P> {
                     )? {
                         return Ok(false);
                     }
-                    let source = self.index.document(document).ok_or_else(|| {
-                        NativeDiagnostic::error(
-                            NativeDiagnosticKind::Internal,
-                            "text candidate is absent from its original index",
-                            workspace,
-                        )
-                    })?;
+                    let source =
+                        self.index
+                            .read_document(document, workspace)?
+                            .ok_or_else(|| {
+                                NativeDiagnostic::error(
+                                    NativeDiagnosticKind::Internal,
+                                    "text candidate is absent from its original index",
+                                    workspace,
+                                )
+                            })?;
                     let evidence = selection
                         .scope
                         .decide(source.subject(), workspace)?
@@ -1377,12 +1511,11 @@ impl<P: CorpusProfile> TextSearchRelation<P> {
             // Unknown ranks retain the original possible-candidate order; they
             // belong to the separate incomplete evidence partition, not to the
             // complete contiguous ranked stream.
-            if selection.subject.is_some_and(|subject| {
-                self.index
-                    .document(row.document)
-                    .is_none_or(|document| document.subject() != subject)
-            }) {
-                continue;
+            if let Some(subject) = selection.subject {
+                let document = self.index.required_document(row.document, workspace)?;
+                if !workspace.terms_equal(document.subject(), subject)? {
+                    continue;
+                }
             }
             if !unknown {
                 if selection.ceiling.is_some_and(|ceiling| selected >= ceiling)
@@ -1477,13 +1610,16 @@ impl<P: CorpusProfile> TextSearchRelation<P> {
                     )?;
                     let mut selected = AdmittedVec::with_capacity(holdings.len(), &workspace)?;
                     for holding in holdings {
-                        let document = self.index.document(holding.document).ok_or_else(|| {
-                            NativeDiagnostic::error(
-                                NativeDiagnosticKind::Internal,
-                                "bound text holding lost its original document",
-                                &workspace,
-                            )
-                        })?;
+                        let document = self
+                            .index
+                            .read_document(holding.document, &workspace)?
+                            .ok_or_else(|| {
+                                NativeDiagnostic::error(
+                                    NativeDiagnosticKind::Internal,
+                                    "bound text holding lost its original document",
+                                    &workspace,
+                                )
+                            })?;
                         if let Some(evidence) = scope
                             .decide(document.subject(), &workspace)?
                             .into_evidence(&workspace)?
@@ -1604,7 +1740,8 @@ impl<P: CorpusProfile> TextSearchRelation<P> {
         }
         let bound = bound_terms(args, &workspace)?;
         let owner_workspace = workspace.clone();
-        let cursor = SearchCursor {
+        let cursor = SearchCursor::<P, S> {
+            profile: core::marker::PhantomData,
             index: Arc::clone(&self.index),
             generation: Arc::clone(&self.generation),
             rows,
@@ -1619,7 +1756,7 @@ impl<P: CorpusProfile> TextSearchRelation<P> {
     }
 }
 
-impl<P: CorpusProfile> PropertyFunction for TextSearchRelation<P> {
+impl<P: CorpusProfile, S: TextSource<P>> PropertyFunction for TextSearchRelation<P, S> {
     fn supports_candidate_scope(&self) -> bool {
         true
     }
@@ -1802,8 +1939,9 @@ impl<P: CorpusProfile> PropertyFunction for TextSearchRelation<P> {
 /// **constant** written at the call site, which the engine still treats as
 /// admission-transparent and so still offers a ceiling for.
 #[derive(Debug)]
-struct SearchCursor<P: CorpusProfile = GraphLanguage> {
-    index: Arc<TextIndex<P>>,
+struct SearchCursor<P: CorpusProfile = GraphLanguage, S: TextSource<P> = TextIndex<P>> {
+    index: Arc<S>,
+    profile: core::marker::PhantomData<P>,
     generation: Arc<str>,
     rows: AdmittedVec<Hit>,
     declarations: AdmittedVec<(u32, Option<purrdf_sparql_eval::RowEvidence>)>,
@@ -1814,18 +1952,21 @@ struct SearchCursor<P: CorpusProfile = GraphLanguage> {
     workspace: WorkspaceCapability,
 }
 
-impl<P: CorpusProfile> SearchCursor<P> {
+impl<P: CorpusProfile, S: TextSource<P>> SearchCursor<P, S> {
     fn build(&self, hit: &Hit) -> Result<AdmittedPfRow, EvalError> {
-        let document = self.index.document(hit.document).ok_or_else(|| {
-            NativeDiagnostic::error(
-                NativeDiagnosticKind::Data,
-                format_args!(
-                    "a scored row named document {}, which the index does not hold",
-                    hit.document
-                ),
-                &self.workspace,
-            )
-        })?;
+        let document = self
+            .index
+            .read_document(hit.document, &self.workspace)?
+            .ok_or_else(|| {
+                NativeDiagnostic::error(
+                    NativeDiagnosticKind::Data,
+                    format_args!(
+                        "a scored row named document {}, which the index does not hold",
+                        hit.document
+                    ),
+                    &self.workspace,
+                )
+            })?;
         let needle = self.bound[SEARCH_NEEDLE]
             .as_ref()
             .expect("validated required needle");
@@ -1898,7 +2039,7 @@ macro_rules! resident_cursor_next {
     };
 }
 
-impl<P: CorpusProfile> PfCursor for SearchCursor<P> {
+impl<P: CorpusProfile, S: TextSource<P>> PfCursor for SearchCursor<P, S> {
     fn carries_row_evidence(&self) -> bool {
         self.scoped
     }
@@ -1917,8 +2058,8 @@ impl<P: CorpusProfile> PfCursor for SearchCursor<P> {
 
 /// The maxima [`TermOccurrenceRelation::rows_per_invocation`] is computed from,
 /// measured once at relation construction by walking the postings.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct OccurrenceBounds {
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct OccurrenceBounds {
     /// The largest total occurrence count of any one term, across every
     /// partition. Occurrences, not documents: a term occurring four times in
     /// one document is four rows.
@@ -1937,59 +2078,147 @@ struct OccurrenceBounds {
 }
 
 impl OccurrenceBounds {
-    /// Measure `index` by walking every term's postings once.
-    fn of<P: CorpusProfile>(index: &TextIndex<P>) -> Self {
-        let keys: Vec<_> = index
-            .partitions()
-            .filter(|(_, stats)| stats.document_count() != 0)
-            .map(|(key, _)| key.clone())
-            .collect();
-        let groups = language_groups(&keys);
+    fn measure<P: CorpusProfile, S: TextSource<P>>(
+        index: &S,
+        workspace: &WorkspaceCapability,
+    ) -> Result<Self, TextError> {
+        let mut keys = bound_partitions(index, workspace)?;
+        let graphs = distinct_graphs(&keys, workspace)?;
+        group_languages(keys.as_mut_slice());
+        let mut in_partition = admitted(AdmittedVec::with_capacity(keys.len(), workspace))?;
+        for _ in &keys {
+            admitted(in_partition.push(0_u64))?;
+        }
+        let terms = (0..index.term_count()).map(|ordinal| {
+            index
+                .read_term(
+                    u32::try_from(ordinal).map_err(|_| crate::query_workspace::overflow())?,
+                    workspace,
+                )?
+                .ok_or_else(|| {
+                    crate::query_workspace::data_error(
+                        "source term dictionary contains a missing ordinal",
+                        Some(workspace),
+                    )
+                })
+        });
+        Self::summarize(
+            &keys,
+            graphs,
+            &mut in_partition,
+            terms,
+            |partition, term, ordinal| {
+                let key = index
+                    .partition_at(partition)
+                    .map(|(key, _)| key)
+                    .ok_or_else(|| {
+                        crate::query_workspace::data_error(
+                            "source partition disappeared",
+                            Some(workspace),
+                        )
+                    })?;
+                index
+                    .field_posting_at(key, term, ordinal, workspace)?
+                    .map(|(_, counts)| {
+                        counts.as_ref().iter().try_fold(0_u64, |total, (_, count)| {
+                            total.checked_add(*count).ok_or_else(|| {
+                                crate::query_workspace::data_error(
+                                    "source posting frequency overflow",
+                                    Some(workspace),
+                                )
+                            })
+                        })
+                    })
+                    .transpose()
+            },
+        )
+    }
 
+    fn resident<P: CorpusProfile>(index: &TextIndex<P>) -> Self {
+        let mut keys: Vec<_> = index
+            .partitions()
+            .enumerate()
+            .filter(|(_, (_, stats))| stats.document_count() != 0)
+            .map(|(ordinal, (key, stats))| (ordinal, key, stats.document_count()))
+            .collect();
+        let graphs = resident_graph_count(&keys);
+        group_languages(&mut keys);
+        let mut in_partition = vec![0; keys.len()];
+        let mut run = None;
+        let mut run_key = None;
+        let result = Self::summarize(
+            &keys,
+            graphs,
+            &mut in_partition,
+            index.terms().map(Ok::<_, std::convert::Infallible>),
+            |partition, term, _| {
+                let key = (partition, term.as_ptr(), term.len());
+                if run_key != Some(key) {
+                    run = Some(index.partition_occurrence_counts(partition, term));
+                    run_key = Some(key);
+                }
+                Ok(run.as_mut().and_then(Iterator::next))
+            },
+        );
+        match result {
+            Ok(bounds) => bounds,
+            Err(never) => match never {},
+        }
+    }
+
+    fn summarize<P: CorpusProfile, E, T: AsRef<str>>(
+        keys: &[BoundPartition<'_, P>],
+        graphs: u64,
+        in_partition: &mut [u64],
+        terms: impl Iterator<Item = Result<T, E>>,
+        mut posting_count: impl FnMut(usize, &str, usize) -> Result<Option<u64>, E>,
+    ) -> Result<Self, E> {
         let mut occurrences = 0_u64;
         let mut documents_holding = 0_u64;
         let mut per_document = 0_u64;
         let mut per_language = 0_u64;
-        let mut in_partition = vec![0_u64; keys.len()];
-
-        for term in index.terms() {
+        for term in terms {
+            let term = term?;
             in_partition.fill(0);
             let mut total = 0_u64;
             let mut holding = 0_u64;
-            for (at, key) in keys.iter().enumerate() {
-                for (_, positions) in index.postings(key, term) {
-                    let count = positions.len() as u64;
+            for (at, (partition, _, _)) in keys.iter().enumerate() {
+                let mut ordinal = 0;
+                while let Some(count) = posting_count(*partition, term.as_ref(), ordinal)? {
                     total = total.saturating_add(count);
                     holding = holding.saturating_add(1);
                     per_document = per_document.max(count);
                     in_partition[at] = in_partition[at].saturating_add(count);
+                    ordinal += 1;
                 }
             }
             occurrences = occurrences.max(total);
             documents_holding = documents_holding.max(holding);
-            for group in &groups {
-                let summed = group
-                    .iter()
-                    .map(|&at| in_partition[at])
-                    .fold(0_u64, u64::saturating_add);
-                per_language = per_language.max(summed);
+            let mut at = 0;
+            while at < keys.len() {
+                let language = keys[at].1.language();
+                let mut count = 0_u64;
+                while at < keys.len() && keys[at].1.language() == language {
+                    count = count.saturating_add(in_partition[at]);
+                    at += 1;
+                }
+                per_language = per_language.max(count);
             }
         }
-
-        Self {
+        Ok(Self {
             occurrences,
             documents_holding,
             per_document,
             per_language,
             partitions: keys.len() as u64,
-            graphs: distinct_graphs(&keys),
-        }
+            graphs,
+        })
     }
 
     /// The declared bound for an invocation binding the positions named.
     ///
     /// Zero over an index with no postings — including one with no documents at
-    /// all, where [`Self::of`] walks an empty dictionary and every maximum stays
+    /// all, where [`Self::measure`] walks an empty dictionary and every maximum stays
     /// at its zero start. That is the honest bound: no invocation can emit a row.
     fn for_mode(self, document: bool, language: bool, position: bool) -> u64 {
         let mut bound = self.occurrences;
@@ -2015,7 +2244,7 @@ impl OccurrenceBounds {
     }
 }
 
-/// Positional matching over a frozen [`TextIndex`], as a SPARQL relation.
+/// Positional matching over an immutable [`TextSource`], as a SPARQL relation.
 ///
 /// One subject-side argument and three object-side ones, so a call reads
 ///
@@ -2073,10 +2302,12 @@ impl OccurrenceBounds {
 /// A frozen index's postings are the same postings on every worker and on every
 /// target, so an invocation's rows are a pure function of its arguments for the
 /// lifetime of a query and the relation may run across fork-join workers.
-#[derive(Clone, Debug)]
-pub struct TermOccurrenceRelation<P: CorpusProfile = GraphLanguage> {
+#[derive(Debug)]
+pub struct TermOccurrenceRelation<P: CorpusProfile = GraphLanguage, S: TextSource<P> = TextIndex<P>>
+{
     /// The index every invocation is answered from.
-    index: Arc<TextIndex<P>>,
+    index: Arc<S>,
+    profile: core::marker::PhantomData<P>,
     /// The single declared mode, materialized once.
     modes: [BindingPattern; 1],
     /// The row maxima, measured once at construction.
@@ -2087,20 +2318,47 @@ pub struct TermOccurrenceRelation<P: CorpusProfile = GraphLanguage> {
     dictionary: Arc<crate::dictionary::DictionaryCache>,
 }
 
+impl<P: CorpusProfile, S: TextSource<P>> Clone for TermOccurrenceRelation<P, S> {
+    fn clone(&self) -> Self {
+        Self {
+            index: self.index.clone(),
+            generation: self.generation.clone(),
+            dictionary: self.dictionary.clone(),
+            profile: core::marker::PhantomData,
+            modes: self.modes,
+            bounds: self.bounds,
+        }
+    }
+}
+
 impl<P: CorpusProfile> TermOccurrenceRelation<P> {
-    /// A positional-matching relation over `index`.
-    ///
-    /// Walks every term's postings once to measure the row bounds it declares;
-    /// the index is frozen, so they are measured here rather than per
-    /// invocation, and the generation its cursors attest is rendered here for
-    /// the same reason — it is the index fingerprint in lowercase hex, interned
-    /// once so that attesting it costs a pointer rather than a copy.
+    /// Construct the native relation over an already validated resident index.
     #[must_use]
     pub fn new(index: Arc<TextIndex<P>>) -> Self {
-        let bounds = OccurrenceBounds::of(&index);
-        let generation = index_generation(&index);
+        let bounds = OccurrenceBounds::resident(&index);
+        Self::build(index, bounds)
+    }
+}
+
+impl<P: CorpusProfile, S: TextSource<P>> TermOccurrenceRelation<P, S> {
+    /// A positional-matching relation over `index`.
+    ///
+    /// Prepares or reuses this snapshot's native row bounds through
+    /// [`TextSource::relation_bounds`] at registration. The generation its
+    /// cursors attest is rendered once from the snapshot fingerprint, so each
+    /// invocation shares the original identity and prepared bounds.
+    pub fn from_source(index: Arc<S>, workspace: &WorkspaceCapability) -> Result<Self, TextError> {
+        let measured = index.relation_bounds(workspace)?;
+        measured.validate(&*index)?;
+        let bounds = measured.occurrence;
+        Ok(Self::build(index, bounds))
+    }
+
+    fn build(index: Arc<S>, bounds: OccurrenceBounds) -> Self {
+        let generation = index_generation(&*index);
         Self {
             index,
+            profile: core::marker::PhantomData,
             modes: [BindingPattern::from_code(OCCURRENCE_MODE)],
             bounds,
             generation,
@@ -2155,12 +2413,16 @@ impl<P: CorpusProfile> TermOccurrenceRelation<P> {
         let mut document_partitions = AdmittedVec::new(&workspace);
         if let Some(documents) = &documents {
             for &document in documents {
-                if let Some(partition) = self
+                let partition = self
                     .index
                     .partition_ordinal_of_owned(document, &workspace)?
-                {
-                    document_partitions.push(partition)?;
-                }
+                    .ok_or_else(|| {
+                        crate::query_workspace::data_error(
+                            "source subject index names an absent document partition",
+                            Some(&workspace),
+                        )
+                    })?;
+                document_partitions.push(partition)?;
             }
         }
         if analyzed.first().is_some_and(|term| !term.is_empty()) {
@@ -2174,14 +2436,14 @@ impl<P: CorpusProfile> TermOccurrenceRelation<P> {
         }
         let bound = bound_terms(args, &workspace)?;
         let owner_workspace = workspace.clone();
-        let cursor = OccurrenceCursor {
+        let cursor = OccurrenceCursor::<P, S> {
             index: Arc::clone(&self.index),
             generation: Arc::clone(&self.generation),
             analyzed,
             partitions,
             partition_at: 0,
-            posting_at: 0,
-            position_at: 0,
+            positions: S::Positions::default(),
+            profile: core::marker::PhantomData,
             bound,
             remaining: ceiling,
             workspace,
@@ -2189,14 +2451,14 @@ impl<P: CorpusProfile> TermOccurrenceRelation<P> {
         WorkspaceCursor::new(cursor, &owner_workspace, "term occurrence cursor")
     }
 
-    /// The index this relation answers from.
+    /// The immutable source this relation answers from.
     #[must_use]
-    pub fn index(&self) -> &TextIndex<P> {
+    pub fn index(&self) -> &S {
         &self.index
     }
 }
 
-impl<P: CorpusProfile> PropertyFunction for TermOccurrenceRelation<P> {
+impl<P: CorpusProfile, S: TextSource<P>> PropertyFunction for TermOccurrenceRelation<P, S> {
     fn occurrence_shape(&self) -> Option<purrdf_sparql_eval::property_fn::OccurrenceShape> {
         Some(purrdf_sparql_eval::property_fn::OccurrenceShape {
             analyzer: self.index.analyzer_fingerprint(),
@@ -2308,36 +2570,40 @@ impl<P: CorpusProfile> PropertyFunction for TermOccurrenceRelation<P> {
 /// The cursor [`TermOccurrenceRelation::open`] returns: a walk of one term's
 /// postings, one partition at a time.
 ///
-/// The postings of the partition being read are materialized; the rest are not,
-/// so a ceiling of ten over a term with a million occurrences reads one
-/// partition's list rather than all of them.
+/// The source advances one positional record at a time through cursor-owned
+/// state. A ceiling stops the walk after the licensed rows have been emitted.
 ///
 /// The same two properties the search cursor documents hold here: the equality
 /// filter runs on **every** bound position before a row is emitted, and the
 /// licence is decremented **only** on emitted rows.
 #[derive(Debug)]
-struct OccurrenceCursor<P: CorpusProfile = GraphLanguage> {
-    index: Arc<TextIndex<P>>,
+struct OccurrenceCursor<P: CorpusProfile = GraphLanguage, S: TextSource<P> = TextIndex<P>> {
+    index: Arc<S>,
+    profile: core::marker::PhantomData<P>,
     generation: Arc<str>,
     analyzed: AdmittedVec<QueryString>,
     partitions: AdmittedVec<usize>,
     partition_at: usize,
-    posting_at: usize,
-    position_at: usize,
+    positions: S::Positions,
     bound: AdmittedVec<Option<WorkspaceTerm>>,
     remaining: Option<u64>,
     workspace: WorkspaceCapability,
 }
 
-impl<P: CorpusProfile> OccurrenceCursor<P> {
+impl<P: CorpusProfile, S: TextSource<P>> OccurrenceCursor<P, S> {
     fn build(&self, document: u32, position: u32) -> Result<AdmittedPfRow, EvalError> {
-        let held = self.index.document(document).ok_or_else(|| {
-            NativeDiagnostic::error(
-                NativeDiagnosticKind::Data,
-                format_args!("a posting named document {document}, which the index does not hold"),
-                &self.workspace,
-            )
-        })?;
+        let held = self
+            .index
+            .read_document(document, &self.workspace)?
+            .ok_or_else(|| {
+                NativeDiagnostic::error(
+                    NativeDiagnosticKind::Data,
+                    format_args!(
+                        "a posting named document {document}, which the index does not hold"
+                    ),
+                    &self.workspace,
+                )
+            })?;
         let needle = self.bound[OCCURRENCE_TERM]
             .as_ref()
             .expect("validated required occurrence term");
@@ -2362,21 +2628,14 @@ impl<P: CorpusProfile> OccurrenceCursor<P> {
             let Some(&partition) = self.partitions.get(self.partition_at) else {
                 return Ok(None);
             };
-            let Some((document, positions)) =
+            let Some((document, position)) =
                 self.index
-                    .posting_at_owned(partition, term, self.posting_at, &self.workspace)?
+                    .next_position(partition, term, &mut self.positions, &self.workspace)?
             else {
                 self.partition_at += 1;
-                self.posting_at = 0;
-                self.position_at = 0;
+                self.positions = S::Positions::default();
                 continue;
             };
-            let Some(&position) = positions.get(self.position_at) else {
-                self.posting_at += 1;
-                self.position_at = 0;
-                continue;
-            };
-            self.position_at += 1;
             let row = self.build(document, position)?;
             if agrees_owned(&self.bound, row.cells(), &self.workspace)? {
                 if let Some(remaining) = self.remaining.as_mut() {
@@ -2388,7 +2647,7 @@ impl<P: CorpusProfile> OccurrenceCursor<P> {
     }
 }
 
-impl<P: CorpusProfile> PfCursor for OccurrenceCursor<P> {
+impl<P: CorpusProfile, S: TextSource<P>> PfCursor for OccurrenceCursor<P, S> {
     resident_cursor_next!();
     fn next_admitted(&mut self) -> Result<Option<AdmittedPfRow>, EvalError> {
         self.next_owned()
@@ -2462,7 +2721,7 @@ impl<P: CorpusProfile> PfCursor for OccurrenceCursor<P> {
 ///   built over an empty corpus, unequal to one built over any corpus with text in
 ///   it — and its coverage reports no shortfall.
 pub fn verify_binding<D: DatasetView, P: CorpusProfile>(
-    index: &TextIndex<P>,
+    index: &impl TextSource<P>,
     dataset: &D,
     config: &TextIndexConfig<P>,
 ) -> Result<(), TextError>

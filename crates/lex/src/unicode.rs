@@ -59,10 +59,30 @@ use crate::unicode_tables as tables;
 mod aligned;
 mod case_tables;
 mod casing;
+mod fold_tables;
 pub use aligned::{
     TaggedScalar, compose_tagged, decompose_tagged, decompose_tagged_preallocated, decomposed_len,
 };
 pub use casing::{Lowercase, lowercase, lowercase_len, lowercase_with_memory};
+
+/// Full default Unicode case folding (CaseFolding.txt C/F mappings), without allocation.
+/// Every emitted scalar retains the caller's source identity.
+pub fn fold_scalar(c: char, mut emit: impl FnMut(char)) {
+    if c.is_ascii() {
+        emit(c.to_ascii_lowercase());
+        return;
+    }
+    let record = lookup_two_stage(&fold_tables::FOLD_INDEX, &fold_tables::FOLD_BLOCKS, c);
+    if record == 0 {
+        emit(c);
+        return;
+    }
+    let (start, len) = fold_tables::FOLD_RECORDS[usize::from(record)];
+    let start = usize::from(start);
+    for &part in &fold_tables::FOLD_CHARS[start..start + usize::from(len)] {
+        emit(part);
+    }
+}
 
 /// The Unicode version every generated Unicode table in the workspace comes
 /// from. The tables of `purrdf-iri`, `purrdf-text` and `purrdf-jsonschema`
