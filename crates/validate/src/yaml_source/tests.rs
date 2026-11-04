@@ -208,10 +208,15 @@ fn native_source_roundtrip_preserves_roots_profiles_and_original_refusals() {
         .as_bytes(),
     )
     .unwrap();
-    assert!(matches!(
-        export("https://example.org/source.yaml", source, &limited),
-        Err(Error::Native(YamlError::Storage(_)))
-    ));
+    let storage = export("https://example.org/source.yaml", source, &limited)
+        .unwrap_err()
+        .into_diagnostic();
+    assert!(storage.storage_error().is_some());
+    assert_eq!(storage.code, "rdf-storage-refused");
+    assert_eq!(
+        crate::native_error::to_json(storage.native_cause().unwrap()).unwrap()["code"].as_str(),
+        Some("yaml-source-storage")
+    );
     assert!(matches!(
         export("relative", source, &selected),
         Err(Error::Native(YamlError::Iri(_)))
@@ -224,4 +229,22 @@ fn native_source_roundtrip_preserves_roots_profiles_and_original_refusals() {
         panic!("native syntax failure");
     };
     assert!(cause.line() > 0 && cause.column() > 0);
+    let expected = crate::native_error::to_json(&YamlError::Syntax(cause)).unwrap();
+    let diagnostic = Error::Native(YamlError::Syntax(cause)).into_diagnostic();
+    assert_eq!(diagnostic.code, "yaml-source-native");
+    assert_eq!(
+        crate::native_error::to_json(diagnostic.native_cause().unwrap()).unwrap(),
+        expected
+    );
+    let Error::Configuration(configuration) = profile(b"{").unwrap_err() else {
+        panic!("configuration diagnostic");
+    };
+    let expected = configuration.to_json();
+    let original = crate::native_error::to_json(configuration.native_cause().unwrap()).unwrap();
+    let configuration = Error::Configuration(configuration).into_diagnostic();
+    assert_eq!(configuration.to_json(), expected);
+    assert_eq!(
+        crate::native_error::to_json(configuration.native_cause().unwrap()).unwrap(),
+        original
+    );
 }
