@@ -14,6 +14,7 @@ fn main() -> Result<(), purrdf_rdf::RdfDiagnostic> {
         None,
         &ParseOptions {
             track_source_spans: true,
+            yaml_ld: None,
         },
     )?;
     assert_eq!(parsed.dataset.quad_count(), 1);

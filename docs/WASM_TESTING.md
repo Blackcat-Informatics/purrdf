@@ -3,6 +3,12 @@
 
 # Native ownership and WASM execution
 
+The exact package case `configured YAML input crosses wasm-bindgen with native error records`
+in `jsonld-configured.test.mjs` checks the appended text-options argument, the
+preserved `rememberEmptyGraphs` slot, and native code/location records on real
+JavaScript `Error` objects. Run only that named case for configured input.
+Native Rust owns YAML grammar, selection and resource-account correctness.
+
 Native Rust owns general semantics, grammar, arithmetic, refusal, ownership and
 conformance. A WASM build, 32-bit value, shared test runner, or historical
 selection does not justify replaying an ordinary Rust suite on WASM.

@@ -216,4 +216,6 @@ pub struct ParseOptions {
     /// because it costs memory and pins the sequential line pipeline; off by default
     /// so the hot path is untouched.
     pub track_source_spans: bool,
+    /// Explicit YAML-LD Basic controls. Refused for every other input format.
+    pub yaml_ld: Option<super::jsonld::YamlLdOptions>,
 }

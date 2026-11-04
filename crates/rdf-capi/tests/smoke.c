@@ -328,7 +328,7 @@ static char *rdfxml_file_to_nquads(const char *path) {
     PurrdfBuffer *serialized = NULL;
     PurrdfError *error = NULL;
     char *out = NULL;
-    if (purrdf_parse(source, source_len, "application/rdf+xml", NULL, NULL, &parsed,
+    if (purrdf_parse(source, source_len, "application/rdf+xml", NULL, NULL, NULL, 0, &parsed,
                      &error) != PURRDF_STATUS_OK) {
         fprintf(stderr, "cannot parse %s: %s\n", path,
                 error == NULL ? "(no error)" : purrdf_error_message(error));
@@ -747,7 +747,7 @@ static int check_xpath_regex(void) {
     const char *media = "application/n-triples";
     PurrdfDataset *dataset = NULL;
     PurrdfError *error = NULL;
-    CHECK(purrdf_parse((const uint8_t *)nt, strlen(nt), media, NULL, NULL, &dataset, &error) ==
+    CHECK(purrdf_parse((const uint8_t *)nt, strlen(nt), media, NULL, NULL, NULL, 0, &dataset, &error) ==
               PURRDF_STATUS_OK,
           "parse the regex fixture");
     const char *non_capturing =
@@ -1192,7 +1192,7 @@ int main(int argc, char **argv) {
     PurrdfError *error = NULL;
     PurrdfBuffer *canonical_evidence = NULL;
     int rc = purrdf_parse((const uint8_t *)doc, strlen(doc), "text/turtle", NULL,
-                          NULL, &dataset, &error);
+                          NULL, NULL, 0, &dataset, &error);
     CHECK(rc == PURRDF_STATUS_OK && error == NULL && dataset != NULL, "parse");
     CHECK(check_geo_handles(dataset) == 0, "geographic C handles");
 
@@ -1300,7 +1300,7 @@ int main(int argc, char **argv) {
                             "<http://s2> <http://p> <http://o2> <http://g2> .\n";
     PurrdfDataset *graph_dataset = NULL;
     rc = purrdf_parse((const uint8_t *)graph_doc, strlen(graph_doc),
-                      "application/n-quads", NULL, NULL, &graph_dataset, &error);
+                      "application/n-quads", NULL, NULL, NULL, 0, &graph_dataset, &error);
     CHECK(rc == PURRDF_STATUS_OK && error == NULL && graph_dataset != NULL,
           "parse an all-named-graph n-quads document");
 
@@ -1379,7 +1379,7 @@ int main(int argc, char **argv) {
                                "_:bg { }\n";
     PurrdfDataset *declared_dataset = NULL;
     rc = purrdf_parse((const uint8_t *)declared_doc, strlen(declared_doc),
-                      "application/trig", NULL, NULL, &declared_dataset, &error);
+                      "application/trig", NULL, NULL, NULL, 0, &declared_dataset, &error);
     CHECK(rc == PURRDF_STATUS_OK && error == NULL && declared_dataset != NULL,
           "parse a trig document declaring empty graphs");
     const char *lossy_targets[] = {"application/n-quads", "application/x-hextuples",
@@ -1514,7 +1514,7 @@ int main(int argc, char **argv) {
     uint8_t *okf_config = read_file(argv[2], &okf_config_len);
     CHECK(okf_source != NULL && okf_config != NULL, "read shared OKF fixtures");
     PurrdfDataset *okf_dataset = NULL;
-    rc = purrdf_parse(okf_source, okf_source_len, "application/trig", NULL, NULL,
+    rc = purrdf_parse(okf_source, okf_source_len, "application/trig", NULL, NULL, NULL, 0,
                       &okf_dataset, &error);
     CHECK(rc == PURRDF_STATUS_OK && okf_dataset != NULL, "parse shared OKF source");
     PurrdfBuffer *okf_projection = NULL;
@@ -1612,7 +1612,7 @@ int main(int argc, char **argv) {
         "<http://www.w3.org/2001/XMLSchema#integer> .\n";
     PurrdfDataset *median_dataset = NULL;
     rc = purrdf_parse((const uint8_t *)median_doc, strlen(median_doc), "text/turtle",
-                      NULL, NULL, &median_dataset, &error);
+                      NULL, NULL, NULL, 0, &median_dataset, &error);
     CHECK(rc == PURRDF_STATUS_OK && error == NULL && median_dataset != NULL,
           "median fixture parses");
 
@@ -1695,7 +1695,7 @@ int main(int argc, char **argv) {
         "<http://www.w3.org/2001/XMLSchema#integer> .\n";
     PurrdfDataset *entailed_median_dataset = NULL;
     rc = purrdf_parse((const uint8_t *)entailed_median_doc,
-                      strlen(entailed_median_doc), "text/turtle", NULL, NULL,
+                      strlen(entailed_median_doc), "text/turtle", NULL, NULL, NULL, 0,
                       &entailed_median_dataset, &error);
     CHECK(rc == PURRDF_STATUS_OK && error == NULL &&
               entailed_median_dataset != NULL,
@@ -1818,7 +1818,7 @@ int main(int argc, char **argv) {
 
     /* Supplied coordinates cross the actual linked UPDATE ABI. */
     PurrdfDataset *coordinate_dataset = NULL;
-    CHECK(purrdf_parse((const uint8_t *)"", 0, "text/turtle", NULL, NULL,
+    CHECK(purrdf_parse((const uint8_t *)"", 0, "text/turtle", NULL, NULL, NULL, 0,
                       &coordinate_dataset, &error) == PURRDF_STATUS_OK,
           "empty coordinate dataset");
     CHECK(purrdf_query_governors_init(&governors) == PURRDF_STATUS_OK,
@@ -1913,7 +1913,7 @@ int main(int argc, char **argv) {
             PurrdfDataset *lifetime_dataset = NULL;
             CHECK(purrdf_parse((const uint8_t *)lifetime_document,
                                strlen(lifetime_document), "application/n-quads",
-                               NULL, NULL, &lifetime_dataset, &error) == PURRDF_STATUS_OK,
+                               NULL, NULL, NULL, 0, &lifetime_dataset, &error) == PURRDF_STATUS_OK,
                   "lifetime source");
             PurrdfGraph *branch = NULL;
             CHECK(purrdf_graph_from_dataset(lifetime_dataset, -1, &branch) ==
@@ -1983,7 +1983,7 @@ int main(int argc, char **argv) {
     const char *bad = "<http://a> <http://b> @@@";
     PurrdfDataset *bad_dataset = NULL;
     PurrdfError *bad_error = NULL;
-    rc = purrdf_parse((const uint8_t *)bad, strlen(bad), "text/turtle", NULL, NULL,
+    rc = purrdf_parse((const uint8_t *)bad, strlen(bad), "text/turtle", NULL, NULL, NULL, 0,
                       &bad_dataset, &bad_error);
     CHECK(rc == PURRDF_STATUS_PARSE_ERROR, "malformed parse error");
     CHECK(bad_dataset == NULL && bad_error != NULL, "error set");
@@ -2000,7 +2000,7 @@ int main(int argc, char **argv) {
     const char *bad_iri = "<http://example.org/%zz> <http://example.org/p> <http://example.org/o> .";
     bad_error = NULL;
     rc = purrdf_parse((const uint8_t *)bad_iri, strlen(bad_iri), "application/n-triples",
-                      NULL, NULL, &bad_dataset, &bad_error);
+                      NULL, NULL, NULL, 0, &bad_dataset, &bad_error);
     CHECK(rc == PURRDF_STATUS_PARSE_ERROR && bad_error != NULL,
           "IRI producer refuses invalid percent escape");
     const char *iri_record = purrdf_error_presentation_json(bad_error);

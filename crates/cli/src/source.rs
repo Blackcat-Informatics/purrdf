@@ -123,9 +123,8 @@ use purrdf_core::{
 };
 use purrdf_rdf::{
     NativeRdfFormat, ParseOptions, ParseOutcome, SerializeOutcome, SourceFormat, TransportEncoding,
-    decode_transport, detect_transport, import_gts_events, parse_dataset,
-    parse_dataset_from_reader, parse_dataset_with, serialize_dataset_to_format, sniff_transport,
-    transport_reader,
+    decode_transport, detect_transport, import_gts_events, parse_dataset_from_reader,
+    parse_dataset_with, serialize_dataset_to_format, sniff_transport, transport_reader,
 };
 
 use crate::error::CliError;
@@ -326,22 +325,29 @@ pub(crate) fn effective_base(
 /// surfaces as a read failure part-way through and fails the whole parse: there is no
 /// partial success, and nothing is written, exactly as on the buffered lane.
 ///
-/// The buffered arm is unchanged — [`read_bytes_with_transport`] then `parse_dataset` —
+/// The buffered arm is unchanged — [`read_bytes_with_transport`] then the shared RDF input boundary —
 /// and is what every non-line-oriented syntax takes.
 ///
 /// The base the document parses under is [`effective_base`]'s answer, so an explicit
 /// `--base` and the derived retrieval IRI are decided in one place rather than per lane.
-fn load_native(
+pub(crate) fn load_native(
     path: &str,
     format: NativeRdfFormat,
     base: Option<&str>,
     policy: TransportPolicy,
+    input_options: Option<&[u8]>,
 ) -> Result<Arc<RdfDataset>, CliError> {
+    if input_options.is_some() && format != NativeRdfFormat::YamlLd {
+        return Err(CliError::Usage(
+            "YAML-LD input options require YAML-LD input".into(),
+        ));
+    }
     let base = effective_base(path, format, base)?;
     let base = base.as_deref();
     if !format.is_line_oriented() {
         let bytes = read_bytes_with_transport(path, policy)?;
-        return parse_dataset(&bytes, format.media_type(), base)
+        return purrdf_validate::rdf_input::parse(&bytes, format.media_type(), base, input_options)
+            .map(|outcome| outcome.dataset)
             .map_err(|error| with_cli_base_hint(&error, base));
     }
 
@@ -631,7 +637,7 @@ pub(crate) fn run_over_input_with_transport<Op: ViewOp>(
 ) -> Result<Op::Output, CliError> {
     match format {
         SourceFormat::Native(rdf_format) => {
-            let dataset = load_native(path, rdf_format, base, policy)?;
+            let dataset = load_native(path, rdf_format, base, policy, None)?;
             op.run(&*dataset, canonical)
         }
         SourceFormat::Pack => {
@@ -681,7 +687,7 @@ pub(crate) fn load_dataset_reporting(
 ) -> Result<(Arc<RdfDataset>, LossLedger), CliError> {
     match format {
         SourceFormat::Native(rdf_format) => Ok((
-            load_native(path, rdf_format, base, policy)?,
+            load_native(path, rdf_format, base, policy, None)?,
             LossLedger::new(),
         )),
         SourceFormat::Pack => {

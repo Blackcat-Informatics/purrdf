@@ -125,6 +125,8 @@ fn dataset(nt: &str) -> *mut PurrdfDataset {
             media.as_ptr(),
             std::ptr::null(),
             std::ptr::null(),
+            std::ptr::null(),
+            0,
             &raw mut out,
             &raw mut error,
         )

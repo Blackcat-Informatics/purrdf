@@ -102,8 +102,8 @@ purrdf [--geo-profile PROFILE.json] geo [INPUT] [OUTPUT]
 
 Execute a version-one geographic JSON request through the shared geographic
 engine. Both positional paths default to `-` for stdin and stdout. Coordinates
-are exact decimal strings. The default profile supplies standard CRS84
-longitude/latitude coordinates and WGS84 metric execution.
+are exact decimal strings. The default profile supplies standard `CRS84`
+longitude/latitude coordinates and `WGS84` metric execution.
 
 ```sh
 printf '%s\n' '{"version":1,"operation":"distance","a":{"longitude":"0","latitude":"0"},"b":{"longitude":"1","latitude":"0"}}' | purrdf geo
@@ -1533,3 +1533,11 @@ reports and raw output, and on refusal.
 Known input, import, raw-output and report aliases are refused before execution.
 An evidence I/O refusal retains and reports any original native canonicalization
 failure, and a failure to publish evidence prevents raw output publication.
+
+## Configured YAML-LD input
+
+`convert --yamlld-input-options PATH` reads the closed version-one Basic
+configuration described in [YAML-LD input options](../../docs/YAML_INPUT_OPTIONS.md).
+Every input must be YAML-LD, including during canonicalization or entailment.
+Other commands reject this command-local flag. Existing output options remain
+independent.

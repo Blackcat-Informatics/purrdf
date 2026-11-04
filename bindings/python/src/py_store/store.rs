@@ -67,7 +67,7 @@ impl PyStore {
     /// `PREFIX` bindings a Turtle or TriG document left in force at its end, as
     /// `(prefix, namespace)` pairs sorted by prefix, each namespace resolved. Empty for
     /// every other format.
-    #[pyo3(signature = (input=None, format=None, *, path=None, base=None))]
+    #[pyo3(signature = (input=None, format=None, *, path=None, base=None, input_options=None))]
     fn load(
         mut slf: PyRefMut<'_, Self>,
         py: Python<'_>,
@@ -75,6 +75,7 @@ impl PyStore {
         format: Option<PyRdfFormat>,
         path: Option<String>,
         base: Option<String>,
+        input_options: Option<String>,
     ) -> PyResult<Vec<(String, String)>> {
         let format = format.ok_or_else(|| PyValueError::new_err("load: format is required"))?;
         let data = read_input(input, path)?;
@@ -94,9 +95,13 @@ impl PyStore {
         // plain Rust data.
         let result = py.detach(move || {
             let base_ref = base.as_deref();
-            let (quads, prefixes, declared) =
-                parse_quads_and_prefixes(&data, format.to_native(), base_ref)
-                    .map_err(|e| presentation::value_error(format!("load error: {e}"), &e))?;
+            let (quads, prefixes, declared) = parse_quads_and_prefixes(
+                &data,
+                format.to_native(),
+                base_ref,
+                input_options.as_deref(),
+            )
+            .map_err(|e| presentation::value_error(format!("load error: {e}"), &e))?;
             insert_loaded_document(inner, &quads, declared, next_scope_ref)
                 .map_err(super::load_value_error)?;
             Ok(prefixes)
@@ -107,7 +112,7 @@ impl PyStore {
 
     /// Alias of [`Self::load`] — bulk loading is not a different semantics, so the
     /// in-memory store path is identical.
-    #[pyo3(signature = (input=None, format=None, *, path=None, base=None))]
+    #[pyo3(signature = (input=None, format=None, *, path=None, base=None, input_options=None))]
     fn bulk_load(
         slf: PyRefMut<'_, Self>,
         py: Python<'_>,
@@ -115,8 +120,9 @@ impl PyStore {
         format: Option<PyRdfFormat>,
         path: Option<String>,
         base: Option<String>,
+        input_options: Option<String>,
     ) -> PyResult<Vec<(String, String)>> {
-        Self::load(slf, py, input, format, path, base)
+        Self::load(slf, py, input, format, path, base, input_options)
     }
 
     /// Add a single quad.

@@ -160,7 +160,7 @@ fn yaml_error(error: yaml::Error) -> RdfDiagnostic {
         let mut memory = Memory::new(&mut resident);
         let mut diagnostic = RdfDiagnostic::try_error_with_memory(code, &error, &mut memory)?;
         diagnostic.location = Some(memory.boxed(location(error.line(), error.column()))?);
-        let cause = purrdf_gts::model::retain_native_cause(error)?;
+        let cause = purrdf_lex::allocation::retain_native_cause(error)?;
         diagnostic.with_native_cause(cause, &mut memory)
     };
     result().unwrap_or_else(RdfDiagnostic::from)

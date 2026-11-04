@@ -85,6 +85,7 @@ pub mod native_error;
 pub mod path_syntax;
 pub mod product;
 pub mod query;
+pub mod rdf_input;
 pub mod regime;
 pub mod rules;
 pub mod shacl;

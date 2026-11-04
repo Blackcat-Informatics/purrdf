@@ -58,6 +58,82 @@ use support::{
 
 use purrdf_rdf::JsonLdContextLimits;
 
+#[test]
+fn configured_yamlld_input_reaches_convert_and_refuses_other_routes() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let yaml = write_file(
+        dir.path(),
+        "input.yamlld",
+        "'@id': first\nhttps://example.org/p: one\n---\n'@id': second\nhttps://example.org/p: two\n",
+    );
+    let config = write_file(
+        dir.path(),
+        "input.json",
+        r#"{"version":1,"yaml_ld":{"extract_all_scripts":true}}"#,
+    );
+    let output = path(dir.path(), "output.nq");
+    let first = run(&["convert", "--base", "https://example.org/", &yaml, &output]);
+    assert!(first.status.success(), "{}", stderr(&first));
+    assert_eq!(std::fs::read_to_string(&output).unwrap().lines().count(), 1);
+    for transform in [None, Some("--canonical")] {
+        let mut args = vec![
+            "convert",
+            "--base",
+            "https://example.org/",
+            "--yamlld-input-options",
+            &config,
+        ];
+        if transform.is_some() {
+            args.extend([
+                "--canonical-search",
+                "unlimited",
+                "--canonicalization-receipts",
+                "-",
+            ]);
+        }
+        args.extend(transform);
+        args.extend([yaml.as_str(), output.as_str()]);
+        let all = run(&args);
+        assert!(all.status.success(), "{}", stderr(&all));
+        let text = std::fs::read_to_string(&output).unwrap();
+        assert_eq!(text.lines().count(), 2);
+        assert!(text.contains("https://example.org/first"));
+        assert!(text.contains("https://example.org/second"));
+    }
+    for format in ["turtle", "jsonld", "pack", "gts"] {
+        let refused = run(&[
+            "convert",
+            "--from",
+            format,
+            "--yamlld-input-options",
+            &config,
+            "missing-input",
+            &output,
+        ]);
+        assert!(!refused.status.success());
+        assert!(
+            stderr(&refused).contains("requires every input to be YAML-LD"),
+            "{}",
+            stderr(&refused)
+        );
+    }
+    let other = run(&["query", "--yamlld-input-options", &config]);
+    assert!(!other.status.success());
+    assert!(stderr(&other).contains("unexpected argument"));
+    let limit = write_file(
+        dir.path(),
+        "limit.json",
+        r#"{"version":1,"yaml_ld":{"syntax":{"max_input_bytes":0}}}"#,
+    );
+    let refused = run(&["convert", "--yamlld-input-options", &limit, &yaml, &output]);
+    assert!(!refused.status.success());
+    assert!(
+        stderr(&refused).contains("native-yaml-input-limit"),
+        "{}",
+        stderr(&refused)
+    );
+}
+
 /// The nine native RDF syntaxes, by their `--from`/`--to` token. Every format appears
 /// as BOTH a source and a destination in the matrix.
 const FORMATS: [&str; 9] = [
