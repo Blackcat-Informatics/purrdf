@@ -513,7 +513,7 @@ black-cat family system — `#cat-head-core` is shared verbatim; only the
 
 ## 6. Releases
 
-Tag-driven trusted publishing: `rust-v*` → crates.io (36 crates, ordered),
+Tag-driven trusted publishing: `rust-v*` → crates.io (37 crates, ordered),
 `py-v*` → PyPI (`purrdf`). See [`docs/RELEASE.md`](./docs/RELEASE.md). Version
 is single-sourced in `[workspace.package]`. Twelve members never reach
 crates.io: `purrdf-capi`, `purrdf-sparql-conformance`,
