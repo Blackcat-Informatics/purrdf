@@ -446,16 +446,16 @@ impl<'a, Id: ViewTermId> Memo<'a, Id> {
                 return Ok(());
             }
             if let Some((key, value)) = self.table.pop_first() {
-                let released = retain(memory, &mut self.live, self.limit, |memory| {
+                retain(memory, &mut self.live, self.limit, |memory| {
                     release_entry(key, value, memory)
-                })?;
-                released.expect("destroying a retained entry cannot exceed its quota");
+                })?
+                .expect("destroying a retained entry cannot exceed its quota");
             } else if self.table.storage_bytes()? != 0 {
                 let table = std::mem::take(&mut self.table);
-                let released = retain(memory, &mut self.live, self.limit, |memory| {
+                retain(memory, &mut self.live, self.limit, |memory| {
                     table.release(memory)
-                })?;
-                released.expect("destroying an empty arena cannot exceed its quota");
+                })?
+                .expect("destroying an empty arena cannot exceed its quota");
             } else {
                 // This complete result does not fit the input-derived retention
                 // ceiling. Its mandatory solver result remains unchanged.
