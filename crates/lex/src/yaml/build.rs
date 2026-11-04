@@ -5,7 +5,7 @@
 
 use super::admission::Allocations;
 use super::read::{ErrorKind, Limits, Tag};
-use super::resolve::{Plain, resolve};
+use super::resolve::Plain;
 use crate::allocation::{OrderedTable, StorageError};
 use crate::json::{Number, Object, Value};
 use core::mem;
@@ -118,6 +118,7 @@ pub(super) trait Builder {
 pub(super) struct CoreBuilder {
     pub(super) limits: Limits,
     pub(super) allocations: Allocations,
+    numbers: super::number::Budget,
 }
 
 /// One owned Core product. Payload bytes follow the value through parser
@@ -133,6 +134,16 @@ pub(super) struct CoreMap {
 }
 
 impl CoreBuilder {
+    pub(super) const fn new(limits: Limits, allocations: Allocations) -> Self {
+        Self {
+            limits,
+            allocations,
+            numbers: super::number::Budget::new(limits),
+        }
+    }
+    fn classify<'a>(&mut self, text: &'a str, at: usize) -> Result<Plain<'a>, Refusal> {
+        self.numbers.classify(text).map_err(|kind| (kind, at))
+    }
     fn storage(&self, cause: StorageError, at: usize) -> Refusal {
         (
             match (cause, self.allocations.limit()) {
@@ -154,14 +165,17 @@ impl CoreBuilder {
         Self::leaf(Value::String(text), bytes)
     }
     fn plain_value(&mut self, text: String, at: usize) -> Result<CoreNode, Refusal> {
-        let node = match resolve(&text) {
+        let node = match self.classify(&text, at)? {
             Plain::Null => Self::leaf(Value::Null, 0),
             Plain::Bool(value) => Self::leaf(Value::Bool(value), 0),
             Plain::Number(plan) => {
                 let lexeme = self
-                    .allocations
-                    .format(&plan)
-                    .map_err(|cause| self.storage(cause, at))?;
+                    .numbers
+                    .materialize(plan, &mut self.allocations)
+                    .map_err(|kind| match kind {
+                        ErrorKind::Storage(cause) => self.storage(cause, at),
+                        kind => (kind, at),
+                    })?;
                 let bytes = lexeme.capacity();
                 let number = Number::from_lexeme(lexeme)
                     .map_err(|_| (ErrorKind::Syntax("a JSON-compatible number"), at))?;
@@ -275,7 +289,7 @@ impl Builder for CoreBuilder {
         match tag {
             None if plain
                 && !self.limits.scalar_keys
-                && !matches!(resolve(&text), Plain::String) =>
+                && !matches!(self.classify(&text, at)?, Plain::String) =>
             {
                 Err((ErrorKind::NonStringKey, at))
             }
@@ -283,7 +297,7 @@ impl Builder for CoreBuilder {
             Some((tag @ (Tag::Int | Tag::Float | Tag::Bool | Tag::Null), tag_at))
                 if self.limits.scalar_keys =>
             {
-                let matches = match (tag, resolve(&text)) {
+                let matches = match (tag, self.classify(&text, at)?) {
                     (Tag::Int, Plain::Number(plan)) => plan.is_integer(),
                     (Tag::Float, Plain::Number(_) | Plain::NonFinite)
                     | (Tag::Bool, Plain::Bool(_))
@@ -311,7 +325,7 @@ impl Builder for CoreBuilder {
         // non-finite-key spelling needs a semantic fallback; storage failures
         // always propagate.
         if !self.limits.scalar_keys
-            || (matches!(resolve(&text), Plain::NonFinite)
+            || (matches!(self.classify(&text, at)?, Plain::NonFinite)
                 && (plain && tag.is_none() || matches!(tag, Some((Tag::Float, _)))))
         {
             return Ok(Self::string(text));

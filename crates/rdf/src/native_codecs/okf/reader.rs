@@ -323,6 +323,7 @@ fn parse_frontmatter(path: &str, markdown: &str) -> Result<Option<ParsedFrontmat
                     max_nodes: MAX_OKF_YAML_NODES as u64,
                     aliases: true,
                     scalar_keys: true,
+                    ..yaml::Limits::DEFAULT
                 },
             )
             .map_err(|error| document_error(path, format!("invalid YAML frontmatter: {error}")))?;

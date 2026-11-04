@@ -148,6 +148,7 @@ pub mod visual_fingerprint;
 /// Borrowed typed error inspection shared by all native producers.
 pub use purrdf_hash::error;
 pub mod html;
+pub mod integer_text;
 pub mod iri_escape;
 pub mod json;
 pub mod json_escape;

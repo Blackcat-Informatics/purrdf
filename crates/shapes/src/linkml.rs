@@ -507,6 +507,7 @@ pub fn parse_linkml(input: &str) -> Result<LinkmlDocument, LinkmlError> {
             max_nodes: u64::try_from(max_nodes).unwrap_or(u64::MAX),
             aliases: true,
             scalar_keys: false,
+            ..purrdf_lex::yaml::Limits::DEFAULT
         },
     )
     .map_err(|error| LinkmlError::new(format!("invalid LinkML YAML: {error}")))?;

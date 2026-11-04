@@ -21,6 +21,13 @@ pub struct Limits {
     /// The most nodes the document may denote, every node an alias expands to
     /// included, so an alias bomb is refused before it is built.
     pub max_nodes: u64,
+    /// Aggregate scalar-classification and numeric-conversion work units.
+    /// One input byte, packed radix digit, divided word or output/validation
+    /// byte costs one unit. The account is shared by every stream document.
+    pub max_numeric_work: u64,
+    /// Aggregate bytes of newly materialized numeric spellings. Alias copies
+    /// remain governed by the node and allocation bounds.
+    pub max_numeric_bytes: usize,
     /// Whether anchors and aliases are accepted. YAML-LD's JSON profile
     /// refuses them.
     pub aliases: bool,
@@ -34,11 +41,13 @@ pub struct Limits {
 }
 
 impl Limits {
-    /// 128 open collections, 1,048,576 nodes, aliases accepted, scalar keys
-    /// refused.
+    /// 128 open collections, 1,048,576 nodes, 67,108,864 numeric work units,
+    /// 32 MiB of numeric spellings, aliases accepted, scalar keys refused.
     pub const DEFAULT: Self = Self {
         max_depth: 128,
         max_nodes: 1 << 20,
+        max_numeric_work: 1 << 26,
+        max_numeric_bytes: 32 << 20,
         aliases: true,
         scalar_keys: false,
     };
@@ -48,6 +57,21 @@ impl Default for Limits {
     fn default() -> Self {
         Self::DEFAULT
     }
+}
+
+/// Explicit bounds for construction of a complete ordered YAML stream.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StreamLimits {
+    /// Semantic rules and bounds. `max_nodes` covers the entire stream,
+    /// including every expanded alias; collection depth is local to a document.
+    pub core: Limits,
+    /// Maximum number of documents, including explicitly empty documents.
+    pub max_documents: usize,
+    /// Maximum original UTF-8 bytes, checked before allocation.
+    pub max_input_bytes: usize,
+    /// Maximum additional live native bytes, including all retained documents,
+    /// the result vector, parser scratch and anchor/alias copies.
+    pub max_allocation_bytes: usize,
 }
 
 /// What is wrong with a YAML document.
@@ -72,10 +96,25 @@ pub enum ErrorKind {
     DuplicateKey,
     /// `.inf`, `-.inf` or `.nan`, which JSON cannot hold.
     NonFinite,
+    /// Scalar classification or numeric preparation exhausted its work account.
+    NumericWork {
+        /// Original construction-wide work allowance.
+        limit: u64,
+    },
+    /// Newly materialized numeric spellings exceed their aggregate byte bound.
+    NumericOutput {
+        /// Original construction-wide spelling-byte allowance.
+        limit: usize,
+    },
     /// A malformed double-quoted escape, or one that names no character.
     Escape,
     /// A second document in the stream.
     MultipleDocuments,
+    /// More documents than [`StreamLimits::max_documents`] allows.
+    Documents {
+        /// The cap that was exceeded.
+        limit: usize,
+    },
     /// More collections open at once than [`Limits::max_depth`] allows.
     Depth {
         /// The cap that was exceeded.
@@ -109,6 +148,8 @@ pub struct Error {
     column: usize,
 }
 
+crate::variant_from!(ErrorKind { Storage(StorageError) });
+
 impl purrdf_hash::error::StructuredError for ErrorKind {
     purrdf_hash::error_visit! {
         Syntax(expected) => "yaml-syntax" { "expected" => Text(expected) },
@@ -119,8 +160,11 @@ impl purrdf_hash::error::StructuredError for ErrorKind {
         NonStringKey => "yaml-non-string-key" {},
         DuplicateKey => "yaml-duplicate-key" {},
         NonFinite => "yaml-non-finite" {},
+        NumericWork { limit } => "yaml-numeric-work-limit" { "limit" => Unsigned(u128::from(*limit)) },
+        NumericOutput { limit } => "yaml-numeric-output-limit" { "limit" => ByteCount(*limit as u128) },
         Escape => "yaml-escape" {},
         MultipleDocuments => "yaml-multiple-documents" {},
+        Documents { limit } => "yaml-document-limit" { "limit" => Unsigned(*limit as u128) },
         Depth { limit } => "yaml-depth-limit" { "limit" => Unsigned(*limit as u128) },
         Nodes { limit } => "yaml-node-limit" { "limit" => Unsigned(u128::from(*limit)) },
         Input { limit } => "yaml-input-limit" { "limit" => ByteCount(*limit as u128) },
@@ -199,8 +243,13 @@ impl fmt::Display for Error {
             ErrorKind::NonStringKey => f.write_str("a mapping key must be a string"),
             ErrorKind::DuplicateKey => f.write_str("a mapping repeats a key"),
             ErrorKind::NonFinite => f.write_str("JSON cannot hold an infinite or NaN number"),
+            ErrorKind::NumericWork { limit } => write!(f, "numeric work exceeds {limit} units"),
+            ErrorKind::NumericOutput { limit } => {
+                write!(f, "numeric spellings exceed {limit} bytes")
+            }
             ErrorKind::Escape => f.write_str("a malformed escape"),
             ErrorKind::MultipleDocuments => f.write_str("the stream holds more than one document"),
+            ErrorKind::Documents { limit } => write!(f, "more than {limit} documents"),
             ErrorKind::Depth { limit } => write!(f, "more than {limit} nested collections"),
             ErrorKind::Nodes { limit } => write!(f, "more than {limit} nodes"),
             ErrorKind::Input { limit } => write!(f, "input exceeds {limit} bytes"),
@@ -345,6 +394,9 @@ pub(super) struct Parser<'a, B: Builder> {
     /// The last position located: its offset, line start and column, so
     /// locating the cursor as it advances costs the bytes it crossed.
     located: Cell<(usize, usize, usize)>,
+    /// A consumed document-prefix BOM is not an indentation column. Keep its
+    /// original line origin for backwards location lookups within that document.
+    bom_line: Option<usize>,
 }
 
 const fn is_break(byte: Option<u8>) -> bool {
@@ -415,6 +467,12 @@ impl<'a, B: Builder> Parser<'a, B> {
                 .rfind(['\n', '\r'])
                 .map_or(0, |index| index + 1);
             (start, self.text[start..at].chars().count())
+        };
+        let located = if self.bom_line == Some(located.0) && at >= located.0 + '\u{feff}'.len_utf8()
+        {
+            (located.0 + '\u{feff}'.len_utf8(), located.1 - 1)
+        } else {
+            located
         };
         self.located.set((at, located.0, located.1));
         located
@@ -2598,9 +2656,14 @@ impl<'a, B: Builder> Parser<'a, B> {
         }
     }
 
-    fn document(&mut self) -> Result<B::Node, Error> {
-        if self.text.starts_with('\u{feff}') {
-            self.pos = 3;
+    fn take_bom(&mut self) {
+        self.bom_line = Some(self.pos);
+        self.pos += '\u{feff}'.len_utf8();
+    }
+
+    fn document(&mut self, stream: bool) -> Result<B::Node, Error> {
+        if self.pos == 0 && self.text.starts_with('\u{feff}') {
+            self.take_bom();
         }
         // The prologue: comments, directives, and the document start marker.
         let mut directives = false;
@@ -2666,22 +2729,77 @@ impl<'a, B: Builder> Parser<'a, B> {
             }
             self.close_top()?;
         }
-        // Only comments may follow the document (after an optional `...`).
-        if self.pos < self.bytes.len()
-            && self.bytes[self.pos..].starts_with(b"...")
-            && self.at_marker()
-        {
-            self.pos += 3;
-            self.skip_separation()?;
-        }
-        if self.pos < self.bytes.len() {
-            return Err(self.error(ErrorKind::MultipleDocuments, self.pos));
+        if !stream {
+            // Preserve the single-document refusal before publishing its root.
+            if self.pos < self.bytes.len()
+                && self.bytes[self.pos..].starts_with(b"...")
+                && self.at_marker()
+            {
+                self.pos += 3;
+                self.skip_separation()?;
+            }
+            if self.pos < self.bytes.len() {
+                return Err(self.error(ErrorKind::MultipleDocuments, self.pos));
+            }
         }
         match self.stack.pop() {
             Some(Frame::Root(Some(value))) => Ok(value),
             Some(Frame::Root(None)) => self.null(self.pos),
             _ => unreachable!("only the root frame remains"),
         }
+    }
+
+    fn end_marker(&mut self) -> Result<(), Error> {
+        self.pos += 3;
+        self.skip_inline_space();
+        if !matches!(self.peek(), None | Some(b'\n' | b'\r' | b'#')) {
+            return Err(self.error(ErrorKind::Syntax("a line ending after `...`"), self.pos));
+        }
+        self.skip_separation()?;
+        Ok(())
+    }
+
+    // Stream material is not itself an empty document. Explicit `---` is.
+    fn stream_prefix(&mut self) -> Result<bool, Error> {
+        loop {
+            self.skip_separation()?;
+            if (self.pos == 0 || matches!(self.bytes.get(self.pos - 1), Some(b'\r' | b'\n')))
+                && self.text[self.pos..].starts_with('\u{feff}')
+            {
+                self.take_bom();
+            } else if self.at_marker() && self.peek() == Some(b'.') {
+                self.end_marker()?;
+            } else {
+                return Ok(self.pos < self.bytes.len());
+            }
+        }
+    }
+
+    fn clear_document(&mut self) -> Result<(), Error> {
+        while let Some((name, (value, _))) = self.anchors.pop_first() {
+            self.builder
+                .discard_node(value)
+                .map_err(|(kind, at)| self.error(kind, at))?;
+            self.builder
+                .discard_text(name)
+                .map_err(|(kind, at)| self.error(kind, at))?;
+        }
+        while let Some((name, ())) = self.handles.pop_first() {
+            self.builder
+                .discard_text(name)
+                .map_err(|(kind, at)| self.error(kind, at))?;
+        }
+        let anchors = mem::take(&mut self.anchors);
+        let handles = mem::take(&mut self.handles);
+        admit!(
+            self,
+            self.builder.allocations().memory(|memory| {
+                anchors.release(memory)?;
+                handles.release(memory)
+            })
+        );
+        self.last_scalar_end = self.pos;
+        Ok(())
     }
 }
 
@@ -2714,32 +2832,85 @@ pub fn read_with(text: &str, limits: Limits) -> Result<Value, Error> {
     parse(
         text,
         limits,
-        CoreBuilder {
-            limits,
-            allocations: super::admission::Allocations::legacy(),
-        },
+        CoreBuilder::new(limits, super::admission::Allocations::legacy()),
     )
     .map(|(node, _)| node.value)
 }
 
+/// Construct every document using the existing reader's scalar, tag, mapping
+/// and alias rules, in source order, under one allocation and node account.
+///
+/// Empty/comment-only streams and standalone end markers contain no documents;
+/// `---` with an omitted root constructs a null document. Anchor bindings and
+/// directives are local to each document. Original offsets remain stream-wide.
+/// No documents are returned unless the entire stream succeeds.
+///
+/// # Errors
+///
+/// [`Error`] at the original absolute position of a syntax, semantic or resource
+/// refusal, including refusals in later documents. Single-document [`read_with`]
+/// retains its existing `MultipleDocuments` policy and error precedence.
+pub fn read_stream(text: &str, limits: StreamLimits) -> Result<Vec<Value>, Error> {
+    input_limit(text, limits.max_input_bytes)?;
+    let builder = CoreBuilder::new(
+        limits.core,
+        super::admission::Allocations::bounded(limits.max_allocation_bytes),
+    );
+    let mut parser = parser(text, limits.core, builder);
+    let mut documents = Vec::new();
+    while parser.stream_prefix()? {
+        if documents.len() >= limits.max_documents {
+            return Err(parser.error(
+                ErrorKind::Documents {
+                    limit: limits.max_documents,
+                },
+                parser.pos,
+            ));
+        }
+        admit!(
+            parser,
+            parser
+                .builder
+                .allocations()
+                .push(&mut parser.stack, Frame::Root(None))
+        );
+        let node = parser.document(true)?;
+        admit!(
+            parser,
+            parser
+                .builder
+                .allocations()
+                .push(&mut documents, node.value)
+        );
+        parser.clear_document()?;
+        if parser.at_marker() && parser.peek() == Some(b'.') {
+            parser.end_marker()?;
+        }
+    }
+    admit!(
+        parser,
+        parser.builder.allocations().discard_vec(parser.stack)
+    );
+    Ok(documents)
+}
+
+fn input_limit(text: &str, limit: usize) -> Result<(), Error> {
+    if text.len() > limit {
+        return Err(Error::new(text, ErrorKind::Input { limit }, 0));
+    }
+    Ok(())
+}
+
 /// Run the one grammar with an admitted product builder.
 pub(super) fn project(text: &str, limits: super::syntax::ProjectionLimits) -> Result<Value, Error> {
-    if text.len() > limits.max_input_bytes {
-        return Err(Error::new(
-            text,
-            ErrorKind::Input {
-                limit: limits.max_input_bytes,
-            },
-            0,
-        ));
-    }
+    input_limit(text, limits.max_input_bytes)?;
     parse(
         text,
         limits.core,
-        CoreBuilder {
-            limits: limits.core,
-            allocations: super::admission::Allocations::bounded(limits.max_allocation_bytes),
-        },
+        CoreBuilder::new(
+            limits.core,
+            super::admission::Allocations::bounded(limits.max_allocation_bytes),
+        ),
     )
     .map(|(node, _)| node.value)
 }
@@ -2748,15 +2919,27 @@ pub(super) fn project(text: &str, limits: super::syntax::ProjectionLimits) -> Re
 pub(super) fn parse<B: Builder>(
     text: &str,
     limits: Limits,
-    mut builder: B,
+    builder: B,
 ) -> Result<(B::Node, B), Error> {
-    let mut stack = Vec::new();
-    let ceiling = builder.allocation_limit();
-    builder
-        .allocations()
-        .push(&mut stack, Frame::Root(None))
-        .map_err(|cause| Error::storage(text, ceiling, cause, 0))?;
-    let mut parser = Parser {
+    let mut parser = parser(text, limits, builder);
+    admit!(
+        parser,
+        parser
+            .builder
+            .allocations()
+            .push(&mut parser.stack, Frame::Root(None))
+    );
+    let node = parser.document(false)?;
+    parser.clear_document()?;
+    admit!(
+        parser,
+        parser.builder.allocations().discard_vec(parser.stack)
+    );
+    Ok((node, parser.builder))
+}
+
+fn parser<B: Builder>(text: &str, limits: Limits, builder: B) -> Parser<'_, B> {
+    Parser {
         text,
         bytes: text.as_bytes(),
         pos: 0,
@@ -2765,45 +2948,14 @@ pub(super) fn parse<B: Builder>(
         depth: 0,
         anchors: OrderedTable::default(),
         handles: OrderedTable::default(),
-        stack,
+        stack: Vec::new(),
         pending: None,
         later: None,
         located: Cell::new((0, 0, 0)),
+        bom_line: None,
         builder,
         last_scalar_end: 0,
-    };
-    let node = parser.document()?;
-    let ceiling = parser.builder.allocation_limit();
-    while let Some((name, (value, _))) = parser.anchors.pop_first() {
-        parser
-            .builder
-            .discard_node(value)
-            .map_err(|(kind, at)| Error::new(text, kind, at))?;
-        parser
-            .builder
-            .discard_text(name)
-            .map_err(|(kind, at)| Error::new(text, kind, at))?;
     }
-    while let Some((name, ())) = parser.handles.pop_first() {
-        parser
-            .builder
-            .discard_text(name)
-            .map_err(|(kind, at)| Error::new(text, kind, at))?;
-    }
-    parser
-        .builder
-        .allocations()
-        .memory(|memory| {
-            parser.anchors.release(memory)?;
-            parser.handles.release(memory)
-        })
-        .map_err(|cause| Error::storage(text, ceiling, cause, parser.pos))?;
-    parser
-        .builder
-        .allocations()
-        .discard_vec(parser.stack)
-        .map_err(|cause| Error::storage(text, ceiling, cause, parser.pos))?;
-    Ok((node, parser.builder))
 }
 
 pub(super) fn position(text: &str, at: usize) -> (usize, usize) {
