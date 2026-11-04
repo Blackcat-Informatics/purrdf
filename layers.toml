@@ -191,6 +191,10 @@ name = "purrdf-toml"
 deps = ["purrdf-core", "purrdf-hash", "purrdf-lex", "purrdf-xsd"]
 
 [[crate]]
+name = "purrdf-yaml"
+deps = ["purrdf-core", "purrdf-hash", "purrdf-lex"]
+
+[[crate]]
 name = "purrdf-glob"
 deps = ["purrdf-core", "purrdf-hash", "purrdf-iri", "purrdf-lex"]
 
@@ -388,6 +392,7 @@ deps = [
     "purrdf-sparql-results",
     "purrdf-text",
     "purrdf-toml",
+    "purrdf-yaml",
     "purrdf-glob",
     "purrdf-validate",
     "purrdf-xsd",

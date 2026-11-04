@@ -308,7 +308,7 @@ pub use purrdf_iri::vocab;
 /// keeps it one law rather than one per producer — `parse_iri` is
 /// [`purrdf_iri::parse`] under a name that stays unambiguous in this crate's flat
 /// root.
-pub use purrdf_iri::{BaseIri, Iri, IriError, parse as parse_iri};
+pub use purrdf_iri::{BaseIri, Iri, IriError, IriReadError, parse as parse_iri};
 /// The XSD datatype and constraining-facet IRIs, re-exported for the same reason
 /// as [`vocab`].
 pub use purrdf_xsd::datatype;

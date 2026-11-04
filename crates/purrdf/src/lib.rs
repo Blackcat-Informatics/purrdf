@@ -375,6 +375,24 @@ pub mod toml {
     pub use purrdf_toml::*;
 }
 
+/// Source-preserving YAML stream model and strict RDF byte-cover reconstruction.
+///
+/// ```
+/// use purrdf::yaml::{Profile, SourceDocument, analyze, decode_stream, project};
+/// let profile = Profile::standard()?;
+/// let source = SourceDocument {
+///     id: "https://example.org/source.yaml",
+///     bytes: b"---\nkey: 'value'\n",
+/// };
+/// let document = analyze(source, &profile)?;
+/// let graph = project(&document, &profile)?;
+/// assert_eq!(decode_stream(&graph, document.id(), &profile)?.as_bytes(), source.bytes);
+/// # Ok::<(), purrdf::yaml::YamlError>(())
+/// ```
+pub mod yaml {
+    pub use purrdf_yaml::*;
+}
+
 /// Compiled, explicitly metered Unicode glob matching over literal and IRI surfaces.
 pub mod glob {
     pub use purrdf_glob::*;
