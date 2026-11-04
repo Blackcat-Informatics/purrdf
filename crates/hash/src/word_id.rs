@@ -170,6 +170,13 @@ pub struct Prefix {
     lower: Digest32,
     words: u8,
 }
+impl crate::error::StructuredError for Prefix {
+    crate::error_visit! {
+        @record self { lower, words } => "word-id-prefix" {
+            "lower" => Record(&self.lower), "payload_words" => Unsigned(u128::from(self.words)),
+        }
+    }
+}
 impl Prefix {
     /// Number of retained digest bits (12 through 252).
     pub const fn bit_len(self) -> usize {
@@ -192,6 +199,12 @@ pub enum Reference {
     Full(Digest32),
     /// Checked leading bits, meaningful only under an external scope.
     Prefix(Prefix),
+}
+impl crate::error::StructuredError for Reference {
+    crate::error_visit! {
+        Full(digest) => "word-id-full" { "digest" => Record(digest) },
+        Prefix(prefix) => "word-id-reference-prefix" { "prefix" => Record(prefix) },
+    }
 }
 
 fn mask(digest: Digest32, words: usize) -> Digest32 {
