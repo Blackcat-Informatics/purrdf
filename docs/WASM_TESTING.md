@@ -26,6 +26,12 @@ as text, and keeps an owned native cause readable after its dataset wrapper is
 freed. Native Rust owns the underlying reserved-vocabulary refusal semantics.
 Run only this named package case for those host obligations.
 
+The packaged case `an unsupported format crosses the wasm boundary as a JavaScript
+Error` in `roundtrip.test.mjs` exercises the format resolver's wasm-only
+`JsError` construction/import and the JavaScript exception name and message.
+It uses an unregistered media type; native Rust owns format classification and
+YAML-LD empty-stream semantics. Run only this named case for that host obligation.
+
 The packaged case `wasm_shacl_apply_rules: maxStoredFacts reaches the evaluator
 and names the host control` checks BigInt argument transport, a JavaScript Error
 and its host-specific control name, and returned string ownership. Its fixture

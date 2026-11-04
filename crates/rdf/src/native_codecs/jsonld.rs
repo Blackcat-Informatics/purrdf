@@ -19,6 +19,8 @@ mod carrier;
 pub mod context;
 mod derived;
 mod expand;
+pub(super) mod yaml;
+pub use yaml::{YamlLdOptions, parse_yamlld_with_options, yamlld_to_jsonld_with_options};
 
 pub use context::{
     CompiledJsonLdContext, JSON_LD_SERIALIZE_OPTIONS_VERSION, JsonLdContainer, JsonLdContextLimits,
@@ -275,7 +277,7 @@ impl RdfCodec for JsonLdCodec {
 /// The YAML-LD-star codec — the registry's behavior seam for `application/ld+yaml`.
 ///
 /// Serialize walks the shared JSON-LD-star core then re-emits as YAML;
-/// parse bridges YAML→JSON ([`yamlld_to_jsonld`]) and reuses [`parse_jsonld`]. The
+/// parse constructs a Basic value and enters the shared JSON-LD value engine. The
 /// registry path uses the bundled schema reference (the custom-`schema_url` overload
 /// stays on the public [`serialize_dataset_to_yamlld`]).
 ///
@@ -290,8 +292,7 @@ impl RdfCodec for YamlLdCodec {
         base: &mut purrdf_iri::BaseScope,
         _mode: LineParseMode,
     ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
-        let json = yamlld_to_jsonld(text.as_bytes())?;
-        parse_jsonld_into_scope(json.as_bytes(), base)
+        yaml::parse_into_scope(text.as_bytes(), base, &YamlLdOptions::DEFAULT)
     }
 
     fn serialize_into(
@@ -1823,8 +1824,15 @@ pub(super) fn parse_jsonld_into_scope(
     json_bytes: &[u8],
     base: &mut purrdf_iri::BaseScope,
 ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
-    let context = CompiledJsonLdContext::compile(&Value::Object(Object::new()), scope_base(base))?;
     let value = context::parse_document(json_bytes)?;
+    value_into_scope(value, base)
+}
+
+fn value_into_scope(
+    value: Value,
+    base: &mut purrdf_iri::BaseScope,
+) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+    let context = CompiledJsonLdContext::compile(&Value::Object(Object::new()), scope_base(base))?;
     let in_force = expand::document_base(&value, &context)?;
     // `value` is MOVED here: the base question is already answered, so the parsed
     // document need not outlive the expansion that consumes it.
@@ -1999,37 +2007,13 @@ pub fn jsonld_to_statement_metadata_nquads(
     String::from_utf8(buf).map_err(|e| decode(format!("N-Quads are not UTF-8: {e}")))
 }
 
-/// Convert YAML-LD-star bytes to JSON-LD-star JSON, hard-failing on YAML
-/// anchors/aliases (extended YAML is out of scope).
-///
-/// The conversion is purely structural: YAML scalars/sequences/mappings map one-to-one
-/// onto JSON, so the resulting JSON is consumable by [`parse_jsonld`] and the
-/// statement-metadata downcast. The document is read by [`purrdf_lex::yaml`] under
-/// YAML-LD's JSON profile: anchors and aliases, tags beyond the core schema, keys that
-/// are not strings, repeated keys, `.inf`/`.nan` and a second document are refused.
-/// The key refusal is the specification's: "every mapping key MUST be a YAML scalar
-/// whose resolved node tag in the representation graph is `tag:yaml.org,2002:str`.
-/// Otherwise, a mapping-key-error MUST be detected, and processing aborted" (YAML-LD,
-/// "Mapping Key Types"), so `1: a`, `true: a` and `null: a` are refused while `'1': a`
-/// and `!!str 1: a` are read. Mapping keys keep their document order and numbers their
-/// lexemes.
+/// Convert YAML-LD Basic bytes to JSON-LD JSON using first-document selection.
+/// The complete stream must have valid syntax, roots and resolved string keys;
+/// only selected values undergo Core scalar construction. Acyclic aliases produce
+/// independent JSON copies. Use [`yamlld_to_jsonld_with_options`] for all documents
+/// or explicit resource bounds. Mapping order and exact numeric values are retained.
 pub fn yamlld_to_jsonld(yaml_bytes: &[u8]) -> Result<String, RdfDiagnostic> {
-    let text = std::str::from_utf8(yaml_bytes)
-        .map_err(|e| decode(format!("YAML-LD-star bytes are not UTF-8: {e}")))?;
-    let value = purrdf_lex::yaml::read_with(
-        text,
-        purrdf_lex::yaml::Limits {
-            aliases: false,
-            ..purrdf_lex::yaml::Limits::DEFAULT
-        },
-    )
-    .map_err(|e| match e.kind() {
-        purrdf_lex::yaml::ErrorKind::Alias => {
-            decode(format!("YAML-LD-star must not use anchors or aliases: {e}"))
-        }
-        _ => decode(format!("parse YAML-LD-star: {e}")),
-    })?;
-    Ok(purrdf_lex::json::write_compact(&value))
+    yamlld_to_jsonld_with_options(yaml_bytes, &YamlLdOptions::DEFAULT)
 }
 
 /// Downcast YAML-LD-star bytes to statement-metadata N-Quads in the caller's
@@ -2248,7 +2232,7 @@ mod yamlld_input {
 
     /// Each refused YAML-LD document beside the nearest accepted one.
     #[test]
-    fn yaml_ld_refuses_what_its_json_profile_cannot_hold_and_accepts_the_neighbours() {
+    fn yaml_ld_basic_refuses_invalid_keys_and_accepts_acyclic_aliases() {
         for (yaml, refusal) in [
             ("'@id': https://example.org/s\n", None),
             (
@@ -2262,7 +2246,7 @@ mod yamlld_input {
             ),
             (
                 "https://example.org/p: &a one\nhttps://example.org/q: *a\n",
-                Some("must not use anchors or aliases"),
+                None,
             ),
             (
                 "https://example.org/p: one & two\nhttps://example.org/q: '*a'\n",

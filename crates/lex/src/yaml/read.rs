@@ -94,6 +94,8 @@ pub enum ErrorKind {
     CyclicAlias,
     /// A shorthand tag uses a handle not declared in this document.
     UnknownTagHandle,
+    /// A semantic projection requires a collection or null document root.
+    InvalidRoot,
     /// A mapping key that is not a string: a number, a boolean, `null`, an
     /// empty key (all accepted under [`Limits::scalar_keys`]), or a collection.
     NonStringKey,
@@ -164,6 +166,7 @@ impl purrdf_hash::error::StructuredError for ErrorKind {
         UnknownAlias => "yaml-unknown-alias" {},
         CyclicAlias => "yaml-cyclic-alias" {},
         UnknownTagHandle => "yaml-unknown-tag-handle" {},
+        InvalidRoot => "yaml-invalid-root" {},
         NonStringKey => "yaml-non-string-key" {},
         DuplicateKey => "yaml-duplicate-key" {},
         NonFinite => "yaml-non-finite" {},
@@ -249,6 +252,7 @@ impl fmt::Display for Error {
             ErrorKind::UnknownAlias => f.write_str("the alias names no anchor defined before it"),
             ErrorKind::CyclicAlias => f.write_str("the alias names an anchor still being constructed; only acyclic aliases are supported"),
             ErrorKind::UnknownTagHandle => f.write_str("the tag handle is not declared in this document"),
+            ErrorKind::InvalidRoot => f.write_str("a document root must be a mapping, sequence or null"),
             ErrorKind::NonStringKey => f.write_str("a mapping key must be a string"),
             ErrorKind::DuplicateKey => f.write_str("a mapping repeats a key"),
             ErrorKind::NonFinite => f.write_str("JSON cannot hold an infinite or NaN number"),
@@ -343,6 +347,20 @@ pub(super) enum Tag {
     Map,
     NonSpecific,
     Other,
+}
+impl Tag {
+    pub(super) fn specific(name: &str) -> Self {
+        match name.strip_prefix("tag:yaml.org,2002:") {
+            Some("str") => Self::Str,
+            Some("int") => Self::Int,
+            Some("float") => Self::Float,
+            Some("bool") => Self::Bool,
+            Some("null") => Self::Null,
+            Some("seq") => Self::Seq,
+            Some("map") => Self::Map,
+            _ => Self::Other,
+        }
+    }
 }
 
 /// A node's properties (§6.9), waiting for their node.
@@ -760,17 +778,10 @@ impl<'a, B: Builder> Parser<'a, B> {
             ));
         }
         let expanded = self.decode_tag(expanded, decode_from, at)?;
-        let tag = match expanded.strip_prefix("tag:yaml.org,2002:") {
-            Some("str") => Tag::Str,
-            Some("int") => Tag::Int,
-            Some("float") => Tag::Float,
-            Some("bool") => Tag::Bool,
-            Some("null") => Tag::Null,
-            Some("seq") => Tag::Seq,
-            Some("map") => Tag::Map,
-            _ if B::LEXICAL => Tag::Other,
-            _ => return Err(self.error(ErrorKind::Tag, at)),
-        };
+        let tag = Tag::specific(&expanded);
+        if tag == Tag::Other && !B::LEXICAL {
+            return Err(self.error(ErrorKind::Tag, at));
+        }
         self.builder
             .tag(
                 super::syntax::Span::new(at, self.pos),

@@ -99,17 +99,20 @@
 mod admission;
 mod build;
 mod number;
+mod project;
 mod read;
 mod resolve;
 mod syntax;
 mod write;
 
+pub use project::{SyntaxProjectionLimits, SyntaxRootPolicy, SyntaxSelection};
 pub use read::{Error, ErrorKind, Limits, StreamLimits, read, read_stream, read_with};
 pub use syntax::{
     Attachment, BlockHeader, Chomping, CollectionStyle, ExplicitTag, NodeId, NodeKind, Position,
     ProjectionLimits, ScalarStyle, Span, SyntaxArena, SyntaxDocument, SyntaxDocumentRoot,
-    SyntaxEntry, SyntaxEscape, SyntaxLimits, SyntaxNode, SyntaxScalar, SyntaxStream,
-    SyntaxStreamLimits, Trivia, TriviaKind, read_syntax, read_syntax_stream,
+    SyntaxEntry, SyntaxEscape, SyntaxKeyPolicy, SyntaxLimits, SyntaxNode, SyntaxScalar,
+    SyntaxStream, SyntaxStreamLimits, Trivia, TriviaKind, read_syntax, read_syntax_stream,
+    read_syntax_stream_with,
 };
 pub use write::{
     EmitError, EmitLimits, EmitStyle, EmittedScalar, ScalarContext, emit_scalar, write,

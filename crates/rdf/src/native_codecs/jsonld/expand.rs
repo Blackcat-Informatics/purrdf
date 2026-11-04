@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use purrdf_lex::json::{self, Number, Object as Map, Value as JsonValue};
+use purrdf_lex::walk::WorkList;
 
 use super::carrier::{Document, Literal, NamedGraph, Node, Part, Term, Triple, Value};
 use super::{
@@ -25,28 +26,28 @@ use purrdf_xsd::datatype::XSD_DOUBLE;
 use purrdf_xsd::datatype::XSD_INTEGER;
 
 pub(super) fn expand_document(
-    mut document: JsonValue,
+    document: JsonValue,
     context: &CompiledJsonLdContext,
 ) -> Result<Document, RdfDiagnostic> {
     // The reserved-label pre-pass reads the whole parsed document, for the same
     // reason the lowering pass does: a minted blank label must not collide with one
     // used anywhere. It retains labels, not values.
     let mut builder = Builder::new(&document);
-    match &mut document {
-        // Top-level entries are DRAINED, so each parsed entry is released as soon as
-        // it has been expanded rather than the whole parsed document standing beside
-        // the whole carrier. The expansion itself is unchanged — same entries, same
-        // order, same context.
-        JsonValue::Array(entries) => {
-            for mut entry in core::mem::take(entries) {
-                builder.expand_graph_entry(&mut entry, None, context)?;
+    let mut frames: WorkList<_, 8> = WorkList::with(vec![document].into_iter());
+    while let Some(frame) = frames.top_mut() {
+        let Some(mut entry) = frame.next() else {
+            frames.pop();
+            continue;
+        };
+        match &mut entry {
+            JsonValue::Array(entries) => frames.push(core::mem::take(entries).into_iter()),
+            JsonValue::Null => {}
+            JsonValue::Object(_) => builder.expand_graph_entry(&mut entry, None, context)?,
+            _ => {
+                return Err(decode(
+                    "JSON-LD document entries must be objects, arrays or null",
+                ));
             }
-        }
-        JsonValue::Object(_) => builder.expand_graph_entry(&mut document, None, context)?,
-        _ => {
-            return Err(decode(
-                "JSON-LD document must be an object or array of objects",
-            ));
         }
     }
     Ok(builder.finish())
@@ -69,12 +70,17 @@ pub(super) fn document_base(
     document: &JsonValue,
     context: &CompiledJsonLdContext,
 ) -> Result<Option<String>, RdfDiagnostic> {
-    let entries: &[JsonValue] = match document {
-        JsonValue::Array(entries) => entries,
-        other => std::slice::from_ref(other),
-    };
     let mut base = context.base_iri().map(str::to_owned);
-    for entry in entries {
+    let mut frames: WorkList<_, 8> = WorkList::with(std::slice::from_ref(document).iter());
+    while let Some(frame) = frames.top_mut() {
+        let Some(entry) = frame.next() else {
+            frames.pop();
+            continue;
+        };
+        if let JsonValue::Array(entries) = entry {
+            frames.push(entries.iter());
+            continue;
+        }
         let Some(object) = entry.as_object() else {
             continue;
         };
@@ -1377,21 +1383,24 @@ fn insert_expanded_control(
 }
 
 fn collect_blank_node_ids(value: &JsonValue, output: &mut BTreeSet<String>) {
-    match value {
-        JsonValue::String(value) if value.starts_with("_:") => {
-            output.insert(value.clone());
-        }
-        JsonValue::Array(values) => {
-            for value in values {
-                collect_blank_node_ids(value, output);
+    let mut pending: WorkList<_, 8> = WorkList::with(value);
+    while let Some(value) = pending.pop() {
+        match value {
+            JsonValue::String(value) if value.starts_with("_:") => {
+                output.insert(value.clone());
             }
-        }
-        JsonValue::Object(object) => {
-            for value in object.values() {
-                collect_blank_node_ids(value, output);
+            JsonValue::Array(values) => {
+                for value in values {
+                    pending.push(value);
+                }
             }
+            JsonValue::Object(object) => {
+                for value in object.values() {
+                    pending.push(value);
+                }
+            }
+            _ => {}
         }
-        _ => {}
     }
 }
 
