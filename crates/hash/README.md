@@ -702,6 +702,8 @@ source on every run.
 | `b"purrdf-toml-document-v1"` | `DOCUMENT_DOMAIN` | `crates/toml/src/profile.rs` |
 | `b"purrdf-toml-profile-v1"` | `PROFILE_DOMAIN` | `crates/toml/src/profile.rs` |
 | `b"purrdf-xsd/date-time-representation/v1"` | `(inline)` | `crates/xsd/src/temporal.rs` |
+| `b"purrdf-yaml-profile-v1"` | `PROFILE_DOMAIN` | `crates/yaml/src/profile.rs` |
+| `b"purrdf-yaml-stream-v1"` | `STREAM_DOMAIN` | `crates/yaml/src/profile.rs` |
 | `b"purrdf.pipeline-root.v1"` | `PIPELINE_ROOT_DOMAIN` | `crates/rdf-core/src/ir/pipeline_bundle.rs` |
 | `b"purrdf.purremb.v1.artifact\0"` | `D_ARTIFACT` | `crates/rdf-core/src/ir/embedding/identity.rs` |
 | `b"purrdf.purremb.v1.chunking\0"` | `D_CHUNKING` | `crates/rdf-core/src/ir/embedding/identity.rs` |
