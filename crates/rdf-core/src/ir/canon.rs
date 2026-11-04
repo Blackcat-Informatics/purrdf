@@ -3168,8 +3168,26 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
             if let Some((hash, related)) = frame.related.next() {
                 self.check_stop().map_err(CanonError::with_read_error)?;
                 frame.data.push_str(hash.as_str());
+                let fixed_label = |id| {
+                    self.canonical
+                        .issued_for(id)
+                        .or_else(|| frame.issuer.issued_for(id))
+                };
+                let mut permutations = permutations(&related);
+                if related.iter().all(|&id| fixed_label(id).is_some()) {
+                    // Every candidate has no recursion and the same final issuer.
+                    // Choose its minimum fixed-label concatenation once, retaining
+                    // the complete group inventory for refusal observations.
+                    permutations.items.sort_unstable_by(|&left, &right| {
+                        fixed_label_order(
+                            fixed_label(left).expect("the group has only fixed labels"),
+                            fixed_label(right).expect("the group has only fixed labels"),
+                        )
+                    });
+                    permutations.single = true;
+                }
                 frame.group = Some(NDegreeGroup {
-                    permutations: permutations(&related),
+                    permutations,
                     chosen_path: None,
                     chosen_issuer: None,
                     candidate: None,
@@ -3660,8 +3678,25 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
     }
 }
 
-/// A **lazy** generator of every permutation of a slice (identity first, then
-/// lexicographic position order). Lazy generation matters for the poison case: a
+/// Compare emitted `_:label` pieces by their two possible concatenations.
+/// Plain label order is insufficient: `_:b10_:b1` precedes `_:b1_:b10`.
+fn fixed_label_order(left: &str, right: &str) -> Ordering {
+    // The first "_:" is common to both concatenations.
+    left.bytes()
+        .chain(b"_:".iter().copied())
+        .chain(right.bytes())
+        .cmp(
+            right
+                .bytes()
+                .chain(b"_:".iter().copied())
+                .chain(left.bytes()),
+        )
+}
+
+/// A **lazy** permutation generator, exhaustive by default (identity first, then
+/// lexicographic position order). The solver can seed the minimum fixed-label
+/// ordering and select that single candidate after proving it sufficient.
+/// Lazy generation matters for the poison case: a
 /// 9-element related group has 9! = 362 880 permutations, so collecting them all
 /// upfront would allocate a factorial-sized `Vec<Vec<_>>` per n-degree call. Yielding
 /// one small `Vec` at a time keeps the call-budget guard the only bound on cost.
@@ -3670,6 +3705,8 @@ struct Permutations<T> {
     idx: Vec<usize>,
     first: bool,
     done: bool,
+    /// The solver proved the first ordering sufficient for a fixed-label group.
+    single: bool,
 }
 
 impl<T: Copy> Iterator for Permutations<T> {
@@ -3681,6 +3718,7 @@ impl<T: Copy> Iterator for Permutations<T> {
         }
         if self.first {
             self.first = false;
+            self.done = self.single;
         } else if !next_permutation(&mut self.idx) {
             self.done = true;
             return None;
@@ -3697,6 +3735,7 @@ fn permutations<T: Copy>(items: &[T]) -> Permutations<T> {
         first: true,
         // An empty slice still yields exactly one (empty) permutation.
         done: false,
+        single: false,
     }
 }
 
@@ -4822,6 +4861,16 @@ mod tests {
         b.push_quad(y, p, x, None).unwrap();
         let ds = b.freeze().expect("valid");
         assert_eq!(blank_count(&ds).unwrap(), 2);
+    }
+
+    #[test]
+    fn fixed_label_paths_order_prefix_labels_by_concatenation() {
+        let mut labels = ["b1", "b10", "b2"];
+        labels.sort_unstable_by(|left, right| fixed_label_order(left, right));
+        assert_eq!(
+            format!("_:{}_:{}_:{}", labels[0], labels[1], labels[2]),
+            "_:b10_:b1_:b2"
+        );
     }
 
     #[test]
@@ -6682,7 +6731,38 @@ mod tests {
             builder.push_quad(right, predicate, left, None).unwrap();
         }
         let cycle = builder.freeze().expect("valid reciprocal cycle");
-        let mut control = CanonicalizationControl::new(SearchPolicy::Finite(94), None);
+        // One candidate for each root's final known-label group gives 136 events.
+        // The 139-event ceiling detects a return to the 140-event full enumeration.
+        let mut complete = CanonicalizationControl::new(SearchPolicy::Finite(139), None);
+        let canonical = try_canonicalize(&cycle, &mut complete)
+            .expect("fixed-label groups admit the cycle within its finite ceiling");
+        assert_eq!(complete.receipts()[0].work.total(), 136);
+        assert_eq!(
+            canonical.nquads(),
+            concat!(
+                "_:c14n0 <http://example.org/link> _:c14n1 .\n",
+                "_:c14n0 <http://example.org/link> _:c14n2 .\n",
+                "_:c14n1 <http://example.org/link> _:c14n0 .\n",
+                "_:c14n1 <http://example.org/link> _:c14n3 .\n",
+                "_:c14n2 <http://example.org/link> _:c14n0 .\n",
+                "_:c14n2 <http://example.org/link> _:c14n3 .\n",
+                "_:c14n3 <http://example.org/link> _:c14n1 .\n",
+                "_:c14n3 <http://example.org/link> _:c14n2 .\n",
+            )
+        );
+        assert_eq!(
+            canonical.labels().collect::<BTreeMap<_, _>>(),
+            BTreeMap::from([
+                (blanks[0], "c14n0"),
+                (blanks[1], "c14n1"),
+                (blanks[2], "c14n3"),
+                (blanks[3], "c14n2"),
+            ])
+        );
+
+        // Two completed roots each save one final-group event, preserving the
+        // same descendant refusal after the first 24 events of the third root.
+        let mut control = CanonicalizationControl::new(SearchPolicy::Finite(92), None);
         let first_position = control.position();
         let error = canonical_relabel(&cycle, &mut control).expect_err("finite cycle refusal");
         let CanonError::BudgetExceeded(budget) = error else {
