@@ -17,6 +17,7 @@ provenance = ["crates/zstd/PROVENANCE.md", "crates/zstd/UPSTREAM-SHA256.json"]
 # first-party header must match workspace.package.license. The header gate
 # checks these paths and refuses stale or unchecked registrations.
 [header_offers]
+"crates/hash/src/word_id/data.rs" = "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND CC-BY-4.0"
 # The book is prose under the documentation grant.
 "docs/book/book.toml" = "CC-BY-4.0"
 # Generated Unicode data carries Unicode-3.0 beside the first-party offer.
@@ -34,6 +35,15 @@ provenance = ["crates/zstd/PROVENANCE.md", "crates/zstd/UPSTREAM-SHA256.json"]
 # Verbatim WHATWG data, with frozen notice/input and verified native generation;
 # the independently written resolver and generator keep the first-party offer.
 "crates/lex/src/html/entities.rs" = "BSD-3-Clause"
+
+[[material]]
+id = "eff-word-alphabet"
+license = "CC-BY-4.0"
+source = "https://www.eff.org/files/2016/07/18/eff_large_wordlist.txt"
+scope = "EFF-original long wordlist, selected alphabet and generated word data; original attribution and grant apply in addition to the independently written codec's first-party offer"
+paths = ["crates/hash/data/word-id/**", "crates/hash/src/word_id/data.rs", "crates/hash-conformance/data/word-id/**"]
+notices = ["LICENSES/CC-BY-4.0.txt", "crates/hash/data/word-id/EFF-NOTICE.txt"]
+provenance = ["crates/hash/data/word-id/PROVENANCE.md", "crates/hash/data/word-id/manifest.toml"]
 
 [[material]]
 id = "unicode"

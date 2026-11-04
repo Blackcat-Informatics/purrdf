@@ -11,6 +11,29 @@ use std::hint::black_box;
 static GLOBAL: CountingAllocator = CountingAllocator;
 
 #[test]
+fn word_id_buffers_allocate_nothing_and_owned_output_allocates_once() {
+    use purrdf_hash::{
+        hex::Digest32,
+        word_id::{self, Reference},
+    };
+    let reference = Reference::Full(Digest32::new([0x5a; 32]));
+    let mut buffer = [0; word_id::MAX_ENCODED_LEN];
+    let window = CurrentThreadWindow::open();
+    let len = reference.encode(&mut buffer).unwrap();
+    black_box(word_id::decode(&buffer[..len])).unwrap();
+    let mut digest = [0; 32];
+    word_id::decode_full(&buffer[..len], &mut digest).unwrap();
+    black_box(reference.encoded_len());
+    let measured = window.close();
+    assert_eq!(measured.allocations, 0, "{measured:?}");
+    let window = CurrentThreadWindow::open();
+    let owned = reference.to_text().unwrap();
+    let measured = window.close();
+    assert_eq!(measured.allocations, 1, "{measured:?}");
+    assert_eq!(owned.as_bytes(), &buffer[..len]);
+}
+
+#[test]
 fn creation_streaming_finalization_and_reset_allocate_nothing() {
     let bytes = vec![0x5a; 1024 * 1024 + 1];
     for length in [0, 1, 64, 1024, 16384, bytes.len()] {

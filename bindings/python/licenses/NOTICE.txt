@@ -133,6 +133,14 @@ Source: registry+https://github.com/rust-lang/crates.io-index
 Notice: dependencies/digest-0.11.3/LICENSE-APACHE
 Notice: dependencies/digest-0.11.3/LICENSE-MIT
 
+eff-word-alphabet: CC-BY-4.0
+Scope: EFF-original long wordlist, selected alphabet and generated word data; original attribution and grant apply in addition to the independently written codec's first-party offer
+Source: https://www.eff.org/files/2016/07/18/eff_large_wordlist.txt
+Evidence: crates/hash/data/word-id/PROVENANCE.md
+Evidence: crates/hash/data/word-id/manifest.toml
+Notice: third-party/eff-word-alphabet/0-CC-BY-4.0.txt
+Notice: third-party/eff-word-alphabet/1-EFF-NOTICE.txt
+
 either-1.19.0: MIT OR Apache-2.0
 Scope: resolved normal/build input, including target-specific alternatives
 Source: registry+https://github.com/rust-lang/crates.io-index

@@ -116,6 +116,19 @@ impl CliOutcome {
 /// A CLI-level failure, carrying its rendered message and its exit classification.
 #[derive(Debug)]
 pub enum CliError {
+    /// Original output-target open, write or flush failure.
+    OutputIo(std::io::Error),
+    /// The failed output's cleanup, retaining the original native failure.
+    PartialOutputRemoved {
+        /// Original failure before cleanup.
+        original: Box<Self>,
+        /// Removed partial output path.
+        path: std::path::PathBuf,
+    },
+    /// Original source/output file-identity inspection failure.
+    FileIdentity(std::io::Error),
+    /// Original checked word conversion, record or I/O refusal.
+    WordId(Box<crate::word_id::Failure>),
     /// An argument / usage error (exit code 2).
     Usage(String),
     /// Any other runtime failure — parse, serialize, pack integrity, or I/O
@@ -165,8 +178,13 @@ impl CliError {
     /// The process exit code for this error's category (2 usage / 1 runtime).
     pub(crate) fn exit_code(&self) -> i32 {
         match self {
+            Self::WordId(error) if matches!(&**error, crate::WordIdFailure::Usage(_)) => 2,
             Self::Usage(_) => 2,
             Self::OutputPublication { .. }
+            | Self::OutputIo(_)
+            | Self::PartialOutputRemoved { .. }
+            | Self::FileIdentity(_)
+            | Self::WordId(_)
             | Self::Canonical { .. }
             | Self::ReceiptPublication { .. }
             | Self::Runtime(_)
@@ -182,9 +200,19 @@ impl CliError {
     }
 }
 
+purrdf_lex::variant_from!(CliError { WordId(crate::WordIdFailure) via Box::new });
+
 impl fmt::Display for CliError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::OutputIo(error) => error.fmt(f),
+            Self::PartialOutputRemoved { original, path } => write!(
+                f,
+                "{original}; the partial output file `{}` was removed (its previous contents were replaced when the write began)",
+                path.display()
+            ),
+            Self::FileIdentity(error) => error.fmt(f),
+            Self::WordId(error) => error.fmt(f),
             Self::Usage(msg) | Self::Runtime(msg) => f.write_str(msg),
             Self::Canonical { message, .. } => f.write_str(message),
             Self::OutputPublication { original, failure } => {
@@ -221,6 +249,10 @@ impl fmt::Display for CliError {
 impl std::error::Error for CliError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::OutputIo(error) => Some(error),
+            Self::PartialOutputRemoved { original, .. } => Some(&**original),
+            Self::FileIdentity(error) => Some(error),
+            Self::WordId(error) => Some(&**error),
             Self::Canonical { cause, .. } => Some(cause),
             Self::OutputPublication { original, .. } => Some(&**original),
             Self::ReceiptPublication {

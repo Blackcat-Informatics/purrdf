@@ -691,6 +691,7 @@ version = "3.0.1"
 dependencies = [
  "purrdf-hash",
  "purrdf-testkit",
+ "purrdf-xsd",
 ]
 
 [[package]]

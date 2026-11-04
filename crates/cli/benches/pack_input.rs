@@ -100,5 +100,85 @@ fn reasoning(c: &mut Bench) {
     group.finish();
 }
 
-bench_group!(benches, acquisition, verification, reasoning);
+/// Actual command startup plus buffered file conversion; setup is outside timing.
+fn word_ids(c: &mut Bench) {
+    use purrdf_hash::{hex::Digest32, word_id::Reference};
+    use purrdf_testkit::bench::Throughput;
+    use std::{process::Command, time::Duration};
+    let directory = purrdf_testkit::temp_dir!().expect("word conversion fixture directory");
+    let input = directory.path().join("input.txt");
+    let words = directory.path().join("words.txt");
+    let batch = directory.path().join("batch.txt");
+    let batch_words = directory.path().join("batch-words.txt");
+    let invalid = directory.path().join("invalid.txt");
+    let output = directory.path().join("output.txt");
+    let digest = Digest32::new([0x5a; 32]);
+    std::fs::write(&input, format!("{digest}\n")).unwrap();
+    std::fs::write(&words, Reference::Full(digest).to_text().unwrap()).unwrap();
+    std::fs::write(&invalid, b"b3w2: invalid").unwrap();
+    let mut hex_rows = String::new();
+    let mut word_rows = String::new();
+    for ordinal in 0_u64..256 {
+        let digest = Digest32::new(*purrdf_hash::blake3::hash(&ordinal.to_le_bytes()).as_bytes());
+        use std::fmt::Write as _;
+        writeln!(hex_rows, "{digest}").unwrap();
+        writeln!(word_rows, "{}", Reference::Full(digest).to_text().unwrap()).unwrap();
+    }
+    std::fs::write(&batch, hex_rows).unwrap();
+    std::fs::write(&batch_words, word_rows).unwrap();
+    let mut group = c.benchmark_group("word_ids");
+    group
+        .sample_size(20)
+        .warm_up_time(Duration::from_millis(100))
+        .measurement_time(Duration::from_millis(300));
+    for (name, arguments, source, count, expected) in [
+        ("cli_encode", vec!["encode", "--from", "hex"], &input, 1, 0),
+        ("cli_decode", vec!["decode", "--to", "hex"], &words, 1, 0),
+        (
+            "cli_decode_invalid",
+            vec!["decode", "--to", "hex"],
+            &invalid,
+            1,
+            1,
+        ),
+        (
+            "cli_encode_batch_256",
+            vec!["batch", "--from", "hex-lines", "--to", "word-lines"],
+            &batch,
+            256,
+            0,
+        ),
+        (
+            "cli_decode_batch_256",
+            vec!["batch", "--from", "word-lines", "--to", "hex-lines"],
+            &batch_words,
+            256,
+            0,
+        ),
+    ] {
+        group.throughput(Throughput::Elements(count));
+        group.bench_function(name, |b| {
+            b.iter(|| {
+                let result = Command::new(env!("CARGO_BIN_EXE_purrdf"))
+                    .arg("word-id")
+                    .args(&arguments)
+                    .arg("--input")
+                    .arg(source)
+                    .arg("--output")
+                    .arg(&output)
+                    .output()
+                    .unwrap();
+                assert_eq!(
+                    result.status.code(),
+                    Some(expected),
+                    "{}",
+                    String::from_utf8_lossy(&result.stderr)
+                );
+                black_box(result);
+            });
+        });
+    }
+}
+
+bench_group!(benches, acquisition, verification, reasoning, word_ids);
 bench_main!(benches);

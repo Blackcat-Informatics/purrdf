@@ -409,6 +409,7 @@ deps = [
     "purrdf",
     "purrdf-core",
     "purrdf-entail",
+    "purrdf-hash",
     "purrdf-iri",
     "purrdf-lex",
     "purrdf-rdf",

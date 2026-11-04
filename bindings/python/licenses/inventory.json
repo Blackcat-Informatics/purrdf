@@ -245,6 +245,25 @@
       "source_checksum": "f1dd6dbb5841937940781866fa1281a1ff7bd3bf827091440879f9994983d5c2"
     },
     {
+      "id": "eff-word-alphabet",
+      "license": "CC-BY-4.0",
+      "notices": [
+        "third-party/eff-word-alphabet/0-CC-BY-4.0.txt",
+        "third-party/eff-word-alphabet/1-EFF-NOTICE.txt"
+      ],
+      "paths": [
+        "crates/hash/data/word-id/**",
+        "crates/hash/src/word_id/data.rs",
+        "crates/hash-conformance/data/word-id/**"
+      ],
+      "provenance": [
+        "crates/hash/data/word-id/PROVENANCE.md",
+        "crates/hash/data/word-id/manifest.toml"
+      ],
+      "scope": "EFF-original long wordlist, selected alphabet and generated word data; original attribution and grant apply in addition to the independently written codec's first-party offer",
+      "source": "https://www.eff.org/files/2016/07/18/eff_large_wordlist.txt"
+    },
+    {
       "id": "either-1.19.0",
       "license": "MIT OR Apache-2.0",
       "notices": [
@@ -1213,7 +1232,7 @@
     "LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
     "LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
     "LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c",
-    "NOTICE.txt": "55bb36b36af871cbc05d44e1a8aa6a7b1a4b6b6855ec5bc69491114d5bbbf97d",
+    "NOTICE.txt": "b567e9c7aa473f18126acf657f6cb14bd6734c6e6b312560e418ea59bd536623",
     "dependencies/aead-0.6.1/LICENSE-APACHE": "b1cf9a3333ca78152b859012cd4a804156e5243e9ca20ad1df7327ba5ea7405c",
     "dependencies/aead-0.6.1/LICENSE-MIT": "33b32a251d445c5c03a634e64c53314c55540fc367fabdd45d9b6c8f260c028c",
     "dependencies/aes-0.9.3/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",
@@ -1335,6 +1354,8 @@
     "dependencies/windows-sys-0.61.2/license-mit": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
     "third-party/csvw/0-W3C-document-license.html": "1ce63a482b3fe34cf19bab6846d179f7b5a5e0fdf1e995c43031962591713d55",
     "third-party/csvw/1-LICENSE.md": "e7b710c5c57e14969bfc5ea371f0859769e11016cd9d99e6c6f6def9dddb535a",
+    "third-party/eff-word-alphabet/0-CC-BY-4.0.txt": "d557539df68e771cc1eedcc91d13f70fca930e508d11eedcafa4b15db49e3744",
+    "third-party/eff-word-alphabet/1-EFF-NOTICE.txt": "164492e87bbd29552b8c407e06d1396d9552b00ae363ef958021ab839010a28a",
     "third-party/hashbrown-native-table/0-MIT.txt": "ff8f68cb076caf8cefe7a6430d4ac086ce6af2ca8ce2c4e5a2004d4552ef52a2",
     "third-party/hashbrown-native-table/1-Apache-2.0.txt": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
     "third-party/hashbrown-native-table/2-NOTICE": "1523147a6efc4f8c0a660994a10465c2918c3b2c2dd243b3403f6b860b136a4d",

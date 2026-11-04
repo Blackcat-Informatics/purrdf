@@ -535,6 +535,7 @@ entry_points = [
     "purrdf_hash::hex::encode_to_slice",
     "purrdf_hash::hex::decode",
     "purrdf_hash::hex::decode_canonical",
+    "purrdf_hash::hex::decode_canonical_to_slice",
     "purrdf_hash::hex::decode_32",
     "purrdf_hash::hex::decode_32_canonical",
     "purrdf_hash::hex::nibble",
@@ -3956,6 +3957,23 @@ entry_points = []
 spec = "Sum in Z/(2^256), with an independent checked u128 population; duplicate members contribute repeatedly, and callers independently establish membership before subtraction"
 vectors = []
 bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = []
+
+[[job]]
+id = "checked-word-identity"
+summary = "Frozen full and prefix checked word spellings over the original 32-byte digest identity"
+home = "purrdf_hash::word_id::Reference"
+entry_points = ["purrdf_hash::word_id::decode", "purrdf_hash::word_id::decode_full", "purrdf_hash::word_id::encode_batch", "purrdf_hash::word_id::decode_batch"]
+spec = "docs/design/purrdf-word-identities.md: immutable ASCII alphabet, big-endian 12-bit extraction, full zero padding and count-first GF check; lexical selectors carry no scope"
+vectors = ["crates/hash-conformance/tests/vectors/word_id.txt"]
+bench = ["purrdf-hash-conformance:digests"]
 sites = []
 replaces_external = []
 enforced = true
