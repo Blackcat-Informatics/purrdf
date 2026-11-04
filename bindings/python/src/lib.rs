@@ -70,6 +70,7 @@ mod py_shex;
 mod py_slice;
 mod py_sssom;
 mod py_store;
+mod py_yaml_source;
 mod rdf;
 mod shacl;
 mod xpath_regex;

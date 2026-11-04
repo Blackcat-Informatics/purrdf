@@ -91,6 +91,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     crate::py_store::register(m)?;
     // Deterministic graph/tabular/research-object archive projection and lift surfaces.
     crate::py_projection::register(m)?;
+    crate::py_yaml_source::register(m)?;
     // The native RDF → GTS producer surface (snapshot author + compile_gts) and
     // the `PyRdfDataset` Arc handle (Task 8 / C7).
     crate::py_gts::register(m)?;

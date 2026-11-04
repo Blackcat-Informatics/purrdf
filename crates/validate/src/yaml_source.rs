@@ -62,6 +62,34 @@ impl purrdf_hash::error::StructuredError for Error {
     }
 }
 
+impl Error {
+    /// Preserve configuration diagnostics or retain the original native refusal.
+    ///
+    /// Native codes and exact positions remain available through the diagnostic's
+    /// structured native cause. Diagnostic allocation failure reports its actual
+    /// storage refusal instead of publishing an incomplete diagnostic.
+    pub fn into_diagnostic(self) -> RdfDiagnostic {
+        match self {
+            Self::Configuration(diagnostic) => diagnostic,
+            Self::Native(cause) => {
+                let mut current: &(dyn std::error::Error + 'static) = &cause;
+                let storage = loop {
+                    if let Some(storage) =
+                        current.downcast_ref::<purrdf_lex::allocation::StorageError>()
+                    {
+                        break Some(*storage);
+                    }
+                    match current.source() {
+                        Some(source) => current = source,
+                        None => break None,
+                    }
+                };
+                crate::json_config::failure("yaml-source-native", cause, storage)
+            }
+        }
+    }
+}
+
 fn syntax(
     value: &Value,
     bounds: &mut Bounds,

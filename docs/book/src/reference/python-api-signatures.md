@@ -1136,6 +1136,19 @@ def gts_to_duckdb(data: bytes, path: str, *, blob_limits: _GtsBlobPolicy) -> Gts
 def gts_to_parquet(data: bytes, out_dir: str, *, blob_limits: _GtsBlobPolicy) -> GtsExportResult:
     ...
 
+class YamlSourceExport:
+    @property
+    def root(self) -> str: ...
+    @property
+    def dataset(self) -> RdfDataset: ...
+
+def yaml_source_export(
+    source: bytes, *, source_iri: str, profile_json: bytes
+) -> YamlSourceExport: ...
+def yaml_source_reconstruct(
+    dataset: RdfDataset, *, root: str, profile_json: bytes
+) -> bytes: ...
+
 class RdfDataset:
 
     def __init__(self, data: bytes | str, format: RdfFormat, *, base: str | None=...) -> None:

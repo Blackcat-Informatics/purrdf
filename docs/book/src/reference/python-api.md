@@ -41,6 +41,41 @@ assert rows[0]["name"].value == "Alice"
 
 `SELECT` returns `QuerySolutions`. A row supports variable names, `Variable` objects and integer positions, including negative indexing. An unbound projected cell is `None`; it is not omitted. Missing variable names raise `KeyError`, and out-of-range positions raise `IndexError`. `ASK` returns `QueryBoolean`. Default-graph `CONSTRUCT`/`DESCRIBE` results iterate over `Triple`; a result carrying named graphs iterates over `Quad`.
 
+## Preserve original YAML source
+
+`yaml_source_export` returns a frozen `YamlSourceExport` with a computed `root`
+and an existing immutable `RdfDataset`. Supply immutable source and profile JSON
+bytes. The profile is explicit; no vocabulary or standard profile is implicit.
+These operations preserve source presentation through the native cover carrier.
+Ordinary YAML-LD parsing remains a separate semantic operation.
+
+```python
+profile = b'{"version":1,"name":"my-source","profile_version":1,"vocabulary":"https://example.org/yaml#"}'
+source = b"# original\r\nkey: 'value'\r\n"
+exported = purrdf.yaml_source_export(
+    source, source_iri="https://example.org/source.yaml", profile_json=profile
+)
+restored = purrdf.yaml_source_reconstruct(
+    exported.dataset, root=exported.root, profile_json=profile
+)
+assert restored == source
+```
+
+Retain the explicit root and use the same profile for reconstruction. Dataset
+handles remain usable after the export result is released. Reconstruction returns
+verified original UTF-8 bytes without a newline or transport transformation.
+
+The bounded profile decoder runs before source work. Source and profile bytes are
+borrowed while their Python owners remain alive during native execution. Native
+phase accounts, shared handle control, Python output and error inspection have
+separate ownership; native bounds are not a combined process memory ceiling.
+
+Failures raise `ValueError` with the usual `code`, `diagnostic_json`, `message_id`
+and `presentation` attributes. `native_cause` carries the original structured
+cause, including available byte offsets and line/column positions;
+`native_cause_json` carries its JSON representation. Error inspection or attachment
+failures propagate as their own exceptions.
+
 ## RDF terms and exact values
 
 `NamedNode.value` is its IRI. `Literal.value` preserves its lexical form; datatype, language and direction are separate properties. Language-tag identity folds case. Construct typed literals with `datatype=NamedNode(iri)`, language literals with `language=`, and directional language literals with both `language=` and `direction=`.
