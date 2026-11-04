@@ -2283,6 +2283,8 @@ impl purrdf_hash::error::StructuredError for RdfcSearchContext {
     purrdf_hash::error_visit! {
         InitialFrame { root_ordinal } => "rdfc-initial-frame" {
             "root_ordinal" => Unsigned(*root_ordinal as u128),
+            "frame_ordinal" => Unsigned(*root_ordinal as u128),
+            "depth" => Unsigned(0),
             "related_group" => Absent,
         },
         ChildFrame { root_ordinal, frame_ordinal, depth, parent_group } => "rdfc-child-frame" {
