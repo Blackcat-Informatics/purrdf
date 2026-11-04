@@ -7612,6 +7612,9 @@ mod tests {
             &[fixture.tails[0]]
         );
 
+        let mut frontier_order = fixture.branches;
+        frontier_order[5] = fixture.tails[0];
+        let newly_labeled_tail = memo_entry(fixture.root, frontier_order);
         let mut focus_order = fixture.branches;
         focus_order.swap(0, 1);
         let changed_focus = memo_entry(fixture.root, focus_order);
@@ -7625,6 +7628,7 @@ mod tests {
         let mut changed_counter = entry;
         changed_counter.issue(fixture.unrelated);
         for (name, mut issuer) in [
+            ("new frontier", newly_labeled_tail),
             ("focus label", changed_focus),
             ("frontier label", changed_frontier),
             ("next counter", changed_counter),
@@ -7704,9 +7708,7 @@ mod tests {
             .unwrap();
         let reads = fixture.view.reads.get();
         let work = run.work();
-        signal
-            .0
-            .store(state.blanks.len() + 3, std::sync::atomic::Ordering::Relaxed);
+        signal.0.store(3, std::sync::atomic::Ordering::Relaxed);
         assert!(matches!(
             memo.lookup(&state, fixture.branches[0], &mut frame.issuer, &mut memory),
             Err(CanonError::Stopped)

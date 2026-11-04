@@ -184,10 +184,21 @@ impl<Id: ViewTermId> Workspace<Id> {
     ) -> Result<Prefix<Id>, CanonError<D::ReadError>> {
         state.check_stop().map_err(CanonError::with_read_error)?;
         self.prefix.clear();
-        for visited in &mut self.visited {
-            state.check_stop().map_err(CanonError::with_read_error)?;
-            *visited = false;
+        // Pending retains every traversed unknown, including the focus; frontier
+        // retains every other marked ID. Reuse both as the sparse reset inventory.
+        for (index, id) in self
+            .pending
+            .iter()
+            .copied()
+            .chain(self.frontier.iter().map(|&(id, _)| id))
+            .enumerate()
+        {
+            if index.is_multiple_of(256) {
+                state.check_stop().map_err(CanonError::with_read_error)?;
+            }
+            self.visited[state.blank_ordinal(id)] = false;
         }
+        state.check_stop().map_err(CanonError::with_read_error)?;
         self.pending.clear();
         self.frontier.clear();
         // Successful issuers only append: the final prefix reconstructs the
@@ -208,7 +219,10 @@ impl<Id: ViewTermId> Workspace<Id> {
         };
         self.visited[state.blank_ordinal(focus)] = true;
         memory.push(&mut self.pending, focus)?;
-        while let Some(id) = self.pending.pop() {
+        let mut cursor = 0;
+        while cursor < self.pending.len() {
+            let id = self.pending[cursor];
+            cursor += 1;
             state.check_stop().map_err(CanonError::with_read_error)?;
             for &component in state.incident.get(&id).map_or_default(Vec::as_slice) {
                 state.check_stop().map_err(CanonError::with_read_error)?;
