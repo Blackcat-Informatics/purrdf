@@ -2998,14 +2998,13 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                 let mut temp = IdIssuer::new(TEMP_PREFIX);
                 temp.issue(b);
                 let (result_hash, result_issuer) =
-                    self.hash_n_degree(b, temp).map_err(|error| {
-                        if matches!(&error, CanonError::BudgetExceeded(_)) {
+                    self.hash_n_degree(b, temp).inspect_err(|error| {
+                        if matches!(error, CanonError::BudgetExceeded(_)) {
                             self.run.observe_rdfc_root_progress(RdfcRootProgress {
                                 first_degree_group_size: group.len(),
                                 completed_root_searches: hash_paths.len(),
                             });
                         }
-                        error
                     })?;
                 hash_paths.push((result_hash, result_issuer));
             }
