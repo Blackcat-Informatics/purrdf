@@ -59,6 +59,231 @@ use support::{
 use purrdf_rdf::JsonLdContextLimits;
 
 #[test]
+// This named-file case requires the inherited Unix file-identity capability.
+#[cfg(unix)]
+fn yaml_source_exports_and_reconstructs_exact_bytes_with_explicit_bounds() {
+    let dir = purrdf_testkit::temp_dir!().unwrap();
+    let config_text = r#"{"version":1,"name":"cli-source","profile_version":1,"vocabulary":"https://example.org/yaml#"}"#;
+    let config = write_file(dir.path(), "profile.json", config_text);
+    let original = "\u{feff}# exact CRLF presentation\r\n---\r\na: &a [one, 'two']\r\nb: *a\r\n...\r\n---\r\n? [complex, key]\r\n: value\r\n";
+    let input = write_file(dir.path(), "authored.yaml.gz", original);
+    let metadata = path(dir.path(), "metadata.nq");
+    let root_file = path(dir.path(), "root.txt");
+    let restored = path(dir.path(), "restored.yaml");
+    let export_args = [
+        "yaml-source",
+        "export",
+        "--source-iri",
+        "https://example.org/authored",
+        "--profile",
+        &config,
+        "--root-output",
+        &root_file,
+        &input,
+        &metadata,
+    ];
+    let exported = run(&export_args);
+    assert!(exported.status.success(), "{}", stderr(&exported));
+    assert_eq!(exported.stdout, Vec::<u8>::new());
+    let root_text = std::fs::read_to_string(&root_file).unwrap();
+    assert!(root_text.ends_with('\n') && root_text.lines().count() == 1);
+    let root = root_text.trim_end_matches('\n');
+    let graph = std::fs::read(&metadata).unwrap();
+    assert!(std::str::from_utf8(&graph).unwrap().contains(root));
+    let repeated = run_with_stdin(
+        &[
+            "yaml-source",
+            "export",
+            "--source-iri",
+            "https://example.org/authored",
+            "--profile",
+            &config,
+            "-",
+            "-",
+        ],
+        original.as_bytes(),
+    );
+    assert!(repeated.status.success(), "{}", stderr(&repeated));
+    assert_eq!(repeated.stdout, graph);
+    let reconstructed = run(&[
+        "yaml-source",
+        "reconstruct",
+        "--root",
+        root,
+        "--profile",
+        &config,
+        "--max-rdf-bytes",
+        &graph.len().to_string(),
+        &metadata,
+        &restored,
+    ]);
+    assert!(reconstructed.status.success(), "{}", stderr(&reconstructed));
+    assert_eq!(std::fs::read(&restored).unwrap(), original.as_bytes());
+    let piped = run_with_stdin(
+        &[
+            "yaml-source",
+            "reconstruct",
+            "--root",
+            root,
+            "--profile",
+            &config,
+            "-",
+            "-",
+        ],
+        &graph,
+    );
+    assert!(piped.status.success(), "{}", stderr(&piped));
+    assert_eq!(piped.stdout, original.as_bytes());
+    for cap in ["0".to_owned(), (graph.len() - 1).to_string()] {
+        let refused = run(&[
+            "yaml-source",
+            "reconstruct",
+            "--root",
+            root,
+            "--profile",
+            &config,
+            "--max-rdf-bytes",
+            &cap,
+            &metadata,
+            "-",
+        ]);
+        assert!(!refused.status.success());
+        assert!(stderr(&refused).contains("raw input exceeds"));
+        assert_eq!(refused.stdout, Vec::<u8>::new());
+    }
+    for (selected_root, profile) in [
+        ("https://example.org/missing", config.clone()),
+        (
+            root,
+            write_file(
+                dir.path(),
+                "wrong-profile.json",
+                &config_text.replace("cli-source", "other"),
+            ),
+        ),
+    ] {
+        let refused = run(&[
+            "yaml-source",
+            "reconstruct",
+            "--root",
+            selected_root,
+            "--profile",
+            &profile,
+            &metadata,
+            "-",
+        ]);
+        assert!(!refused.status.success());
+        assert_eq!(refused.stdout, Vec::<u8>::new());
+    }
+    let forged = format!(
+        "{}<{root}> <https://example.org/yaml#forged> \"extra\" .\n",
+        std::str::from_utf8(&graph).unwrap()
+    );
+    let refused = run_with_stdin(
+        &[
+            "yaml-source",
+            "reconstruct",
+            "--root",
+            root,
+            "--profile",
+            &config,
+            "-",
+            "-",
+        ],
+        forged.as_bytes(),
+    );
+    assert!(!refused.status.success());
+    assert_eq!(refused.stdout, Vec::<u8>::new());
+    for limits in [
+        r#""syntax":{"max_input_bytes":0}"#,
+        r#""max_projection_bytes":0"#,
+    ] {
+        let bounded = format!(
+            "{},\"bounds\":{{{limits}}}}}",
+            &config_text[..config_text.len() - 1]
+        );
+        let bounded = write_file(dir.path(), "bounded.json", &bounded);
+        let refused = run(&[
+            "yaml-source",
+            "export",
+            "--source-iri",
+            "https://example.org/authored",
+            "--profile",
+            &bounded,
+            &input,
+            "-",
+        ]);
+        assert!(!refused.status.success());
+        assert_eq!(refused.stdout, Vec::<u8>::new());
+    }
+    let oversized = write_file(dir.path(), "oversized.json", &" ".repeat((16 << 10) + 1));
+    let refused = run(&[
+        "yaml-source",
+        "export",
+        "--source-iri",
+        "https://example.org/authored",
+        "--profile",
+        &oversized,
+        &input,
+        "-",
+    ]);
+    assert!(!refused.status.success());
+    assert!(stderr(&refused).contains("raw input exceeds 16384 bytes"));
+    for (profile, root_output, output) in [
+        (config.as_str(), "-", metadata.as_str()),
+        (&config, metadata.as_str(), metadata.as_str()),
+        (config.as_str(), input.as_str(), metadata.as_str()),
+        (config.as_str(), root_file.as_str(), config.as_str()),
+        (config.as_str(), root_file.as_str(), input.as_str()),
+        ("-", root_file.as_str(), metadata.as_str()),
+    ] {
+        let refused = run(&[
+            "yaml-source",
+            "export",
+            "--source-iri",
+            "https://example.org/authored",
+            "--profile",
+            profile,
+            "--root-output",
+            root_output,
+            &input,
+            output,
+        ]);
+        assert_eq!(refused.status.code(), Some(2), "{}", stderr(&refused));
+    }
+    assert_eq!(std::fs::read(&input).unwrap(), original.as_bytes());
+    assert_eq!(std::fs::read_to_string(&config).unwrap(), config_text);
+    for args in [
+        vec![
+            "yaml-source",
+            "reconstruct",
+            "--root",
+            root,
+            "--profile",
+            &config,
+            "--max-rdf-bytes",
+            "4294967296",
+            &metadata,
+            "-",
+        ],
+        vec![
+            "yaml-source",
+            "export",
+            "--source-iri",
+            "https://example.org/authored",
+            "--profile",
+            &config,
+            "--max-rdf-bytes",
+            "1",
+            &input,
+            "-",
+        ],
+    ] {
+        assert_eq!(run(&args).status.code(), Some(2));
+    }
+}
+
+#[test]
 fn configured_yamlld_input_reaches_convert_and_refuses_other_routes() {
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let yaml = write_file(

@@ -363,6 +363,7 @@ deps = [
     "purrdf-sparql-eval",
     "purrdf-sparql-results",
     "purrdf-xsd",
+    "purrdf-yaml",
 ]
 
 [[crate]]

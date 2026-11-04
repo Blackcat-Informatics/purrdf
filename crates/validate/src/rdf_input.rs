@@ -3,90 +3,17 @@
 
 //! Closed input configuration shared by native and foreign RDF callers.
 
+use crate::json_config::{field, portable};
 use purrdf_core::RdfDiagnostic;
-use purrdf_lex::allocation::{Admission, Memory, Resident, StorageError, retain_native_cause};
-use purrdf_lex::json::record::{
-    DecodeError, FromJsonNative, Record, RecordAllocation, RecordMemory, Within,
-};
-use purrdf_lex::json::{self, Value};
+use purrdf_lex::json::Value;
+use purrdf_lex::json::record::{DecodeError, Record, RecordAllocation, Within};
 use purrdf_rdf::native_codecs::jsonld::YamlLdOptions;
 use purrdf_rdf::{ParseOptions, ParseOutcome, parse_dataset_with};
-use std::cell::RefCell;
 
 /// Maximum UTF-8 bytes in an input-options document.
 pub const MAX_OPTIONS_BYTES: usize = 16 << 10;
 /// Separate native allocation account for JSON decoding and record metadata.
 pub const MAX_OPTIONS_ALLOCATION_BYTES: usize = 128 << 10;
-
-struct OptionsMemory;
-impl Admission for OptionsMemory {
-    fn resize(&mut self, live: usize) -> Result<(), StorageError> {
-        if live <= MAX_OPTIONS_ALLOCATION_BYTES {
-            Ok(())
-        } else {
-            Err(StorageError::AdmissionFailed)
-        }
-    }
-}
-
-fn failure(
-    error: impl purrdf_hash::error::NativeError + 'static,
-    storage: Option<StorageError>,
-) -> RdfDiagnostic {
-    let result = || {
-        let mut resident = Resident;
-        let diagnostic = match storage {
-            Some(storage) => RdfDiagnostic::from(storage),
-            None => RdfDiagnostic::try_error_with_memory(
-                "rdf-input-options",
-                &error,
-                &mut Memory::new(&mut resident),
-            )?,
-        };
-        let retained = diagnostic
-            .retained_bytes()
-            .ok_or(StorageError::SizeOverflow)?;
-        let mut memory = Memory::resume(&mut resident, retained);
-        diagnostic.with_native_cause(retain_native_cause(error)?, &mut memory)
-    };
-    result().unwrap_or_else(RdfDiagnostic::from)
-}
-
-fn json_failure(error: json::Error) -> RdfDiagnostic {
-    let storage = match error.kind() {
-        json::ErrorKind::Storage(cause) => Some(cause),
-        _ => None,
-    };
-    failure(error, storage)
-}
-
-fn field<T: FromJsonNative>(
-    record: &mut Record<'_>,
-    name: &'static str,
-    default: T,
-    allocation: &dyn RecordAllocation,
-) -> Result<T, DecodeError> {
-    match record.raw(name)? {
-        None => Ok(default),
-        Some(value) => T::from_json_native(value, Some(allocation))
-            .map_err(|error| error.within_native(name, Some(allocation))),
-    }
-}
-
-fn portable(
-    record: &mut Record<'_>,
-    name: &'static str,
-    default: usize,
-    allocation: &dyn RecordAllocation,
-) -> Result<usize, DecodeError> {
-    let default = u32::try_from(default).map_err(|_| {
-        DecodeError::custom_native(
-            "native default exceeds portable input-options range",
-            Some(allocation),
-        )
-    })?;
-    Ok(field(record, name, default, allocation)? as usize)
-}
 
 fn syntax(
     value: &Value,
@@ -193,34 +120,14 @@ fn decode(value: &Value, allocation: &dyn RecordAllocation) -> Result<YamlLdOpti
 /// # Errors
 /// Refuses oversized, malformed, duplicate, unknown, null or mistyped records.
 pub fn options(bytes: &[u8]) -> Result<YamlLdOptions, RdfDiagnostic> {
-    if bytes.len() > MAX_OPTIONS_BYTES {
-        return Err(failure(
-            DecodeError::custom("input-options document exceeds 16384 bytes"),
-            None,
-        ));
-    }
-    let mut admission = OptionsMemory;
-    let memory = RefCell::new(Memory::new(&mut admission));
-    let mut reader = json::Reader::from_slice(
+    crate::json_config::decode(
         bytes,
-        json::Limits {
-            max_depth: 4,
-            max_values: 64,
-            max_string_bytes: MAX_OPTIONS_BYTES,
-            unique_members: true,
-        },
+        "rdf-input-options",
+        MAX_OPTIONS_BYTES,
+        MAX_OPTIONS_ALLOCATION_BYTES,
+        "input-options document exceeds 16384 bytes",
+        decode,
     )
-    .map_err(json_failure)?;
-    let value = reader
-        .read_value_with_memory(&mut memory.borrow_mut())
-        .map_err(json_failure)?;
-    reader
-        .finish_with_memory(&mut memory.borrow_mut())
-        .map_err(json_failure)?;
-    decode(&value, &RecordMemory::new(&memory)).map_err(|error| {
-        let storage = error.storage_error();
-        failure(error, storage)
-    })
 }
 
 /// Parse original RDF bytes with an optional closed input-options document.

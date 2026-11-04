@@ -1040,6 +1040,7 @@ dependencies = [
  "purrdf-stack",
  "purrdf-testkit",
  "purrdf-xsd",
+ "purrdf-yaml",
  "sha2",
 ]
 

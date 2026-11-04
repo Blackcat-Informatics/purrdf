@@ -80,6 +80,7 @@ pub mod entail;
 pub mod expr_selector;
 pub mod geo;
 pub mod governors;
+mod json_config;
 pub mod model;
 pub mod native_error;
 pub mod path_syntax;
@@ -91,6 +92,7 @@ pub mod rules;
 pub mod shacl;
 pub mod shapes_tools;
 pub mod xpath_regex;
+pub mod yaml_source;
 
 pub use build::{
     SarifOptions, SarifReport, SarifSources, build_diagnostics_sarif, build_report_sarif,
