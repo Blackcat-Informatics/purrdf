@@ -34,6 +34,15 @@ impl Allocations {
             live: 0,
         }
     }
+    pub(super) fn resume(limit: usize, live: usize) -> Result<Self, StorageError> {
+        if live > limit {
+            return Err(StorageError::AdmissionFailed);
+        }
+        Ok(Self {
+            limit: Some(limit),
+            live,
+        })
+    }
     pub(super) const fn limit(&self) -> Option<usize> {
         self.limit
     }

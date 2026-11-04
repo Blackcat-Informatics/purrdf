@@ -16,8 +16,186 @@
 //!   did (`1: a` is the key `1`), refuses a collection key, and checks uniqueness
 //!   on the text (`1: a` with `"1": b` repeats a key).
 
+use purrdf_rdf::native_codecs::jsonld::{
+    YamlLdOptions, parse_yamlld_with_options, yamlld_to_jsonld, yamlld_to_jsonld_with_options,
+};
 use purrdf_rdf::native_codecs::parse_dataset;
 use purrdf_rdf::{DatasetSink, OkfBundle, OkfConfig, lift_okf_bundle};
+
+#[test]
+fn basic_selection_routes_default_and_options_through_one_jsonld_engine() {
+    let all = YamlLdOptions {
+        extract_all_scripts: true,
+        ..YamlLdOptions::DEFAULT
+    };
+    let source = "--- {'@context': {'@vocab': 'https://a.example/'}, '@id': 'https://example.org/s', p: first}\n--- [null, [{'@context': {'@vocab': 'https://b.example/'}, '@id': 'https://example.org/s', p: second}]]\n--- null\n";
+    let first = parse_dataset(source.as_bytes(), "application/ld+yaml", None).unwrap();
+    assert_eq!(first.quads().count(), 1);
+    let selected = parse_yamlld_with_options(source.as_bytes(), None, &all).unwrap();
+    let json = yamlld_to_jsonld_with_options(source.as_bytes(), &all).unwrap();
+    let expected = parse_dataset(json.as_bytes(), "application/ld+json", None).unwrap();
+    assert_eq!(selected.quads().count(), 2);
+    let triples = String::from_utf8(
+        purrdf_rdf::serialize_dataset(
+            &selected,
+            "application/n-quads",
+            purrdf_rdf::SerializeGraph::Dataset,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(triples.contains("<https://a.example/p>"));
+    assert!(triples.contains("<https://b.example/p>"));
+    let isolated = format!("{source}--- {{'@id': 'https://example.org/t', p: undefined}}\n");
+    assert_eq!(
+        parse_yamlld_with_options(isolated.as_bytes(), None, &all)
+            .unwrap_err()
+            .code,
+        "jsonld-context-invalid"
+    );
+    assert_eq!(
+        purrdf_rdf::serialize_dataset(
+            &selected,
+            "application/n-quads",
+            purrdf_rdf::SerializeGraph::Dataset
+        )
+        .unwrap(),
+        purrdf_rdf::serialize_dataset(
+            &expected,
+            "application/n-quads",
+            purrdf_rdf::SerializeGraph::Dataset
+        )
+        .unwrap()
+    );
+    let shared = "--- {'@id': '_:shared', 'https://example.org/p': same}\n--- {'@id': '_:shared', 'https://example.org/p': same}";
+    assert_eq!(
+        parse_yamlld_with_options(shared.as_bytes(), None, &all)
+            .unwrap()
+            .quads()
+            .count(),
+        1
+    );
+    let copies = "[&a {'https://example.org/p': same}, *a]";
+    assert_eq!(
+        parse_dataset(copies.as_bytes(), "application/ld+yaml", None)
+            .unwrap()
+            .quads()
+            .count(),
+        2
+    );
+    for source in ["", "# absent\n", "---\n", "null", "[null, [null]]"] {
+        assert_eq!(
+            parse_dataset(source.as_bytes(), "application/ld+yaml", None)
+                .unwrap()
+                .quads()
+                .count(),
+            0
+        );
+    }
+    assert_eq!(yamlld_to_jsonld(b"---\n--- {later: .inf}").unwrap(), "null");
+    assert_eq!(
+        yamlld_to_jsonld_with_options(b"---\n--- null", &all).unwrap(),
+        "[null,null]"
+    );
+    // Arrays inside a JSON literal stay literal, rather than becoming entries.
+    let literal = b"{'@id': 'https://example.org/s', 'https://example.org/p': {'@value': [null, [1, 2]], '@type': '@json'}}";
+    assert_eq!(
+        parse_dataset(literal, "application/ld+yaml", None)
+            .unwrap()
+            .quads()
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn basic_validates_later_documents_and_preserves_original_error_codes_and_locations() {
+    for (source, code) in [
+        ("--- {}\n--- {1: value}", "mapping-key-error"),
+        (
+            "--- {}\n--- {a: value, !!str a: other}",
+            "loading-document-failed",
+        ),
+        ("--- {}\n--- string", "loading-document-failed"),
+        ("--- {}\n--- &a [*a]", "loading-document-failed"),
+        ("--- {}\n--- [broken", "loading-document-failed"),
+    ] {
+        let error = yamlld_to_jsonld(source.as_bytes()).unwrap_err();
+        assert_eq!(error.code, code, "{source}");
+        assert_eq!(error.location.as_ref().unwrap().line, Some(2));
+        assert!(error.native_cause().is_some());
+    }
+    for source in ["--- {}\n--- {n: .inf}", "--- {}\n--- {n: !custom value}"] {
+        assert_eq!(yamlld_to_jsonld(source.as_bytes()).unwrap(), "{}");
+        let all = YamlLdOptions {
+            extract_all_scripts: true,
+            ..YamlLdOptions::DEFAULT
+        };
+        assert_eq!(
+            yamlld_to_jsonld_with_options(source.as_bytes(), &all)
+                .unwrap_err()
+                .code,
+            "loading-document-failed"
+        );
+    }
+    let invalid = b"--- {}\n--- \xff";
+    for error in [
+        yamlld_to_jsonld(invalid).unwrap_err(),
+        parse_dataset(invalid, "application/ld+yaml", None).unwrap_err(),
+    ] {
+        assert_eq!(error.code, "invalid-encoding");
+        assert_eq!(error.location.as_ref().unwrap().line, Some(2));
+        assert_eq!(error.location.as_ref().unwrap().column, Some(5));
+    }
+    let mut options = YamlLdOptions::DEFAULT;
+    options.projection.max_numeric_bytes = 1;
+    let error = yamlld_to_jsonld_with_options(b"{n: 12}", &options).unwrap_err();
+    assert_eq!(error.code, "native-yaml-numeric-output-limit");
+    assert!(error.native_cause().is_some());
+    options.projection.max_numeric_bytes = 64;
+    assert_eq!(
+        yamlld_to_jsonld_with_options(
+            b"{n: 0x100000000000000000000000000000001, date: 2026-11-04}",
+            &options
+        )
+        .unwrap(),
+        r#"{"n":340282366920938463463374607431768211457,"date":"2026-11-04"}"#
+    );
+    options.max_serialization_bytes = 1024;
+    assert_eq!(
+        yamlld_to_jsonld_with_options(b"{p: x}", &options).unwrap(),
+        r#"{"p":"x"}"#
+    );
+    let escaped = format!("{{p: \"{}\"}}", "\\x01".repeat(512));
+    let error = yamlld_to_jsonld_with_options(escaped.as_bytes(), &options).unwrap_err();
+    assert_eq!(error.code, "native-yaml-output-limit");
+    assert_eq!(
+        error.storage_error(),
+        Some(purrdf_lex::allocation::StorageError::AdmissionFailed)
+    );
+    options.max_serialization_bytes = 0;
+    assert_eq!(
+        parse_yamlld_with_options(b"{'https://example.org/p': x}", None, &options)
+            .unwrap()
+            .quads()
+            .count(),
+        1
+    );
+    options.syntax.syntax.max_input_bytes = invalid.len() - 1;
+    assert_eq!(
+        yamlld_to_jsonld_with_options(invalid, &options)
+            .unwrap_err()
+            .code,
+        "native-yaml-input-limit"
+    );
+    options.syntax.syntax.max_input_bytes = invalid.len();
+    assert_eq!(
+        yamlld_to_jsonld_with_options(invalid, &options)
+            .unwrap_err()
+            .code,
+        "invalid-encoding"
+    );
+}
 
 fn yamlld(keys: &str) -> Result<usize, String> {
     let text = format!(

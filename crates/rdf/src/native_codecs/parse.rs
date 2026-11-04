@@ -771,6 +771,16 @@ fn parse_dataset_mode(
 ) -> Result<(Arc<RdfDataset>, BaseScope), RdfDiagnostic> {
     let format = classify(media_type)?;
     let mut base = base_scope_for(base_iri)?;
+    if format == NativeRdfFormat::YamlLd {
+        let dataset = catch_codec_panic(format, || {
+            super::jsonld::yaml::parse_into_scope(
+                bytes,
+                &mut base,
+                &super::jsonld::YamlLdOptions::DEFAULT,
+            )
+        })?;
+        return Ok((dataset, base));
+    }
     let text = std::str::from_utf8(bytes).map_err(|e| super::stream::utf8_error(&e, 0))?;
 
     // Dispatch to the format's codec (the single `codec_for` chokepoint). Each codec is
