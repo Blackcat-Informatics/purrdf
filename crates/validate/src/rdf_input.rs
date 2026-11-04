@@ -263,7 +263,7 @@ mod tests {
         assert_eq!(limits.projection.max_nodes, u64::MAX);
         assert_eq!(limits.projection.max_numeric_work, u64::MAX);
         for refused in [
-            r#"{}"#,
+            "{}",
             r#"{"version":2,"yaml_ld":{}}"#,
             r#"{"version":1,"version":1,"yaml_ld":{}}"#,
             r#"{"version":1,"yaml_ld":null}"#,
@@ -326,7 +326,7 @@ mod tests {
         )
         .unwrap();
         assert!(native.spans.unwrap().is_empty());
-        assert!(native.document_prefixes.is_empty());
+        assert_eq!(native.document_prefixes, [] as [(String, String); 0]);
         let resource = parse(
             YAML,
             "application/ld+yaml",
