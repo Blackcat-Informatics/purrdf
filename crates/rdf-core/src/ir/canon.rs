@@ -7589,10 +7589,10 @@ mod tests {
             .unwrap();
         let reads = fixture.view.reads.get();
         let work = run.work();
-        assert_eq!(
+        assert!(
             memo.lookup(&state, fixture.branches[0], &mut frame.issuer, &mut memory)
-                .unwrap(),
-            Some(hash)
+                .unwrap()
+                == Some(hash)
         );
         assert_eq!(
             fixture.view.reads.get(),
@@ -7604,7 +7604,7 @@ mod tests {
             &frame.issuer.order()[..alternate.order().len()],
             alternate.order()
         );
-        assert_eq!(hash, expected_hash);
+        assert!(hash == expected_hash);
         assert_eq!(frame.issuer.order(), expected.order());
         assert_eq!(frame.issuer.issued, expected.issued);
         assert_eq!(
