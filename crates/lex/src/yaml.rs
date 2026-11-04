@@ -26,7 +26,12 @@
 //! complete Core representation-key equality or YAML-LD composition proof.
 //! [`emit_scalar`] shares the native quoting and escape bodies with [`write`](fn@write),
 //! reports the actual safe style, and admits its complete measured output before
-//! writing. Layout-policy consumers can use it without a local scalar encoder.
+//! writing. [`emit_scalar_exact`] instead preserves the requested concrete style
+//! under an explicit lexical/Core-string policy and native permitted escape set.
+//! [`plain_lexical_allowed`] checks lossless plain eligibility without allocation.
+//! [`ScalarContext::Root`] distinguishes a standalone document node from an
+//! embedded block value; [`ScalarContext::Key`] is safe in both mapping layouts.
+//! Layout-policy consumers use these boundaries without a local scalar encoder.
 //!
 //! The semantic reader and writer carry JSON-shaped data — LinkML schemas,
 //! OKF frontmatter, YAML-LD — through [`crate::json::Value`]. Lexical syntax
@@ -102,6 +107,7 @@ mod number;
 mod project;
 mod read;
 mod resolve;
+mod scalar;
 mod syntax;
 mod write;
 
@@ -115,7 +121,8 @@ pub use syntax::{
     read_syntax_stream_with,
 };
 pub use write::{
-    EmitError, EmitLimits, EmitStyle, EmittedScalar, ScalarContext, emit_scalar, write,
+    EmitError, EmitLimits, EmitPolicy, EmitStyle, EmittedScalar, EscapeSet, PlainMode,
+    ScalarContext, emit_scalar, emit_scalar_exact, plain_lexical_allowed, write,
 };
 
 #[cfg(test)]
