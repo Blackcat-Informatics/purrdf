@@ -2368,6 +2368,50 @@ pub struct RdfcRootProgress {
     pub completed_root_searches: usize,
 }
 
+/// Group-opening label availability, with canonical labels taking precedence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RdfcGroupLabels {
+    /// IDs already carrying canonical labels.
+    pub canonical: RdfcGroupStats,
+    /// Noncanonical IDs already labeled by the frame issuer when this group opened.
+    pub temporary: RdfcGroupStats,
+    /// IDs absent from both issuers when this group opened.
+    pub unissued: RdfcGroupStats,
+}
+
+/// Recursion state of the current candidate at terminal refusal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RdfcCandidateProgress {
+    /// A child was selected and is awaiting entry or completion.
+    pub pending_child: bool,
+    /// Children still in the recursion iterator, excluding the pending child.
+    pub remaining_children: usize,
+}
+
+/// One built group's terminal state, without retaining IDs or candidate paths.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RdfcGroupObservation {
+    /// Coordinates and complete original related-ID inventory.
+    pub active: RdfcActiveGroup,
+    /// Availability against the canonical and frame issuers, never candidate issuer.
+    pub labels: RdfcGroupLabels,
+    /// Absent when no candidate is active at the refused boundary.
+    pub candidate: Option<RdfcCandidateProgress>,
+    /// A completed candidate has already supplied a chosen path for this group.
+    pub has_chosen_path: bool,
+}
+
+/// Fixed-size snapshots of built groups on the terminal active path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RdfcGroupObservations {
+    /// Current built group; the parent when child entry itself was refused.
+    pub at_refusal: RdfcGroupObservation,
+    /// Active group belonging to the root frame.
+    pub root: RdfcGroupObservation,
+    /// Largest active group, with the same shallower-depth tie rule as the path.
+    pub largest: RdfcGroupObservation,
+}
+
 /// Finalized finite-refusal evidence owned by one control's last actual run.
 ///
 /// This lives outside the native error and receipt payloads. It adds no heap
@@ -2380,6 +2424,8 @@ pub struct RdfcRefusalObservation {
     pub first_degree_group: Option<RdfcRootProgress>,
     /// Root and largest active group at the refused step.
     pub path: RdfcActivePath,
+    /// Built-group evidence; absent only when `path` is `UnbuiltRoot`.
+    pub groups: Option<RdfcGroupObservations>,
 }
 
 impl std::fmt::Display for RdfcRefusalObservation {
@@ -2410,7 +2456,39 @@ impl std::fmt::Display for RdfcRefusalObservation {
                 largest_group.group.occurrences,
                 largest_group.group.distinct
             ),
+        }?;
+        if let Some(groups) = self.groups {
+            for (name, observation) in [
+                ("at refusal", groups.at_refusal),
+                ("root", groups.root),
+                ("largest", groups.largest),
+            ] {
+                let labels = observation.labels;
+                write!(
+                    f,
+                    "; {name} group frame ordinal={}, depth={}, canonical occurrences={}, distinct={}, temporary occurrences={}, distinct={}, unissued occurrences={}, distinct={}, chosen path={}",
+                    observation.active.frame_ordinal,
+                    observation.active.depth,
+                    labels.canonical.occurrences,
+                    labels.canonical.distinct,
+                    labels.temporary.occurrences,
+                    labels.temporary.distinct,
+                    labels.unissued.occurrences,
+                    labels.unissued.distinct,
+                    observation.has_chosen_path
+                )?;
+                if let Some(candidate) = observation.candidate {
+                    write!(
+                        f,
+                        ", pending child={}, remaining children excluding pending={}",
+                        candidate.pending_child, candidate.remaining_children
+                    )?;
+                } else {
+                    f.write_str(", candidate absent")?;
+                }
+            }
         }
+        Ok(())
     }
 }
 
@@ -2871,7 +2949,11 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
     fn charge_search(
         &self,
         event: SearchEvent,
-        context: impl FnOnce() -> (RdfcSearchContext, RdfcActivePath),
+        context: impl FnOnce() -> (
+            RdfcSearchContext,
+            RdfcActivePath,
+            Option<RdfcGroupObservations>,
+        ),
     ) -> Result<(), CanonError> {
         self.run.charge(event).map_err(|failure| match failure {
             SearchRefusal::Stopped => CanonError::Stopped,
@@ -2880,10 +2962,11 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                 let SearchPolicy::Finite(limit) = self.run.policy() else {
                     unreachable!("only a finite policy can refuse its logical ceiling")
                 };
-                let (context, path) = context();
+                let (context, path, groups) = context();
                 self.run.observe_rdfc_refusal(RdfcRefusalObservation {
                     first_degree_group: None,
                     path,
+                    groups,
                 });
                 CanonError::BudgetExceeded(BudgetExceeded {
                     blank_count: self.blanks.len(),
@@ -3054,6 +3137,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                     root_ordinal: self.blank_ordinal(identifier),
                 },
                 RdfcActivePath::UnbuiltRoot,
+                None,
             )
         })?;
         let mut parents: WorkList<NDegreeFrame<D::Id>, 8> = WorkList::default();
@@ -3069,21 +3153,21 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                         group.candidate = Some(candidate);
                         let child = self.n_degree_frame(related, child_issuer, || {
                             let depth = parents.len();
-                            let parent_group =
-                                RdfcGroupStats::at_refusal(&mut group.permutations.items);
+                            let observation = self.refusal_group(
+                                self.blank_ordinal(frame_identifier),
+                                depth,
+                                &frame.issuer,
+                                group,
+                            );
+                            let parent_group = observation.active.group;
                             let context = RdfcSearchContext::ChildFrame {
                                 root_ordinal: self.blank_ordinal(identifier),
                                 frame_ordinal: self.blank_ordinal(related),
                                 depth: depth + 1,
                                 parent_group,
                             };
-                            let path = self.refusal_path(
-                                self.blank_ordinal(frame_identifier),
-                                depth,
-                                parent_group,
-                                &mut parents,
-                            );
-                            (context, path)
+                            let (path, groups) = self.refusal_path(observation, &mut parents);
+                            (context, path, Some(groups))
                         })?;
                         parents.push(frame);
                         frame = child;
@@ -3105,15 +3189,17 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                     self.charge_search(SearchEvent::RdfcPermutation, || {
                         let frame_ordinal = self.blank_ordinal(frame_identifier);
                         let depth = parents.len();
-                        let group = RdfcGroupStats::at_refusal(&mut group.permutations.items);
+                        let observation =
+                            self.refusal_group(frame_ordinal, depth, &frame.issuer, group);
+                        let group = observation.active.group;
                         let context = RdfcSearchContext::Permutation {
                             root_ordinal: self.blank_ordinal(identifier),
                             frame_ordinal,
                             depth,
                             group,
                         };
-                        let path = self.refusal_path(frame_ordinal, depth, group, &mut parents);
-                        (context, path)
+                        let (path, groups) = self.refusal_path(observation, &mut parents);
+                        (context, path, Some(groups))
                     })
                     .map_err(CanonError::with_read_error)?;
                     let mut issuer = frame.issuer.clone();
@@ -3227,44 +3313,95 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         }
     }
 
-    /// Consume terminal failed state, without allocating or reading the source.
-    fn refusal_path(
+    /// Inspect only terminal state. The frame issuer remains unchanged while a
+    /// group runs; the candidate issuer would hide its initially unissued IDs.
+    fn refusal_group(
         &self,
         frame_ordinal: usize,
         depth: usize,
-        group: RdfcGroupStats,
-        parents: &mut WorkList<NDegreeFrame<D::Id>, 8>,
-    ) -> RdfcActivePath {
-        let mut root_group = group;
-        let mut largest_group = RdfcActiveGroup {
-            frame_ordinal,
-            depth,
-            group,
+        issuer: &IdIssuer<D::Id>,
+        group: &mut NDegreeGroup<D::Id>,
+    ) -> RdfcGroupObservation {
+        let inventory = RdfcGroupStats::at_refusal(&mut group.permutations.items);
+        let empty = RdfcGroupStats {
+            occurrences: 0,
+            distinct: 0,
         };
+        let mut labels = RdfcGroupLabels {
+            canonical: empty,
+            temporary: empty,
+            unissued: empty,
+        };
+        let mut previous = None;
+        for &related in &group.permutations.items {
+            let stats = if self.canonical.has(related) {
+                &mut labels.canonical
+            } else if issuer.has(related) {
+                &mut labels.temporary
+            } else {
+                &mut labels.unissued
+            };
+            stats.occurrences += 1;
+            stats.distinct += usize::from(previous != Some(related));
+            previous = Some(related);
+        }
+        RdfcGroupObservation {
+            active: RdfcActiveGroup {
+                frame_ordinal,
+                depth,
+                group: inventory,
+            },
+            labels,
+            candidate: group
+                .candidate
+                .as_ref()
+                .map(|candidate| RdfcCandidateProgress {
+                    pending_child: candidate.pending.is_some(),
+                    remaining_children: candidate.recursion.len(),
+                }),
+            has_chosen_path: group.chosen_path.is_some(),
+        }
+    }
+
+    /// Consume terminal failed state, without allocating or reading the source.
+    fn refusal_path(
+        &self,
+        at_refusal: RdfcGroupObservation,
+        parents: &mut WorkList<NDegreeFrame<D::Id>, 8>,
+    ) -> (RdfcActivePath, RdfcGroupObservations) {
+        let mut root = at_refusal;
+        let mut largest = at_refusal;
         while let Some(mut parent) = parents.pop() {
             // Every suspended frame has the active group that requested its child.
             let group = parent
                 .group
                 .as_mut()
                 .expect("a suspended frame has an active group");
-            let group = RdfcGroupStats::at_refusal(&mut group.permutations.items);
-            let depth = parents.len();
-            if group.occurrences > largest_group.group.occurrences
-                || (group.occurrences == largest_group.group.occurrences
-                    && depth < largest_group.depth)
+            let observation = self.refusal_group(
+                self.blank_ordinal(parent.identifier),
+                parents.len(),
+                &parent.issuer,
+                group,
+            );
+            if observation.active.group.occurrences > largest.active.group.occurrences
+                || (observation.active.group.occurrences == largest.active.group.occurrences
+                    && observation.active.depth < largest.active.depth)
             {
-                largest_group = RdfcActiveGroup {
-                    frame_ordinal: self.blank_ordinal(parent.identifier),
-                    depth,
-                    group,
-                };
+                largest = observation;
             }
-            root_group = group;
+            root = observation;
         }
-        RdfcActivePath::Active {
-            root_group,
-            largest_group,
-        }
+        (
+            RdfcActivePath::Active {
+                root_group: root.active.group,
+                largest_group: largest.active,
+            },
+            RdfcGroupObservations {
+                at_refusal,
+                root,
+                largest,
+            },
+        )
     }
 
     /// Enter §4.8 once. Work and stop checks have the same order at every depth.
@@ -3272,7 +3409,11 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         &self,
         identifier: D::Id,
         issuer: IdIssuer<D::Id>,
-        context: impl FnOnce() -> (RdfcSearchContext, RdfcActivePath),
+        context: impl FnOnce() -> (
+            RdfcSearchContext,
+            RdfcActivePath,
+            Option<RdfcGroupObservations>,
+        ),
     ) -> Result<NDegreeFrame<D::Id>, CanonError<D::ReadError>> {
         self.charge_search(SearchEvent::RdfcFrame, context)
             .map_err(CanonError::with_read_error)?;
@@ -6711,6 +6852,45 @@ mod tests {
                 }
             };
             assert_eq!(observation.path, expected_path);
+            let empty = RdfcGroupStats {
+                occurrences: 0,
+                distinct: 0,
+            };
+            let expected_groups = (limit != 0).then(|| {
+                let group = RdfcGroupObservation {
+                    active: RdfcActiveGroup {
+                        frame_ordinal: 0,
+                        depth: 0,
+                        group: stats,
+                    },
+                    labels: RdfcGroupLabels {
+                        canonical: empty,
+                        temporary: empty,
+                        unissued: stats,
+                    },
+                    candidate: (limit == 2).then_some(RdfcCandidateProgress {
+                        pending_child: true,
+                        remaining_children: 0,
+                    }),
+                    has_chosen_path: false,
+                };
+                RdfcGroupObservations {
+                    at_refusal: group,
+                    root: group,
+                    largest: group,
+                }
+            });
+            assert_eq!(observation.groups, expected_groups);
+            if limit != 0 {
+                let visible = observation.to_string();
+                assert!(visible.contains("unissued occurrences=3, distinct=1"));
+                if limit == 2 {
+                    assert!(
+                        visible
+                            .contains("pending child=true, remaining children excluding pending=0")
+                    );
+                }
+            }
             let receipt = &control.receipts()[0];
             assert_eq!(receipt.work, budget.work);
             assert_eq!(receipt.observed_refusal, Some(SearchRefusal::Limit));
@@ -6770,9 +6950,9 @@ mod tests {
         };
         let RdfcSearchContext::Permutation {
             root_ordinal,
+            frame_ordinal,
             depth: 2,
             group,
-            ..
         } = budget.context
         else {
             panic!("the refused permutation is below the root and immediate parent");
@@ -6784,6 +6964,33 @@ mod tests {
                 distinct: 1
             }
         );
+        let empty = RdfcGroupStats {
+            occurrences: 0,
+            distinct: 0,
+        };
+        let root = RdfcGroupObservation {
+            active: RdfcActiveGroup {
+                frame_ordinal: root_ordinal,
+                depth: 0,
+                group: RdfcGroupStats {
+                    occurrences: 2,
+                    distinct: 2,
+                },
+            },
+            labels: RdfcGroupLabels {
+                canonical: empty,
+                temporary: empty,
+                unissued: RdfcGroupStats {
+                    occurrences: 2,
+                    distinct: 2,
+                },
+            },
+            candidate: Some(RdfcCandidateProgress {
+                pending_child: true,
+                remaining_children: 1,
+            }),
+            has_chosen_path: true,
+        };
         let expected = RdfcRefusalObservation {
             first_degree_group: Some(RdfcRootProgress {
                 first_degree_group_size: 4,
@@ -6803,6 +7010,24 @@ mod tests {
                     },
                 },
             },
+            groups: Some(RdfcGroupObservations {
+                at_refusal: RdfcGroupObservation {
+                    active: RdfcActiveGroup {
+                        frame_ordinal,
+                        depth: 2,
+                        group,
+                    },
+                    labels: RdfcGroupLabels {
+                        canonical: empty,
+                        temporary: group,
+                        unissued: empty,
+                    },
+                    candidate: None,
+                    has_chosen_path: false,
+                },
+                root,
+                largest: root,
+            }),
         };
         assert_eq!(
             control.last_rdfc_refusal(),
