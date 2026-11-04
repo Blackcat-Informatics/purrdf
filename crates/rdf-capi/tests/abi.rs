@@ -71,13 +71,13 @@ fn configured_yamlld_parse_abi_transports_options_and_native_diagnostics() {
                 std::ptr::null(),
                 options.map_or(std::ptr::null(), <[u8]>::as_ptr),
                 options.map_or(0, <[u8]>::len),
-                &mut dataset,
-                &mut error,
+                &raw mut dataset,
+                &raw mut error,
             );
             assert_eq!(status, PurrdfStatus::Ok as i32);
             let mut count = 0;
             assert_eq!(
-                purrdf_dataset_quad_count(dataset, &mut count),
+                purrdf_dataset_quad_count(dataset, &raw mut count),
                 PurrdfStatus::Ok as i32
             );
             assert_eq!(count, expected);
@@ -116,8 +116,8 @@ fn configured_yamlld_parse_abi_transports_options_and_native_diagnostics() {
                     std::ptr::null(),
                     options.as_ptr(),
                     options.len(),
-                    &mut dataset,
-                    &mut error
+                    &raw mut dataset,
+                    &raw mut error
                 ),
                 PurrdfStatus::Ok as i32
             );
