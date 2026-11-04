@@ -3,7 +3,12 @@
 
 //! Bounded source syntax shared by authoring consumers and the RDF slicer.
 
+mod authoring;
 mod block;
+pub use authoring::{
+    AuthoringComment, AuthoringDocument, AuthoringHeading, AuthoringLine, AuthoringLink,
+    AuthoringLinkForm, authoring,
+};
 mod budget;
 mod inline;
 use crate::Span;
@@ -222,9 +227,11 @@ impl Block {
 /// A link component retains spelling alongside native-decoded text.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LinkPart<'a> {
-    /// Raw component, without its surrounding delimiters.
+    /// Original component envelope, without its surrounding delimiters.
+    /// Authoring comment removal and code replacement can leave holes inside it.
     pub source: Span,
-    /// Backslash/character-reference decoded value.
+    /// Interpreted value. Standard syntax decodes punctuation escapes and
+    /// character references; authoring preserves references and raw HTML values.
     pub decoded: Cow<'a, str>,
 }
 /// A link/image occurrence, resolved natively when reference syntax is used.
@@ -290,6 +297,7 @@ pub struct HtmlAttribute<'a> {
 /// Fully admitted borrowed source syntax; construction publishes atomically.
 #[derive(Debug)]
 pub struct SyntaxDocument<'a> {
+    policy: Policy,
     source: &'a str,
     pub(crate) blocks: Vec<Block>,
     pub(crate) lines: Vec<ContentLine>,
@@ -361,19 +369,24 @@ impl<'a> SyntaxDocument<'a> {
     pub fn position(&self, byte: usize) -> Option<SourcePosition> {
         self.source
             .is_char_boundary(byte)
-            .then(|| position(self.source, byte))
+            .then(|| position(self.source, byte, self.policy))
     }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Policy {
+    Standard,
+    Authoring,
 }
 fn span(start: usize, end: usize) -> Span {
     Span::new(start as u64, end as u64)
 }
-fn position(text: &str, byte: usize) -> SourcePosition {
+fn position(text: &str, byte: usize, policy: Policy) -> SourcePosition {
     let mut line = 1;
     let mut from = 0;
     let mut at = 0;
     let b = text.as_bytes();
     while at < byte {
-        if b[at] == b'\r' {
+        if policy == Policy::Standard && b[at] == b'\r' {
             line += 1;
             at += 1;
             if at < byte && b[at] == b'\n' {
@@ -427,10 +440,11 @@ fn code_span_end(
 /// Parse once into the shared syntax model, refusing all output on resource failure.
 /// No file access, normalization or downstream policy is performed.
 pub fn syntax(source: &str, limits: SyntaxLimits) -> Result<SyntaxDocument<'_>, SyntaxError> {
-    let mut budget = Budget::new(source, limits);
+    let mut budget = Budget::new(source, limits, Policy::Standard);
     budget.limit(0, "source bytes", source.len(), limits.source_bytes)?;
     budget.tick(0, source.len())?;
     let mut document = SyntaxDocument {
+        policy: Policy::Standard,
         source,
         blocks: Vec::new(),
         lines: Vec::new(),
