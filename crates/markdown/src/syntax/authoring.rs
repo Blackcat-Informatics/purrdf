@@ -192,41 +192,22 @@ fn code_end(
     input: &Input,
     at: usize,
     budget: &mut Budget<'_>,
-) -> Result<Option<usize>, SyntaxError> {
-    if input.text.as_bytes()[at] != b'`' {
-        return Ok(None);
-    }
-    let run = input.text.as_bytes()[at..]
-        .iter()
-        .take_while(|b| **b == b'`')
-        .count();
-    let slashes = input.text.as_bytes()[..at]
-        .iter()
-        .rev()
-        .take_while(|b| **b == b'\\')
-        .count();
-    budget.tick(input.map[at], run + slashes)?;
-    if slashes % 2 != 0 {
-        return Ok(None);
-    }
-    super::code_span_end(&input.text, at + run, run, |at| input.map[at], budget)
-}
-fn literal_end(input: &Input, at: usize) -> usize {
+) -> Result<(usize, Option<usize>), SyntaxError> {
     if input.text.as_bytes()[at] == b'`' {
-        at + input.text.as_bytes()[at..]
-            .iter()
-            .take_while(|b| **b == b'`')
-            .count()
+        super::code_span::read(&input.text, at, |at| input.map[at], budget)
     } else {
-        // INVARIANT: the physical-line loop admits a nonempty UTF-8 suffix;
+        // INVARIANT: the physical-line loop supplies a nonempty UTF-8 suffix;
         // every prior advance ends at a scalar or ASCII delimiter boundary.
-        at + input.text[at..]
-            .chars()
-            .next()
-            .expect("physical scalar")
-            .len_utf8()
+        let end = at
+            + input.text[at..]
+                .chars()
+                .next()
+                .expect("physical scalar")
+                .len_utf8();
+        Ok((end, None))
     }
 }
+
 fn comments(
     input: &Input,
     open: &mut Option<usize>,
@@ -255,7 +236,8 @@ fn comments(
             *open = Some(input.map[at]);
             at += 4;
         } else {
-            let end = code_end(input, at, budget)?.unwrap_or_else(|| literal_end(input, at));
+            let (opening_end, closing_end) = code_end(input, at, budget)?;
+            let end = closing_end.unwrap_or(opening_end);
             append(
                 &mut out,
                 &input.text[at..end],
@@ -284,7 +266,8 @@ fn prose(
     let mut replaced = false;
     while at < input.text.len() {
         budget.tick(input.map[at], 1)?;
-        if let Some(end) = code_end(input, at, budget)? {
+        let (opening_end, closing_end) = code_end(input, at, budget)?;
+        if let Some(end) = closing_end {
             budget.push(
                 &mut doc.inlines,
                 Inline {
@@ -301,7 +284,7 @@ fn prose(
             replaced = true;
             at = end;
         } else {
-            let end = literal_end(input, at);
+            let end = opening_end;
             append(
                 &mut out,
                 &input.text[at..end],

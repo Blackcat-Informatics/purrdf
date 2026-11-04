@@ -315,6 +315,40 @@ must also choose finite `auxiliary_bytes` and `work` ceilings; construction can
 refuse scratch storage even when the final retained model would fit. No limit
 is silently relaxed and there is no unbounded authoring preset.
 
+### 2.5 Code-only decoded scalars
+
+`replace_code_spans(source, CodeSpanLimits)` interprets an already-decoded UTF-8
+scalar. Its three explicit inclusive ceilings are `source_bytes`,
+`auxiliary_bytes` and `work`. It borrows unchanged input and allocates native
+replacement text only after finding a complete span. No partial text is
+returned on refusal; typed causes and positions refer to the decoded scalar,
+without converting coordinates to any enclosing document.
+
+Matching covers the entire scalar, across LF, CR and CRLF. A maximal backtick
+run opens a span unless immediately preceded by an odd number of backslashes.
+The next maximal run of exactly equal length closes it; backslashes do not
+escape closing runs. Unmatched runs remain literal, and different run lengths
+do not close a span. Every complete span, including delimiters, becomes exactly
+one ASCII space. Every other byte remains verbatim, including Unicode text,
+encoding marks, comment delimiters, HTML, entities, YAML-looking strings and
+fence-looking text. Backticks inside those spellings remain eligible. This
+operation performs no other document or language interpretation.
+
+The scalar, Standard and Authoring readers share one admitted matcher. Byte
+probes and candidate-width comparisons are charged before inspection, and
+output capacity and copies use the same native admission account. Storage
+includes simultaneous old and replacement buffers during growth. Closing
+searches can revisit suffixes, so finite work limits may refuse an input even
+when source and output storage would fit; no linear-work guarantee is made.
+
+Standard opening-run scans and width comparisons that previously went
+uncharged now consume work. Authoring opener and backslash scans are charged
+before inspection rather than afterward, without rescanning unmatched runs.
+Consequently tight finite work ceilings can now refuse earlier, and refusal
+positions can identify a newly charged probe or comparison. These are resource
+accounting changes: grammar, output for admitted input, document physical-line
+policy and the structural dialect revision remain unchanged.
+
 ## 3. The split law
 
 A unit longer than `max_bytes` is cut into pieces. The law is stated over

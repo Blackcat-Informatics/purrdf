@@ -10,6 +10,8 @@ pub use authoring::{
     AuthoringLinkForm, authoring,
 };
 mod budget;
+mod code_span;
+pub use code_span::{CodeSpanLimits, replace_code_spans};
 mod inline;
 use crate::Span;
 use budget::Budget;
@@ -418,31 +420,6 @@ fn position(text: &str, byte: usize, policy: Policy) -> SourcePosition {
         line,
         column: text[from..boundary].chars().count() + 1,
     }
-}
-fn code_span_end(
-    text: &str,
-    mut at: usize,
-    count: usize,
-    position: impl Fn(usize) -> usize,
-    budget: &mut Budget<'_>,
-) -> Result<Option<usize>, SyntaxError> {
-    let bytes = text.as_bytes();
-    while at < bytes.len() {
-        budget.tick(position(at), 1)?;
-        if bytes[at] != b'`' {
-            at += 1;
-            continue;
-        }
-        let from = at;
-        while at < bytes.len() && bytes[at] == b'`' {
-            budget.tick(position(at), 1)?;
-            at += 1;
-        }
-        if at - from == count {
-            return Ok(Some(at));
-        }
-    }
-    Ok(None)
 }
 
 /// Parse once into the shared syntax model, refusing all output on resource failure.
