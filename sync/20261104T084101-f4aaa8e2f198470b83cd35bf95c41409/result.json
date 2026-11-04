@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1005-retain-compact-rdfc-search-refusal",
+  "branch": "paudley/1005-retain-compact-rdfc-search-refusal",
+  "base_ref": "origin/main",
+  "head": "79dcfc4d24cb6d18a1cad3872ec3cdc37822596e",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/1005-retain-compact-rdfc-search-refusal/.stage/retain-compact-rdfc-search-refusal/sync/20261104T084101-f4aaa8e2f198470b83cd35bf95c41409",
+  "conflicts": [
+    "helpers-ledger.toml"
+  ],
+  "status": "completed",
+  "base": "68abe768949b9aeb932ad9435a0bf6d83210d981",
+  "merge_bases": [
+    "10d03f63090b8ec2e7cba67d5baa2d6c2d05c28c"
+  ],
+  "merge_index": "0a66c82ed38031e5a20bd0a2907c8151cc848d985cfd11cada1c3575bfa358f2",
+  "reused_paths": [],
+  "rerere_output": "Recorded preimage for 'helpers-ledger.toml'\n",
+  "candidate_tree": "010d19909601b594293b088a405e05aeae3bc4a1",
+  "candidate_patch": "candidate-95d5daef53b149ffac971dd75f7c90e1.patch",
+  "validation_records": [],
+  "commit": "49a3fa43767aabbc44bd347c25c5eede7e0c9578",
+  "tree": "010d19909601b594293b088a405e05aeae3bc4a1"
+}

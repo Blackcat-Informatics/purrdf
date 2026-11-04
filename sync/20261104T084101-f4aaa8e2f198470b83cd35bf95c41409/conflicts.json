@@ -1,0 +1,22 @@
+{
+  "helpers-ledger.toml": [
+    {
+      "mode": "100644",
+      "oid": "a2046def5f37d1aec352cca80a52648733c01c79",
+      "stage": 1,
+      "content": "inputs/0-1.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "7e67e39cbac5c70180dfd2c9a670a6693d445125",
+      "stage": 2,
+      "content": "inputs/0-2.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "44d01ca0b5a732a2bd33c284819ddbdacbff6963",
+      "stage": 3,
+      "content": "inputs/0-3.bin"
+    }
+  ]
+}

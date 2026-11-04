@@ -1,0 +1,2668 @@
+diff --git crates/cli/benches/pack_input.rs crates/cli/benches/pack_input.rs
+index b6e18f270..49e7db427 100644
+--- crates/cli/benches/pack_input.rs
++++ crates/cli/benches/pack_input.rs
+@@ -118,20 +118,125 @@ fn word_ids(c: &mut Bench) {
+     std::fs::write(&invalid, b"b3w2: invalid").unwrap();
+     let mut hex_rows = String::new();
+     let mut word_rows = String::new();
++    let mut values = Vec::new();
+     for ordinal in 0_u64..256 {
+         let digest = Digest32::new(*purrdf_hash::blake3::hash(&ordinal.to_le_bytes()).as_bytes());
+         use std::fmt::Write as _;
+         writeln!(hex_rows, "{digest}").unwrap();
+         writeln!(word_rows, "{}", Reference::Full(digest).to_text().unwrap()).unwrap();
++        values.push(digest);
+     }
+     std::fs::write(&batch, hex_rows).unwrap();
+     std::fs::write(&batch_words, word_rows).unwrap();
++    use purrdf_core::{
++        content_alias::{AliasScope, ScopeId},
++        content_prefix::{Length, PrefixPlan},
++    };
++    use purrdf_lex::allocation::Resident;
++    let snapshot = directory.path().join("snapshot.bin");
++    let prefix_single = directory.path().join("prefix-single.txt");
++    let prefix_hex = directory.path().join("prefix-hex.txt");
++    let prefix_batch = directory.path().join("prefix-batch.txt");
++    let scope = ScopeId::new(Digest32::new([23; 32]));
++    let scope_text = scope.digest().to_string();
++    let mut aliases = AliasScope::new(scope, Resident).unwrap();
++    aliases.extend(scope, &values).unwrap();
++    let binding = aliases.presentation(scope).unwrap();
++    let revision_text = binding.revision.digest().to_string();
++    let exported = aliases.export(scope).unwrap();
++    std::fs::write(&snapshot, &*exported).unwrap();
++    exported.release().unwrap();
++    let mut plan = PrefixPlan::from_aliases(&mut aliases, Resident).unwrap();
++    let mut prefix_rows = String::new();
++    for digest in &values {
++        use std::fmt::Write as _;
++        writeln!(
++            prefix_rows,
++            "{}",
++            plan.shorten(binding, *digest, Length::PerEntry)
++                .unwrap()
++                .reference
++                .to_text()
++                .unwrap()
++        )
++        .unwrap();
++    }
++    std::fs::write(&prefix_batch, prefix_rows).unwrap();
++    std::fs::write(
++        &prefix_single,
++        plan.shorten(binding, values[0], Length::PerEntry)
++            .unwrap()
++            .reference
++            .to_text()
++            .unwrap(),
++    )
++    .unwrap();
++    std::fs::write(&prefix_hex, format!("{}\n", values[0])).unwrap();
++    let snapshot_args = [
++        "--manifest",
++        snapshot.to_str().unwrap(),
++        "--scope",
++        &scope_text,
++        "--revision",
++        &revision_text,
++    ];
+     let mut group = c.benchmark_group("word_ids");
+     group
+         .sample_size(20)
+         .warm_up_time(Duration::from_millis(100))
+         .measurement_time(Duration::from_millis(300));
+     for (name, arguments, source, count, expected) in [
++        (
++            "cli_prefix_plan_256",
++            vec!["plan", "--scope", &scope_text],
++            &batch,
++            256,
++            0,
++        ),
++        (
++            "cli_prefix_shorten",
++            vec!["shorten", "--from", "hex", "--length", "per-entry"],
++            &prefix_hex,
++            1,
++            0,
++        ),
++        (
++            "cli_prefix_expand",
++            vec!["expand", "--to", "hex"],
++            &prefix_single,
++            1,
++            0,
++        ),
++        (
++            "cli_prefix_shorten_batch_256",
++            vec![
++                "batch-scoped",
++                "--from",
++                "hex-lines",
++                "--to",
++                "word-lines",
++                "--length",
++                "per-entry",
++            ],
++            &batch,
++            256,
++            0,
++        ),
++        (
++            "cli_prefix_expand_batch_256",
++            vec![
++                "batch-scoped",
++                "--from",
++                "word-lines",
++                "--to",
++                "hex-lines",
++                "--length",
++                "uniform",
++            ],
++            &prefix_batch,
++            256,
++            0,
++        ),
+         ("cli_encode", vec!["encode", "--from", "hex"], &input, 1, 0),
+         ("cli_decode", vec!["decode", "--to", "hex"], &words, 1, 0),
+         (
+@@ -159,9 +264,12 @@ fn word_ids(c: &mut Bench) {
+         group.throughput(Throughput::Elements(count));
+         group.bench_function(name, |b| {
+             b.iter(|| {
+-                let result = Command::new(env!("CARGO_BIN_EXE_purrdf"))
+-                    .arg("word-id")
+-                    .args(&arguments)
++                let mut command = Command::new(env!("CARGO_BIN_EXE_purrdf"));
++                command.arg("word-id").args(&arguments);
++                if name.starts_with("cli_prefix") && name != "cli_prefix_plan_256" {
++                    command.args(snapshot_args);
++                }
++                let result = command
+                     .arg("--input")
+                     .arg(source)
+                     .arg("--output")
+diff --git crates/cli/src/word_id.rs crates/cli/src/word_id.rs
+index 49c837cb5..4f3f9d794 100644
+--- crates/cli/src/word_id.rs
++++ crates/cli/src/word_id.rs
+@@ -13,6 +13,7 @@ use purrdf_hash::{
+     hex::{self, Digest32},
+     word_id::{self, Reference},
+ };
++mod scoped;
+ 
+ #[derive(Clone, Copy, Debug, ValueEnum)]
+ pub(crate) enum Format {
+@@ -43,6 +44,64 @@ pub(crate) enum Lines {
+ 
+ #[derive(Debug, Subcommand)]
+ pub(crate) enum Command {
++    /// Build a `PURRAL01` snapshot from canonical hex lines; report exact lengths
++    /// and the retained revision on stderr. The scope belongs to the caller.
++    Plan {
++        #[arg(long)]
++        scope: String,
++        #[arg(long, default_value = "-")]
++        input: String,
++        #[arg(long)]
++        output: String,
++    },
++    /// Shorten a member of the exact retained snapshot.
++    Shorten {
++        #[command(flatten)]
++        snapshot: scoped::Snapshot,
++        #[arg(long, value_enum)]
++        from: Format,
++        #[arg(long, value_enum)]
++        length: scoped::LengthChoice,
++        #[arg(long, default_value = "-")]
++        input: String,
++        #[arg(long, default_value = "-")]
++        output: String,
++    },
++    /// Expand a checked reference in the required original snapshot revision.
++    Expand {
++        #[command(flatten)]
++        snapshot: scoped::Snapshot,
++        #[arg(long, value_enum)]
++        to: DigestFormat,
++        #[arg(long, default_value = "-")]
++        input: String,
++        #[arg(long, default_value = "-")]
++        output: String,
++    },
++    /// Inspect a checked reference and its uniquely resolved complete identity.
++    InspectScoped {
++        #[command(flatten)]
++        snapshot: scoped::Snapshot,
++        #[arg(long, default_value = "-")]
++        input: String,
++        #[arg(long, default_value = "-")]
++        output: String,
++    },
++    /// Convert explicit LF-framed formats using one retained snapshot index.
++    BatchScoped {
++        #[command(flatten)]
++        snapshot: scoped::Snapshot,
++        #[arg(long, value_enum)]
++        from: Lines,
++        #[arg(long, value_enum)]
++        to: Lines,
++        #[arg(long, value_enum)]
++        length: scoped::LengthChoice,
++        #[arg(long, default_value = "-")]
++        input: String,
++        #[arg(long, default_value = "-")]
++        output: String,
++    },
+     /// Encode one 64-digit canonical hex or exact 32-byte input record.
+     Encode {
+         #[arg(long, value_enum)]
+@@ -92,10 +151,27 @@ impl Command {
+                 paths.push(PathBuf::from(path));
+             }
+         }
++        if let Some(snapshot) = self.snapshot() {
++            paths.push(PathBuf::from(&snapshot.manifest));
++        }
++    }
++    fn snapshot(&self) -> Option<&scoped::Snapshot> {
++        match self {
++            Self::Shorten { snapshot, .. }
++            | Self::Expand { snapshot, .. }
++            | Self::InspectScoped { snapshot, .. }
++            | Self::BatchScoped { snapshot, .. } => Some(snapshot),
++            _ => None,
++        }
+     }
+     fn io(&self) -> (&str, &str) {
+         match self {
+-            Self::Encode { input, output, .. }
++            Self::Plan { input, output, .. }
++            | Self::Shorten { input, output, .. }
++            | Self::Expand { input, output, .. }
++            | Self::InspectScoped { input, output, .. }
++            | Self::BatchScoped { input, output, .. }
++            | Self::Encode { input, output, .. }
+             | Self::Decode { input, output, .. }
+             | Self::Inspect { input, output, .. }
+             | Self::Batch { input, output, .. } => (input, output),
+@@ -106,6 +182,21 @@ impl Command {
+ /// A conversion refusal retaining the original native codec or I/O cause.
+ #[derive(Debug)]
+ pub enum Failure {
++    /// Original native snapshot owner failure.
++    Alias(purrdf_core::content_alias::Error),
++    /// Original native prefix planning or lookup failure.
++    Prefix(purrdf_core::content_prefix::Error),
++    /// Original admitted storage failure.
++    Storage(purrdf_lex::allocation::StorageError),
++    /// Source record context with the original typed failure.
++    Record {
++        /// One-based original source record.
++        record: usize,
++        /// Absolute source byte offset of the record start.
++        offset: u64,
++        /// Original unmodified refusal.
++        cause: Box<Self>,
++    },
+     /// Original strict word codec refusal.
+     Codec(word_id::Error),
+     /// Original canonical base16 refusal.
+@@ -143,6 +234,14 @@ pub enum Failure {
+ impl fmt::Display for Failure {
+     fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
+         match self {
++            Self::Alias(error) => error.fmt(out),
++            Self::Prefix(error) => error.fmt(out),
++            Self::Storage(error) => error.fmt(out),
++            Self::Record {
++                record,
++                offset,
++                cause,
++            } => write!(out, "record {record}, stream byte {offset}: {cause}"),
+             Self::Codec(error) => error.fmt(out),
+             Self::Hex(error) => error.fmt(out),
+             Self::Io(error) => error.fmt(out),
+@@ -166,6 +265,10 @@ impl fmt::Display for Failure {
+ impl std::error::Error for Failure {
+     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+         match self {
++            Self::Alias(error) => Some(error),
++            Self::Prefix(error) => Some(error),
++            Self::Storage(error) => Some(error),
++            Self::Record { cause, .. } => Some(&**cause),
+             Self::Codec(error) => Some(error),
+             Self::Hex(error) => Some(error),
+             Self::Io(error) => Some(error),
+@@ -176,6 +279,7 @@ impl std::error::Error for Failure {
+     }
+ }
+ purrdf_lex::variant_from!(Failure { Codec(word_id::Error), Hex(hex::HexError), Io(io::Error), Allocation(std::collections::TryReserveError) });
++purrdf_lex::variant_from!(Failure { Alias(purrdf_core::content_alias::Error), Prefix(purrdf_core::content_prefix::Error), Storage(purrdf_lex::allocation::StorageError) });
+ 
+ fn digest(input: &[u8], format: Format) -> Result<Digest32, Failure> {
+     match format {
+@@ -237,21 +341,83 @@ fn write_digest(
+             output.write_all(b"\n")?;
+         }
+         Format::Words => {
+-            let len = Reference::Full(digest).encode(buffer)?;
+-            output.write_all(&buffer[..len])?;
+-            output.write_all(b"\n")?;
++            write_reference(output, Reference::Full(digest), buffer)?;
+         }
+     }
+     Ok(())
+ }
+ 
++fn write_reference(
++    output: &mut dyn io::Write,
++    reference: Reference,
++    buffer: &mut [u8; word_id::MAX_ENCODED_LEN],
++) -> Result<(), Failure> {
++    let len = reference.encode(buffer)?;
++    output.write_all(&buffer[..len])?;
++    output.write_all(b"\n")?;
++    Ok(())
++}
++
++fn inspect_reference(
++    output: &mut dyn io::Write,
++    reference: Reference,
++    buffer: &mut [u8; word_id::MAX_ENCODED_LEN],
++) -> Result<(), Failure> {
++    writeln!(
++        output,
++        "payload_words {}\ncheck_words 1\ndisplayed_words {}",
++        reference.payload_words(),
++        reference.payload_words() + 1
++    )?;
++    let len = reference.encode(buffer)?;
++    let check = buffer[..len]
++        .iter()
++        .rposition(|byte| *byte == b' ')
++        .ok_or(Failure::Invariant("missing encoded separator"))?;
++    output.write_all(b"check ")?;
++    output.write_all(&buffer[check + 1..len])?;
++    output.write_all(b"\ncanonical ")?;
++    output.write_all(&buffer[..len])?;
++    output.write_all(b"\n")?;
++    Ok(())
++}
++
++fn read_single(reader: &mut dyn io::Read, format: Format) -> Result<Vec<u8>, Failure> {
++    let mut input = Vec::new();
++    input.try_reserve_exact(word_id::MAX_ENCODED_LEN + 2)?;
++    reader
++        .take((word_id::MAX_ENCODED_LEN + 2) as u64)
++        .read_to_end(&mut input)?;
++    if !matches!(format, Format::Raw) && input.last() == Some(&b'\n') {
++        input.pop();
++    }
++    Ok(input)
++}
++
+ struct PreparedInput {
+     reader: io::BufReader<Box<dyn io::Read>>,
+     single: Option<Digest32>,
++    scoped: Option<scoped::State>,
+ }
+ 
+ fn prepare(command: &Command) -> Result<PreparedInput, Failure> {
+     let (input_path, output_path) = command.io();
++    if let Some(snapshot) = command.snapshot() {
++        if snapshot.manifest == "-" {
++            return Err(Failure::Usage("snapshot manifest must name a file"));
++        }
++        if output_path != "-"
++            && (snapshot.manifest == output_path
++                || crate::canonical::same_file(
++                    std::path::Path::new(&snapshot.manifest),
++                    std::path::Path::new(output_path),
++                )?)
++        {
++            return Err(Failure::Usage(
++                "output aliases the bound snapshot manifest; choose a distinct output",
++            ));
++        }
++    }
+     if input_path != "-" && input_path == output_path {
+         return Err(Failure::Usage("input and output must have different paths"));
+     }
+@@ -272,6 +438,14 @@ fn prepare(command: &Command) -> Result<PreparedInput, Failure> {
+         Box::new(std::fs::File::open(input_path)?)
+     };
+     let mut reader = io::BufReader::new(input);
++    if command.snapshot().is_some() || matches!(command, Command::Plan { .. }) {
++        let (single, scoped) = scoped::prepare(command, &mut reader)?;
++        return Ok(PreparedInput {
++            reader,
++            single,
++            scoped: Some(scoped),
++        });
++    }
+     // Single-record conversion finishes validation before opening an output file.
+     let single = if matches!(command, Command::Batch { .. }) {
+         None
+@@ -281,18 +455,14 @@ fn prepare(command: &Command) -> Result<PreparedInput, Failure> {
+             Command::Inspect { from, .. } => *from,
+             _ => Format::Words,
+         };
+-        let mut input = Vec::new();
+-        input.try_reserve_exact(word_id::MAX_ENCODED_LEN + 2)?;
+-        reader
+-            .by_ref()
+-            .take((word_id::MAX_ENCODED_LEN + 2) as u64)
+-            .read_to_end(&mut input)?;
+-        if !matches!(format, Format::Raw) && input.last() == Some(&b'\n') {
+-            input.pop();
+-        }
++        let input = read_single(&mut reader, format)?;
+         Some(digest(&input, format)?)
+     };
+-    Ok(PreparedInput { reader, single })
++    Ok(PreparedInput {
++        reader,
++        single,
++        scoped: None,
++    })
+ }
+ 
+ #[derive(Default)]
+@@ -310,7 +480,11 @@ impl Refusals {
+ }
+ 
+ pub(crate) fn run(command: &Command) -> Result<(), CliError> {
+-    let PreparedInput { mut reader, single } = prepare(command).map_err(CliError::from)?;
++    let PreparedInput {
++        mut reader,
++        single,
++        mut scoped,
++    } = prepare(command).map_err(CliError::from)?;
+     let mut target = OutTarget::open(command.io().1)?;
+     let mut writer = io::BufWriter::new(target.writer());
+     let mut buffer = [0; word_id::MAX_ENCODED_LEN];
+@@ -322,6 +496,7 @@ pub(crate) fn run(command: &Command) -> Result<(), CliError> {
+         &mut writer,
+         &mut buffer,
+         &mut refusals,
++        scoped.as_mut(),
+     );
+     let result = match (refusals.finish(), operation) {
+         (None, result) => result.map_err(CliError::from),
+@@ -367,27 +542,19 @@ fn convert(
+     writer: &mut dyn io::Write,
+     buffer: &mut [u8; word_id::MAX_ENCODED_LEN],
+     refusals: &mut Refusals,
++    scoped: Option<&mut scoped::State>,
+ ) -> Result<(), Failure> {
++    if let Some(state) = scoped {
++        return state.convert(command, reader, single, writer, buffer, refusals);
++    }
+     match command {
+         Command::Batch { from, to, .. } => {
+-            batch(reader, writer, *from, *to, buffer, refusals)?;
++            batch(reader, writer, *from, *to, buffer, refusals, None)?;
+         }
+         Command::Inspect { .. } => {
+             let digest = single.ok_or(Failure::Invariant("missing validated input"))?;
+-            writeln!(
+-                writer,
+-                "digest {digest}\npayload_words 22\ncheck_words 1\ndisplayed_words 23"
+-            )?;
+-            let len = Reference::Full(digest).encode(buffer)?;
+-            let check = buffer[..len]
+-                .iter()
+-                .rposition(|byte| *byte == b' ')
+-                .ok_or(Failure::Invariant("missing encoded separator"))?;
+-            writer.write_all(b"check ")?;
+-            writer.write_all(&buffer[check + 1..len])?;
+-            writer.write_all(b"\ncanonical ")?;
+-            writer.write_all(&buffer[..len])?;
+-            writer.write_all(b"\n")?;
++            writeln!(writer, "digest {digest}")?;
++            inspect_reference(writer, Reference::Full(digest), buffer)?;
+         }
+         Command::Encode { .. } => write_digest(
+             writer,
+@@ -401,6 +568,7 @@ fn convert(
+             (*to).into(),
+             buffer,
+         )?,
++        _ => return Err(Failure::Invariant("missing scoped preparation")),
+     }
+     Ok(())
+ }
+@@ -412,62 +580,46 @@ fn batch(
+     to: Lines,
+     buffer: &mut [u8; word_id::MAX_ENCODED_LEN],
+     refusals: &mut Refusals,
++    mut scoped: Option<&mut scoped::State>,
+ ) -> Result<(), Failure> {
+     let mut input = Vec::new();
+     input.try_reserve_exact(word_id::MAX_ENCODED_LEN + 1)?;
+     let mut record = 0;
+     let mut stream_offset = 0_u64;
+     loop {
+-        input.clear();
+         let start = stream_offset;
+-        let mut saw_input = false;
+-        loop {
+-            let chunk = reader.fill_buf()?;
+-            if chunk.is_empty() {
+-                break;
+-            }
+-            saw_input = true;
+-            let newline = chunk.iter().position(|byte| *byte == b'\n');
+-            let consume = newline.map_or(chunk.len(), |index| index + 1);
+-            let keep = consume.min((word_id::MAX_ENCODED_LEN + 1).saturating_sub(input.len()));
+-            input.extend_from_slice(&chunk[..keep]);
+-            stream_offset += consume as u64;
+-            reader.consume(consume);
+-            if newline.is_some() {
+-                break;
+-            }
+-        }
+-        if !saw_input {
+-            break;
+-        }
+-        record += 1;
+-        let result = if stream_offset - start > (word_id::MAX_ENCODED_LEN + 1) as u64 {
+-            Err(Failure::RecordTooLong {
+-                record,
+-                offset: start + word_id::MAX_ENCODED_LEN as u64,
+-            })
+-        } else {
+-            if input.last() == Some(&b'\n') {
+-                input.pop();
+-            }
+-            digest(
+-                &input,
+-                match from {
++        let result = match read_record(reader, &mut input, &mut record, &mut stream_offset) {
++            Ok(false) => break,
++            Err(error @ Failure::RecordTooLong { .. }) => Err(error),
++            Err(error) => return Err(error),
++            Ok(true) => {
++                let format = match from {
+                     Lines::HexLines => Format::Hex,
+                     Lines::WordLines => Format::Words,
+-                },
+-            )
++                };
++                if let Some(state) = scoped.as_deref_mut() {
++                    state.read(&input, format)
++                } else {
++                    digest(&input, format)
++                }
++            }
+         };
+         match result {
+-            Ok(digest) => write_digest(
+-                writer,
+-                digest,
+-                match to {
+-                    Lines::HexLines => Format::Hex,
+-                    Lines::WordLines => Format::Words,
+-                },
+-                buffer,
+-            )?,
++            Ok(digest) => {
++                if let Some(state) = scoped.as_deref_mut() {
++                    state.write(writer, digest, to, buffer)?;
++                } else {
++                    write_digest(
++                        writer,
++                        digest,
++                        match to {
++                            Lines::HexLines => Format::Hex,
++                            Lines::WordLines => Format::Words,
++                        },
++                        buffer,
++                    )?;
++                }
++            }
+             Err(error) => {
+                 let reported = writeln!(
+                     io::stderr().lock(),
+@@ -483,3 +635,48 @@ fn batch(
+     }
+     Ok(())
+ }
++
++fn read_record(
++    reader: &mut dyn io::BufRead,
++    input: &mut Vec<u8>,
++    record: &mut usize,
++    stream_offset: &mut u64,
++) -> Result<bool, Failure> {
++    input.clear();
++    let start = *stream_offset;
++    loop {
++        let chunk = match reader.fill_buf() {
++            Ok(chunk) => chunk,
++            Err(error) => {
++                *record += 1;
++                return Err(error.into());
++            }
++        };
++        if chunk.is_empty() {
++            break;
++        }
++        let newline = chunk.iter().position(|byte| *byte == b'\n');
++        let consume = newline.map_or(chunk.len(), |index| index + 1);
++        let keep = consume.min((word_id::MAX_ENCODED_LEN + 1).saturating_sub(input.len()));
++        input.extend_from_slice(&chunk[..keep]);
++        *stream_offset += consume as u64;
++        reader.consume(consume);
++        if newline.is_some() {
++            break;
++        }
++    }
++    if *stream_offset == start {
++        return Ok(false);
++    }
++    *record += 1;
++    if *stream_offset - start > (word_id::MAX_ENCODED_LEN + 1) as u64 {
++        return Err(Failure::RecordTooLong {
++            record: *record,
++            offset: start + word_id::MAX_ENCODED_LEN as u64,
++        });
++    }
++    if input.last() == Some(&b'\n') {
++        input.pop();
++    }
++    Ok(true)
++}
+diff --git crates/cli/src/word_id/scoped.rs crates/cli/src/word_id/scoped.rs
+new file mode 100644
+index 000000000..838eed5fd
+--- /dev/null
++++ crates/cli/src/word_id/scoped.rs
+@@ -0,0 +1,267 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! Restore the existing snapshot law and retain one native plan per operation.
++
++use super::{Command, Failure, Format, Lines, Refusals, digest, io, word_id, write_digest};
++use clap::{Args, ValueEnum};
++use purrdf_core::{
++    content_alias::{self, AliasScope, MappingRevision, Presentation, ScopeId},
++    content_prefix::{BuildError, Length, PrefixPlan, ScopedReference},
++};
++use purrdf_hash::{hex::Digest32, word_id::Reference};
++use purrdf_lex::allocation::{Memory, OwnedAdmission, Resident};
++use std::io::{Read as _, Write as _};
++
++#[derive(Debug, Args)]
++pub(crate) struct Snapshot {
++    /// Exact original `PURRAL01` export; this must be a file.
++    #[arg(long)]
++    pub(super) manifest: String,
++    /// Caller-owned scope, as canonical full hex.
++    #[arg(long)]
++    scope: String,
++    /// Revision retained when the references were presented, as canonical hex.
++    #[arg(long)]
++    revision: String,
++}
++
++#[derive(Clone, Copy, Debug, ValueEnum)]
++pub(crate) enum LengthChoice {
++    Uniform,
++    PerEntry,
++}
++impl From<LengthChoice> for Length {
++    fn from(value: LengthChoice) -> Self {
++        match value {
++            LengthChoice::Uniform => Self::Uniform,
++            LengthChoice::PerEntry => Self::PerEntry,
++        }
++    }
++}
++
++pub(super) struct State {
++    plan: PrefixPlan<Resident>,
++    aliases: Option<AliasScope<Resident>>,
++    reference: Option<Reference>,
++    length: Length,
++}
++
++fn plan(aliases: &mut AliasScope<Resident>) -> Result<PrefixPlan<Resident>, Failure> {
++    PrefixPlan::from_aliases(aliases, Resident).map_err(|error| match error {
++        BuildError::Source { ordinal, cause } => Failure::Record {
++            record: ordinal,
++            offset: 0,
++            cause: Box::new(cause.into()),
++        },
++        BuildError::Plan(cause) => cause.into(),
++    })
++}
++
++fn committed(commit: content_alias::Commit) -> Result<(), Failure> {
++    if let Some(cause) = commit.cleanup_refusal {
++        return Err(cause.into());
++    }
++    Ok(())
++}
++
++pub(super) fn prepare(
++    command: &Command,
++    reader: &mut dyn io::BufRead,
++) -> Result<(Option<Digest32>, State), Failure> {
++    if let Command::Plan { scope, .. } = command {
++        let scope = ScopeId::new(digest(scope.as_bytes(), Format::Hex)?);
++        let mut owner = OwnedAdmission::new(Resident);
++        let mut values = Vec::new();
++        let mut memory = Memory::new(&mut owner);
++        let mut input = Vec::new();
++        input.try_reserve_exact(word_id::MAX_ENCODED_LEN + 1)?;
++        let (mut ordinal, mut offset) = (0, 0);
++        loop {
++            let start = offset;
++            let value = match super::read_record(reader, &mut input, &mut ordinal, &mut offset) {
++                Ok(false) => break,
++                Ok(true) => digest(&input, Format::Hex),
++                Err(cause) => Err(cause),
++            }
++            .map_err(|cause| Failure::Record {
++                record: ordinal,
++                offset: start,
++                cause: Box::new(cause),
++            })?;
++            memory.push(&mut values, value)?;
++        }
++        let mut aliases = AliasScope::new(scope, Resident)?;
++        // One atomic assignment operation over the once-read admitted source.
++        committed(aliases.extend(scope, &values)?)?;
++        let plan = plan(&mut aliases)?;
++        return Ok((
++            None,
++            State {
++                plan,
++                aliases: Some(aliases),
++                reference: None,
++                length: Length::Uniform,
++            },
++        ));
++    }
++    let snapshot = command
++        .snapshot()
++        .ok_or(Failure::Invariant("missing snapshot arguments"))?;
++    let expected = Presentation {
++        scope: ScopeId::new(digest(snapshot.scope.as_bytes(), Format::Hex)?),
++        revision: MappingRevision::new(digest(snapshot.revision.as_bytes(), Format::Hex)?),
++    };
++    let mut owner = OwnedAdmission::new(Resident);
++    let mut bytes = Vec::new();
++    let mut memory = Memory::new(&mut owner);
++    let mut file = std::fs::File::open(&snapshot.manifest)?;
++    let mut chunk = [0; 8192];
++    loop {
++        let count = file.read(&mut chunk)?;
++        if count == 0 {
++            break;
++        }
++        memory.extend(&mut bytes, chunk[..count].iter().copied())?;
++    }
++    let mut aliases = AliasScope::new(expected.scope, Resident)?;
++    committed(aliases.restore(expected.scope, &bytes)?)?;
++    let actual = aliases.presentation(expected.scope)?;
++    if actual.revision != expected.revision {
++        return Err(content_alias::Error::Revision {
++            expected: expected.revision,
++            actual: actual.revision,
++        }
++        .into());
++    }
++    let mut state = State {
++        plan: plan(&mut aliases)?,
++        aliases: None,
++        reference: None,
++        length: match command {
++            Command::Shorten { length, .. } | Command::BatchScoped { length, .. } => {
++                (*length).into()
++            }
++            _ => Length::Uniform,
++        },
++    };
++    let single = if matches!(command, Command::BatchScoped { .. }) {
++        None
++    } else {
++        let format = match command {
++            Command::Shorten { from, .. } => *from,
++            _ => Format::Words,
++        };
++        let input = super::read_single(reader, format)?;
++        let value = state.read(&input, format)?;
++        Some(value)
++    };
++    Ok((single, state))
++}
++
++impl State {
++    pub(super) fn read(&mut self, input: &[u8], format: Format) -> Result<Digest32, Failure> {
++        let reference = match format {
++            Format::Words => word_id::decode(input)?,
++            _ => Reference::Full(digest(input, format)?),
++        };
++        self.reference = Some(reference);
++        Ok(self.plan.resolve(ScopedReference {
++            presentation: self.plan.presentation(),
++            reference,
++        })?)
++    }
++    pub(super) fn write(
++        &mut self,
++        output: &mut dyn io::Write,
++        digest: Digest32,
++        format: Lines,
++        buffer: &mut [u8; word_id::MAX_ENCODED_LEN],
++    ) -> Result<(), Failure> {
++        match format {
++            Lines::HexLines => write_digest(output, digest, Format::Hex, buffer),
++            Lines::WordLines => {
++                let reference = self
++                    .plan
++                    .shorten(self.plan.presentation(), digest, self.length)?
++                    .reference;
++                super::write_reference(output, reference, buffer)?;
++                Ok(())
++            }
++        }
++    }
++    pub(super) fn convert(
++        &mut self,
++        command: &Command,
++        reader: &mut dyn io::BufRead,
++        single: Option<Digest32>,
++        output: &mut dyn io::Write,
++        buffer: &mut [u8; word_id::MAX_ENCODED_LEN],
++        refusals: &mut Refusals,
++    ) -> Result<(), Failure> {
++        if let Command::BatchScoped { from, to, .. } = command {
++            return super::batch(reader, output, *from, *to, buffer, refusals, Some(self));
++        }
++        let binding = self.plan.presentation();
++        match command {
++            Command::Plan { .. } => {
++                let aliases = self
++                    .aliases
++                    .as_mut()
++                    .ok_or(Failure::Invariant("missing prepared snapshot"))?;
++                let exported = aliases.export(binding.scope)?;
++                output.write_all(&exported)?;
++                exported.release()?;
++                let summary = self.plan.summary();
++                let checked = if summary.uniform_payload_words == 0 {
++                    0
++                } else {
++                    summary.uniform_payload_words + 1
++                };
++                let mut stderr = io::stderr().lock();
++                writeln!(
++                    stderr,
++                    "scope {}\nrevision {}\nidentities {}\nuniform_payload_words {}\nuniform_checked_words {checked}",
++                    binding.scope.digest(),
++                    binding.revision.digest(),
++                    summary.identities,
++                    summary.uniform_payload_words
++                )?;
++                for (index, count) in summary.per_entry_lengths.iter().enumerate() {
++                    writeln!(
++                        stderr,
++                        "per_entry_payload_words {} count {count}",
++                        index + 1
++                    )?;
++                }
++            }
++            Command::Shorten { .. } => self.write(
++                output,
++                single.ok_or(Failure::Invariant("missing validated digest"))?,
++                Lines::WordLines,
++                buffer,
++            )?,
++            Command::Expand { to, .. } => write_digest(
++                output,
++                single.ok_or(Failure::Invariant("missing validated digest"))?,
++                (*to).into(),
++                buffer,
++            )?,
++            Command::InspectScoped { .. } => {
++                let digest = single.ok_or(Failure::Invariant("missing resolved digest"))?;
++                let reference = self
++                    .reference
++                    .ok_or(Failure::Invariant("missing validated selector"))?;
++                writeln!(
++                    output,
++                    "scope {}\nrevision {}\ndigest {digest}",
++                    binding.scope.digest(),
++                    binding.revision.digest(),
++                )?;
++                super::inspect_reference(output, reference, buffer)?;
++            }
++            _ => return Err(Failure::Invariant("unexpected scoped operation")),
++        }
++        Ok(())
++    }
++}
+diff --git crates/cli/tests/word_id_cli.rs crates/cli/tests/word_id_cli.rs
+index a27cc9dbf..3a07f8d68 100644
+--- crates/cli/tests/word_id_cli.rs
++++ crates/cli/tests/word_id_cli.rs
+@@ -66,6 +66,262 @@ fn explicit_full_formats_and_batch_records_preserve_original_digests() {
+     );
+     assert!(recovered.status.success(), "{}", stderr(&recovered));
+     assert_eq!(stdout_utf8(&recovered), format!("{hex}\n{hex}\n"));
++    // The real tools persist the existing alias manifest, retain its revision,
++    // and reuse one native prefix index across a buffered batch.
++    use purrdf_core::content_alias::{AliasScope, ScopeId};
++    use purrdf_hash::{hex::Digest32, word_id::Reference};
++    use purrdf_lex::allocation::Resident;
++    let directory = purrdf_testkit::temp_dir!().unwrap();
++    let manifest = directory.path().join("snapshot.bin");
++    let manifest_path = manifest.to_str().unwrap();
++    let scope = ScopeId::new(Digest32::new([7; 32]));
++    let scope_text = scope.digest().to_string();
++    let mut close = [0; 32];
++    close[31] = 1;
++    let values = [
++        Digest32::new([0x5a; 32]),
++        Digest32::new([0; 32]),
++        Digest32::new(close),
++    ];
++    let mut aliases = AliasScope::new(scope, Resident).unwrap();
++    aliases.extend(scope, &values).unwrap();
++    let revision = aliases
++        .presentation(scope)
++        .unwrap()
++        .revision
++        .digest()
++        .to_string();
++    let rows = format!(
++        "{}\n{}\n{}\n{}\n",
++        values[0], values[1], values[2], values[0]
++    );
++    let planned = run_with_input(
++        &[
++            "word-id",
++            "plan",
++            "--scope",
++            &scope_text,
++            "--output",
++            manifest_path,
++        ],
++        rows.as_bytes(),
++    );
++    assert!(planned.status.success(), "{}", stderr(&planned));
++    let snapshot = std::fs::read(&manifest).unwrap();
++    let expected = aliases.export(scope).unwrap();
++    assert_eq!(snapshot.as_slice(), &*expected);
++    expected.release().unwrap();
++    assert!(stderr(&planned).contains(&format!("revision {revision}")));
++    assert!(
++        stderr(&planned)
++            .contains("identities 3\nuniform_payload_words 22\nuniform_checked_words 23")
++    );
++    assert!(stderr(&planned).contains("per_entry_payload_words 1 count 1"));
++    let binding = [
++        "--manifest",
++        manifest_path,
++        "--scope",
++        &scope_text,
++        "--revision",
++        &revision,
++    ];
++    let invoke = |operation: &[&str], input: &[u8]| {
++        let mut arguments = vec!["word-id"];
++        arguments.extend_from_slice(operation);
++        arguments.extend_from_slice(&binding);
++        run_with_input(&arguments, input)
++    };
++    let shortened = invoke(
++        &["shorten", "--from", "hex", "--length", "per-entry"],
++        format!("{}\n", values[0]).as_bytes(),
++    );
++    assert!(shortened.status.success(), "{}", stderr(&shortened));
++    assert!(stdout_utf8(&shortened).starts_with("b3p1: "));
++    let expanded = invoke(&["expand", "--to", "raw"], &shortened.stdout);
++    assert!(expanded.status.success(), "{}", stderr(&expanded));
++    assert_eq!(expanded.stdout, values[0].as_bytes());
++    let inspected = invoke(&["inspect-scoped"], &shortened.stdout);
++    assert!(inspected.status.success(), "{}", stderr(&inspected));
++    assert!(stdout_utf8(&inspected).contains(&format!(
++        "digest {}\npayload_words 1\ncheck_words 1\ndisplayed_words 2",
++        values[0]
++    )));
++    let selected = invoke(
++        &[
++            "batch-scoped",
++            "--from",
++            "hex-lines",
++            "--to",
++            "word-lines",
++            "--length",
++            "per-entry",
++        ],
++        rows.as_bytes(),
++    );
++    assert!(selected.status.success(), "{}", stderr(&selected));
++    let restored = invoke(
++        &[
++            "batch-scoped",
++            "--from",
++            "word-lines",
++            "--to",
++            "hex-lines",
++            "--length",
++            "uniform",
++        ],
++        &selected.stdout,
++    );
++    assert!(restored.status.success(), "{}", stderr(&restored));
++    assert_eq!(restored.stdout, rows.as_bytes());
++    let selector = Reference::from_digest(values[1], 1)
++        .unwrap()
++        .to_text()
++        .unwrap();
++    let ambiguous = invoke(&["expand", "--to", "hex"], selector.as_bytes());
++    assert_eq!(ambiguous.status.code(), Some(1));
++    assert!(stderr(&ambiguous).contains("ambiguous"));
++    let unknown = Reference::from_digest(Digest32::new([0xff; 32]), 1)
++        .unwrap()
++        .to_text()
++        .unwrap();
++    let refused = invoke(&["expand", "--to", "hex"], unknown.as_bytes());
++    assert_eq!(refused.status.code(), Some(1));
++    assert!(stderr(&refused).contains("unknown"));
++    let mixed = format!("invalid\n{unknown}\n{}", stdout_utf8(&shortened));
++    let partially = invoke(
++        &[
++            "batch-scoped",
++            "--from",
++            "word-lines",
++            "--to",
++            "hex-lines",
++            "--length",
++            "uniform",
++        ],
++        mixed.as_bytes(),
++    );
++    assert_eq!(partially.status.code(), Some(1));
++    assert_eq!(stdout_utf8(&partially), format!("{}\n", values[0]));
++    assert!(stderr(&partially).contains("batch refused 2 records"));
++    let missing_revision = run_with_input(
++        &[
++            "word-id",
++            "expand",
++            "--to",
++            "hex",
++            "--manifest",
++            manifest_path,
++            "--scope",
++            &scope_text,
++        ],
++        &shortened.stdout,
++    );
++    assert_eq!(missing_revision.status.code(), Some(2));
++    let wrong_scope = "08".repeat(32);
++    let wrong = run_with_input(
++        &[
++            "word-id",
++            "expand",
++            "--to",
++            "hex",
++            "--manifest",
++            manifest_path,
++            "--scope",
++            &wrong_scope,
++            "--revision",
++            &revision,
++        ],
++        &shortened.stdout,
++    );
++    assert_eq!(wrong.status.code(), Some(1));
++    assert!(stderr(&wrong).contains("scope"));
++    #[cfg(unix)]
++    {
++        let hardlink = directory.path().join("snapshot-hardlink.bin");
++        std::fs::hard_link(&manifest, &hardlink).unwrap();
++        for destination in [manifest_path, hardlink.to_str().unwrap()] {
++            let refused = invoke(
++                &["expand", "--to", "hex", "--output", destination],
++                &shortened.stdout,
++            );
++            assert_eq!(refused.status.code(), Some(2));
++            assert_eq!(std::fs::read(&manifest).unwrap(), snapshot);
++            let canonical = invoke(
++                &[
++                    "expand",
++                    "--to",
++                    "hex",
++                    "--canonical-search",
++                    "unlimited",
++                    "--canonicalization-receipts",
++                    destination,
++                ],
++                &shortened.stdout,
++            );
++            assert_eq!(canonical.status.code(), Some(2));
++            assert_eq!(std::fs::read(&manifest).unwrap(), snapshot);
++        }
++        let source = directory.path().join("scoped-input.txt");
++        for invalid_first in [false, true] {
++            let contents = format!(
++                "{}{}",
++                if invalid_first { "invalid\n" } else { "" },
++                stdout_utf8(&shortened).repeat(16_384)
++            );
++            std::fs::write(&source, contents).unwrap();
++            let mut child = support::purrdf()
++                .args([
++                    "word-id",
++                    "batch-scoped",
++                    "--from",
++                    "word-lines",
++                    "--to",
++                    "hex-lines",
++                    "--length",
++                    "uniform",
++                    "--input",
++                    source.to_str().unwrap(),
++                ])
++                .args(binding)
++                .stdin(std::process::Stdio::null())
++                .stdout(std::process::Stdio::piped())
++                .stderr(std::process::Stdio::piped())
++                .spawn()
++                .unwrap();
++            drop(child.stdout.take());
++            let result = child.wait_with_output().unwrap();
++            assert_eq!(
++                result.status.code(),
++                Some(i32::from(invalid_first)),
++                "{}",
++                stderr(&result)
++            );
++            if invalid_first {
++                assert!(stderr(&result).contains("batch refused 1 records"));
++            }
++        }
++    }
++    // Overwriting the same filename with a grown snapshot cannot retarget an
++    // old envelope. Validation also precedes opening a distinct output.
++    aliases.extend(scope, &[Digest32::new([0x5b; 32])]).unwrap();
++    let grown = aliases.export(scope).unwrap();
++    std::fs::write(&manifest, &*grown).unwrap();
++    grown.release().unwrap();
++    let output = directory.path().join("preserved.txt");
++    std::fs::write(&output, b"preserve").unwrap();
++    let stale = invoke(
++        &[
++            "expand",
++            "--to",
++            "hex",
++            "--output",
++            output.to_str().unwrap(),
++        ],
++        &shortened.stdout,
++    );
++    assert_eq!(stale.status.code(), Some(1));
++    assert!(stderr(&stale).contains("revision"));
++    assert_eq!(std::fs::read(&output).unwrap(), b"preserve");
+     #[cfg(unix)]
+     {
+         let directory = purrdf_testkit::temp_dir!().unwrap();
+diff --git crates/hash/src/word_id.rs crates/hash/src/word_id.rs
+index c3e0c97bc..a5507341d 100644
+--- crates/hash/src/word_id.rs
++++ crates/hash/src/word_id.rs
+@@ -170,6 +170,13 @@ pub struct Prefix {
+     lower: Digest32,
+     words: u8,
+ }
++impl crate::error::StructuredError for Prefix {
++    crate::error_visit! {
++        @record self { lower, words } => "word-id-prefix" {
++            "lower" => Record(&self.lower), "payload_words" => Unsigned(u128::from(self.words)),
++        }
++    }
++}
+ impl Prefix {
+     /// Number of retained digest bits (12 through 252).
+     pub const fn bit_len(self) -> usize {
+@@ -193,6 +200,12 @@ pub enum Reference {
+     /// Checked leading bits, meaningful only under an external scope.
+     Prefix(Prefix),
+ }
++impl crate::error::StructuredError for Reference {
++    crate::error_visit! {
++        Full(digest) => "word-id-full" { "digest" => Record(digest) },
++        Prefix(prefix) => "word-id-reference-prefix" { "prefix" => Record(prefix) },
++    }
++}
+ 
+ fn mask(digest: Digest32, words: usize) -> Digest32 {
+     let mut bytes = digest.into_bytes();
+diff --git crates/rdf-core/benches/ir_layout.rs crates/rdf-core/benches/ir_layout.rs
+index 77f14adea..3e43dedd2 100644
+--- crates/rdf-core/benches/ir_layout.rs
++++ crates/rdf-core/benches/ir_layout.rs
+@@ -1215,9 +1215,97 @@ fn bench_canonicalize(c: &mut Bench) {
+     group.finish();
+ }
+ 
++fn bench_word_prefixes(c: &mut Bench) {
++    use purrdf_core::{
++        content_alias::{AliasScope, ScopeId},
++        content_prefix::{Length, PrefixPlan},
++    };
++    use purrdf_hash::{blake3, hex::Digest32};
++    use purrdf_lex::allocation::Resident;
++    let mut group = c.benchmark_group("word_prefix_plan");
++    group
++        .sample_size(20)
++        .warm_up_time(std::time::Duration::from_millis(100))
++        .measurement_time(std::time::Duration::from_millis(300));
++    for count in [128_u64, 4096] {
++        let values: Vec<_> = (0..count)
++            .map(|index| Digest32::new(*blake3::hash(&index.to_le_bytes()).as_bytes()))
++            .collect();
++        let scope = ScopeId::new(Digest32::new([23; 32]));
++        let mut aliases = AliasScope::new(scope, Resident).unwrap();
++        aliases.extend(scope, &values).unwrap();
++        let binding = aliases.presentation(scope).unwrap();
++        let mut sorted = values.clone();
++        sorted.sort_unstable();
++        let window = CurrentThreadWindow::open();
++        let mut plan = PrefixPlan::from_digests(binding, &values, Resident).unwrap();
++        let measurement = window.close();
++        report(&format!("word_prefix/{count}"), measurement);
++        eprintln!(
++            "[word_prefix] count={count} uniform_payload_words={} lengths={:?}",
++            plan.summary().uniform_payload_words,
++            plan.summary().per_entry_lengths
++        );
++        let references: Vec<_> = values
++            .iter()
++            .map(|&digest| plan.shorten(binding, digest, Length::PerEntry).unwrap())
++            .collect();
++        let window = CurrentThreadWindow::open();
++        for &reference in &references {
++            std::hint::black_box(plan.resolve(reference).unwrap());
++        }
++        let measurement = window.close();
++        report(&format!("word_resolve/{count}"), measurement);
++        group.throughput(purrdf_testkit::bench::Throughput::Elements(count));
++        group.bench_function(format!("build/{count}"), |b| {
++            b.iter(|| {
++                std::hint::black_box(PrefixPlan::from_digests(binding, &values, Resident).unwrap());
++            });
++        });
++        group.bench_function(format!("build_sorted/{count}"), |b| {
++            b.iter(|| {
++                std::hint::black_box(
++                    PrefixPlan::from_sorted_source(
++                        binding,
++                        sorted
++                            .iter()
++                            .copied()
++                            .map(Ok::<_, std::convert::Infallible>),
++                        Resident,
++                    )
++                    .unwrap(),
++                );
++            });
++        });
++        group.bench_function(format!("resolve/{count}"), |b| {
++            b.iter(|| {
++                for &reference in &references {
++                    std::hint::black_box(plan.resolve(reference).unwrap());
++                }
++            });
++        });
++        if count == 4096 {
++            let mut pressure = vec![0_u8; 16 * 1024 * 1024];
++            group.bench_function("pressure_and_resolve/4096", |b| {
++                b.iter(|| {
++                    for byte in pressure.iter_mut().step_by(64) {
++                        *byte = byte.wrapping_add(1);
++                    }
++                    std::hint::black_box(&pressure);
++                    for &reference in &references {
++                        std::hint::black_box(plan.resolve(reference).unwrap());
++                    }
++                });
++            });
++        }
++    }
++    group.finish();
++}
++
+ bench_group!(
+     benches,
+     bench_metrics,
++    bench_word_prefixes,
+     bench_build,
+     bench_triple_carrier,
+     bench_literal_intern,
+diff --git crates/rdf-core/examples/scoped_content_aliases.rs crates/rdf-core/examples/scoped_content_aliases.rs
+index 2daada117..f98d3a7fa 100644
+--- crates/rdf-core/examples/scoped_content_aliases.rs
++++ crates/rdf-core/examples/scoped_content_aliases.rs
+@@ -5,8 +5,9 @@
+ //! resolves structured replies, then matches full identities across datasets.
+ 
+ use purrdf_core::content_alias::{AliasScope, ScopeId};
++use purrdf_core::content_prefix::{Length, PrefixPlan};
+ use purrdf_core::visual_fingerprint::{self, Request};
+-use purrdf_hash::{blake3, hex::Digest32};
++use purrdf_hash::{blake3, hex::Digest32, word_id};
+ use purrdf_lex::{
+     allocation::{Admission, Memory, OwnedAdmission, StorageError},
+     json::{self, Object, Value},
+@@ -168,6 +169,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
+     )?;
+     let left_rendering = left_visual.rendering();
+     let right_rendering = right_visual.rendering();
++    // Decode both word presentations back to the exact identity before visual
++    // rendering. The original alias owner supplies the immutable binding.
++    let mut prefixes = PrefixPlan::from_aliases(&mut left_map, Authority::bounded())?;
++    let short = prefixes.shorten(left_envelope, left[0].digest, Length::PerEntry)?;
++    let mut words = [0; word_id::MAX_ENCODED_LEN];
++    let length = short.reference.encode(&mut words)?;
++    let from_prefix = prefixes.resolve_text(left_envelope, &words[..length])?;
++    let length = word_id::Reference::Full(left[0].digest).encode(&mut words)?;
++    let mut full_bytes = [0; 32];
++    word_id::decode_full(&words[..length], &mut full_bytes)?;
++    let from_full = Digest32::new(full_bytes);
++    for decoded in [from_full, from_prefix] {
++        assert_eq!(decoded, left_map.resolve(left_reference)?);
++        let visual = visual_fingerprint::present(decoded, visual_request, Authority::bounded())?;
++        let rendering = visual.rendering();
++        assert_eq!(
++            (rendering.emoji(), rendering.spoken(), rendering.randomart()),
++            (
++                left_rendering.emoji(),
++                left_rendering.spoken(),
++                left_rendering.randomart()
++            ),
++        );
++        visual.release()?;
++    }
+     assert_eq!(
+         (
+             left_rendering.emoji(),
+diff --git crates/rdf-core/src/content_alias.rs crates/rdf-core/src/content_alias.rs
+index 48d4d31cb..5377d99c1 100644
+--- crates/rdf-core/src/content_alias.rs
++++ crates/rdf-core/src/content_alias.rs
+@@ -366,6 +366,11 @@ impl<S: Admission> AliasScope<S> {
+     pub const fn scope(&self) -> ScopeId {
+         self.scope
+     }
++    /// Number of distinct assigned content identities. Reading this metadata
++    /// performs no lookup and does not enumerate the admitted digest payload.
++    pub fn identity_count(&self) -> usize {
++        self.payload.digests.len()
++    }
+     /// Take a refused destructor/commit cleanup shrink. Its grant remains
+     /// conservative until the original authority accepts its release.
+     pub fn take_cleanup_refusal(&mut self) -> Option<StorageError> {
+diff --git crates/rdf-core/src/content_prefix.rs crates/rdf-core/src/content_prefix.rs
+new file mode 100644
+index 000000000..e503f8b7f
+--- /dev/null
++++ crates/rdf-core/src/content_prefix.rs
+@@ -0,0 +1,450 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! Exact checked word prefixes bound to an immutable content snapshot.
++//!
++//! A caller supplies the real [`Presentation`] of its scoped assignment history
++//! and that revision's complete content membership. This module does not derive
++//! a new scope, revision or content identity. Equal digests are deduplicated;
++//! their separate source-row identities and integer aliases remain unchanged.
++//! Growth constructs a new plan with the new presentation. An old plan and its
++//! references retain their original binding and never silently change meaning.
++//!
++//! Construction sorts native digest bytes and compares neighbours, without
++//! formatting words. Queries use binary search followed by at most two prefix
++//! matches. Every source read, comparison and query retains the original caller
++//! admission; the index's fallible allocation dies before that account.
++
++use core::{convert::Infallible, fmt};
++use purrdf_hash::{
++    hex::Digest32,
++    word_id::{self, Reference},
++};
++use purrdf_lex::{
++    allocation::{Admission, Memory, OwnedAdmission, StorageError},
++    walk::{try_dedup_by, try_equal_range_by, try_sort_unstable_by},
++};
++
++use crate::content_alias::{self, Presentation};
++
++/// The exact trusted snapshot envelope retained alongside displayed words.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct ScopedReference {
++    /// Original scope and assignment revision supplied by the dataset owner.
++    pub presentation: Presentation,
++    /// A validated full identity or checked lexical prefix.
++    pub reference: Reference,
++}
++
++/// Explicit choice between one dataset-wide length and each entry's minimum.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum Length {
++    /// Use the exact uniform payload minimum for this snapshot.
++    Uniform,
++    /// Use the shortest uniquely resolving payload for this entry.
++    PerEntry,
++}
++
++/// Complete exact prefix statistics, excluding duplicate content identities.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct Summary {
++    /// Number of distinct complete digests.
++    pub identities: usize,
++    /// Zero for an empty index, otherwise the exact minimum in 1 through 22.
++    pub uniform_payload_words: usize,
++    /// Count of entries needing each payload length; slot zero means one word.
++    pub per_entry_lengths: [usize; word_id::FULL_PAYLOAD_WORDS],
++}
++
++/// A snapshot, lookup, input-order or original admission refusal.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum Error {
++    /// The supplied scope or revision differs from this frozen owner.
++    Binding(content_alias::Error),
++    /// No content identity in this snapshot matches the submitted reference.
++    Unknown {
++        /// Exact checked selector, never a guessed candidate.
++        reference: Reference,
++    },
++    /// The prefix matches at least these two distinct identities.
++    Ambiguous {
++        /// Exact checked selector.
++        reference: Reference,
++        /// First matching identity in digest order.
++        first: Digest32,
++        /// Second matching identity; no further candidates need be read.
++        second: Digest32,
++    },
++    /// A claimed sorted source decreases at this one-based source ordinal.
++    Order {
++        /// Original input position, including duplicate entries.
++        ordinal: usize,
++        /// Immediately preceding source value.
++        previous: Digest32,
++        /// Current source value.
++        actual: Digest32,
++    },
++    /// Original lexical word-codec refusal.
++    Codec(word_id::Error),
++    /// Original work, storage, layout or physical allocation refusal.
++    Storage(StorageError),
++}
++purrdf_lex::variant_from!(Error { Binding(content_alias::Error), Codec(word_id::Error), Storage(StorageError) });
++purrdf_hash::error_sources!(Error, Binding, Codec, Storage);
++impl purrdf_hash::error::StructuredError for Error {
++    purrdf_hash::error_visit! {
++        Binding(cause) => "content-prefix-binding" { "cause" => Cause(cause) },
++        Unknown { reference } => "content-prefix-unknown" { "reference" => Record(reference) },
++        Ambiguous { reference, first, second } => "content-prefix-ambiguous" { "reference" => Record(reference), "first" => Record(first), "second" => Record(second) },
++        Order { ordinal, previous, actual } => "content-prefix-source-order" { "ordinal" => Unsigned(*ordinal as u128), "previous" => Record(previous), "actual" => Record(actual) },
++        Codec(cause) => "content-prefix-codec" { "cause" => Cause(cause) },
++        Storage(cause) => "content-prefix-storage" { "cause" => Cause(cause) },
++    }
++}
++impl fmt::Display for Error {
++    fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
++        match self {
++            Self::Binding(cause) => cause.fmt(out),
++            Self::Unknown { .. } => {
++                out.write_str("word reference is unknown in the bound snapshot")
++            }
++            Self::Ambiguous { first, second, .. } => {
++                write!(out, "word prefix is ambiguous between {first} and {second}")
++            }
++            Self::Order { ordinal, .. } => write!(
++                out,
++                "digest source decreases at record {ordinal}; sorted input is required"
++            ),
++            Self::Codec(cause) => cause.fmt(out),
++            Self::Storage(cause) => cause.fmt(out),
++        }
++    }
++}
++
++/// A failed construction preserves the source's original typed cause.
++#[derive(Debug)]
++pub enum BuildError<E> {
++    /// A source read failed before this one-based input position was admitted.
++    Source {
++        /// Original input position, including duplicate entries.
++        ordinal: usize,
++        /// Unmodified source failure.
++        cause: E,
++    },
++    /// Native plan construction or admission refusal.
++    Plan(Error),
++}
++purrdf_lex::variant_from!(impl<E> BuildError<E> { Plan(Error) });
++purrdf_lex::variant_from!(impl<E> BuildError<E> { Plan(StorageError) via Error::Storage });
++impl<E: fmt::Display> fmt::Display for BuildError<E> {
++    fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
++        match self {
++            Self::Source { ordinal, cause } => {
++                write!(out, "digest source record {ordinal}: {cause}")
++            }
++            Self::Plan(cause) => cause.fmt(out),
++        }
++    }
++}
++impl<E: std::error::Error + 'static> std::error::Error for BuildError<E> {
++    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
++        Some(match self {
++            Self::Source { cause, .. } => cause,
++            Self::Plan(cause) => cause,
++        })
++    }
++}
++impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError for BuildError<E> {
++    purrdf_hash::error_visit! {
++        Source { ordinal, cause } => "content-prefix-source" { "ordinal" => Unsigned(*ordinal as u128), "cause" => Cause(cause) },
++        Plan(cause) => "content-prefix-build" { "cause" => Cause(cause) },
++    }
++}
++
++#[derive(Clone, Copy)]
++struct Entry {
++    digest: Digest32,
++    words: usize,
++}
++
++/// An immutable, admitted digest index with exact uniform and per-entry plans.
++/// Query methods borrow mutably only to poll the original caller's admission.
++pub struct PrefixPlan<S: Admission> {
++    entries: Vec<Entry>,
++    summary: Summary,
++    presentation: Presentation,
++    admission: OwnedAdmission<S>,
++}
++purrdf_hash::debug_non_exhaustive!([S: Admission] PrefixPlan<S> {});
++impl<S: Admission> PrefixPlan<S> {
++    /// Capture the exact current membership and presentation of an actual
++    /// alias owner. Each original ordinal read retains that owner's admission;
++    /// the new index retains its own supplied account. Later alias growth cannot
++    /// retarget the returned immutable plan.
++    /// # Errors
++    /// Original alias read/admission failure or native plan allocation refusal.
++    pub fn from_aliases<A: Admission>(
++        owner: &mut content_alias::AliasScope<A>,
++        admission: S,
++    ) -> Result<Self, BuildError<content_alias::Error>> {
++        let scope = owner.scope();
++        let presentation = owner.presentation(scope).map_err(Error::from)?;
++        let count = owner.identity_count();
++        let source = (0..count).map(|index| {
++            let ordinal = u64::try_from(index)
++                .ok()
++                .and_then(|value| value.checked_add(1))
++                .ok_or(StorageError::SizeOverflow)?;
++            owner.resolve(content_alias::ScopedAlias {
++                scope,
++                alias: content_alias::Alias::new(ordinal)?,
++            })
++        });
++        Self::from_source(presentation, source, admission)
++    }
++
++    /// Build from the complete membership of the supplied real presentation.
++    ///
++    /// The caller must pair this source with its exact scoped assignment
++    /// revision. Scope/revision values are trusted host metadata, never values
++    /// inferred from a word string. Equal source digests are deduplicated.
++    /// # Errors
++    /// Preserves the indexed original source failure or native construction
++    /// refusal. No partial owner escapes; source reads stop on admission refusal.
++    pub fn from_source<E>(
++        presentation: Presentation,
++        source: impl IntoIterator<Item = Result<Digest32, E>>,
++        admission: S,
++    ) -> Result<Self, BuildError<E>> {
++        Self::build(presentation, source, admission, false)
++    }
++
++    /// Reuse nondecreasing complete digest input, validating its actual order.
++    /// The same trusted presentation/source pairing as [`Self::from_source`]
++    /// is required. Equal consecutive digests are admitted and deduplicated.
++    /// # Errors
++    /// Original source/admission failure or the first decreasing input pair.
++    pub fn from_sorted_source<E>(
++        presentation: Presentation,
++        source: impl IntoIterator<Item = Result<Digest32, E>>,
++        admission: S,
++    ) -> Result<Self, BuildError<E>> {
++        Self::build(presentation, source, admission, true)
++    }
++
++    /// Build from an already available complete membership slice.
++    /// The exact presentation/source pairing remains the caller's obligation.
++    /// # Errors
++    /// Returns native work/storage/allocation refusal without a partial owner.
++    pub fn from_digests(
++        presentation: Presentation,
++        digests: &[Digest32],
++        admission: S,
++    ) -> Result<Self, Error> {
++        match Self::from_source(
++            presentation,
++            digests.iter().copied().map(Ok::<_, Infallible>),
++            admission,
++        ) {
++            Ok(plan) => Ok(plan),
++            Err(BuildError::Plan(cause)) => Err(cause),
++            Err(BuildError::Source { cause, .. }) => match cause {},
++        }
++    }
++
++    fn build<E>(
++        presentation: Presentation,
++        source: impl IntoIterator<Item = Result<Digest32, E>>,
++        admission: S,
++        sorted: bool,
++    ) -> Result<Self, BuildError<E>> {
++        let mut admission = OwnedAdmission::new(admission);
++        let (entries, summary) = Memory::new(&mut admission).try_scope(|memory| {
++            let mut entries: Vec<Entry> = Vec::new();
++            let mut source = source.into_iter();
++            let mut ordinal = 0_usize;
++            loop {
++                memory.admission_mut().checkpoint(1)?;
++                let Some(next) = source.next() else { break };
++                ordinal = ordinal.checked_add(1).ok_or(StorageError::SizeOverflow)?;
++                let digest = next.map_err(|cause| BuildError::Source { ordinal, cause })?;
++                if sorted
++                    && let Some(previous) = entries.last()
++                    && previous.digest > digest
++                {
++                    return Err(Error::Order {
++                        ordinal,
++                        previous: previous.digest,
++                        actual: digest,
++                    }
++                    .into());
++                }
++                memory.push(&mut entries, Entry { digest, words: 1 })?;
++            }
++            if !sorted {
++                try_sort_unstable_by(&mut entries, |left, right| {
++                    memory.admission_mut().checkpoint(1)?;
++                    Ok::<_, StorageError>(left.digest.cmp(&right.digest))
++                })?;
++            }
++            try_dedup_by(&mut entries, |left, right| {
++                memory.admission_mut().checkpoint(1)?;
++                Ok::<_, StorageError>(left.digest == right.digest)
++            })?;
++            for index in 1..entries.len() {
++                memory.admission_mut().checkpoint(1)?;
++                let left = entries[index - 1].digest;
++                let right = entries[index].digest;
++                let same = purrdf_deflate::common_prefix_len(left.as_bytes(), right.as_bytes());
++                // Deduplication ensures a differing byte exists. Its native
++                // leading-zero count completes the exact shared-bit prefix.
++                let bits = same * 8
++                    + (left.as_bytes()[same] ^ right.as_bytes()[same]).leading_zeros() as usize;
++                let words = bits / 12 + 1;
++                entries[index - 1].words = entries[index - 1].words.max(words);
++                entries[index].words = entries[index].words.max(words);
++            }
++            let mut summary = Summary {
++                identities: entries.len(),
++                uniform_payload_words: 0,
++                per_entry_lengths: [0; word_id::FULL_PAYLOAD_WORDS],
++            };
++            for entry in &entries {
++                memory.admission_mut().checkpoint(1)?;
++                summary.uniform_payload_words = summary.uniform_payload_words.max(entry.words);
++                summary.per_entry_lengths[entry.words - 1] += 1;
++            }
++            Ok::<_, BuildError<E>>((entries, summary))
++        })?;
++        Ok(Self {
++            entries,
++            summary,
++            presentation,
++            admission,
++        })
++    }
++
++    /// The frozen trusted envelope; this does not perform a source lookup.
++    pub const fn presentation(&self) -> Presentation {
++        self.presentation
++    }
++
++    /// Complete construction statistics; no source read or output allocation.
++    pub const fn summary(&self) -> Summary {
++        self.summary
++    }
++
++    fn binding(&mut self, actual: Presentation) -> Result<(), Error> {
++        self.admission.checkpoint(1)?;
++        let expected = self.presentation;
++        if expected.scope != actual.scope {
++            return Err(content_alias::Error::Scope {
++                expected: expected.scope,
++                actual: actual.scope,
++            }
++            .into());
++        }
++        if expected.revision != actual.revision {
++            return Err(content_alias::Error::Revision {
++                expected: expected.revision,
++                actual: actual.revision,
++            }
++            .into());
++        }
++        Ok(())
++    }
++
++    fn lower_bound(&mut self, digest: Digest32) -> Result<usize, Error> {
++        Ok(try_equal_range_by(&self.entries, |entry| {
++            self.admission.checkpoint(1)?;
++            Ok::<_, StorageError>(entry.digest.cmp(&digest))
++        })?
++        .start)
++    }
++
++    /// Shorten a member using this snapshot's exact selected length law.
++    /// # Errors
++    /// Wrong snapshot, unknown complete identity or original work refusal.
++    pub fn shorten(
++        &mut self,
++        presentation: Presentation,
++        digest: Digest32,
++        length: Length,
++    ) -> Result<ScopedReference, Error> {
++        self.binding(presentation)?;
++        let index = self.lower_bound(digest)?;
++        self.admission.checkpoint(1)?;
++        let entry = self
++            .entries
++            .get(index)
++            .filter(|entry| entry.digest == digest)
++            .ok_or(Error::Unknown {
++                reference: Reference::Full(digest),
++            })?;
++        let words = match length {
++            Length::Uniform => self.summary.uniform_payload_words,
++            Length::PerEntry => entry.words,
++        };
++        Ok(ScopedReference {
++            presentation,
++            reference: Reference::from_digest(digest, words)?,
++        })
++    }
++
++    /// Resolve only within the exact retained snapshot, stopping after the
++    /// second matching candidate establishes ambiguity. Full forms also require
++    /// membership when resolved through this scoped owner.
++    /// # Errors
++    /// Wrong scope/revision, unknown/ambiguous selector or original work refusal.
++    pub fn resolve(&mut self, reference: ScopedReference) -> Result<Digest32, Error> {
++        self.binding(reference.presentation)?;
++        let lower = match reference.reference {
++            Reference::Full(digest) => digest,
++            Reference::Prefix(prefix) => prefix.lower_bound(),
++        };
++        let index = self.lower_bound(lower)?;
++        let matches = |digest| match reference.reference {
++            Reference::Full(full) => full == digest,
++            Reference::Prefix(prefix) => prefix.matches(digest),
++        };
++        self.admission.checkpoint(1)?;
++        let first = self
++            .entries
++            .get(index)
++            .filter(|entry| matches(entry.digest))
++            .ok_or(Error::Unknown {
++                reference: reference.reference,
++            })?
++            .digest;
++        if matches!(reference.reference, Reference::Prefix(_)) {
++            self.admission.checkpoint(1)?;
++            if let Some(second) = self
++                .entries
++                .get(index + 1)
++                .filter(|entry| matches(entry.digest))
++            {
++                return Err(Error::Ambiguous {
++                    reference: reference.reference,
++                    first,
++                    second: second.digest,
++                });
++            }
++        }
++        Ok(first)
++    }
++
++    /// Validate the displayed lexical check before consulting a dataset index.
++    /// # Errors
++    /// Original codec refusal, then the same scoped errors as [`Self::resolve`].
++    pub fn resolve_text(
++        &mut self,
++        presentation: Presentation,
++        text: &[u8],
++    ) -> Result<Digest32, Error> {
++        let reference = word_id::decode(text)?;
++        self.resolve(ScopedReference {
++            presentation,
++            reference,
++        })
++    }
++}
+diff --git crates/rdf-core/src/lib.rs crates/rdf-core/src/lib.rs
+index aa9192d1d..b6c6407f4 100644
+--- crates/rdf-core/src/lib.rs
++++ crates/rdf-core/src/lib.rs
+@@ -63,6 +63,7 @@ pub mod bytes;
+ pub mod collections;
+ pub mod content_alias;
+ pub mod content_id;
++pub mod content_prefix;
+ pub mod content_store;
+ pub use purrdf_lex::visual_fingerprint;
+ // The cover law: verbatim byte spans back into the document they cover,
+diff --git crates/rdf-core/tests/content_aliases.rs crates/rdf-core/tests/content_aliases.rs
+index f0c6fee08..f37f4e7c4 100644
+--- crates/rdf-core/tests/content_aliases.rs
++++ crates/rdf-core/tests/content_aliases.rs
+@@ -67,6 +67,194 @@ fn digest(byte: u8) -> Digest32 {
+     Digest32::new([byte; 32])
+ }
+ 
++#[test]
++fn word_prefix_plans_are_minimal_and_retain_the_exact_alias_snapshot() {
++    use purrdf_core::content_prefix::{Length, PrefixPlan, ScopedReference};
++    use purrdf_hash::word_id::{self, Reference};
++    use purrdf_lex::allocation::Resident;
++    let id = scope(11);
++    let mut close = [0; 32];
++    close[31] = 1;
++    let close = Digest32::new(close);
++    let values = [digest(32), close, digest(0), digest(16), close];
++    let mut aliases = AliasScope::new(id, Resident).unwrap();
++    aliases.extend(id, &values).unwrap();
++    let mut plan = PrefixPlan::from_aliases(&mut aliases, Resident).unwrap();
++    let binding = plan.presentation();
++    let summary = plan.summary();
++    assert_eq!(summary.identities, 4);
++    assert_eq!(summary.uniform_payload_words, 22);
++    assert_eq!(summary.per_entry_lengths[0], 2);
++    assert_eq!(summary.per_entry_lengths[21], 2);
++    for value in values {
++        for length in [Length::Uniform, Length::PerEntry] {
++            let reference = plan.shorten(binding, value, length).unwrap();
++            assert_eq!(plan.resolve(reference).unwrap(), value);
++            let text = reference.reference.to_text().unwrap();
++            assert_eq!(plan.resolve_text(binding, text.as_bytes()).unwrap(), value);
++            for words in 1..reference.reference.payload_words() {
++                // Only per-entry plans promise individual minimality. The
++                // uniform minimum is established by the close pair below.
++                if length == Length::PerEntry {
++                    assert!(matches!(
++                        plan.resolve(ScopedReference {
++                            presentation: binding,
++                            reference: Reference::from_digest(value, words).unwrap()
++                        }),
++                        Err(purrdf_core::content_prefix::Error::Ambiguous { .. })
++                    ));
++                }
++            }
++        }
++    }
++    assert!(matches!(
++        plan.shorten(binding, digest(99), Length::Uniform),
++        Err(purrdf_core::content_prefix::Error::Unknown { .. })
++    ));
++    assert!(matches!(
++        plan.resolve(ScopedReference {
++            presentation: binding,
++            reference: Reference::Full(digest(99))
++        }),
++        Err(purrdf_core::content_prefix::Error::Unknown { .. })
++    ));
++    let old = plan.shorten(binding, digest(16), Length::PerEntry).unwrap();
++    let selector = Reference::from_digest(digest(0), 1).unwrap();
++    let ambiguous = plan
++        .resolve(ScopedReference {
++            presentation: binding,
++            reference: selector,
++        })
++        .unwrap_err();
++    let captured = purrdf_testkit::error_capture::Capture::read(&ambiguous);
++    let prefix = captured.child("reference").child("prefix");
++    assert!(matches!(
++        prefix.field("payload_words"),
++        purrdf_hash::error::ErrorValue::Unsigned(1)
++    ));
++    assert_eq!(prefix.child("lower").code, "digest32");
++    assert!(
++        matches!(ambiguous, purrdf_core::content_prefix::Error::Ambiguous { reference, .. } if reference == selector)
++    );
++    aliases.extend(id, &[digest(17)]).unwrap();
++    let mut grown = PrefixPlan::from_aliases(&mut aliases, Resident).unwrap();
++    assert!(matches!(
++        grown.resolve(old),
++        Err(purrdf_core::content_prefix::Error::Binding(
++            Error::Revision { .. }
++        ))
++    ));
++    assert_eq!(plan.resolve(old).unwrap(), digest(16));
++    let wrong = purrdf_core::content_alias::Presentation {
++        scope: scope(12),
++        ..binding
++    };
++    assert!(matches!(
++        plan.shorten(wrong, digest(0), Length::Uniform),
++        Err(purrdf_core::content_prefix::Error::Binding(
++            Error::Scope { .. }
++        ))
++    ));
++    // Lexical validation precedes even an invalid snapshot binding.
++    assert!(matches!(
++        plan.resolve_text(wrong, b"not a checked word reference"),
++        Err(purrdf_core::content_prefix::Error::Codec(_))
++    ));
++    let mut empty_aliases = AliasScope::new(scope(15), Resident).unwrap();
++    let mut empty = PrefixPlan::from_aliases(&mut empty_aliases, Resident).unwrap();
++    let empty_binding = empty.presentation();
++    assert_eq!(empty.summary().uniform_payload_words, 0);
++    assert!(matches!(
++        empty.shorten(empty_binding, digest(0), Length::Uniform),
++        Err(purrdf_core::content_prefix::Error::Unknown { .. })
++    ));
++    let mut singleton_aliases = AliasScope::new(scope(16), Resident).unwrap();
++    singleton_aliases
++        .extend(scope(16), &[digest(0), digest(0)])
++        .unwrap();
++    let mut singleton = PrefixPlan::from_aliases(&mut singleton_aliases, Resident).unwrap();
++    let singleton_binding = singleton.presentation();
++    assert_eq!(singleton.summary().identities, 1);
++    let one = singleton
++        .shorten(singleton_binding, digest(0), Length::Uniform)
++        .unwrap();
++    assert_eq!(one.reference.payload_words(), 1);
++    let mut buffer = [0; word_id::MAX_ENCODED_LEN];
++    let len = one.reference.encode(&mut buffer).unwrap();
++    assert_eq!(
++        singleton
++            .resolve_text(singleton_binding, &buffer[..len])
++            .unwrap(),
++        digest(0)
++    );
++}
++
++#[test]
++fn word_prefix_builds_preserve_source_order_and_original_admission_refusals() {
++    use purrdf_core::content_prefix::{BuildError, Error as PrefixError, Length, PrefixPlan};
++    use purrdf_lex::allocation::Resident;
++    let mut aliases = AliasScope::new(scope(13), Resident).unwrap();
++    aliases.extend(scope(13), &[digest(0), digest(1)]).unwrap();
++    let binding = aliases.presentation(scope(13)).unwrap();
++    let ordered = [digest(0), digest(0), digest(1)].map(Ok::<_, &'static str>);
++    let good = PrefixPlan::from_sorted_source(binding, ordered, Resident).unwrap();
++    assert_eq!(good.summary().identities, 2);
++    let descending = [Ok::<_, &'static str>(digest(1)), Ok(digest(0))];
++    assert!(matches!(
++        PrefixPlan::from_sorted_source(binding, descending, Resident),
++        Err(BuildError::Plan(PrefixError::Order { ordinal: 2, .. }))
++    ));
++    let authority = Authority::fresh();
++    let original = [
++        Ok(digest(0)),
++        Err("original source unavailable"),
++        Ok(digest(1)),
++    ];
++    assert!(matches!(
++        PrefixPlan::from_source(binding, original, authority.clone()),
++        Err(BuildError::Source {
++            ordinal: 2,
++            cause: "original source unavailable"
++        })
++    ));
++    assert_eq!(authority.0.borrow().bytes, 0);
++    let calls = std::cell::Cell::new(0);
++    authority.0.borrow_mut().max_work = 0;
++    let source = std::iter::from_fn(|| {
++        calls.set(calls.get() + 1);
++        Some(Ok::<_, &'static str>(digest(0)))
++    });
++    assert!(matches!(
++        PrefixPlan::from_source(binding, source, authority.clone()),
++        Err(BuildError::Plan(PrefixError::Storage(
++            StorageError::AdmissionFailed
++        )))
++    ));
++    assert_eq!(calls.get(), 0);
++    authority.0.borrow_mut().max_work = u64::MAX;
++    authority.0.borrow_mut().max_bytes = 0;
++    assert!(matches!(
++        PrefixPlan::from_digests(binding, &[digest(0), digest(1)], authority.clone()),
++        Err(PrefixError::Storage(StorageError::AdmissionFailed))
++    ));
++    assert_eq!(authority.0.borrow().bytes, 0);
++    authority.0.borrow_mut().max_bytes = usize::MAX;
++    let mut plan =
++        PrefixPlan::from_digests(binding, &[digest(0), digest(1)], authority.clone()).unwrap();
++    assert!(authority.0.borrow().bytes > 0);
++    let spent = authority.0.borrow().work;
++    authority.0.borrow_mut().max_work = spent;
++    assert!(matches!(
++        plan.shorten(binding, digest(0), Length::Uniform),
++        Err(PrefixError::Storage(StorageError::AdmissionFailed))
++    ));
++    authority.0.borrow_mut().max_work = u64::MAX;
++    let reference = plan.shorten(binding, digest(0), Length::Uniform).unwrap();
++    assert_eq!(plan.resolve(reference).unwrap(), digest(0));
++    drop(plan);
++    assert_eq!(authority.0.borrow().bytes, 0);
++}
++
+ #[test]
+ fn first_seen_assignments_are_scoped_reproducible_and_append_only() {
+     let id = scope(9);
+diff --git docs/design/purrdf-word-identities-performance.md docs/design/purrdf-word-identities-performance.md
+index deabc74d1..cff502426 100644
+--- docs/design/purrdf-word-identities-performance.md
++++ docs/design/purrdf-word-identities-performance.md
+@@ -142,3 +142,92 @@ serializes 4,096 actual native references at every payload count one through
+ Full-form observed token ranges were 32–56 and 32–52 respectively. These are
+ sample extrema, not universal bounds. All 22 measured rows and individual
+ word costs are retained in `crates/hash-conformance/data/word-id/`.
++## Native immutable prefix plans
++
++The existing Core `ir_layout` benchmark's `word_prefix_plan` group measures the
++settled snapshot owner on 128 and 4,096 distinct digests from
++`BLAKE3(u64_le(index))`. The original scoped alias owner supplies the real
++presentation. Fixtures, alias assignment and source sorting for the explicitly
++sorted constructor are outside timed construction. Construction includes the
++fallible index allocation, actual input validation, deduplication, neighbour
++minimums and destruction. Resolution reuses one immutable plan and previously
++shortened typed references in original input order, with the original presentation.
++
++The group uses 20 samples, 100 ms warm-up and 300 ms measurement under the same
++managed benchmark profile and host described above. The initial run's load
++averages were 3.92, 7.22 and 10.45. Build/sorted/pressure observations come from
++the initial run; resolution was repeated after moving report-label formatting
++outside its allocation window. No shipping source changed for that correction.
++
++```text
++cargo bench --locked -p purrdf-core --bench ir_layout -- word_prefix_plan
++cargo bench --locked -p purrdf-core --bench ir_layout -- word_prefix_plan/resolve/
++```
++
++| Native operation | 128 identities | 4,096 identities |
++|---|---:|---:|
++| Build from original input order | 3.033 µs | 317.8 µs |
++| Build from validated sorted input | 1.025 µs | 30.73 µs |
++| Resolve every typed reference | 5.379 µs | 687.6 µs |
++| Resolve cost per reference in that pass | about 42.0 ns | about 167.9 ns |
++| Touch 16 MiB, then resolve every reference | — | 921.4 µs |
++
++The pressure case writes one byte per 64-byte cache line before the entire
++resolution pass. Its measured region includes that work; it establishes neither
++an isolated hardware-cold query latency nor a DRAM-cold guarantee. Warm runs
++reuse the same heap index and references. These remain shared-host observations,
++without affinity, frequency pinning or an exclusive-machine guarantee.
++
++For these concrete datasets, both uniform plans require two payload words plus
++one check. The 128-entry individual histogram is 126 one-word payloads and two
++two-word payloads. The 4,096-entry histogram is 1,412 one-word payloads and 2,684
++two-word payloads. These are exact observations of those samples, never a
++dataset-size rule or probability-based choice.
++
++The existing counting allocator measures construction and a complete repeated
++resolution pass separately, with labels and fixtures outside each window:
++
++| Allocation observation | 128 identities | 4,096 identities |
++|---|---:|---:|
++| Construction allocations | 6 | 11 |
++| Total construction bytes allocated across growth | 10,080 | 327,520 |
++| Peak live construction bytes | 7,680 | 245,760 |
++| Repeated resolution allocations/bytes | 0 / 0 | 0 / 0 |
++
++These counts cover the native prefix owner's calls, excluding the pre-existing
++alias owner, input corpus, output formatting and whole-process CLI allocation.
++The static dictionary/table footprint remains the shared codec's 51,303 logical
++bytes above; the scoped owner adds its dynamic digest/length index and no second
++word dictionary or tokenizer state.
++
++## Actual scoped CLI operations
++
++The existing CLI `pack_input` benchmark's `word_ids/cli_prefix` selections use
++256 digests from the same deterministic draw above, an actual `PURRAL01` alias
++export and its retained real revision. Setup writes the native fixture manifest,
++canonical hex input and checked prefixes outside timing. Single operations use
++the first member. Every timed process restores the original manifest, checks
++the expected scope/revision and builds one prefix plan; buffered batches reuse
++that plan across all records. Shortening explicitly selects per-entry lengths.
++
++```text
++cargo bench --locked -p purrdf-cli --bench pack_input -- word_ids/cli_prefix
++```
++
++| Actual scoped CLI operation | Median | Measured unit |
++|---|---:|---|
++| Build/persist plan | 1.988 ms | one process, 256 input digests |
++| Shorten | 1.840 ms | one process, one member |
++| Expand | 1.819 ms | one process, one checked prefix |
++| Shorten batch | 2.137 ms | one process, 256 members |
++| Expand batch | 1.972 ms | one process, 256 checked prefixes |
++
++These five cases passed using the settled CLI artifact already exercised by its
++integration case under the same benchmark profile. The group retains 20 samples,
++100 ms warm-up and 300 ms measurement. The host's load averages before this
++build/run were 5.81, 7.44 and 10.22. Process startup, strict parsing, native
++restore/planning, buffered file I/O, exact output-path preflight and process exit
++are included. File pages and metadata are warm from repeated runs. The plan case
++also includes the original admitted input collection, one alias extension,
++manifest serialization and its exact summary on stderr. These measurements do
++not isolate filesystem-cold startup or claim whole-process allocation counts.
+diff --git docs/design/purrdf-word-identities.md docs/design/purrdf-word-identities.md
+index 116150bef..9f65934df 100644
+--- docs/design/purrdf-word-identities.md
++++ docs/design/purrdf-word-identities.md
+@@ -119,6 +119,40 @@ position to stderr, and makes the final exit status one. Readers/writers stop
+ on original I/O failure. This successful-record stream is not an atomic file
+ transaction; single-record validation completes before opening an output file.
+ 
++## Immutable scoped prefix plans
++
++`purrdf_core::content_prefix::PrefixPlan` owns the admitted sorted digest index
++above the zero-dependency lexical codec. It retains the original alias
++`Presentation`, including scope and mapping revision. `from_aliases` reads the
++actual owner; source constructors require the complete membership of the supplied
++presentation. Equal digests are deduplicated. A sorted-source constructor validates
++nondecreasing input, retaining the first decreasing source ordinal and both values.
++
++For distinct neighbours sharing `b` leading digest bits, their shared whole-word
++prefix has length `floor(b / 12)`. One more word distinguishes them. A neighbour
++pass computes each entry's maximum left/right overlap plus one and the maximum
++over all entries. Empty plans report zero; singletons use one. The summary includes
++the exact uniform payload minimum and a 22-slot individual-length histogram.
++The native byte-prefix kernel and a leading-zero count compute overlap without
++formatting word strings. Unsorted construction costs O(n log n); sorted input
++and the neighbour pass cost O(n). All storage and work retain caller admission.
++
++`shorten` explicitly chooses uniform or per-entry length and returns a checked
++selector with the original presentation. A 22-word payload becomes the ordinary
++full form. `resolve_text` validates the lexical check before index access;
++`resolve` accepts an already validated typed selector. Both require the original
++scope and revision. Binary lower-bound lookup followed by at most two matches
++returns one complete member or an explicit unknown/ambiguous refusal. Refusals
++retain the entire submitted selector as structured fields. Full forms also
++require membership when used through this scoped owner.
++
++Growth produces a new immutable plan with its actual new presentation. An old
++plan retains its original semantics; a grown plan refuses an old revision.
++The tools restore the existing `PURRAL01` alias export and never synthesize a
++new identity, wire law or scope. Scoped batches retain one plan across records.
++See [mnemonic hashes](../mnemonic-hashes.md) for command usage and the native
++example that renders words, prefixes and integer aliases from identical digests.
++
+ ## Offline generation and measurements
+ 
+ The Rust `word_dictionary` example selects the frozen EFF subset and measures
+diff --git docs/mnemonic-hashes.md docs/mnemonic-hashes.md
+index 9b7a6aef8..4d7873bfe 100644
+--- docs/mnemonic-hashes.md
++++ docs/mnemonic-hashes.md
+@@ -75,14 +75,82 @@ fresh prefix check. The lexical codec returns a validated digest-bit selector.
+ It supplies no dataset scope, uniqueness or minimum-length claim. Full forms
+ remain identical across datasets.
+ 
+-The remaining scoped owner belongs above this lexical codec: it must retain an
+-immutable scope/snapshot and complete digest index, calculate exact uniform and
+-per-entry prefix minimums, and resolve a checked selector uniquely against that
+-same snapshot. Unknown, ambiguous, wrong-scope and unavailable-source results
+-must remain explicit. Growth must preserve old snapshot bindings. Dataset
+-planning/resolution commands and visual rendering of resolved words, prefixes
+-and integer aliases belong to that scoped integration; the current word
+-conversion commands operate on complete identities.
++The native scoped owner is `purrdf_core::content_prefix::PrefixPlan`. It retains
++the real `content_alias::Presentation`: the caller-owned scope and exact mapping
++revision, together with an admitted immutable index of complete digest bytes.
++`from_aliases` captures the existing alias owner's current membership; source
++and explicitly sorted-source constructors also accept the real presentation.
++The caller must supply the complete membership belonging to that revision.
++Original source, storage and work refusals remain typed. No dataset-size ceiling
++is compiled into the owner.
++
++Construction deduplicates equal digests, sorts them and compares adjacent pairs.
++If two distinct neighbours share `b` leading bits, they need `1 + floor(b / 12)`
++payload words. The largest such value is the exact uniform minimum. Each entry's
++minimum uses its maximum overlap with either neighbour. Empty plans report zero;
++singletons use one word. At 22 payload words the ordinary full form is emitted.
++The summary reports distinct membership and the distribution of individual
++lengths. Source rows and integer aliases remain separate from content deduplication.
++
++Resolution validates the lexical check before consulting the index. A binary
++lower-bound search and at most two candidate matches establish unknown, unique
++or ambiguous membership; a check word never makes an ambiguous prefix unique.
++Wrong scope and revision remain explicit. Growth requires a new plan and the
++new presentation. An old immutable plan continues to resolve its original
++references; supplying them to a grown plan refuses their stale revision.
++
++## Scoped command usage
++
++The tools reuse the existing `PURRAL01` alias manifest, including its original
++assignment order and revision law. Choose a scope once for an append-only
++assignment history; do not reuse it for another history. `SCOPE` below is that
++caller's exact 64-digit lowercase hex scope. `REVISION` is the exact revision
++retained when presenting the references, printed by `plan` on stderr. It must
++be retained independently of a mutable filename.
++
++```sh
++purrdf word-id plan --scope SCOPE --input digests.txt --output snapshot.bin
++purrdf word-id shorten --manifest snapshot.bin --scope SCOPE --revision REVISION \
++  --from hex --length per-entry --input digest.txt --output short.txt
++purrdf word-id expand --manifest snapshot.bin --scope SCOPE --revision REVISION \
++  --to hex --input short.txt
++purrdf word-id inspect-scoped --manifest snapshot.bin --scope SCOPE \
++  --revision REVISION --input short.txt
++purrdf word-id batch-scoped --manifest snapshot.bin --scope SCOPE \
++  --revision REVISION --from hex-lines --to word-lines --length uniform \
++  --input digests.txt --output prefixes.txt
++purrdf word-id batch-scoped --manifest snapshot.bin --scope SCOPE \
++  --revision REVISION --from word-lines --to hex-lines --length uniform \
++  --input prefixes.txt
++```
++
++`plan` reads canonical hex lines once into admitted storage and makes one atomic
++alias extension. It writes the binary manifest to the explicit output and reports
++the scope, revision, uniform payload/checked lengths and per-entry histogram on
++stderr. Duplicate digests reuse their original assignment. Native alias exports
++can also supply the manifest directly; no alternate snapshot serialization exists.
++
++Every scoped conversion restores that manifest, checks the expected presentation
++and constructs one native plan. Buffered batches reuse the plan and their buffers
++across all records. `--length uniform` and `--length per-entry` explicitly choose
++the shortening law. `word-lines` in a scoped command accepts checked full forms
++and checked prefixes; both require unique membership in the bound snapshot.
++`inspect-scoped` shows the resolved full digest and the submitted selector's
++canonical spelling, payload/check counts and check word. Full-form conversion
++commands retain their original explicit formats and need no snapshot.
++
++Malformed single input, stale revision or invalid manifest fails before the output
++opens. Input/output alias checks include the snapshot itself and hardlinks;
++canonicalization receipt destinations also protect it. Source I/O failures stop
++processing. Batch refusals retain their original order and record/byte context,
++including when a later downstream stdout reader closes.
++
++Matching prefix text across datasets identifies candidates only: resolve within
++each original snapshot, then compare complete digests. The native
++`scoped_content_aliases` example decodes full words and checked prefixes, resolves
++integer aliases and renders all three from the same exact 32 bytes. Emoji,
++spoken labels and randomart are therefore identical for the same identity.
++Visual comparison remains a human check, with exact digest equality authoritative.
+ 
+ The [canonical specification](design/purrdf-word-identities.md) gives the exact
+ packing, field polynomial, seeds, count-first recurrence, error/publication law
+diff --git helpers-ledger.toml helpers-ledger.toml
+index 7e67e39cb..44d01ca0b 100644
+--- helpers-ledger.toml
++++ helpers-ledger.toml
+@@ -3309,7 +3309,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+     "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
+ ]
+-constructors = "source:958a85f6efd89919"
++constructors = "source:715a2e36ae7f43e7"
+ reason = "The private interner hash stores only ordinals minted after LocalCapacity.required and TermId.from_index. Lookup reconstructs the stored ordinal and indexes the same live term vector."
+ 
+ [[job.capacity_proof]]
+@@ -3325,7 +3325,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+     "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
+ ]
+-constructors = "source:958a85f6efd89919"
++constructors = "source:715a2e36ae7f43e7"
+ reason = "The private interner hash stores only ordinals minted after LocalCapacity.required and TermId.from_index. Lookup reconstructs the stored ordinal and indexes the same live term vector."
+ 
+ [[job.capacity_proof]]
+@@ -3341,7 +3341,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+     "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
+ ]
+-constructors = "source:958a85f6efd89919"
++constructors = "source:715a2e36ae7f43e7"
+ reason = "Rollback enumerates only the appended suffix of the admitted interner before truncation. Both the usize-to-u32 conversion and niche reconstruction address that same retained vector."
+ 
+ [[job.capacity_proof]]
+@@ -3357,7 +3357,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+     "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
+ ]
+-constructors = "source:958a85f6efd89919"
++constructors = "source:715a2e36ae7f43e7"
+ reason = "Rollback enumerates only the appended suffix of the admitted interner before truncation. Both the usize-to-u32 conversion and niche reconstruction address that same retained vector."
+ 
+ [[job.capacity_proof]]
+@@ -3373,7 +3373,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+     "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
+ ]
+-constructors = "source:958a85f6efd89919"
++constructors = "source:715a2e36ae7f43e7"
+ reason = "Append enumerates the validated source builder term_count. The source interner bounds this count; the preceding u32 conversion already propagates refusal."
+ 
+ [[job.capacity_proof]]
+@@ -3390,7 +3390,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+     "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
+ ]
+-constructors = "source:958a85f6efd89919"
++constructors = "source:715a2e36ae7f43e7"
+ reason = "Carrier.term_ids uses native RdfDataset length or private Selection.ids length. Selection construction checks u32 length before publishing; Delta delegates its own iterator. Enumeration is strictly below the checked count."
+ 
+ [[job.capacity_proof]]
+@@ -3407,7 +3407,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+     "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
+ ]
+-constructors = "source:958a85f6efd89919"
++constructors = "source:715a2e36ae7f43e7"
+ reason = "Carrier.term_ids uses native RdfDataset length or private Selection.ids length. Selection construction checks u32 length before publishing; Delta delegates its own iterator. Enumeration is strictly below the checked count."
+ 
+ [[job.capacity_proof]]
+@@ -3423,7 +3423,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+     "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
+ ]
+-constructors = "source:958a85f6efd89919"
++constructors = "source:715a2e36ae7f43e7"
+ reason = "Native frozen row tables have the original Quads bound, equal to the native permutation limit. This resident wrapper can still panic on physical allocation failure; reduced test limits use try_permutation and are not asserted here."
+ 
+ [[job.capacity_proof]]
+@@ -3439,7 +3439,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+     "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
+ ]
+-constructors = "source:958a85f6efd89919"
++constructors = "source:715a2e36ae7f43e7"
+ reason = "Frozen hash entries are transferred from the admitted interner. Both predicates reconstruct an existing index; from_parts callers and consumer source are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3455,7 +3455,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+     "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
+ ]
+-constructors = "source:958a85f6efd89919"
++constructors = "source:715a2e36ae7f43e7"
+ reason = "Frozen hash entries are transferred from the admitted interner. Both predicates reconstruct an existing index; from_parts callers and consumer source are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3471,7 +3471,7 @@ authorities = [
+     "crates/rdf-core/src/ir/embedding/mod.rs=source:9b5f6f0268b9dfee",
+     "crates/purrdf/src/embedding/wire.rs=source:946be390eabf2446",
+ ]
+-constructors = "source:958a85f6efd89919"
++constructors = "source:715a2e36ae7f43e7"
+ reason = "FileLayout.plan validates section descriptors including count<=65535. Private entries retain that count; header narrows the already validated directory length."
+ 
+ [[job.capacity_proof]]
+@@ -3488,7 +3488,7 @@ authorities = [
+     "crates/purrdf/src/embedding/wire.rs=source:946be390eabf2446",
+     "crates/purrdf/src/embedding/writer.rs=source:90aebfe6d5b3af88",
+ ]
+-constructors = "source:958a85f6efd89919"
++constructors = "source:715a2e36ae7f43e7"
+ reason = "This equality checks serialized byte shape, not a logical table limit. validate_row enforces stored_dimension; private MatrixScalar f32/f64 raw_bytes writes exactly WIDTH bytes per value. Row capacity was checked before allocation."
+ 
+ [[job.capacity_proof]]
+@@ -3505,7 +3505,7 @@ authorities = [
+     "crates/purrdf/src/embedding/wire.rs=source:946be390eabf2446",
+     "crates/purrdf/src/embedding/writer.rs=source:90aebfe6d5b3af88",
+ ]
+-constructors = "source:958a85f6efd89919"
++constructors = "source:715a2e36ae7f43e7"
+ reason = "This equality checks the encoded matrix byte count. checked_matrix_byte_length and VectorDtype.width agree with private MatrixScalar raw_bytes; each row is validated before append. Arithmetic and allocation refusal remain separate."
+ 
+ [[job.capacity_proof]]
+@@ -3522,7 +3522,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable.rs=source:c2c581ca7cbb0af4",
+     "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
+ ]
+-constructors = "source:958a85f6efd89919"
++constructors = "source:715a2e36ae7f43e7"
+ reason = "The blank visitor enumerates the concrete frozen base term table, whose constructor closure and original interner capacity are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3539,7 +3539,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable.rs=source:c2c581ca7cbb0af4",
+     "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
+ ]
+-constructors = "source:958a85f6efd89919"
++constructors = "source:715a2e36ae7f43e7"
+ reason = "The blank visitor enumerates the concrete frozen base term table, whose constructor closure and original interner capacity are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3556,7 +3556,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable/delta_view.rs=source:7983b20723e489a5",
+     "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
+ ]
+-constructors = "source:958a85f6efd89919"
++constructors = "source:715a2e36ae7f43e7"
+ reason = "DeltaDatasetView.new enumerates its concrete frozen delta table before constructing the private delta ID mapping; both conversions reuse the native ordinal."
+ 
+ [[job.capacity_proof]]
+@@ -3573,7 +3573,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable/delta_view.rs=source:7983b20723e489a5",
+     "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
+ ]
+-constructors = "source:958a85f6efd89919"
++constructors = "source:715a2e36ae7f43e7"
+ reason = "DeltaDatasetView.new enumerates its concrete frozen delta table before constructing the private delta ID mapping; both conversions reuse the native ordinal."
+ 
+ [[job.capacity_proof]]
+@@ -3590,7 +3590,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable/delta_view.rs=source:7983b20723e489a5",
+     "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
+ ]
+-constructors = "source:958a85f6efd89919"
++constructors = "source:715a2e36ae7f43e7"
+ reason = "DeltaDatasetView.term_ids enumerates the concrete frozen base table, then chains already minted added IDs. It does not trust a foreign DatasetView count."
+ 
+ [[job.capacity_proof]]
+@@ -3607,7 +3607,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable/delta_view.rs=source:7983b20723e489a5",
+     "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
+ ]
+-constructors = "source:958a85f6efd89919"
++constructors = "source:715a2e36ae7f43e7"
+ reason = "DeltaDatasetView.term_ids enumerates the concrete frozen base table, then chains already minted added IDs. It does not trust a foreign DatasetView count."
+ 
+ [[job.capacity_proof]]
+@@ -3624,7 +3624,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+     "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
+ ]
+-constructors = "source:958a85f6efd89919"
++constructors = "source:715a2e36ae7f43e7"
+ reason = "The event emitter enumerates its concrete frozen RdfDataset term table; no new slot is allocated by this reconstruction."
+ 
+ [[job.capacity_proof]]
+@@ -3637,7 +3637,7 @@ authorities = [
+     "crates/lex/src/allocation.rs=source:7a6f233a2b0d152f",
+     "crates/rdf-core/src/ir/global.rs=source:5228f8d490189559",
+ ]
+-constructors = "source:958a85f6efd89919"
++constructors = "source:715a2e36ae7f43e7"
+ reason = "GlobalDictionary private hash entries are inserted only after its exact GlobalTerms capacity and checked ID mint. The owner module pins all constructors and mutation paths."
+ 
+ [[job.capacity_proof]]
+@@ -3650,7 +3650,7 @@ authorities = [
+     "crates/lex/src/allocation.rs=source:7a6f233a2b0d152f",
+     "crates/rdf-core/src/ir/global.rs=source:5228f8d490189559",
+ ]
+-constructors = "source:958a85f6efd89919"
++constructors = "source:715a2e36ae7f43e7"
+ reason = "The value index enumerates the resident nonzero-sized GlobalInternedTerm vector. On supported 32/64-bit pointers its addressable element count is below the reserved u64 terminal index; no remote logical count is used."
+ 
+ [[job.capacity_proof]]
+@@ -3667,7 +3667,7 @@ authorities = [
+     "crates/rdf-core/src/ir/ingest.rs=source:003c1266a7e596e0",
+     "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
+ ]
+-constructors = "source:958a85f6efd89919"
++constructors = "source:715a2e36ae7f43e7"
+ reason = "Both ingest passes enumerate the same concrete frozen RdfDataset term table, first for blank scopes and then emission. The original admitted count bounds both ordinal reconstructions."
+ 
+ [[job.capacity_proof]]
+@@ -3684,7 +3684,7 @@ authorities = [
+     "crates/rdf-core/src/ir/ingest.rs=source:003c1266a7e596e0",
+     "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
+ ]
+-constructors = "source:958a85f6efd89919"
++constructors = "source:715a2e36ae7f43e7"
+ reason = "Both ingest passes enumerate the same concrete frozen RdfDataset term table, first for blank scopes and then emission. The original admitted count bounds both ordinal reconstructions."
+ 
+ [[job.capacity_proof]]
+@@ -3701,7 +3701,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/provider.rs=source:7aa0b2bed0d1f840",
+     "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
+ ]
+-constructors = "source:958a85f6efd89919"
++constructors = "source:715a2e36ae7f43e7"
+ reason = "logical_rdf_byte_len takes a concrete RdfDataset and enumerates its retained terms. The nested narrowing and niche conversion reconstruct native ordinals."
+ 
+ [[job.capacity_proof]]
+@@ -3718,7 +3718,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/provider.rs=source:7aa0b2bed0d1f840",
+     "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
+ ]
+-constructors = "source:958a85f6efd89919"
++constructors = "source:715a2e36ae7f43e7"
+ reason = "logical_rdf_byte_len takes a concrete RdfDataset and enumerates its retained terms. The nested narrowing and niche conversion reconstruct native ordinals."
+ 
+ [[job.capacity_proof]]
+@@ -3736,7 +3736,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
+     "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
+ ]
+-constructors = "source:958a85f6efd89919"
++constructors = "source:715a2e36ae7f43e7"
+ reason = "The query validates each local term in the private PageTranslation. Its sole builder copies a concrete frozen page length; remap preserves that length and clone copies it. The provider count is not the authority."
+ 
+ [[job.capacity_proof]]
+@@ -3754,7 +3754,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
+     "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
+ ]
+-constructors = "source:958a85f6efd89919"
++constructors = "source:715a2e36ae7f43e7"
+ reason = "The query validates each local term in the private PageTranslation. Its sole builder copies a concrete frozen page length; remap preserves that length and clone copies it. The provider count is not the authority."
+ 
+ [[job.capacity_proof]]
+@@ -3768,7 +3768,7 @@ authorities = [
+     "crates/rdf-core/src/ir/global.rs=source:5228f8d490189559",
+     "crates/rdf-core/src/ir/paged/stack.rs=source:e2b618a6bf7d0851",
+ ]
+-constructors = "source:958a85f6efd89919"
++constructors = "source:715a2e36ae7f43e7"
+ reason = "Current snapshots and checked historical prefixes enumerate retained GlobalDictionary resident term vectors. Prefix position is checked against the retained source list before selection; neither route uses a foreign logical interval. The private dictionary owner and consuming stack source are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3785,7 +3785,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
+     "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
+ ]
+-constructors = "source:958a85f6efd89919"
++constructors = "source:715a2e36ae7f43e7"
+ reason = "PageTranslation.try_build copies exactly the concrete frozen page term_count. Both conversions reconstruct local IDs already admitted by that page owner."
+ 
+ [[job.capacity_proof]]
+@@ -3802,7 +3802,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
+     "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
+ ]
+-constructors = "source:958a85f6efd89919"
++constructors = "source:715a2e36ae7f43e7"
+ reason = "PageTranslation.try_build copies exactly the concrete frozen page term_count. Both conversions reconstruct local IDs already admitted by that page owner."
+ 
+ [[job.capacity_proof]]
+@@ -3819,7 +3819,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
+     "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
+ ]
+-constructors = "source:958a85f6efd89919"
++constructors = "source:715a2e36ae7f43e7"
+ reason = "PageTranslation.remap enumerates its private local_to_global table created by try_build; it changes global values while preserving local cardinality. All owning module source is pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3836,7 +3836,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
+     "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
+ ]
+-constructors = "source:958a85f6efd89919"
++constructors = "source:715a2e36ae7f43e7"
+ reason = "PageTranslation.remap enumerates its private local_to_global table created by try_build; it changes global values while preserving local cardinality. All owning module source is pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3855,7 +3855,7 @@ authorities = [
+     "crates/rdf-core/src/ir/segmented/mod.rs=source:f7f048945fd74d6e",
+     "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
+ ]
+-constructors = "source:958a85f6efd89919"
++constructors = "source:715a2e36ae7f43e7"
+ reason = "SegmentedBuildLimits private fields are created with bounded terms and checked first+terms. All builder mint paths enforce that term budget. global/map_id translate only admitted local IDs; local first subtracts/checks against the stored builder count. The entire interval owner and all encoding callers are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3874,7 +3874,7 @@ authorities = [
+     "crates/rdf-core/src/ir/segmented/mod.rs=source:f7f048945fd74d6e",
+     "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
+ ]
+-constructors = "source:958a85f6efd89919"
++constructors = "source:715a2e36ae7f43e7"
+ reason = "SegmentedBuildLimits private fields are created with bounded terms and checked first+terms. All builder mint paths enforce that term budget. global/map_id translate only admitted local IDs; local first subtracts/checks against the stored builder count. The entire interval owner and all encoding callers are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3893,7 +3893,7 @@ authorities = [
+     "crates/rdf-core/src/ir/segmented/mod.rs=source:f7f048945fd74d6e",
+     "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
+ ]
+-constructors = "source:958a85f6efd89919"
++constructors = "source:715a2e36ae7f43e7"
+ reason = "SegmentedBuildLimits private fields are created with bounded terms and checked first+terms. All builder mint paths enforce that term budget. global/map_id translate only admitted local IDs; local first subtracts/checks against the stored builder count. The entire interval owner and all encoding callers are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3912,7 +3912,7 @@ authorities = [
+     "crates/rdf-core/src/ir/segmented/mod.rs=source:f7f048945fd74d6e",
+     "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
+ ]
+-constructors = "source:958a85f6efd89919"
++constructors = "source:715a2e36ae7f43e7"
+ reason = "encode_dataset enumerates its concrete frozen input. seal uses the bounded builder; pack migration checks input count against the same validated limits before encoding. The interval, input constructor closure and consuming module are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3929,7 +3929,7 @@ authorities = [
+     "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
+     "crates/rdf-core/src/ir/validate.rs=source:ca5c3028c6150f9f",
+ ]
+-constructors = "source:958a85f6efd89919"
++constructors = "source:715a2e36ae7f43e7"
+ reason = "The private triple validator is called with the actual builder term_count in the same pinned module. Both passes enumerate that bounded interner; callers cannot provide an arbitrary count to this private helper."
+ 
+ [[job.capacity_proof]]
+@@ -3946,7 +3946,7 @@ authorities = [
+     "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
+     "crates/rdf-core/src/ir/validate.rs=source:ca5c3028c6150f9f",
+ ]
+-constructors = "source:958a85f6efd89919"
++constructors = "source:715a2e36ae7f43e7"
+ reason = "The private triple validator is called with the actual builder term_count in the same pinned module. Both passes enumerate that bounded interner; callers cannot provide an arbitrary count to this private helper."
+ 
+ [[job.capacity_proof]]
+@@ -3963,7 +3963,7 @@ authorities = [
+     "crates/rdf-core/src/ir/term.rs=source:e273cb0910811ff8",
+     "crates/rdf-core/src/turtle_render.rs=source:709dd6553dd0b117",
+ ]
+-constructors = "source:958a85f6efd89919"
++constructors = "source:715a2e36ae7f43e7"
+ reason = "The Turtle renderer searches an explicitly borrowed RdfDataset. Enumeration reuses its original bounded term IDs; it is not a DatasetView count."
+ 
+ [[job]]
+@@ -4000,6 +4000,23 @@ constants = []
+ fingerprints = []
+ names = []
+ 
++[[job]]
++id = "checked-word-prefix-plan"
++summary = "Exact uniform and individual checked word prefixes over the original immutable scoped membership"
++home = "purrdf_core::content_prefix::PrefixPlan"
++entry_points = []
++spec = "docs/design/purrdf-word-identities.md: admitted digest sorting and neighbour minimums, bounded unique resolution and exact original Presentation binding"
++vectors = ["crates/rdf-core/tests/content_aliases.rs"]
++bench = ["purrdf-core:ir_layout"]
++sites = []
++replaces_external = []
++enforced = true
++
++[job.forbidden]
++constants = []
++fingerprints = []
++names = []
++
+ [[job]]
+ id = "source-row-identity"
+ summary = "One canonical value-based row law for native sealed source metadata and selected text source fingerprints, in graph-aware and graph-free profiles"

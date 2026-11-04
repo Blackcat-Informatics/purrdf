@@ -1,0 +1,6 @@
+{"time": "2026-11-04T08:41:01.439762+00:00", "status": "started"}
+{"time": "2026-11-04T08:41:09.393332+00:00", "status": "merging"}
+{"time": "2026-11-04T08:41:10.895495+00:00", "status": "conflicted"}
+{"time": "2026-11-04T08:41:10.912097+00:00", "status": "review_required", "reused_paths": [], "rerere_output": "Recorded preimage for 'helpers-ledger.toml'\n"}
+{"time": "2026-11-04T08:46:30.748702+00:00", "status": "committing", "candidate_tree": "010d19909601b594293b088a405e05aeae3bc4a1", "candidate_patch": "candidate-95d5daef53b149ffac971dd75f7c90e1.patch", "validation_records": []}
+{"time": "2026-11-04T08:49:16.369134+00:00", "status": "completed", "commit": "49a3fa43767aabbc44bd347c25c5eede7e0c9578", "tree": "010d19909601b594293b088a405e05aeae3bc4a1"}
