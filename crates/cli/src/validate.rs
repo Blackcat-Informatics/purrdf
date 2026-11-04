@@ -203,6 +203,8 @@ use crate::{format, ledger, sink, source};
 /// Grouped for the reason [`crate::convert::ConvertOptions`] is: it keeps [`run`]'s signature
 /// small enough to read, and every field is borrowed from the parsed command line.
 pub(crate) struct ValidateOptions<'a> {
+    /// Explicit Basic controls for the primary data document only.
+    pub(crate) yamlld_input_options: Option<&'a std::path::Path>,
     /// The data-graph path `IN`, or `-` for stdin (which requires `--from`).
     pub(crate) input: &'a str,
     /// The report path `OUT`, or `-` for stdout.
@@ -452,7 +454,11 @@ pub(crate) fn run(
     refuse_a_rebuild_with_no_product(options)?;
 
     let data_format = format::resolve(options.from, options.input)?;
-    // Decided before a byte of anything is read, for the reason `ShapesPlan::decide` is:
+    let input_options = options
+        .yamlld_input_options
+        .map(|path| source::read_yamlld_input_options(path, &[data_format]))
+        .transpose()?;
+    // Decided before data, change or shapes bytes are read, as `ShapesPlan::decide` is:
     // an unresolvable `--changes-from` is a malformed request about the command line.
     let change_plan = ChangePlan::decide(options)?;
     // The DATA parse is the only leg `--base` has here: the shapes graph resolves against
@@ -476,7 +482,13 @@ pub(crate) fn run(
     // Decided off the command line too: an IRI that is not one is a malformed request.
     let validation = validation_options(options)?;
 
-    let data = source::load_dataset(options.input, data_format, options.base, None, canonical)?;
+    let data = source::load_dataset(
+        options.input,
+        data_format,
+        options.base,
+        input_options.as_deref(),
+        canonical,
+    )?;
     // The graph this run VALIDATES: `IN` itself, or `IN` with the change applied. Built
     // before the shapes are read, because its `sh:shapesGraph` links (SHACL 1.2 Core
     // section 6.4) decide what the shapes graph is — and a change may add or retract a

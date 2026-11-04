@@ -1205,6 +1205,10 @@ pub(crate) enum Command {
     /// stdout — and stdout stays a well-formed RDF or SARIF document, which it could not if
     /// the verdict were interleaved into it.
     Validate {
+        /// Closed version-one YAML-LD Basic input-options JSON file, for primary IN only.
+        /// Shapes, products, imports and change documents keep their existing policy.
+        #[arg(long, value_name = "PATH")]
+        yamlld_input_options: Option<PathBuf>,
         /// The SHACL shapes graph `FILE`, or `-` for stdin (which requires `--shapes-from`).
         /// Exactly one of this and `--shapes-product` is required: they are two spellings of
         /// the same input, a document to parse or a preparation to restore.
@@ -3013,6 +3017,7 @@ impl Cli {
                 paths.push(PathBuf::from(output));
             }
             Command::Validate {
+                yamlld_input_options,
                 shapes,
                 shapes_product,
                 import,
@@ -3022,6 +3027,7 @@ impl Cli {
                 output,
                 ..
             } => {
+                paths.extend(yamlld_input_options.iter().cloned());
                 if let Some(path) = shapes {
                     paths.push(PathBuf::from(path));
                 }
