@@ -13,6 +13,7 @@ use purrdf_hash::{
     hex::{self, Digest32},
     word_id::{self, Reference},
 };
+mod scoped;
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 pub(crate) enum Format {
@@ -43,6 +44,64 @@ pub(crate) enum Lines {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum Command {
+    /// Build a `PURRAL01` snapshot from canonical hex lines; report exact lengths
+    /// and the retained revision on stderr. The scope belongs to the caller.
+    Plan {
+        #[arg(long)]
+        scope: String,
+        #[arg(long, default_value = "-")]
+        input: String,
+        #[arg(long)]
+        output: String,
+    },
+    /// Shorten a member of the exact retained snapshot.
+    Shorten {
+        #[command(flatten)]
+        snapshot: scoped::Snapshot,
+        #[arg(long, value_enum)]
+        from: Format,
+        #[arg(long, value_enum)]
+        length: scoped::LengthChoice,
+        #[arg(long, default_value = "-")]
+        input: String,
+        #[arg(long, default_value = "-")]
+        output: String,
+    },
+    /// Expand a checked reference in the required original snapshot revision.
+    Expand {
+        #[command(flatten)]
+        snapshot: scoped::Snapshot,
+        #[arg(long, value_enum)]
+        to: DigestFormat,
+        #[arg(long, default_value = "-")]
+        input: String,
+        #[arg(long, default_value = "-")]
+        output: String,
+    },
+    /// Inspect a checked reference and its uniquely resolved complete identity.
+    InspectScoped {
+        #[command(flatten)]
+        snapshot: scoped::Snapshot,
+        #[arg(long, default_value = "-")]
+        input: String,
+        #[arg(long, default_value = "-")]
+        output: String,
+    },
+    /// Convert explicit LF-framed formats using one retained snapshot index.
+    BatchScoped {
+        #[command(flatten)]
+        snapshot: scoped::Snapshot,
+        #[arg(long, value_enum)]
+        from: Lines,
+        #[arg(long, value_enum)]
+        to: Lines,
+        #[arg(long, value_enum)]
+        length: scoped::LengthChoice,
+        #[arg(long, default_value = "-")]
+        input: String,
+        #[arg(long, default_value = "-")]
+        output: String,
+    },
     /// Encode one 64-digit canonical hex or exact 32-byte input record.
     Encode {
         #[arg(long, value_enum)]
@@ -92,10 +151,27 @@ impl Command {
                 paths.push(PathBuf::from(path));
             }
         }
+        if let Some(snapshot) = self.snapshot() {
+            paths.push(PathBuf::from(&snapshot.manifest));
+        }
+    }
+    fn snapshot(&self) -> Option<&scoped::Snapshot> {
+        match self {
+            Self::Shorten { snapshot, .. }
+            | Self::Expand { snapshot, .. }
+            | Self::InspectScoped { snapshot, .. }
+            | Self::BatchScoped { snapshot, .. } => Some(snapshot),
+            _ => None,
+        }
     }
     fn io(&self) -> (&str, &str) {
         match self {
-            Self::Encode { input, output, .. }
+            Self::Plan { input, output, .. }
+            | Self::Shorten { input, output, .. }
+            | Self::Expand { input, output, .. }
+            | Self::InspectScoped { input, output, .. }
+            | Self::BatchScoped { input, output, .. }
+            | Self::Encode { input, output, .. }
             | Self::Decode { input, output, .. }
             | Self::Inspect { input, output, .. }
             | Self::Batch { input, output, .. } => (input, output),
@@ -106,6 +182,21 @@ impl Command {
 /// A conversion refusal retaining the original native codec or I/O cause.
 #[derive(Debug)]
 pub enum Failure {
+    /// Original native snapshot owner failure.
+    Alias(purrdf_core::content_alias::Error),
+    /// Original native prefix planning or lookup failure.
+    Prefix(purrdf_core::content_prefix::Error),
+    /// Original admitted storage failure.
+    Storage(purrdf_lex::allocation::StorageError),
+    /// Source record context with the original typed failure.
+    Record {
+        /// One-based original source record.
+        record: usize,
+        /// Absolute source byte offset of the record start.
+        offset: u64,
+        /// Original unmodified refusal.
+        cause: Box<Self>,
+    },
     /// Original strict word codec refusal.
     Codec(word_id::Error),
     /// Original canonical base16 refusal.
@@ -143,6 +234,14 @@ pub enum Failure {
 impl fmt::Display for Failure {
     fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Alias(error) => error.fmt(out),
+            Self::Prefix(error) => error.fmt(out),
+            Self::Storage(error) => error.fmt(out),
+            Self::Record {
+                record,
+                offset,
+                cause,
+            } => write!(out, "record {record}, stream byte {offset}: {cause}"),
             Self::Codec(error) => error.fmt(out),
             Self::Hex(error) => error.fmt(out),
             Self::Io(error) => error.fmt(out),
@@ -166,6 +265,10 @@ impl fmt::Display for Failure {
 impl std::error::Error for Failure {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::Alias(error) => Some(error),
+            Self::Prefix(error) => Some(error),
+            Self::Storage(error) => Some(error),
+            Self::Record { cause, .. } => Some(&**cause),
             Self::Codec(error) => Some(error),
             Self::Hex(error) => Some(error),
             Self::Io(error) => Some(error),
@@ -176,6 +279,7 @@ impl std::error::Error for Failure {
     }
 }
 purrdf_lex::variant_from!(Failure { Codec(word_id::Error), Hex(hex::HexError), Io(io::Error), Allocation(std::collections::TryReserveError) });
+purrdf_lex::variant_from!(Failure { Alias(purrdf_core::content_alias::Error), Prefix(purrdf_core::content_prefix::Error), Storage(purrdf_lex::allocation::StorageError) });
 
 fn digest(input: &[u8], format: Format) -> Result<Digest32, Failure> {
     match format {
@@ -237,21 +341,83 @@ fn write_digest(
             output.write_all(b"\n")?;
         }
         Format::Words => {
-            let len = Reference::Full(digest).encode(buffer)?;
-            output.write_all(&buffer[..len])?;
-            output.write_all(b"\n")?;
+            write_reference(output, Reference::Full(digest), buffer)?;
         }
     }
     Ok(())
 }
 
+fn write_reference(
+    output: &mut dyn io::Write,
+    reference: Reference,
+    buffer: &mut [u8; word_id::MAX_ENCODED_LEN],
+) -> Result<(), Failure> {
+    let len = reference.encode(buffer)?;
+    output.write_all(&buffer[..len])?;
+    output.write_all(b"\n")?;
+    Ok(())
+}
+
+fn inspect_reference(
+    output: &mut dyn io::Write,
+    reference: Reference,
+    buffer: &mut [u8; word_id::MAX_ENCODED_LEN],
+) -> Result<(), Failure> {
+    writeln!(
+        output,
+        "payload_words {}\ncheck_words 1\ndisplayed_words {}",
+        reference.payload_words(),
+        reference.payload_words() + 1
+    )?;
+    let len = reference.encode(buffer)?;
+    let check = buffer[..len]
+        .iter()
+        .rposition(|byte| *byte == b' ')
+        .ok_or(Failure::Invariant("missing encoded separator"))?;
+    output.write_all(b"check ")?;
+    output.write_all(&buffer[check + 1..len])?;
+    output.write_all(b"\ncanonical ")?;
+    output.write_all(&buffer[..len])?;
+    output.write_all(b"\n")?;
+    Ok(())
+}
+
+fn read_single(reader: &mut dyn io::Read, format: Format) -> Result<Vec<u8>, Failure> {
+    let mut input = Vec::new();
+    input.try_reserve_exact(word_id::MAX_ENCODED_LEN + 2)?;
+    reader
+        .take((word_id::MAX_ENCODED_LEN + 2) as u64)
+        .read_to_end(&mut input)?;
+    if !matches!(format, Format::Raw) && input.last() == Some(&b'\n') {
+        input.pop();
+    }
+    Ok(input)
+}
+
 struct PreparedInput {
     reader: io::BufReader<Box<dyn io::Read>>,
     single: Option<Digest32>,
+    scoped: Option<scoped::State>,
 }
 
 fn prepare(command: &Command) -> Result<PreparedInput, Failure> {
     let (input_path, output_path) = command.io();
+    if let Some(snapshot) = command.snapshot() {
+        if snapshot.manifest == "-" {
+            return Err(Failure::Usage("snapshot manifest must name a file"));
+        }
+        if output_path != "-"
+            && (snapshot.manifest == output_path
+                || crate::canonical::same_file(
+                    std::path::Path::new(&snapshot.manifest),
+                    std::path::Path::new(output_path),
+                )?)
+        {
+            return Err(Failure::Usage(
+                "output aliases the bound snapshot manifest; choose a distinct output",
+            ));
+        }
+    }
     if input_path != "-" && input_path == output_path {
         return Err(Failure::Usage("input and output must have different paths"));
     }
@@ -272,6 +438,14 @@ fn prepare(command: &Command) -> Result<PreparedInput, Failure> {
         Box::new(std::fs::File::open(input_path)?)
     };
     let mut reader = io::BufReader::new(input);
+    if command.snapshot().is_some() || matches!(command, Command::Plan { .. }) {
+        let (single, scoped) = scoped::prepare(command, &mut reader)?;
+        return Ok(PreparedInput {
+            reader,
+            single,
+            scoped: Some(scoped),
+        });
+    }
     // Single-record conversion finishes validation before opening an output file.
     let single = if matches!(command, Command::Batch { .. }) {
         None
@@ -281,18 +455,14 @@ fn prepare(command: &Command) -> Result<PreparedInput, Failure> {
             Command::Inspect { from, .. } => *from,
             _ => Format::Words,
         };
-        let mut input = Vec::new();
-        input.try_reserve_exact(word_id::MAX_ENCODED_LEN + 2)?;
-        reader
-            .by_ref()
-            .take((word_id::MAX_ENCODED_LEN + 2) as u64)
-            .read_to_end(&mut input)?;
-        if !matches!(format, Format::Raw) && input.last() == Some(&b'\n') {
-            input.pop();
-        }
+        let input = read_single(&mut reader, format)?;
         Some(digest(&input, format)?)
     };
-    Ok(PreparedInput { reader, single })
+    Ok(PreparedInput {
+        reader,
+        single,
+        scoped: None,
+    })
 }
 
 #[derive(Default)]
@@ -310,7 +480,11 @@ impl Refusals {
 }
 
 pub(crate) fn run(command: &Command) -> Result<(), CliError> {
-    let PreparedInput { mut reader, single } = prepare(command).map_err(CliError::from)?;
+    let PreparedInput {
+        mut reader,
+        single,
+        mut scoped,
+    } = prepare(command).map_err(CliError::from)?;
     let mut target = OutTarget::open(command.io().1)?;
     let mut writer = io::BufWriter::new(target.writer());
     let mut buffer = [0; word_id::MAX_ENCODED_LEN];
@@ -322,6 +496,7 @@ pub(crate) fn run(command: &Command) -> Result<(), CliError> {
         &mut writer,
         &mut buffer,
         &mut refusals,
+        scoped.as_mut(),
     );
     let result = match (refusals.finish(), operation) {
         (None, result) => result.map_err(CliError::from),
@@ -367,27 +542,19 @@ fn convert(
     writer: &mut dyn io::Write,
     buffer: &mut [u8; word_id::MAX_ENCODED_LEN],
     refusals: &mut Refusals,
+    scoped: Option<&mut scoped::State>,
 ) -> Result<(), Failure> {
+    if let Some(state) = scoped {
+        return state.convert(command, reader, single, writer, buffer, refusals);
+    }
     match command {
         Command::Batch { from, to, .. } => {
-            batch(reader, writer, *from, *to, buffer, refusals)?;
+            batch(reader, writer, *from, *to, buffer, refusals, None)?;
         }
         Command::Inspect { .. } => {
             let digest = single.ok_or(Failure::Invariant("missing validated input"))?;
-            writeln!(
-                writer,
-                "digest {digest}\npayload_words 22\ncheck_words 1\ndisplayed_words 23"
-            )?;
-            let len = Reference::Full(digest).encode(buffer)?;
-            let check = buffer[..len]
-                .iter()
-                .rposition(|byte| *byte == b' ')
-                .ok_or(Failure::Invariant("missing encoded separator"))?;
-            writer.write_all(b"check ")?;
-            writer.write_all(&buffer[check + 1..len])?;
-            writer.write_all(b"\ncanonical ")?;
-            writer.write_all(&buffer[..len])?;
-            writer.write_all(b"\n")?;
+            writeln!(writer, "digest {digest}")?;
+            inspect_reference(writer, Reference::Full(digest), buffer)?;
         }
         Command::Encode { .. } => write_digest(
             writer,
@@ -401,6 +568,7 @@ fn convert(
             (*to).into(),
             buffer,
         )?,
+        _ => return Err(Failure::Invariant("missing scoped preparation")),
     }
     Ok(())
 }
@@ -412,62 +580,46 @@ fn batch(
     to: Lines,
     buffer: &mut [u8; word_id::MAX_ENCODED_LEN],
     refusals: &mut Refusals,
+    mut scoped: Option<&mut scoped::State>,
 ) -> Result<(), Failure> {
     let mut input = Vec::new();
     input.try_reserve_exact(word_id::MAX_ENCODED_LEN + 1)?;
     let mut record = 0;
     let mut stream_offset = 0_u64;
     loop {
-        input.clear();
         let start = stream_offset;
-        let mut saw_input = false;
-        loop {
-            let chunk = reader.fill_buf()?;
-            if chunk.is_empty() {
-                break;
-            }
-            saw_input = true;
-            let newline = chunk.iter().position(|byte| *byte == b'\n');
-            let consume = newline.map_or(chunk.len(), |index| index + 1);
-            let keep = consume.min((word_id::MAX_ENCODED_LEN + 1).saturating_sub(input.len()));
-            input.extend_from_slice(&chunk[..keep]);
-            stream_offset += consume as u64;
-            reader.consume(consume);
-            if newline.is_some() {
-                break;
-            }
-        }
-        if !saw_input {
-            break;
-        }
-        record += 1;
-        let result = if stream_offset - start > (word_id::MAX_ENCODED_LEN + 1) as u64 {
-            Err(Failure::RecordTooLong {
-                record,
-                offset: start + word_id::MAX_ENCODED_LEN as u64,
-            })
-        } else {
-            if input.last() == Some(&b'\n') {
-                input.pop();
-            }
-            digest(
-                &input,
-                match from {
+        let result = match read_record(reader, &mut input, &mut record, &mut stream_offset) {
+            Ok(false) => break,
+            Err(error @ Failure::RecordTooLong { .. }) => Err(error),
+            Err(error) => return Err(error),
+            Ok(true) => {
+                let format = match from {
                     Lines::HexLines => Format::Hex,
                     Lines::WordLines => Format::Words,
-                },
-            )
+                };
+                if let Some(state) = scoped.as_deref_mut() {
+                    state.read(&input, format)
+                } else {
+                    digest(&input, format)
+                }
+            }
         };
         match result {
-            Ok(digest) => write_digest(
-                writer,
-                digest,
-                match to {
-                    Lines::HexLines => Format::Hex,
-                    Lines::WordLines => Format::Words,
-                },
-                buffer,
-            )?,
+            Ok(digest) => {
+                if let Some(state) = scoped.as_deref_mut() {
+                    state.write(writer, digest, to, buffer)?;
+                } else {
+                    write_digest(
+                        writer,
+                        digest,
+                        match to {
+                            Lines::HexLines => Format::Hex,
+                            Lines::WordLines => Format::Words,
+                        },
+                        buffer,
+                    )?;
+                }
+            }
             Err(error) => {
                 let reported = writeln!(
                     io::stderr().lock(),
@@ -482,4 +634,49 @@ fn batch(
         }
     }
     Ok(())
+}
+
+fn read_record(
+    reader: &mut dyn io::BufRead,
+    input: &mut Vec<u8>,
+    record: &mut usize,
+    stream_offset: &mut u64,
+) -> Result<bool, Failure> {
+    input.clear();
+    let start = *stream_offset;
+    loop {
+        let chunk = match reader.fill_buf() {
+            Ok(chunk) => chunk,
+            Err(error) => {
+                *record += 1;
+                return Err(error.into());
+            }
+        };
+        if chunk.is_empty() {
+            break;
+        }
+        let newline = chunk.iter().position(|byte| *byte == b'\n');
+        let consume = newline.map_or(chunk.len(), |index| index + 1);
+        let keep = consume.min((word_id::MAX_ENCODED_LEN + 1).saturating_sub(input.len()));
+        input.extend_from_slice(&chunk[..keep]);
+        *stream_offset += consume as u64;
+        reader.consume(consume);
+        if newline.is_some() {
+            break;
+        }
+    }
+    if *stream_offset == start {
+        return Ok(false);
+    }
+    *record += 1;
+    if *stream_offset - start > (word_id::MAX_ENCODED_LEN + 1) as u64 {
+        return Err(Failure::RecordTooLong {
+            record: *record,
+            offset: start + word_id::MAX_ENCODED_LEN as u64,
+        });
+    }
+    if input.last() == Some(&b'\n') {
+        input.pop();
+    }
+    Ok(true)
 }

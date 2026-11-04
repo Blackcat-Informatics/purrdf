@@ -4001,6 +4001,23 @@ fingerprints = []
 names = []
 
 [[job]]
+id = "checked-word-prefix-plan"
+summary = "Exact uniform and individual checked word prefixes over the original immutable scoped membership"
+home = "purrdf_core::content_prefix::PrefixPlan"
+entry_points = []
+spec = "docs/design/purrdf-word-identities.md: admitted digest sorting and neighbour minimums, bounded unique resolution and exact original Presentation binding"
+vectors = ["crates/rdf-core/tests/content_aliases.rs"]
+bench = ["purrdf-core:ir_layout"]
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = []
+
+[[job]]
 id = "source-row-identity"
 summary = "One canonical value-based row law for native sealed source metadata and selected text source fingerprints, in graph-aware and graph-free profiles"
 home = "purrdf_core::source::LiteralSourceRow"

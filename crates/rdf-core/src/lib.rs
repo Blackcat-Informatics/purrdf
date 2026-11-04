@@ -63,6 +63,7 @@ pub mod bytes;
 pub mod collections;
 pub mod content_alias;
 pub mod content_id;
+pub mod content_prefix;
 pub mod content_store;
 pub use purrdf_lex::visual_fingerprint;
 // The cover law: verbatim byte spans back into the document they cover,

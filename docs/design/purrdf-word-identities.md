@@ -119,6 +119,40 @@ position to stderr, and makes the final exit status one. Readers/writers stop
 on original I/O failure. This successful-record stream is not an atomic file
 transaction; single-record validation completes before opening an output file.
 
+## Immutable scoped prefix plans
+
+`purrdf_core::content_prefix::PrefixPlan` owns the admitted sorted digest index
+above the zero-dependency lexical codec. It retains the original alias
+`Presentation`, including scope and mapping revision. `from_aliases` reads the
+actual owner; source constructors require the complete membership of the supplied
+presentation. Equal digests are deduplicated. A sorted-source constructor validates
+nondecreasing input, retaining the first decreasing source ordinal and both values.
+
+For distinct neighbours sharing `b` leading digest bits, their shared whole-word
+prefix has length `floor(b / 12)`. One more word distinguishes them. A neighbour
+pass computes each entry's maximum left/right overlap plus one and the maximum
+over all entries. Empty plans report zero; singletons use one. The summary includes
+the exact uniform payload minimum and a 22-slot individual-length histogram.
+The native byte-prefix kernel and a leading-zero count compute overlap without
+formatting word strings. Unsorted construction costs O(n log n); sorted input
+and the neighbour pass cost O(n). All storage and work retain caller admission.
+
+`shorten` explicitly chooses uniform or per-entry length and returns a checked
+selector with the original presentation. A 22-word payload becomes the ordinary
+full form. `resolve_text` validates the lexical check before index access;
+`resolve` accepts an already validated typed selector. Both require the original
+scope and revision. Binary lower-bound lookup followed by at most two matches
+returns one complete member or an explicit unknown/ambiguous refusal. Refusals
+retain the entire submitted selector as structured fields. Full forms also
+require membership when used through this scoped owner.
+
+Growth produces a new immutable plan with its actual new presentation. An old
+plan retains its original semantics; a grown plan refuses an old revision.
+The tools restore the existing `PURRAL01` alias export and never synthesize a
+new identity, wire law or scope. Scoped batches retain one plan across records.
+See [mnemonic hashes](../mnemonic-hashes.md) for command usage and the native
+example that renders words, prefixes and integer aliases from identical digests.
+
 ## Offline generation and measurements
 
 The Rust `word_dictionary` example selects the frozen EFF subset and measures

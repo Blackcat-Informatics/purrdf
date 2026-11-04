@@ -118,20 +118,125 @@ fn word_ids(c: &mut Bench) {
     std::fs::write(&invalid, b"b3w2: invalid").unwrap();
     let mut hex_rows = String::new();
     let mut word_rows = String::new();
+    let mut values = Vec::new();
     for ordinal in 0_u64..256 {
         let digest = Digest32::new(*purrdf_hash::blake3::hash(&ordinal.to_le_bytes()).as_bytes());
         use std::fmt::Write as _;
         writeln!(hex_rows, "{digest}").unwrap();
         writeln!(word_rows, "{}", Reference::Full(digest).to_text().unwrap()).unwrap();
+        values.push(digest);
     }
     std::fs::write(&batch, hex_rows).unwrap();
     std::fs::write(&batch_words, word_rows).unwrap();
+    use purrdf_core::{
+        content_alias::{AliasScope, ScopeId},
+        content_prefix::{Length, PrefixPlan},
+    };
+    use purrdf_lex::allocation::Resident;
+    let snapshot = directory.path().join("snapshot.bin");
+    let prefix_single = directory.path().join("prefix-single.txt");
+    let prefix_hex = directory.path().join("prefix-hex.txt");
+    let prefix_batch = directory.path().join("prefix-batch.txt");
+    let scope = ScopeId::new(Digest32::new([23; 32]));
+    let scope_text = scope.digest().to_string();
+    let mut aliases = AliasScope::new(scope, Resident).unwrap();
+    aliases.extend(scope, &values).unwrap();
+    let binding = aliases.presentation(scope).unwrap();
+    let revision_text = binding.revision.digest().to_string();
+    let exported = aliases.export(scope).unwrap();
+    std::fs::write(&snapshot, &*exported).unwrap();
+    exported.release().unwrap();
+    let mut plan = PrefixPlan::from_aliases(&mut aliases, Resident).unwrap();
+    let mut prefix_rows = String::new();
+    for digest in &values {
+        use std::fmt::Write as _;
+        writeln!(
+            prefix_rows,
+            "{}",
+            plan.shorten(binding, *digest, Length::PerEntry)
+                .unwrap()
+                .reference
+                .to_text()
+                .unwrap()
+        )
+        .unwrap();
+    }
+    std::fs::write(&prefix_batch, prefix_rows).unwrap();
+    std::fs::write(
+        &prefix_single,
+        plan.shorten(binding, values[0], Length::PerEntry)
+            .unwrap()
+            .reference
+            .to_text()
+            .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(&prefix_hex, format!("{}\n", values[0])).unwrap();
+    let snapshot_args = [
+        "--manifest",
+        snapshot.to_str().unwrap(),
+        "--scope",
+        &scope_text,
+        "--revision",
+        &revision_text,
+    ];
     let mut group = c.benchmark_group("word_ids");
     group
         .sample_size(20)
         .warm_up_time(Duration::from_millis(100))
         .measurement_time(Duration::from_millis(300));
     for (name, arguments, source, count, expected) in [
+        (
+            "cli_prefix_plan_256",
+            vec!["plan", "--scope", &scope_text],
+            &batch,
+            256,
+            0,
+        ),
+        (
+            "cli_prefix_shorten",
+            vec!["shorten", "--from", "hex", "--length", "per-entry"],
+            &prefix_hex,
+            1,
+            0,
+        ),
+        (
+            "cli_prefix_expand",
+            vec!["expand", "--to", "hex"],
+            &prefix_single,
+            1,
+            0,
+        ),
+        (
+            "cli_prefix_shorten_batch_256",
+            vec![
+                "batch-scoped",
+                "--from",
+                "hex-lines",
+                "--to",
+                "word-lines",
+                "--length",
+                "per-entry",
+            ],
+            &batch,
+            256,
+            0,
+        ),
+        (
+            "cli_prefix_expand_batch_256",
+            vec![
+                "batch-scoped",
+                "--from",
+                "word-lines",
+                "--to",
+                "hex-lines",
+                "--length",
+                "uniform",
+            ],
+            &prefix_batch,
+            256,
+            0,
+        ),
         ("cli_encode", vec!["encode", "--from", "hex"], &input, 1, 0),
         ("cli_decode", vec!["decode", "--to", "hex"], &words, 1, 0),
         (
@@ -159,9 +264,12 @@ fn word_ids(c: &mut Bench) {
         group.throughput(Throughput::Elements(count));
         group.bench_function(name, |b| {
             b.iter(|| {
-                let result = Command::new(env!("CARGO_BIN_EXE_purrdf"))
-                    .arg("word-id")
-                    .args(&arguments)
+                let mut command = Command::new(env!("CARGO_BIN_EXE_purrdf"));
+                command.arg("word-id").args(&arguments);
+                if name.starts_with("cli_prefix") && name != "cli_prefix_plan_256" {
+                    command.args(snapshot_args);
+                }
+                let result = command
                     .arg("--input")
                     .arg(source)
                     .arg("--output")

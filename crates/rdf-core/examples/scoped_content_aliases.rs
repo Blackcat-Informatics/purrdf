@@ -5,8 +5,9 @@
 //! resolves structured replies, then matches full identities across datasets.
 
 use purrdf_core::content_alias::{AliasScope, ScopeId};
+use purrdf_core::content_prefix::{Length, PrefixPlan};
 use purrdf_core::visual_fingerprint::{self, Request};
-use purrdf_hash::{blake3, hex::Digest32};
+use purrdf_hash::{blake3, hex::Digest32, word_id};
 use purrdf_lex::{
     allocation::{Admission, Memory, OwnedAdmission, StorageError},
     json::{self, Object, Value},
@@ -168,6 +169,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     let left_rendering = left_visual.rendering();
     let right_rendering = right_visual.rendering();
+    // Decode both word presentations back to the exact identity before visual
+    // rendering. The original alias owner supplies the immutable binding.
+    let mut prefixes = PrefixPlan::from_aliases(&mut left_map, Authority::bounded())?;
+    let short = prefixes.shorten(left_envelope, left[0].digest, Length::PerEntry)?;
+    let mut words = [0; word_id::MAX_ENCODED_LEN];
+    let length = short.reference.encode(&mut words)?;
+    let from_prefix = prefixes.resolve_text(left_envelope, &words[..length])?;
+    let length = word_id::Reference::Full(left[0].digest).encode(&mut words)?;
+    let mut full_bytes = [0; 32];
+    word_id::decode_full(&words[..length], &mut full_bytes)?;
+    let from_full = Digest32::new(full_bytes);
+    for decoded in [from_full, from_prefix] {
+        assert_eq!(decoded, left_map.resolve(left_reference)?);
+        let visual = visual_fingerprint::present(decoded, visual_request, Authority::bounded())?;
+        let rendering = visual.rendering();
+        assert_eq!(
+            (rendering.emoji(), rendering.spoken(), rendering.randomart()),
+            (
+                left_rendering.emoji(),
+                left_rendering.spoken(),
+                left_rendering.randomart()
+            ),
+        );
+        visual.release()?;
+    }
     assert_eq!(
         (
             left_rendering.emoji(),
