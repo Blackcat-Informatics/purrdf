@@ -323,7 +323,13 @@ pub const PURRDF_ABI_MAJOR: u32 = 0;
 /// `purrdf_parse` gains nullable `input_options` bytes and `input_options_len`
 /// after `source_name`. Pass null and zero for the existing default behavior.
 /// Rebuild all consumers against the new header; options select Basic only.
-pub const PURRDF_ABI_MINOR: u32 = 19;
+///
+/// # `0.19.0` → `0.20.0`: native YAML source carrier pair
+///
+/// Adds `purrdf_yaml_source_export` and `purrdf_yaml_source_reconstruct` with
+/// existing dataset/buffer ownership. The `purrdf_parse` signature stays unchanged.
+/// The native-cause accessor also exposes original YAML source refusals.
+pub const PURRDF_ABI_MINOR: u32 = 20;
 /// ABI patch version. Reset to `0` by the MINOR bump documented above.
 pub const PURRDF_ABI_PATCH: u32 = 0;
 

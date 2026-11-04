@@ -107,6 +107,26 @@ executes that example against the generated shared library and committed header.
 
 ## ABI contract (every entry point)
 
+ABI `0.20.0` adds `purrdf_yaml_source_export` and
+`purrdf_yaml_source_reconstruct`. Export borrows original source bytes, an
+explicit source IRI and mandatory profile JSON, returning independent dataset
+and root-buffer handles. The root buffer holds exact UTF-8 IRI bytes with no
+NUL or newline; use its length when preparing a NUL-terminated reconstruction
+argument. Reconstruction verifies that root/profile against the existing
+dataset and returns exact original bytes. Free datasets with
+`purrdf_dataset_free` and both kinds of buffers with `purrdf_buffer_free`.
+
+Both export outputs are prepared before either is published. Output slots must
+be empty, writable and distinct, including from `out_error`; aliasing the error
+slot is rejected by status without writing through it. Native profile/source
+admission precedes copies. Profile JSON uses the shared explicit source profile;
+native processing, retained dataset ownership, and C handle controls have
+separate accounts. `purrdf_error_native_cause_json` exposes original native
+codes, fields and available positions until error-free, while the presentation
+accessor retains the diagnostic. Inspection failure is explicit and retains the
+original cause; it never becomes a successful incomplete error record.
+
+The existing ABI `0.19.0` parse signature is unchanged by this additive pair.
 ABI `0.19.0` extends `purrdf_parse` with `const uint8_t *input_options` and
 `size_t input_options_len` after `source_name`. Recompile consumers against the
 generated header. Pass `NULL, 0` for existing default parsing; explicit options
@@ -143,7 +163,7 @@ the IRI failure without parsing English. The error message and the record's
   When an error out-pointer is supplied, a failure stores an owned `PurrdfError`
   there.
 - **SemVer-frozen ABI.** The status enum is append-only; new fields/functions are
-  additive. The current ABI is **0.19.0 (beta)** — the freeze *discipline* is in
+  additive. The current ABI is **0.20.0 (beta)** — the freeze *discipline* is in
   place, but the version stays pre-1.0 until a real C consumer and the rdflib
   shim exercise it. `purrdf_abi_version` reports it.
 - **An incompatible change is declared, not smuggled.** Pre-1.0 the project

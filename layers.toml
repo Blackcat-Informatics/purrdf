@@ -404,6 +404,7 @@ name = "purrdf-capi"
 deps = [
     "purrdf",
     "purrdf-core",
+    "purrdf-lex",
     "purrdf-sparql-eval",
     "purrdf-sparql-results",
     "purrdf-validate",
