@@ -636,7 +636,7 @@ fn caller_flat_nquads(
         Err(purrdf_core::ViewCanonError::Refused(err)) => {
             Err(crate::canonical::CanonicalServiceError::Canonical {
                 context: context.to_owned(),
-                cause: err,
+                cause: Box::new(err),
             })
         }
         Err(purrdf_core::ViewCanonError::NotReady { error, .. }) => match error {
@@ -3288,7 +3288,7 @@ fn render_justification(
     let digest = justification.digest_hex(control).map_err(|cause| {
         crate::canonical::CanonicalServiceError::Canonical {
             context: "justify: content identity".into(),
-            cause,
+            cause: Box::new(cause),
         }
     })?;
     let mut out = String::new();
@@ -4873,7 +4873,7 @@ fn answer_claims(
                 purrdf_entail::try_ontology_identity(&module, control).map_err(|error| {
                     crate::canonical::CanonicalServiceError::Canonical {
                         context: "the module answer".into(),
-                        cause: error,
+                        cause: Box::new(error),
                     }
                 })?;
             vec![ClaimSubject::Module { digest }]

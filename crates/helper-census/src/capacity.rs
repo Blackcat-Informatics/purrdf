@@ -175,7 +175,7 @@ pub(crate) fn proofs(
         if valid && let [index] = matching.as_slice() {
             accepted.insert(*index);
         } else {
-            errors.push(format!("{label}: stale, duplicate or incomplete source proof ({} matching sinks); review the actual owner and constructor closure", matching.len()));
+            errors.push(format!("{label}: stale, duplicate or incomplete source proof ({} matching sinks); current constructor identity {constructors}; review the actual owner and constructor closure", matching.len()));
         }
     }
     (accepted, errors)

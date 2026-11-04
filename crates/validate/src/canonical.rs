@@ -58,7 +58,7 @@ pub enum CanonicalServiceError {
         /// The operation's caller-facing context.
         context: String,
         /// The original native cause, never reconstructed from its rendering.
-        cause: CanonError,
+        cause: Box<CanonError>,
     },
 }
 
@@ -67,7 +67,7 @@ impl CanonicalServiceError {
         match error {
             purrdf_entail::EntailError::Canonicalization(cause) => Self::Canonical {
                 context: context.to_owned(),
-                cause,
+                cause: Box::new(cause),
             },
             error => Self::Text(format!("{context}: {error}")),
         }
@@ -89,7 +89,7 @@ impl std::error::Error for CanonicalServiceError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Text(_) => None,
-            Self::Canonical { cause, .. } => Some(cause),
+            Self::Canonical { cause, .. } => Some(cause.as_ref()),
         }
     }
 }
@@ -98,7 +98,7 @@ impl purrdf_hash::error::StructuredError for CanonicalServiceError {
     purrdf_hash::error_visit! {
         Text(message) => "canonical-service-message" { "message" => Message(message) },
         Canonical { context, cause } => "canonical-service-refused" {
-            "context" => Text(context), "cause" => Cause(cause),
+            "context" => Text(context), "cause" => Cause(cause.as_ref()),
         },
     }
 }
