@@ -111,6 +111,7 @@ impl BridgeBytes {
                 "yaml-source-byte-length",
             ));
         }
+        // The finite, integral, nonnegative length is already bounded by u32::MAX.
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let length = length as u32 as usize;
         if length > maximum {
