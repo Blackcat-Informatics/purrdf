@@ -63,6 +63,7 @@ pub mod bytes;
 pub mod collections;
 pub mod content_alias;
 pub mod content_id;
+pub mod content_prefix;
 pub mod content_store;
 pub use purrdf_lex::visual_fingerprint;
 // The cover law: verbatim byte spans back into the document they cover,
@@ -229,10 +230,12 @@ pub use ir::{
     PagedStackSnapshotError, PipelineBundle, PipelineBundleError, PipelineViewBundle, QuadHandle,
     QuadIds, QuadPatternCursor, QuadProbePlan, QuadRef, QuadValues, QueryIndexAllocationError,
     RDFC_V2_CORPUS_POLICY, RESERVED_NAMESPACE, RdfDataset, RdfDatasetBuilder, RdfDatasetVisitor,
-    RdfEnvelope, RecordKind, RecordValues, ReservedVocabulary, SkolemError, StackPageOrigin,
-    StackSource, SubsetPageProvider, TermBox, TermId, TermPosition, TermRef, TermValue, TermVisit,
-    TripleDataset, TripleDatasetBuilder, TripleIds, TripleOrder, TripleRead, TripleReadError,
-    TripleReifierRow, TripleReservation, TripleRows, TripleStorageLayout,
+    RdfEnvelope, RdfcActiveGroup, RdfcActivePath, RdfcCandidateProgress, RdfcGroupLabels,
+    RdfcGroupObservation, RdfcGroupObservations, RdfcGroupStats, RdfcRefusalObservation,
+    RdfcRootProgress, RdfcSearchContext, RecordKind, RecordValues, ReservedVocabulary, SkolemError,
+    StackPageOrigin, StackSource, SubsetPageProvider, TermBox, TermId, TermPosition, TermRef,
+    TermValue, TermVisit, TripleDataset, TripleDatasetBuilder, TripleIds, TripleOrder, TripleRead,
+    TripleReadError, TripleReifierRow, TripleReservation, TripleRows, TripleStorageLayout,
     ValidatedRdfDatasetBuilder, ViewCanonError, blank_count_view, canonical_paged_seal,
     canonical_relabel, canonical_relabel_with_mapping, check_admissible,
     check_admissible_flat_view, check_admissible_view, dataset_diff, datasets_isomorphic,

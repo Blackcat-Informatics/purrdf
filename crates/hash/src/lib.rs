@@ -118,6 +118,7 @@ pub mod multiset;
 mod secret;
 pub mod sha1;
 pub mod sha3;
+pub mod word_id;
 
 pub use digest::{Digest, MAX_OUTPUT_LEN};
 pub use dispatch::Backend;

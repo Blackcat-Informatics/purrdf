@@ -68,6 +68,194 @@ fn digest(byte: u8) -> Digest32 {
 }
 
 #[test]
+fn word_prefix_plans_are_minimal_and_retain_the_exact_alias_snapshot() {
+    use purrdf_core::content_prefix::{Length, PrefixPlan, ScopedReference};
+    use purrdf_hash::word_id::{self, Reference};
+    use purrdf_lex::allocation::Resident;
+    let id = scope(11);
+    let mut close = [0; 32];
+    close[31] = 1;
+    let close = Digest32::new(close);
+    let values = [digest(32), close, digest(0), digest(16), close];
+    let mut aliases = AliasScope::new(id, Resident).unwrap();
+    aliases.extend(id, &values).unwrap();
+    let mut plan = PrefixPlan::from_aliases(&mut aliases, Resident).unwrap();
+    let binding = plan.presentation();
+    let summary = plan.summary();
+    assert_eq!(summary.identities, 4);
+    assert_eq!(summary.uniform_payload_words, 22);
+    assert_eq!(summary.per_entry_lengths[0], 2);
+    assert_eq!(summary.per_entry_lengths[21], 2);
+    for value in values {
+        for length in [Length::Uniform, Length::PerEntry] {
+            let reference = plan.shorten(binding, value, length).unwrap();
+            assert_eq!(plan.resolve(reference).unwrap(), value);
+            let text = reference.reference.to_text().unwrap();
+            assert_eq!(plan.resolve_text(binding, text.as_bytes()).unwrap(), value);
+            for words in 1..reference.reference.payload_words() {
+                // Only per-entry plans promise individual minimality. The
+                // uniform minimum is established by the close pair below.
+                if length == Length::PerEntry {
+                    assert!(matches!(
+                        plan.resolve(ScopedReference {
+                            presentation: binding,
+                            reference: Reference::from_digest(value, words).unwrap()
+                        }),
+                        Err(purrdf_core::content_prefix::Error::Ambiguous { .. })
+                    ));
+                }
+            }
+        }
+    }
+    assert!(matches!(
+        plan.shorten(binding, digest(99), Length::Uniform),
+        Err(purrdf_core::content_prefix::Error::Unknown { .. })
+    ));
+    assert!(matches!(
+        plan.resolve(ScopedReference {
+            presentation: binding,
+            reference: Reference::Full(digest(99))
+        }),
+        Err(purrdf_core::content_prefix::Error::Unknown { .. })
+    ));
+    let old = plan.shorten(binding, digest(16), Length::PerEntry).unwrap();
+    let selector = Reference::from_digest(digest(0), 1).unwrap();
+    let ambiguous = plan
+        .resolve(ScopedReference {
+            presentation: binding,
+            reference: selector,
+        })
+        .unwrap_err();
+    let captured = purrdf_testkit::error_capture::Capture::read(&ambiguous);
+    let prefix = captured.child("reference").child("prefix");
+    assert!(matches!(
+        prefix.field("payload_words"),
+        purrdf_hash::error::ErrorValue::Unsigned(1)
+    ));
+    assert_eq!(prefix.child("lower").code, "digest32");
+    assert!(
+        matches!(ambiguous, purrdf_core::content_prefix::Error::Ambiguous { reference, .. } if reference == selector)
+    );
+    aliases.extend(id, &[digest(17)]).unwrap();
+    let mut grown = PrefixPlan::from_aliases(&mut aliases, Resident).unwrap();
+    assert!(matches!(
+        grown.resolve(old),
+        Err(purrdf_core::content_prefix::Error::Binding(
+            Error::Revision { .. }
+        ))
+    ));
+    assert_eq!(plan.resolve(old).unwrap(), digest(16));
+    let wrong = purrdf_core::content_alias::Presentation {
+        scope: scope(12),
+        ..binding
+    };
+    assert!(matches!(
+        plan.shorten(wrong, digest(0), Length::Uniform),
+        Err(purrdf_core::content_prefix::Error::Binding(
+            Error::Scope { .. }
+        ))
+    ));
+    // Lexical validation precedes even an invalid snapshot binding.
+    assert!(matches!(
+        plan.resolve_text(wrong, b"not a checked word reference"),
+        Err(purrdf_core::content_prefix::Error::Codec(_))
+    ));
+    let mut empty_aliases = AliasScope::new(scope(15), Resident).unwrap();
+    let mut empty = PrefixPlan::from_aliases(&mut empty_aliases, Resident).unwrap();
+    let empty_binding = empty.presentation();
+    assert_eq!(empty.summary().uniform_payload_words, 0);
+    assert!(matches!(
+        empty.shorten(empty_binding, digest(0), Length::Uniform),
+        Err(purrdf_core::content_prefix::Error::Unknown { .. })
+    ));
+    let mut singleton_aliases = AliasScope::new(scope(16), Resident).unwrap();
+    singleton_aliases
+        .extend(scope(16), &[digest(0), digest(0)])
+        .unwrap();
+    let mut singleton = PrefixPlan::from_aliases(&mut singleton_aliases, Resident).unwrap();
+    let singleton_binding = singleton.presentation();
+    assert_eq!(singleton.summary().identities, 1);
+    let one = singleton
+        .shorten(singleton_binding, digest(0), Length::Uniform)
+        .unwrap();
+    assert_eq!(one.reference.payload_words(), 1);
+    let mut buffer = [0; word_id::MAX_ENCODED_LEN];
+    let len = one.reference.encode(&mut buffer).unwrap();
+    assert_eq!(
+        singleton
+            .resolve_text(singleton_binding, &buffer[..len])
+            .unwrap(),
+        digest(0)
+    );
+}
+
+#[test]
+fn word_prefix_builds_preserve_source_order_and_original_admission_refusals() {
+    use purrdf_core::content_prefix::{BuildError, Error as PrefixError, Length, PrefixPlan};
+    use purrdf_lex::allocation::Resident;
+    let mut aliases = AliasScope::new(scope(13), Resident).unwrap();
+    aliases.extend(scope(13), &[digest(0), digest(1)]).unwrap();
+    let binding = aliases.presentation(scope(13)).unwrap();
+    let ordered = [digest(0), digest(0), digest(1)].map(Ok::<_, &'static str>);
+    let good = PrefixPlan::from_sorted_source(binding, ordered, Resident).unwrap();
+    assert_eq!(good.summary().identities, 2);
+    let descending = [Ok::<_, &'static str>(digest(1)), Ok(digest(0))];
+    assert!(matches!(
+        PrefixPlan::from_sorted_source(binding, descending, Resident),
+        Err(BuildError::Plan(PrefixError::Order { ordinal: 2, .. }))
+    ));
+    let authority = Authority::fresh();
+    let original = [
+        Ok(digest(0)),
+        Err("original source unavailable"),
+        Ok(digest(1)),
+    ];
+    assert!(matches!(
+        PrefixPlan::from_source(binding, original, authority.clone()),
+        Err(BuildError::Source {
+            ordinal: 2,
+            cause: "original source unavailable"
+        })
+    ));
+    assert_eq!(authority.0.borrow().bytes, 0);
+    let calls = std::cell::Cell::new(0);
+    authority.0.borrow_mut().max_work = 0;
+    let source = std::iter::from_fn(|| {
+        calls.set(calls.get() + 1);
+        Some(Ok::<_, &'static str>(digest(0)))
+    });
+    assert!(matches!(
+        PrefixPlan::from_source(binding, source, authority.clone()),
+        Err(BuildError::Plan(PrefixError::Storage(
+            StorageError::AdmissionFailed
+        )))
+    ));
+    assert_eq!(calls.get(), 0);
+    authority.0.borrow_mut().max_work = u64::MAX;
+    authority.0.borrow_mut().max_bytes = 0;
+    assert!(matches!(
+        PrefixPlan::from_digests(binding, &[digest(0), digest(1)], authority.clone()),
+        Err(PrefixError::Storage(StorageError::AdmissionFailed))
+    ));
+    assert_eq!(authority.0.borrow().bytes, 0);
+    authority.0.borrow_mut().max_bytes = usize::MAX;
+    let mut plan =
+        PrefixPlan::from_digests(binding, &[digest(0), digest(1)], authority.clone()).unwrap();
+    assert!(authority.0.borrow().bytes > 0);
+    let spent = authority.0.borrow().work;
+    authority.0.borrow_mut().max_work = spent;
+    assert!(matches!(
+        plan.shorten(binding, digest(0), Length::Uniform),
+        Err(PrefixError::Storage(StorageError::AdmissionFailed))
+    ));
+    authority.0.borrow_mut().max_work = u64::MAX;
+    let reference = plan.shorten(binding, digest(0), Length::Uniform).unwrap();
+    assert_eq!(plan.resolve(reference).unwrap(), digest(0));
+    drop(plan);
+    assert_eq!(authority.0.borrow().bytes, 0);
+}
+
+#[test]
 fn first_seen_assignments_are_scoped_reproducible_and_append_only() {
     let id = scope(9);
     let mut map = AliasScope::new(id, Authority::fresh()).unwrap();

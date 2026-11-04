@@ -66,7 +66,9 @@ impl Request {
         };
         let resolved = resolve(destination)?;
         for path in paths.iter().filter(|path| path.as_path() != Path::new("-")) {
-            if resolved == resolve(path)? || same_file(destination, path)? {
+            if resolved == resolve(path)?
+                || same_file(destination, path).map_err(CliError::FileIdentity)?
+            {
                 return Err(CliError::Usage(format!(
                     "--canonicalization-receipts {} aliases input or output {}; choose a distinct destination",
                     destination.display(),
@@ -196,12 +198,12 @@ fn resolve(path: &Path) -> Result<PathBuf, CliError> {
     }
 }
 
-fn same_file(a: &Path, b: &Path) -> Result<bool, CliError> {
-    let metadata = |path: &Path| -> Result<Option<std::fs::Metadata>, CliError> {
+pub(crate) fn same_file(a: &Path, b: &Path) -> Result<bool, std::io::Error> {
+    let metadata = |path: &Path| -> Result<Option<std::fs::Metadata>, std::io::Error> {
         match std::fs::metadata(path) {
             Ok(metadata) => Ok(Some(metadata)),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(error) => Err(error.into()),
+            Err(error) => Err(error),
         }
     };
     let (Some(a), Some(b)) = (metadata(a)?, metadata(b)?) else {
@@ -215,7 +217,10 @@ fn same_file(a: &Path, b: &Path) -> Result<bool, CliError> {
     #[cfg(not(unix))]
     {
         let _ = (a, b);
-        Err(CliError::Usage("cannot prove distinct identities for an existing receipt file on this platform; choose a new receipt destination".to_owned()))
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "cannot prove distinct identities for existing files on this platform; choose a new output destination",
+        ))
     }
 }
 
@@ -229,7 +234,7 @@ pub(crate) fn map_error<E: std::error::Error + 'static>(
     match cause {
         Some(cause) => CliError::Canonical {
             message: mapped.to_string(),
-            cause,
+            cause: Box::new(cause),
         },
         None => mapped,
     }

@@ -224,5 +224,116 @@ fn blake3_backends(c: &mut Bench) {
     group.finish();
 }
 
-bench_group!(benches, digests, hex, blake3, blake3_backends);
+fn word_ids(c: &mut Bench) {
+    use purrdf_hash::{
+        hex::Digest32,
+        word_id::{self, Reference},
+    };
+    use purrdf_hash_conformance::word_lookup::Lookup;
+    use std::time::Duration;
+    let words: Vec<_> = (0..4096)
+        .map(|index| word_id::dictionary_word(index).unwrap())
+        .collect();
+    let lookup = Lookup::new(&words).unwrap();
+    let invalid: Vec<_> = words.iter().map(|word| format!("{word}z")).collect();
+    for word in &invalid {
+        assert_eq!(
+            lookup.perfect(word.as_bytes()),
+            lookup.bucket(word.as_bytes())
+        );
+    }
+    let reference = Reference::Full(Digest32::new([0x5a; 32]));
+    let text = reference.to_text().unwrap();
+    let mut bad = text.clone().into_bytes();
+    *bad.last_mut().unwrap() = b'z';
+    assert!(word_id::decode(&bad).is_err());
+    let rows: Vec<_> = (0_u64..256)
+        .map(|index| {
+            Reference::Full(Digest32::new(
+                *purrdf_hash::blake3::hash(&index.to_le_bytes()).as_bytes(),
+            ))
+        })
+        .collect();
+    let texts: Vec<_> = rows.iter().map(|row| row.to_text().unwrap()).collect();
+    let mut output = [0; word_id::MAX_ENCODED_LEN];
+    let mut group = c.benchmark_group("word_ids");
+    group
+        .sample_size(20)
+        .warm_up_time(Duration::from_millis(100))
+        .measurement_time(Duration::from_millis(300));
+    group.throughput(Throughput::Elements(4096));
+    group.bench_function("lookup_perfect_valid", |b| {
+        b.iter(|| {
+            for word in &words {
+                black_box(lookup.perfect(black_box(word.as_bytes())));
+            }
+        });
+    });
+    group.bench_function("lookup_bucket_valid", |b| {
+        b.iter(|| {
+            for word in &words {
+                black_box(lookup.bucket(black_box(word.as_bytes())));
+            }
+        });
+    });
+    group.bench_function("lookup_perfect_invalid", |b| {
+        b.iter(|| {
+            for word in &invalid {
+                black_box(lookup.perfect(black_box(word.as_bytes())));
+            }
+        });
+    });
+    group.bench_function("lookup_bucket_invalid", |b| {
+        b.iter(|| {
+            for word in &invalid {
+                black_box(lookup.bucket(black_box(word.as_bytes())));
+            }
+        });
+    });
+    group.throughput(Throughput::Elements(1));
+    group.bench_function("encode_buffer", |b| {
+        b.iter(|| black_box(reference.encode(black_box(&mut output))).unwrap());
+    });
+    group.bench_function("encode_owned", |b| {
+        b.iter(|| black_box(reference.to_text()).unwrap());
+    });
+    group.bench_function("decode_valid", |b| {
+        b.iter(|| black_box(word_id::decode(black_box(text.as_bytes()))).unwrap());
+    });
+    group.bench_function("decode_invalid", |b| {
+        b.iter(|| black_box(word_id::decode(black_box(&bad))));
+    });
+    group.throughput(Throughput::Elements(256));
+    group.bench_function("encode_batch_256", |b| {
+        b.iter(|| {
+            word_id::encode_batch(rows.iter().copied(), &mut output, |_, value| {
+                black_box(value.unwrap());
+                Ok::<_, core::convert::Infallible>(())
+            })
+            .unwrap();
+        });
+    });
+    group.bench_function("decode_batch_256", |b| {
+        b.iter(|| {
+            for value in word_id::decode_batch(texts.iter().map(String::as_bytes)) {
+                black_box(value.unwrap());
+            }
+        });
+    });
+    // Deliberately measured with the pressure work included: no claim of a
+    // DRAM-cold isolated decoder or uncontended machine-wide cache control.
+    let mut pressure = vec![0_u8; 16 * 1024 * 1024];
+    group.throughput(Throughput::Elements(1));
+    group.bench_function("decode_with_16MiB_cache_pressure", |b| {
+        b.iter(|| {
+            for byte in pressure.iter_mut().step_by(64) {
+                *byte = byte.wrapping_add(1);
+            }
+            black_box(&pressure);
+            black_box(word_id::decode(black_box(text.as_bytes()))).unwrap()
+        });
+    });
+}
+
+bench_group!(benches, digests, hex, blake3, blake3_backends, word_ids);
 bench_main!(benches);

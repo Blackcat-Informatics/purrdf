@@ -1215,9 +1215,97 @@ fn bench_canonicalize(c: &mut Bench) {
     group.finish();
 }
 
+fn bench_word_prefixes(c: &mut Bench) {
+    use purrdf_core::{
+        content_alias::{AliasScope, ScopeId},
+        content_prefix::{Length, PrefixPlan},
+    };
+    use purrdf_hash::{blake3, hex::Digest32};
+    use purrdf_lex::allocation::Resident;
+    let mut group = c.benchmark_group("word_prefix_plan");
+    group
+        .sample_size(20)
+        .warm_up_time(std::time::Duration::from_millis(100))
+        .measurement_time(std::time::Duration::from_millis(300));
+    for count in [128_u64, 4096] {
+        let values: Vec<_> = (0..count)
+            .map(|index| Digest32::new(*blake3::hash(&index.to_le_bytes()).as_bytes()))
+            .collect();
+        let scope = ScopeId::new(Digest32::new([23; 32]));
+        let mut aliases = AliasScope::new(scope, Resident).unwrap();
+        aliases.extend(scope, &values).unwrap();
+        let binding = aliases.presentation(scope).unwrap();
+        let mut sorted = values.clone();
+        sorted.sort_unstable();
+        let window = CurrentThreadWindow::open();
+        let mut plan = PrefixPlan::from_digests(binding, &values, Resident).unwrap();
+        let measurement = window.close();
+        report(&format!("word_prefix/{count}"), measurement);
+        eprintln!(
+            "[word_prefix] count={count} uniform_payload_words={} lengths={:?}",
+            plan.summary().uniform_payload_words,
+            plan.summary().per_entry_lengths
+        );
+        let references: Vec<_> = values
+            .iter()
+            .map(|&digest| plan.shorten(binding, digest, Length::PerEntry).unwrap())
+            .collect();
+        let window = CurrentThreadWindow::open();
+        for &reference in &references {
+            std::hint::black_box(plan.resolve(reference).unwrap());
+        }
+        let measurement = window.close();
+        report(&format!("word_resolve/{count}"), measurement);
+        group.throughput(purrdf_testkit::bench::Throughput::Elements(count));
+        group.bench_function(format!("build/{count}"), |b| {
+            b.iter(|| {
+                std::hint::black_box(PrefixPlan::from_digests(binding, &values, Resident).unwrap());
+            });
+        });
+        group.bench_function(format!("build_sorted/{count}"), |b| {
+            b.iter(|| {
+                std::hint::black_box(
+                    PrefixPlan::from_sorted_source(
+                        binding,
+                        sorted
+                            .iter()
+                            .copied()
+                            .map(Ok::<_, std::convert::Infallible>),
+                        Resident,
+                    )
+                    .unwrap(),
+                );
+            });
+        });
+        group.bench_function(format!("resolve/{count}"), |b| {
+            b.iter(|| {
+                for &reference in &references {
+                    std::hint::black_box(plan.resolve(reference).unwrap());
+                }
+            });
+        });
+        if count == 4096 {
+            let mut pressure = vec![0_u8; 16 * 1024 * 1024];
+            group.bench_function("pressure_and_resolve/4096", |b| {
+                b.iter(|| {
+                    for byte in pressure.iter_mut().step_by(64) {
+                        *byte = byte.wrapping_add(1);
+                    }
+                    std::hint::black_box(&pressure);
+                    for &reference in &references {
+                        std::hint::black_box(plan.resolve(reference).unwrap());
+                    }
+                });
+            });
+        }
+    }
+    group.finish();
+}
+
 bench_group!(
     benches,
     bench_metrics,
+    bench_word_prefixes,
     bench_build,
     bench_triple_carrier,
     bench_literal_intern,

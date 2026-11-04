@@ -742,4 +742,11 @@ source on every run.
 
 ## License
 
-`MIT OR Apache-2.0 OR MulanPSL-2.0`.
+Independently written code: `MIT OR Apache-2.0 OR MulanPSL-2.0`.
+The frozen word alphabet preserves EFF's `CC-BY-4.0` grant in addition; see
+[`data/word-id/PROVENANCE.md`](data/word-id/PROVENANCE.md).
+
+`word_id` supplies reversible full word identities and checked lexical prefixes
+over `hex::Digest32`, with caller-buffer, fallible owned and ordered batch APIs.
+Its exact scheme and conversion commands are specified in
+[`purrdf-word-identities.md`](../../docs/design/purrdf-word-identities.md).

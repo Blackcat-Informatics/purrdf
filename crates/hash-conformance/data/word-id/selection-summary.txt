@@ -1,0 +1,12 @@
+source_words=7776
+candidate_words=7772
+selected_words=4096
+alphabet_blake3=39a51de1fc00b10225ceeae54f6a7c1cd3ad7f191af0f92f5eb044132c534c05
+original_distance_one_pairs=2363
+original_distance_two_pairs=26134
+selected_distance_1_pairs=0
+selected_distance_2_pairs=153
+cl100k_space_word_token_sum=6789
+cl100k_space_word_token_max=4
+o200k_space_word_token_sum=6548
+o200k_space_word_token_max=4
