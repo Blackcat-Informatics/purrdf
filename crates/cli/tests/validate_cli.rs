@@ -107,6 +107,115 @@ fn conforms_triple(value: bool) -> String {
     )
 }
 
+/// Primary YAML selection feeds both validation routes and refuses before publication.
+#[test]
+fn configured_yamlld_primary_reaches_whole_and_incremental_validation() {
+    use support::path;
+    let dir = purrdf_testkit::temp_dir!().expect("temporary inputs");
+    let shapes = write_file(dir.path(), "shapes.ttl", SHAPES);
+    let input = write_file(
+        dir.path(),
+        "input.yamlld",
+        "'@id': http://example.org/bob\n'@type': http://example.org/Person\nhttp://example.org/age:\n  '@value': '42'\n  '@type': http://www.w3.org/2001/XMLSchema#integer\n---\n'@id': http://example.org/alice\n'@type': http://example.org/Person\nhttp://example.org/age: nope\n",
+    );
+    let config = write_file(
+        dir.path(),
+        "all.json",
+        r#"{"version":1,"yaml_ld":{"extract_all_scripts":true}}"#,
+    );
+    let first = run(&["validate", "--shapes", &shapes, &input]);
+    assert_eq!(code(&first), 0, "{}", stderr(&first));
+    assert!(stdout(&first).contains(&conforms_triple(true)));
+    assert!(stderr(&first).contains("shacl conforms true\n"));
+
+    let added = write_file(
+        dir.path(),
+        "added.ttl",
+        "<http://example.org/alice> <http://example.org/age> 42 .\n",
+    );
+    for changes in [None, Some(added.as_str())] {
+        let mut args = vec![
+            "validate",
+            "--shapes",
+            &shapes,
+            "--yamlld-input-options",
+            &config,
+        ];
+        if let Some(changes) = changes {
+            args.extend(["--changes", changes]);
+        }
+        args.push(&input);
+        let selected = run(&args);
+        assert_eq!(code(&selected), 0, "{}", stderr(&selected));
+        assert!(stdout(&selected).contains(&conforms_triple(false)));
+        assert!(stdout(&selected).contains("http://example.org/alice"));
+        assert!(stderr(&selected).contains("shacl conforms false\n"));
+        assert!(stderr(&selected).contains("shacl results 1\n"));
+    }
+
+    let output = write_file(dir.path(), "output.nt", "unchanged destination");
+    let limited = write_file(
+        dir.path(),
+        "limited.json",
+        r#"{"version":1,"yaml_ld":{"syntax":{"max_input_bytes":0}}}"#,
+    );
+    let refused = run(&[
+        "validate",
+        "--shapes",
+        &shapes,
+        "--yamlld-input-options",
+        &limited,
+        &input,
+        &output,
+    ]);
+    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+    assert!(stderr(&refused).contains("native-yaml-input-limit"));
+    assert_eq!(stdout(&refused), "");
+    assert_eq!(
+        std::fs::read_to_string(&output).unwrap(),
+        "unchanged destination"
+    );
+
+    let malformed = write_file(dir.path(), "malformed.json", "{");
+    let missing = path(dir.path(), "missing.yamlld");
+    let missing_shapes = path(dir.path(), "missing-shapes.ttl");
+    let missing_changes = path(dir.path(), "missing-changes.nt");
+    let refused = run(&[
+        "validate",
+        "--shapes",
+        &missing_shapes,
+        "--changes",
+        &missing_changes,
+        "--yamlld-input-options",
+        &malformed,
+        &missing,
+        &output,
+    ]);
+    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+    assert!(stderr(&refused).contains("rdf-input-options"));
+    assert_eq!(
+        std::fs::read_to_string(&output).unwrap(),
+        "unchanged destination"
+    );
+
+    let other = path(dir.path(), "missing.ttl");
+    let refused = run(&[
+        "validate",
+        "--shapes",
+        &shapes,
+        "--yamlld-input-options",
+        &config,
+        &other,
+        &output,
+    ]);
+    assert_eq!(code(&refused), 2, "{}", stderr(&refused));
+    assert!(stderr(&refused).contains("requires every input to be YAML-LD"));
+    assert_eq!(
+        std::fs::read_to_string(&output).unwrap(),
+        "unchanged destination"
+    );
+}
+
 /// A non-conforming data graph produces the SHACL results graph on stdout, the verdict on
 /// stderr, and exit **0**.
 ///
@@ -1413,7 +1522,7 @@ fn a_malformed_shapes_graph_is_a_named_usage_error() {
 // ── owl:imports in the shapes graph ──────────────────────────────────────────
 //
 // Jena's SHACL validator dereferences `owl:imports` over HTTP. PurRDF ships no HTTP client
-// and must stay wasm32-clean, so the closure is caller-supplied — the same answer `entails
+// and must build for `wasm32-unknown-unknown`, so the closure is caller-supplied — the same answer `entails
 // --import` and `shex --import` give. Only an `owl:imports` on the shapes document's own IRI,
 // on an `owl:Ontology` header, or on a node versioning either is an import; any other is data.
 // An import whose ontology is already IN the shapes graph needs no pair; any other unresolved

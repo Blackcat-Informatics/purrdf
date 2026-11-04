@@ -628,6 +628,7 @@ fn dispatch_with_request(
             canonical,
         ),
         Command::Validate {
+            yamlld_input_options,
             shapes,
             shapes_product,
             expect_identity,
@@ -659,6 +660,7 @@ fn dispatch_with_request(
             output,
         } => validate::run(
             &validate::ValidateOptions {
+                yamlld_input_options: yamlld_input_options.as_deref(),
                 shacl_profile: shacl_profile.as_deref(),
                 input,
                 output,

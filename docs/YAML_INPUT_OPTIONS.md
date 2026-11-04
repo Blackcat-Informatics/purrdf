@@ -66,11 +66,17 @@ conversion input, including canonicalization and entailment. `update` and `query
 accept the same flag for their sole `--data` document. Query applies it in ordinary,
 governed, explain and entailment execution, using its existing filename-based
 input selection. Query premise imports retain their default input policy.
+`validate` accepts the flag for primary `IN`, on both whole-graph and incremental
+validation. Shapes documents, prepared products, imports and added/removed change
+documents retain their existing input policy. The flag is also valid with
+`--shapes-product`, because the primary data is still parsed.
 Every selected input must be YAML-LD; pack, GTS and other native formats are
 refused before data acquisition. The bounded named options file is validated
 before primary data, premise imports or rule documents are read; it does not
 consume standard input. Other commands reject the flag. Existing output options
 are independent.
+For validation, configuration decoding also precedes change documents and shapes
+document/product/import acquisition.
 
 ```sh
 purrdf update --data input.yamlld --yamlld-input-options options.json --to nquads \
@@ -80,6 +86,7 @@ purrdf update --data input.yamlld --yamlld-input-options options.json --to nquad
 Without the flag, the existing first-document behavior is preserved. A configured
 input refusal writes no updated dataset and leaves an existing output intact.
 Query input refusals emit no answers or explanation.
+Validation input refusals publish no report and preserve an existing output.
 
 The C ABI takes nullable `input_options` bytes and `input_options_len` after
 `source_name` in `purrdf_parse`. Null with length zero keeps default parsing;
