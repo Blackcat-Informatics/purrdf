@@ -1,0 +1,540 @@
+diff --git crates/lex/src/allocation.rs crates/lex/src/allocation.rs
+index bb3d6c853..553ce5955 100644
+--- crates/lex/src/allocation.rs
++++ crates/lex/src/allocation.rs
+@@ -369,6 +369,26 @@ impl Admission for Resident {
+     }
+ }
+ 
++/// A fixed ceiling on the absolute live-byte total of one native account.
++///
++/// Each resize compares the requested total with the ceiling independently;
++/// admitted bytes are not subtracted from the ceiling. Native progress controls
++/// remain disabled, as in [`Admission`]'s defaults.
++#[derive(Debug)]
++pub struct Ceiling(
++    /// Maximum admitted live bytes, inclusive.
++    pub usize,
++);
++
++impl Admission for Ceiling {
++    fn resize(&mut self, live: usize) -> Result<(), StorageError> {
++        self.0
++            .checked_sub(live)
++            .map(|_| ())
++            .ok_or(StorageError::AdmissionFailed)
++    }
++}
++
+ impl<A: Admission + ?Sized> Admission for &mut A {
+     fn progress_enabled(&self) -> bool {
+         (**self).progress_enabled()
+diff --git crates/lex/src/yaml/admission.rs crates/lex/src/yaml/admission.rs
+index 667f4757a..080d701ad 100644
+--- crates/lex/src/yaml/admission.rs
++++ crates/lex/src/yaml/admission.rs
+@@ -3,24 +3,13 @@
+ 
+ //! One native allocation account for scanners, parser frames and syntax products.
+ 
+-use crate::allocation::{Admission, Memory, OrderedTable, StorageError};
++use crate::allocation::{Ceiling, Memory, OrderedTable, StorageError};
+ 
+ pub(super) struct Allocations {
+     limit: Option<usize>,
+     live: usize,
+ }
+ 
+-pub(super) struct Ceiling(usize);
+-impl Admission for Ceiling {
+-    fn resize(&mut self, live: usize) -> Result<(), StorageError> {
+-        if live > self.0 {
+-            Err(StorageError::AdmissionFailed)
+-        } else {
+-            Ok(())
+-        }
+-    }
+-}
+-
+ impl Allocations {
+     pub(super) const fn legacy() -> Self {
+         Self {
+diff --git crates/rdf/src/native_codecs/jsonld/yaml.rs crates/rdf/src/native_codecs/jsonld/yaml.rs
+index 78edc1c54..a3eb2c759 100644
+--- crates/rdf/src/native_codecs/jsonld/yaml.rs
++++ crates/rdf/src/native_codecs/jsonld/yaml.rs
+@@ -52,9 +52,9 @@ pub fn yamlld_to_jsonld_with_options(
+     bytes: &[u8],
+     options: &YamlLdOptions,
+ ) -> Result<String, RdfDiagnostic> {
+-    use purrdf_lex::allocation::Memory;
++    use purrdf_lex::allocation::{Ceiling, Memory};
+     let value = basic_value(bytes, options)?;
+-    let mut ceiling = SerializationLimit(options.max_serialization_bytes);
++    let mut ceiling = Ceiling(options.max_serialization_bytes);
+     let mut memory = Memory::new(&mut ceiling);
+     purrdf_lex::json::write_with_memory(&value, purrdf_lex::json::Format::COMPACT, &mut memory)
+         .map_err(|cause| {
+@@ -70,16 +70,6 @@ pub fn yamlld_to_jsonld_with_options(
+         })
+ }
+ 
+-struct SerializationLimit(usize);
+-impl purrdf_lex::allocation::Admission for SerializationLimit {
+-    fn resize(&mut self, live: usize) -> Result<(), purrdf_lex::allocation::StorageError> {
+-        self.0
+-            .checked_sub(live)
+-            .map(|_| ())
+-            .ok_or(purrdf_lex::allocation::StorageError::AdmissionFailed)
+-    }
+-}
+-
+ /// Parse YAML-LD Basic directly through the existing JSON-LD value engine.
+ /// # Errors
+ /// Returns the original YAML profile, admission or JSON-LD diagnostic.
+diff --git crates/yaml/src/decode.rs crates/yaml/src/decode.rs
+index 0ef269727..dc7eccffa 100644
+--- crates/yaml/src/decode.rs
++++ crates/yaml/src/decode.rs
+@@ -2,8 +2,7 @@
+ // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+ 
+ use crate::{
+-    Ceiling, Profile, SourceDocument, YamlError, admit_count, analyze, profile::validate_iri,
+-    project,
++    Profile, SourceDocument, YamlError, admit_count, analyze, profile::validate_iri, project,
+ };
+ use purrdf_core::{
+     ContentDigest, RdfDataset, TermId, TermRef,
+@@ -11,7 +10,7 @@ use purrdf_core::{
+     datatype::XSD_INTEGER,
+     ir::QuadIds,
+ };
+-use purrdf_lex::allocation::{Memory, OrderedTable, StorageError};
++use purrdf_lex::allocation::{Ceiling, Memory, OrderedTable, StorageError};
+ 
+ fn rows(dataset: &RdfDataset) -> impl Iterator<Item = QuadIds> + '_ {
+     dataset
+diff --git crates/yaml/src/lib.rs crates/yaml/src/lib.rs
+index 6c79adfaf..fe5ad6b10 100644
+--- crates/yaml/src/lib.rs
++++ crates/yaml/src/lib.rs
+@@ -86,16 +86,6 @@ impl purrdf_hash::error::StructuredError for YamlError {
+     }
+ }
+ 
+-pub(crate) struct Ceiling(pub(crate) usize);
+-impl purrdf_lex::allocation::Admission for Ceiling {
+-    fn resize(&mut self, live: usize) -> Result<(), purrdf_lex::allocation::StorageError> {
+-        self.0
+-            .checked_sub(live)
+-            .map(|_| ())
+-            .ok_or(purrdf_lex::allocation::StorageError::AdmissionFailed)
+-    }
+-}
+-
+ pub(crate) fn admit_count(
+     current: usize,
+     maximum: usize,
+diff --git crates/yaml/src/model.rs crates/yaml/src/model.rs
+index 4731ae08c..7f1b57e02 100644
+--- crates/yaml/src/model.rs
++++ crates/yaml/src/model.rs
+@@ -1,13 +1,13 @@
+ // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+ // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+ 
+-use crate::{Ceiling, Profile, YamlError, admit_count, profile::validate_iri};
++use crate::{Profile, YamlError, admit_count, profile::validate_iri};
+ use purrdf_core::{
+     ContentDigest,
+     cover::{VerbatimSpan, reconstruct_with_memory},
+ };
+ use purrdf_lex::{
+-    allocation::Memory,
++    allocation::{Ceiling, Memory},
+     yaml::{self, NodeKind, Span, SyntaxKeyPolicy, SyntaxStream},
+ };
+ 
+diff --git crates/yaml/src/project.rs crates/yaml/src/project.rs
+index 383260475..aaea7475d 100644
+--- crates/yaml/src/project.rs
++++ crates/yaml/src/project.rs
+@@ -2,7 +2,7 @@
+ // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+ 
+ use crate::{
+-    Ceiling, Document, Profile, SourceDocument, YamlError, admit_count, analyze,
++    Document, Profile, SourceDocument, YamlError, admit_count, analyze,
+     profile::{SPECIFICATION, TERMS},
+ };
+ use purrdf_core::{
+@@ -10,7 +10,7 @@ use purrdf_core::{
+     datatype::{XSD_INTEGER, XSD_STRING},
+ };
+ use purrdf_lex::{
+-    allocation::{Memory, OrderedTable, StorageError},
++    allocation::{Ceiling, Memory, OrderedTable, StorageError},
+     yaml::{
+         Attachment, Chomping, CollectionStyle, ExplicitTag, NodeId, NodeKind, ScalarStyle, Span,
+         TriviaKind,
+diff --git helpers-ledger.toml helpers-ledger.toml
+index 402f5f267..858f68d63 100644
+--- helpers-ledger.toml
++++ helpers-ledger.toml
+@@ -2048,18 +2048,19 @@ members = [
+     "purrdf_markdown::profile::Vocabulary::standard",
+     "purrdf_mime::profile::Vocabulary::standard",
+     "purrdf_toml::profile::Vocabulary::standard",
++    "purrdf_yaml::profile::Vocabulary::standard",
+ ]
+ kind = "shim"
+ criterion = "b"
+ anchor = "purrdf_markdown::profile::Vocabulary::standard"
+-reason = "Each codec crate names its own vocabulary under its own designated namespace: four different vocabularies with no shared job, whose constructors share only the `Self::under(STANDARD_NAMESPACE)` spelling."
++reason = "Each codec crate names its own vocabulary under its own designated namespace: five different vocabularies with no shared job, whose constructors share only the `Self::under(STANDARD_NAMESPACE)` spelling."
+ 
+ [[distinct]]
+-members = ["purrdf_json::project::encode", "purrdf_toml::codec::encode"]
++members = ["purrdf_json::project::encode", "purrdf_toml::codec::encode", "purrdf_yaml::project::encode"]
+ kind = "shim"
+ criterion = "b"
+ anchor = "purrdf_json::project::encode"
+-reason = "The public convenience entry points admit different languages and typed models: RFC 8259 ordered JSON versus TOML 1.1 declarations and values. Each composes its own single analysis and projection homes; neither duplicates a parser, identity function or byte-cover law."
++reason = "The public convenience entry points admit different languages and typed models: RFC 8259 ordered JSON, TOML 1.1 declarations and values, and YAML 1.2.2 source streams. Each composes its own single analysis and projection homes; none duplicates a parser, identity function or byte-cover law."
+ 
+ [[distinct]]
+ members = [
+@@ -3320,7 +3321,7 @@ line = 750
+ sink = "source:bcb4a119fb003223"
+ class = "local-stored-index"
+ authorities = [
+-    "crates/lex/src/allocation.rs=source:84bf41bac2f061dc",
++    "crates/lex/src/allocation.rs=source:fb79edc716e2bda4",
+     "crates/rdf-core/src/ir/builder.rs=source:bb28484c09dde7bd",
+     "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+@@ -3336,7 +3337,7 @@ line = 795
+ sink = "source:bcb4a119fb003223"
+ class = "local-stored-index"
+ authorities = [
+-    "crates/lex/src/allocation.rs=source:84bf41bac2f061dc",
++    "crates/lex/src/allocation.rs=source:fb79edc716e2bda4",
+     "crates/rdf-core/src/ir/builder.rs=source:bb28484c09dde7bd",
+     "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+@@ -3352,7 +3353,7 @@ line = 1027
+ sink = "source:68501dd74980d201"
+ class = "local-stored-index"
+ authorities = [
+-    "crates/lex/src/allocation.rs=source:84bf41bac2f061dc",
++    "crates/lex/src/allocation.rs=source:fb79edc716e2bda4",
+     "crates/rdf-core/src/ir/builder.rs=source:bb28484c09dde7bd",
+     "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+@@ -3368,7 +3369,7 @@ line = 1027
+ sink = "source:469fd0ba6adc3424"
+ class = "local-stored-index"
+ authorities = [
+-    "crates/lex/src/allocation.rs=source:84bf41bac2f061dc",
++    "crates/lex/src/allocation.rs=source:fb79edc716e2bda4",
+     "crates/rdf-core/src/ir/builder.rs=source:bb28484c09dde7bd",
+     "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+@@ -3384,7 +3385,7 @@ line = 2476
+ sink = "source:f9e400eaac2b01f1"
+ class = "concrete-frozen-term-range"
+ authorities = [
+-    "crates/lex/src/allocation.rs=source:84bf41bac2f061dc",
++    "crates/lex/src/allocation.rs=source:fb79edc716e2bda4",
+     "crates/rdf-core/src/ir/builder.rs=source:bb28484c09dde7bd",
+     "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+@@ -3400,7 +3401,7 @@ line = 261
+ sink = "source:cff2cf01734ea1d3"
+ class = "concrete-frozen-term-range"
+ authorities = [
+-    "crates/lex/src/allocation.rs=source:84bf41bac2f061dc",
++    "crates/lex/src/allocation.rs=source:fb79edc716e2bda4",
+     "crates/rdf-core/src/ir/builder.rs=source:bb28484c09dde7bd",
+     "crates/rdf-core/src/ir/composite.rs=source:e4e5aa0fe3414212",
+     "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+@@ -3417,7 +3418,7 @@ line = 261
+ sink = "source:d14392e033854316"
+ class = "concrete-frozen-term-range"
+ authorities = [
+-    "crates/lex/src/allocation.rs=source:84bf41bac2f061dc",
++    "crates/lex/src/allocation.rs=source:fb79edc716e2bda4",
+     "crates/rdf-core/src/ir/builder.rs=source:bb28484c09dde7bd",
+     "crates/rdf-core/src/ir/composite.rs=source:e4e5aa0fe3414212",
+     "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+@@ -3434,7 +3435,7 @@ line = 1420
+ sink = "source:93359fa72451a90c"
+ class = "resident-permutation"
+ authorities = [
+-    "crates/lex/src/allocation.rs=source:84bf41bac2f061dc",
++    "crates/lex/src/allocation.rs=source:fb79edc716e2bda4",
+     "crates/rdf-core/src/ir/builder.rs=source:bb28484c09dde7bd",
+     "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+@@ -3450,7 +3451,7 @@ line = 187
+ sink = "source:bcb4a119fb003223"
+ class = "local-stored-index"
+ authorities = [
+-    "crates/lex/src/allocation.rs=source:84bf41bac2f061dc",
++    "crates/lex/src/allocation.rs=source:fb79edc716e2bda4",
+     "crates/rdf-core/src/ir/builder.rs=source:bb28484c09dde7bd",
+     "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+@@ -3466,7 +3467,7 @@ line = 190
+ sink = "source:bcb4a119fb003223"
+ class = "local-stored-index"
+ authorities = [
+-    "crates/lex/src/allocation.rs=source:84bf41bac2f061dc",
++    "crates/lex/src/allocation.rs=source:fb79edc716e2bda4",
+     "crates/rdf-core/src/ir/builder.rs=source:bb28484c09dde7bd",
+     "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+@@ -3532,7 +3533,7 @@ line = 606
+ sink = "source:c4edb708dec6980b"
+ class = "concrete-frozen-term-range"
+ authorities = [
+-    "crates/lex/src/allocation.rs=source:84bf41bac2f061dc",
++    "crates/lex/src/allocation.rs=source:fb79edc716e2bda4",
+     "crates/rdf-core/src/ir/builder.rs=source:bb28484c09dde7bd",
+     "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+@@ -3549,7 +3550,7 @@ line = 606
+ sink = "source:eb9a0b3db238c761"
+ class = "concrete-frozen-term-range"
+ authorities = [
+-    "crates/lex/src/allocation.rs=source:84bf41bac2f061dc",
++    "crates/lex/src/allocation.rs=source:fb79edc716e2bda4",
+     "crates/rdf-core/src/ir/builder.rs=source:bb28484c09dde7bd",
+     "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+@@ -3566,7 +3567,7 @@ line = 159
+ sink = "source:3d42d43948575620"
+ class = "concrete-frozen-term-range"
+ authorities = [
+-    "crates/lex/src/allocation.rs=source:84bf41bac2f061dc",
++    "crates/lex/src/allocation.rs=source:fb79edc716e2bda4",
+     "crates/rdf-core/src/ir/builder.rs=source:bb28484c09dde7bd",
+     "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+@@ -3583,7 +3584,7 @@ line = 159
+ sink = "source:bfcc85921a648621"
+ class = "concrete-frozen-term-range"
+ authorities = [
+-    "crates/lex/src/allocation.rs=source:84bf41bac2f061dc",
++    "crates/lex/src/allocation.rs=source:fb79edc716e2bda4",
+     "crates/rdf-core/src/ir/builder.rs=source:bb28484c09dde7bd",
+     "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+@@ -3600,7 +3601,7 @@ line = 250
+ sink = "source:c4edb708dec6980b"
+ class = "concrete-frozen-term-range"
+ authorities = [
+-    "crates/lex/src/allocation.rs=source:84bf41bac2f061dc",
++    "crates/lex/src/allocation.rs=source:fb79edc716e2bda4",
+     "crates/rdf-core/src/ir/builder.rs=source:bb28484c09dde7bd",
+     "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+@@ -3617,7 +3618,7 @@ line = 250
+ sink = "source:eb9a0b3db238c761"
+ class = "concrete-frozen-term-range"
+ authorities = [
+-    "crates/lex/src/allocation.rs=source:84bf41bac2f061dc",
++    "crates/lex/src/allocation.rs=source:fb79edc716e2bda4",
+     "crates/rdf-core/src/ir/builder.rs=source:bb28484c09dde7bd",
+     "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+@@ -3634,7 +3635,7 @@ line = 95
+ sink = "source:ae1073a499b2ccac"
+ class = "concrete-frozen-term-range"
+ authorities = [
+-    "crates/lex/src/allocation.rs=source:84bf41bac2f061dc",
++    "crates/lex/src/allocation.rs=source:fb79edc716e2bda4",
+     "crates/rdf-core/src/ir/builder.rs=source:bb28484c09dde7bd",
+     "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+     "crates/rdf-core/src/ir/event_sink.rs=source:06dde97381917c60",
+@@ -3651,7 +3652,7 @@ line = 432
+ sink = "source:c1a00658c1ffa4e5"
+ class = "global-stored-index"
+ authorities = [
+-    "crates/lex/src/allocation.rs=source:84bf41bac2f061dc",
++    "crates/lex/src/allocation.rs=source:fb79edc716e2bda4",
+     "crates/rdf-core/src/ir/global.rs=source:5228f8d490189559",
+ ]
+ constructors = "source:f0038ef003a22a51"
+@@ -3664,7 +3665,7 @@ line = 890
+ sink = "source:921e8adc54613316"
+ class = "resident-global-vec-range"
+ authorities = [
+-    "crates/lex/src/allocation.rs=source:84bf41bac2f061dc",
++    "crates/lex/src/allocation.rs=source:fb79edc716e2bda4",
+     "crates/rdf-core/src/ir/global.rs=source:5228f8d490189559",
+ ]
+ constructors = "source:f0038ef003a22a51"
+@@ -3677,7 +3678,7 @@ line = 588
+ sink = "source:ae1073a499b2ccac"
+ class = "concrete-frozen-term-range"
+ authorities = [
+-    "crates/lex/src/allocation.rs=source:84bf41bac2f061dc",
++    "crates/lex/src/allocation.rs=source:fb79edc716e2bda4",
+     "crates/rdf-core/src/ir/builder.rs=source:bb28484c09dde7bd",
+     "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+@@ -3694,7 +3695,7 @@ line = 603
+ sink = "source:ae1073a499b2ccac"
+ class = "concrete-frozen-term-range"
+ authorities = [
+-    "crates/lex/src/allocation.rs=source:84bf41bac2f061dc",
++    "crates/lex/src/allocation.rs=source:fb79edc716e2bda4",
+     "crates/rdf-core/src/ir/builder.rs=source:bb28484c09dde7bd",
+     "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+@@ -3711,7 +3712,7 @@ line = 458
+ sink = "source:20664803727b8ebe"
+ class = "concrete-frozen-term-range"
+ authorities = [
+-    "crates/lex/src/allocation.rs=source:84bf41bac2f061dc",
++    "crates/lex/src/allocation.rs=source:fb79edc716e2bda4",
+     "crates/rdf-core/src/ir/builder.rs=source:bb28484c09dde7bd",
+     "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+@@ -3728,7 +3729,7 @@ line = 458
+ sink = "source:a89aa0bcdd678ca2"
+ class = "concrete-frozen-term-range"
+ authorities = [
+-    "crates/lex/src/allocation.rs=source:84bf41bac2f061dc",
++    "crates/lex/src/allocation.rs=source:fb79edc716e2bda4",
+     "crates/rdf-core/src/ir/builder.rs=source:bb28484c09dde7bd",
+     "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+@@ -3745,7 +3746,7 @@ line = 752
+ sink = "source:77a0de8cadadbe03"
+ class = "concrete-frozen-term-range"
+ authorities = [
+-    "crates/lex/src/allocation.rs=source:84bf41bac2f061dc",
++    "crates/lex/src/allocation.rs=source:fb79edc716e2bda4",
+     "crates/rdf-core/src/ir/builder.rs=source:bb28484c09dde7bd",
+     "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+@@ -3763,7 +3764,7 @@ line = 752
+ sink = "source:2b2967d384636018"
+ class = "concrete-frozen-term-range"
+ authorities = [
+-    "crates/lex/src/allocation.rs=source:84bf41bac2f061dc",
++    "crates/lex/src/allocation.rs=source:fb79edc716e2bda4",
+     "crates/rdf-core/src/ir/builder.rs=source:bb28484c09dde7bd",
+     "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+@@ -3781,7 +3782,7 @@ line = 467
+ sink = "source:e56729be357eb4f1"
+ class = "resident-global-vec-range"
+ authorities = [
+-    "crates/lex/src/allocation.rs=source:84bf41bac2f061dc",
++    "crates/lex/src/allocation.rs=source:fb79edc716e2bda4",
+     "crates/rdf-core/src/ir/global.rs=source:5228f8d490189559",
+     "crates/rdf-core/src/ir/paged/stack.rs=source:e2b618a6bf7d0851",
+ ]
+@@ -3795,7 +3796,7 @@ line = 113
+ sink = "source:082c3ff94178a18d"
+ class = "concrete-frozen-term-range"
+ authorities = [
+-    "crates/lex/src/allocation.rs=source:84bf41bac2f061dc",
++    "crates/lex/src/allocation.rs=source:fb79edc716e2bda4",
+     "crates/rdf-core/src/ir/builder.rs=source:bb28484c09dde7bd",
+     "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+@@ -3812,7 +3813,7 @@ line = 113
+ sink = "source:dbc961a86092a7d3"
+ class = "concrete-frozen-term-range"
+ authorities = [
+-    "crates/lex/src/allocation.rs=source:84bf41bac2f061dc",
++    "crates/lex/src/allocation.rs=source:fb79edc716e2bda4",
+     "crates/rdf-core/src/ir/builder.rs=source:bb28484c09dde7bd",
+     "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+@@ -3829,7 +3830,7 @@ line = 196
+ sink = "source:082c3ff94178a18d"
+ class = "concrete-frozen-term-range"
+ authorities = [
+-    "crates/lex/src/allocation.rs=source:84bf41bac2f061dc",
++    "crates/lex/src/allocation.rs=source:fb79edc716e2bda4",
+     "crates/rdf-core/src/ir/builder.rs=source:bb28484c09dde7bd",
+     "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+@@ -3846,7 +3847,7 @@ line = 196
+ sink = "source:dbc961a86092a7d3"
+ class = "concrete-frozen-term-range"
+ authorities = [
+-    "crates/lex/src/allocation.rs=source:84bf41bac2f061dc",
++    "crates/lex/src/allocation.rs=source:fb79edc716e2bda4",
+     "crates/rdf-core/src/ir/builder.rs=source:bb28484c09dde7bd",
+     "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+@@ -3863,7 +3864,7 @@ line = 110
+ sink = "source:399173dc809511f8"
+ class = "segmented-checked-interval"
+ authorities = [
+-    "crates/lex/src/allocation.rs=source:84bf41bac2f061dc",
++    "crates/lex/src/allocation.rs=source:fb79edc716e2bda4",
+     "crates/rdf-core/src/ir/builder.rs=source:bb28484c09dde7bd",
+     "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+@@ -3882,7 +3883,7 @@ line = 127
+ sink = "source:93bf37ec51519cfd"
+ class = "segmented-checked-interval"
+ authorities = [
+-    "crates/lex/src/allocation.rs=source:84bf41bac2f061dc",
++    "crates/lex/src/allocation.rs=source:fb79edc716e2bda4",
+     "crates/rdf-core/src/ir/builder.rs=source:bb28484c09dde7bd",
+     "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+@@ -3901,7 +3902,7 @@ line = 531
+ sink = "source:495627ce45322797"
+ class = "segmented-checked-interval"
+ authorities = [
+-    "crates/lex/src/allocation.rs=source:84bf41bac2f061dc",
++    "crates/lex/src/allocation.rs=source:fb79edc716e2bda4",
+     "crates/rdf-core/src/ir/builder.rs=source:bb28484c09dde7bd",
+     "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+@@ -3920,7 +3921,7 @@ line = 556
+ sink = "source:93bf37ec51519cfd"
+ class = "segmented-checked-interval"
+ authorities = [
+-    "crates/lex/src/allocation.rs=source:84bf41bac2f061dc",
++    "crates/lex/src/allocation.rs=source:fb79edc716e2bda4",
+     "crates/rdf-core/src/ir/builder.rs=source:bb28484c09dde7bd",
+     "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+@@ -3939,7 +3940,7 @@ line = 558
+ sink = "source:55afea662f67f62d"
+ class = "concrete-frozen-term-range"
+ authorities = [
+-    "crates/lex/src/allocation.rs=source:84bf41bac2f061dc",
++    "crates/lex/src/allocation.rs=source:fb79edc716e2bda4",
+     "crates/rdf-core/src/ir/builder.rs=source:bb28484c09dde7bd",
+     "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+@@ -3956,7 +3957,7 @@ line = 607
+ sink = "source:55afea662f67f62d"
+ class = "concrete-frozen-term-range"
+ authorities = [
+-    "crates/lex/src/allocation.rs=source:84bf41bac2f061dc",
++    "crates/lex/src/allocation.rs=source:fb79edc716e2bda4",
+     "crates/rdf-core/src/ir/builder.rs=source:bb28484c09dde7bd",
+     "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",
+@@ -3973,7 +3974,7 @@ line = 254
+ sink = "source:ae1073a499b2ccac"
+ class = "concrete-frozen-term-range"
+ authorities = [
+-    "crates/lex/src/allocation.rs=source:84bf41bac2f061dc",
++    "crates/lex/src/allocation.rs=source:fb79edc716e2bda4",
+     "crates/rdf-core/src/ir/builder.rs=source:bb28484c09dde7bd",
+     "crates/rdf-core/src/ir/dataset.rs=source:cfb846ea74174162",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:1db4f1112746b19b",

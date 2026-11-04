@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1018-expose-checked-unsigned-radix",
+  "branch": "paudley/1018-expose-checked-unsigned-radix",
+  "base_ref": "8ac1e6bb3d772bb89fa0f2688507b092e4b994bf",
+  "head": "4fa42463f527b6ef8291cffc04f5038d16541806",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/1018-expose-checked-unsigned-radix/.stage/1018-main-helper-integration/sync/20261104T162342-0039e1f2eebf4ae29b57594167ea0eb7",
+  "conflicts": [],
+  "status": "completed",
+  "base": "8ac1e6bb3d772bb89fa0f2688507b092e4b994bf",
+  "merge_bases": [
+    "3ab4f2338a4e18fcbd540d2ae874799607d8feba"
+  ],
+  "merge_index": "9ddebd46b54660eed7580aebfb90daaad1f940e7978a4102658d429059c1223b",
+  "candidate_tree": "9e8adafd5443a8ba72cfb89c8e85c99beb7bdcf8",
+  "candidate_patch": "candidate-7e71d250c24545a982bd845f3b75c8fd.patch",
+  "validation_records": [],
+  "commit": "6bf6c21721a4dfa1162b8fa0652b5a8f2b2fb94a",
+  "tree": "9e8adafd5443a8ba72cfb89c8e85c99beb7bdcf8"
+}
