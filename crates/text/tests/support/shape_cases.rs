@@ -108,7 +108,7 @@ pub(crate) fn graph_free_corpus_keys_ranking_and_query() {
     )
     .unwrap();
     let index = Arc::new(TextIndex::from_dataset(&read, &config).unwrap());
-    purrdf_text::verify_binding(&index, &read, &config).unwrap();
+    purrdf_text::verify_binding(&*index, &read, &config).unwrap();
     assert_eq!(
         size_of::<PartitionKey<GraphFree>>(),
         size_of::<Option<String>>()
@@ -139,7 +139,7 @@ pub(crate) fn graph_free_corpus_keys_ranking_and_query() {
 
     let lexical_config = config.with_surface_index(false);
     let lexical = Arc::new(TextIndex::from_dataset(&read, &lexical_config).unwrap());
-    purrdf_text::verify_binding(&lexical, &read, &lexical_config).unwrap();
+    purrdf_text::verify_binding(&*lexical, &read, &lexical_config).unwrap();
     assert_ne!(lexical.fingerprint(), index.fingerprint());
     assert_eq!(lexical.source_fingerprint(), index.source_fingerprint());
     assert!(lexical.surface_index().is_none());
@@ -147,7 +147,7 @@ pub(crate) fn graph_free_corpus_keys_ranking_and_query() {
 
     assert_eq!(
         select(
-            &index,
+            &*index,
             &["river".into()],
             &PartitionFilter::unconstrained(),
             None,
@@ -155,7 +155,7 @@ pub(crate) fn graph_free_corpus_keys_ranking_and_query() {
         )
         .unwrap(),
         select(
-            &quad,
+            &*quad,
             &["river".into()],
             &PartitionFilter::unconstrained(),
             None,
@@ -537,11 +537,11 @@ pub(crate) fn dictionary_cache_and_size() {
             })
             .collect();
         let first = cache
-            .get(&fixture.index, &entries, &capability)
+            .get(&*fixture.index, &entries, &capability)
             .expect("all authored rows compile");
         assert_eq!(first.len(), count);
         let second = cache
-            .get(&fixture.index, &entries, &capability)
+            .get(&*fixture.index, &entries, &capability)
             .expect("repeat native key");
         if count != 0 {
             assert!(
@@ -581,8 +581,8 @@ pub(crate) fn dictionary_cache_and_size() {
         phrase: "audley",
         payload: &[],
     }];
-    let first = cache.get(&fixture.index, &a, &capability).unwrap();
-    let changed = cache.get(&fixture.index, &b, &capability).unwrap();
+    let first = cache.get(&*fixture.index, &a, &capability).unwrap();
+    let changed = cache.get(&*fixture.index, &b, &capability).unwrap();
     assert!(
         !std::ptr::eq(first.entry(0).unwrap().0, changed.entry(0).unwrap().0),
         "authored dictionary change invalidates compilation"
@@ -593,7 +593,7 @@ pub(crate) fn dictionary_cache_and_size() {
         None,
         false,
     )]);
-    let rebound = cache.get(&fresh.index, &b, &capability).unwrap();
+    let rebound = cache.get(&*fresh.index, &b, &capability).unwrap();
     assert!(
         std::ptr::eq(changed.entry(0).unwrap().0, rebound.entry(0).unwrap().0),
         "same analyzer reuses index-independent automaton"
@@ -952,7 +952,7 @@ pub(crate) fn dictionary_analyzer_identity() {
             )
             .unwrap();
             let fixture = Fixture::analyzed(&corpus, analyzer);
-            let compiled = cache.get(&fixture.index, &entries, &capability).unwrap();
+            let compiled = cache.get(&*fixture.index, &entries, &capability).unwrap();
             if let Some(prior) = previous.take() {
                 let prior: purrdf_text::dictionary::Dictionary = prior;
                 assert!(
@@ -1467,7 +1467,7 @@ pub(crate) fn dictionary_long_phrase_and_determinism() {
     let entry = TermValue::iri("https://example.org/long-entry");
     let dictionary = DictionaryCache::default()
         .get(
-            &fixture.index,
+            &*fixture.index,
             &[DictionaryEntry {
                 identity: &entry,
                 phrase: &phrase,
@@ -1510,33 +1510,9 @@ pub(crate) fn dictionary_long_phrase_and_determinism() {
     );
 }
 
-pub(crate) fn segmented(dataset: &RdfDataset) -> purrdf_core::SegmentedImage {
-    let mut builder = purrdf_core::SegmentedBuilder::new(
-        purrdf_core::SegmentedBuildLimits::new(4096, 500_000, 4096, 512, 4).unwrap(),
-    )
-    .unwrap();
-    for quad in dataset.quads() {
-        let mut values = vec![
-            dataset.term_value(quad.s),
-            dataset.term_value(quad.p),
-            dataset.term_value(quad.o),
-        ];
-        if let Some(graph) = quad.g {
-            values.push(dataset.term_value(graph));
-        }
-        let mut ids = Vec::new();
-        builder.intern_batch(&values, |_, id| ids.push(id)).unwrap();
-        builder
-            .push_quad(purrdf_core::QuadIds {
-                s: ids[0],
-                p: ids[1],
-                o: ids[2],
-                g: quad.g.map(|_| ids[3]),
-            })
-            .unwrap();
-    }
-    builder.seal().unwrap()
-}
+#[path = "segmented.rs"]
+mod segmented_fixture;
+pub(crate) use segmented_fixture::segmented;
 
 pub(crate) fn bounded_shapes_keep_original_owners() {
     use purrdf_alloc_probe::CurrentThreadWindow;
@@ -1741,7 +1717,7 @@ impl ShapeProvider for CompileProbe {
             })?;
         }
         self.entered.store(2, Ordering::Relaxed);
-        let compiled = self.cache.get(&self.index, &entries, workspace)?;
+        let compiled = self.cache.get(&*self.index, &entries, workspace)?;
         assert_eq!(compiled.len(), self.entries.len());
         ShapeOffer::new_admitted(
             "dictionary-refusal-probe",
@@ -1769,7 +1745,7 @@ pub(crate) fn cache_refusal_keeps_previous_owner() {
         payload: &[],
     }];
     let before = cache
-        .get(&fixture.index, &original, &WorkspaceCapability::resident())
+        .get(&*fixture.index, &original, &WorkspaceCapability::resident())
         .unwrap();
     let entries: Arc<[(TermValue, String)]> = (0..4_097)
         .map(|index| {
@@ -1826,7 +1802,7 @@ pub(crate) fn cache_refusal_keeps_previous_owner() {
         purrdf_core::ViewOperationStatus::Ready { .. }
     ));
     let after = cache
-        .get(&fixture.index, &original, &WorkspaceCapability::resident())
+        .get(&*fixture.index, &original, &WorkspaceCapability::resident())
         .unwrap();
     assert!(
         std::ptr::eq(before.entry(0).unwrap().0, after.entry(0).unwrap().0),

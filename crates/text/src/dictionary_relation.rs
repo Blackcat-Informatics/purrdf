@@ -33,7 +33,7 @@ pub struct PhraseOccurrenceRelation<P: CorpusProfile = GraphLanguage> {
 impl<P: CorpusProfile> PhraseOccurrenceRelation<P> {
     /// Match phrases over all configured indexed predicates, preserving original positions.
     pub fn new(index: Arc<TextIndex<P>>) -> Self {
-        let generation = crate::relation::index_generation(&index);
+        let generation = crate::relation::index_generation(&*index);
         let rows = index.phrase_row_bound();
         Self {
             index,
@@ -82,7 +82,7 @@ impl<P: CorpusProfile> PhraseOccurrenceRelation<P> {
             phrase: needle,
             payload: &[],
         }];
-        let dictionary = Dictionary::compile(&self.index, &entries, workspace)?;
+        let dictionary = Dictionary::compile(&*self.index, &entries, workspace)?;
         let matches = literal_matches(
             self.index.clone(),
             dictionary,
@@ -175,7 +175,7 @@ impl<P: CorpusProfile> PropertyFunction for PhraseOccurrenceRelation<P> {
                 payload,
             })?;
         }
-        let dictionary = self.cache.get(&self.index, &entries, workspace)?;
+        let dictionary = self.cache.get(&*self.index, &entries, workspace)?;
         let results = share(
             dictionary.scan(self.index.clone(), self.predicate, workspace)?,
             workspace,

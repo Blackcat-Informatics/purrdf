@@ -6,6 +6,7 @@
 //! longest-first selection is an explicit logical consumer, not a shape flag.
 
 use crate::{CorpusProfile, GraphLanguage, TextIndex};
+use crate::{TextError, TextSource, source::SourceExt};
 use purrdf_core::{TermValue, small::Shared};
 use purrdf_lex::allocation::SharedText;
 use purrdf_sparql_eval::{
@@ -68,7 +69,7 @@ impl Dictionary {
     /// # Errors
     /// Preserves analyzer input errors and before-allocation physical refusals.
     pub fn compile<P: CorpusProfile>(
-        index: &TextIndex<P>,
+        index: &impl TextSource<P>,
         entries: &[DictionaryEntry<'_>],
         workspace: &WorkspaceCapability,
     ) -> Result<Self, EvalError> {
@@ -191,7 +192,7 @@ impl Dictionary {
     }
     fn matches_key<P: CorpusProfile>(
         &self,
-        index: &TextIndex<P>,
+        index: &impl TextSource<P>,
         entries: &[DictionaryEntry<'_>],
         workspace: &WorkspaceCapability,
     ) -> Result<bool, EvalError> {
@@ -220,12 +221,12 @@ impl Dictionary {
     ///
     /// # Errors
     /// Refuses an analyzer mismatch, overflow or actual storage failure.
-    pub fn scan<P: CorpusProfile>(
+    pub fn scan<P: CorpusProfile, S: TextSource<P>>(
         &self,
-        index: Arc<TextIndex<P>>,
+        index: Arc<S>,
         predicate: Option<u32>,
         workspace: &WorkspaceCapability,
-    ) -> Result<DictionaryMatches<P>, EvalError> {
+    ) -> Result<DictionaryMatches<P, S>, EvalError> {
         if self.0.analyzer != index.analyzer_fingerprint() {
             return Err(purrdf_sparql_eval::RetainedNativeFailure::error(
                 purrdf_sparql_eval::NativeDiagnosticKind::Config,
@@ -238,6 +239,7 @@ impl Dictionary {
         }
         let mut result = DictionaryMatches {
             index,
+            profile: core::marker::PhantomData,
             dictionary: self.clone(),
             rows: AdmittedVec::new(workspace),
             work: DictionaryWork::default(),
@@ -245,27 +247,32 @@ impl Dictionary {
         if self.is_empty() {
             return Ok(result);
         }
-        let order = result.index.occurrence_order();
         let mut begin = 0;
-        while begin < order.len() {
-            let first = result
+        let documents = usize::try_from(result.index.document_count())
+            .map_err(|_| EvalError::WorkspaceBoundOverflow)?;
+        while begin < documents {
+            let first_id = result
                 .index
-                .document(
-                    order
-                        .get_owned(begin, workspace)?
-                        .expect("index-owned document"),
-                )
-                .expect("index-owned document");
-            let mut end = begin + 1;
-            while end < order.len() {
-                let next = result
-                    .index
-                    .document(
-                        order
-                            .get_owned(end, workspace)?
-                            .expect("index-owned document"),
+                .occurrence_document_at(begin, workspace)?
+                .ok_or_else(|| {
+                    crate::query_workspace::data_error(
+                        "dictionary occurrence order is incomplete",
+                        Some(workspace),
                     )
-                    .expect("index-owned document");
+                })?;
+            let first = result.index.required_document(first_id, workspace)?;
+            let mut end = begin + 1;
+            while end < documents {
+                let next_id = result
+                    .index
+                    .occurrence_document_at(end, workspace)?
+                    .ok_or_else(|| {
+                        crate::query_workspace::data_error(
+                            "dictionary occurrence order is incomplete",
+                            Some(workspace),
+                        )
+                    })?;
+                let next = result.index.required_document(next_id, workspace)?;
                 if next.language() != first.language()
                     || !workspace.terms_equal(next.subject(), first.subject())?
                 {
@@ -274,17 +281,28 @@ impl Dictionary {
                 end += 1;
             }
             let mut occurrences = AdmittedVec::new(workspace);
-            for document in order.range_owned(begin, end, workspace) {
-                let document = document?;
+            for at in begin..end {
+                let document = result
+                    .index
+                    .occurrence_document_at(at, workspace)?
+                    .ok_or_else(|| {
+                        crate::query_workspace::data_error(
+                            "dictionary occurrence order is incomplete",
+                            Some(workspace),
+                        )
+                    })?;
                 let partition = result
                     .index
                     .partition_ordinal_of_owned(document, workspace)?
-                    .expect("index-owned partition");
-                for token in result
-                    .index
-                    .token_occurrences(document)
-                    .expect("index-owned stream")
-                {
+                    .ok_or_else(|| {
+                        crate::query_workspace::data_error(
+                            "dictionary document has no partition",
+                            Some(workspace),
+                        )
+                    })?;
+                let mut token_at = 0;
+                while let Some(token) = result.index.token_at(document, token_at, workspace)? {
+                    token_at += 1;
                     result.work.source_visits = result
                         .work
                         .source_visits
@@ -317,7 +335,7 @@ impl Dictionary {
                     &occurrences,
                     &mut result.rows,
                     &mut result.work,
-                    &result.index,
+                    &*result.index,
                     workspace,
                 )?;
             } else {
@@ -326,7 +344,7 @@ impl Dictionary {
                     &occurrences,
                     &mut result.rows,
                     &mut result.work,
-                    &result.index,
+                    &*result.index,
                     workspace,
                 )?;
             }
@@ -375,7 +393,7 @@ impl DictionaryCache {
     /// Preserves analyzer, allocation and checked-layout failures.
     pub fn get<P: CorpusProfile>(
         &self,
-        index: &TextIndex<P>,
+        index: &impl TextSource<P>,
         entries: &[DictionaryEntry<'_>],
         workspace: &WorkspaceCapability,
     ) -> Result<Dictionary, EvalError> {
@@ -441,23 +459,25 @@ pub struct DictionaryWork {
     /// Required bag cardinality, not distinct geometry.
     pub output_rows: u64,
 }
-/// Retained index/compilation and the admitted ordered match bag.
+/// Retained snapshot/compilation and the admitted ordered match bag.
 #[derive(Debug)]
-pub struct DictionaryMatches<P: CorpusProfile = GraphLanguage> {
-    index: Arc<TextIndex<P>>,
+pub struct DictionaryMatches<P: CorpusProfile = GraphLanguage, S: TextSource<P> = TextIndex<P>> {
+    index: Arc<S>,
+    profile: core::marker::PhantomData<P>,
     dictionary: Dictionary,
     rows: AdmittedVec<DictionaryMatch>,
     work: DictionaryWork,
 }
-impl<P: CorpusProfile> DictionaryMatches<P> {
+impl<P: CorpusProfile, S: TextSource<P>> DictionaryMatches<P, S> {
     pub(crate) fn from_literal(
-        index: Arc<TextIndex<P>>,
+        index: Arc<S>,
         dictionary: Dictionary,
         rows: AdmittedVec<DictionaryMatch>,
     ) -> Self {
         let output_rows = rows.len() as u64;
         Self {
             index,
+            profile: core::marker::PhantomData,
             dictionary,
             rows,
             work: DictionaryWork {
@@ -470,8 +490,8 @@ impl<P: CorpusProfile> DictionaryMatches<P> {
     pub fn rows(&self) -> &[DictionaryMatch] {
         &self.rows
     }
-    /// Original index containing this result's source identity.
-    pub fn index(&self) -> &TextIndex<P> {
+    /// Original snapshot containing this result's source identity.
+    pub fn index(&self) -> &S {
         &self.index
     }
     /// Reusable analyzer-bound dictionary, retained through result extraction.
@@ -492,11 +512,13 @@ impl<P: CorpusProfile> DictionaryMatches<P> {
         let mut geometries = AdmittedVec::new(workspace);
         let mut domains = AdmittedVec::<usize>::new(workspace);
         for (ordinal, row) in self.rows.iter().enumerate() {
-            let (document, language) = domain(&self.index, row);
+            let document = domain(&*self.index, row, workspace)?;
             let mut found = None;
             for (at, &representative) in domains.iter().enumerate() {
-                let (other, other_language) = domain(&self.index, &self.rows[representative]);
-                if language == other_language && workspace.terms_equal(document, other)? {
+                let other = domain(&*self.index, &self.rows[representative], workspace)?;
+                if document.language() == other.language()
+                    && workspace.terms_equal(document.subject(), other.subject())?
+                {
                     found = Some(at);
                     break;
                 }
@@ -530,15 +552,14 @@ impl<P: CorpusProfile> DictionaryMatches<P> {
         Ok(result)
     }
 }
-fn domain<'a, P: CorpusProfile>(
-    index: &'a TextIndex<P>,
+fn domain<'a, P: CorpusProfile, S: TextSource<P>>(
+    index: &'a S,
     row: &DictionaryMatch,
-) -> (&'a TermValue, Option<&'a str>) {
-    let document = index
-        .document(row.path[0].document)
-        .expect("retained occurrence");
-    (document.subject(), document.language())
+    workspace: &WorkspaceCapability,
+) -> Result<S::Document<'a>, TextError> {
+    index.required_document(row.path[0].document, workspace)
 }
+
 fn transition(
     dictionary: &Dictionary,
     mut state: usize,
@@ -591,7 +612,7 @@ fn scan_unique<P: CorpusProfile>(
     occurrences: &[Occurrence],
     rows: &mut AdmittedVec<DictionaryMatch>,
     work: &mut DictionaryWork,
-    index: &TextIndex<P>,
+    index: &impl TextSource<P>,
     workspace: &WorkspaceCapability,
 ) -> Result<(), EvalError> {
     let mut state = 0;
@@ -605,7 +626,7 @@ fn scan_unique<P: CorpusProfile>(
         state = transition(
             dictionary,
             state,
-            index.occurrence_term(occurrence.term).expect("index term"),
+            index.required_term(occurrence.term, workspace)?.as_ref(),
             work,
         )?;
         for &entry in &dictionary.0.states[state].outputs {
@@ -631,7 +652,7 @@ fn scan_aliases<P: CorpusProfile>(
     occurrences: &[Occurrence],
     rows: &mut AdmittedVec<DictionaryMatch>,
     work: &mut DictionaryWork,
-    index: &TextIndex<P>,
+    index: &impl TextSource<P>,
     workspace: &WorkspaceCapability,
 ) -> Result<(), EvalError> {
     let mut parents = AdmittedVec::new(workspace);
@@ -651,7 +672,7 @@ fn scan_aliases<P: CorpusProfile>(
         // Explicit prefix frontiers enumerate actual alias parent alternatives,
         // avoiding suffix duplication from discarded unrelated histories.
         for occurrence in &occurrences[begin..end] {
-            let token = index.occurrence_term(occurrence.term).expect("index term");
+            let token = index.required_term(occurrence.term, workspace)?;
             for (state, parent) in std::iter::once((0, None)).chain(
                 frontier
                     .iter()
@@ -662,7 +683,7 @@ fn scan_aliases<P: CorpusProfile>(
                     .transitions
                     .checked_add(1)
                     .ok_or(EvalError::WorkspaceBoundOverflow)?;
-                let Some(&child) = dictionary.0.states[state].edges.get(token) else {
+                let Some(&child) = dictionary.0.states[state].edges.get(token.as_ref()) else {
                     continue;
                 };
                 let parent_id = parents.len();

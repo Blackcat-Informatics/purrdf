@@ -87,12 +87,21 @@ impl SourceDigest {
     }
 
     pub(super) fn fingerprint<P: CorpusProfile>(&self) -> [u8; 32] {
-        self.state.fingerprint(if P::GRAPH_FREE {
-            TRIPLE_SOURCE_DIGEST_DOMAIN
-        } else {
-            SOURCE_DIGEST_DOMAIN
-        })
+        source_fingerprint::<P>(self.state)
     }
+}
+
+/// Apply the native source domain to maintained selected literal-row hashes.
+/// Insert or remove the matching profile's hash from
+/// `purrdf_core::source::LiteralSourceRow::hashes_with_memory` for each selected
+/// statement. Counts and membership belong to the original source owner; this
+/// multiset identity is not an authentication proof.
+pub fn source_fingerprint<P: CorpusProfile>(state: Multiset256) -> [u8; 32] {
+    state.fingerprint(if P::GRAPH_FREE {
+        TRIPLE_SOURCE_DIGEST_DOMAIN
+    } else {
+        SOURCE_DIGEST_DOMAIN
+    })
 }
 
 fn row_hash<P: CorpusProfile>(row: &SourceRow<P>) -> [u8; 32] {

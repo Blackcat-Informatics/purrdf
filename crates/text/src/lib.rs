@@ -121,6 +121,8 @@ mod profile;
 mod ranking;
 mod relation;
 mod score;
+mod source;
+pub use source::{IndexPositions, TextSource};
 pub mod segment;
 pub mod stem;
 mod surface;
@@ -137,14 +139,15 @@ pub use error::{TextDeltaError, TextError};
 pub use fixed::{Fixed, SCALE_DIGITS};
 pub use index::{
     Document, GraphSelector, PartitionKey, PartitionStats, SourceCoverage, TextIndex,
-    TextIndexConfig, TokenOccurrence,
+    TextIndexConfig, TokenOccurrence, snapshot_fingerprint, source_digest, source_fingerprint,
 };
 pub use profile::{
     AccentFold, AccentScripts, AnalyzerProfile, InputMode, MAX_TOKEN_SCALARS, Segmentation,
     Stemming,
 };
 pub use relation::{
-    SearchObservations, TermOccurrenceRelation, TextSearchRelation, verify_binding,
+    SearchObservations, TermOccurrenceRelation, TextSearchRelation, TextSourceBounds,
+    verify_binding,
 };
 pub use score::{
     B, Constraint, K1, PartitionFilter, ScopedTerm, Scored, TermContribution, explain,
