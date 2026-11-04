@@ -52,9 +52,9 @@ pub fn yamlld_to_jsonld_with_options(
     bytes: &[u8],
     options: &YamlLdOptions,
 ) -> Result<String, RdfDiagnostic> {
-    use purrdf_lex::allocation::Memory;
+    use purrdf_lex::allocation::{Ceiling, Memory};
     let value = basic_value(bytes, options)?;
-    let mut ceiling = SerializationLimit(options.max_serialization_bytes);
+    let mut ceiling = Ceiling(options.max_serialization_bytes);
     let mut memory = Memory::new(&mut ceiling);
     purrdf_lex::json::write_with_memory(&value, purrdf_lex::json::Format::COMPACT, &mut memory)
         .map_err(|cause| {
@@ -68,16 +68,6 @@ pub fn yamlld_to_jsonld_with_options(
             }
             diagnostic
         })
-}
-
-struct SerializationLimit(usize);
-impl purrdf_lex::allocation::Admission for SerializationLimit {
-    fn resize(&mut self, live: usize) -> Result<(), purrdf_lex::allocation::StorageError> {
-        self.0
-            .checked_sub(live)
-            .map(|_| ())
-            .ok_or(purrdf_lex::allocation::StorageError::AdmissionFailed)
-    }
 }
 
 /// Parse YAML-LD Basic directly through the existing JSON-LD value engine.

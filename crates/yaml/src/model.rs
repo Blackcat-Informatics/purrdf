@@ -1,13 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-use crate::{Ceiling, Profile, YamlError, admit_count, profile::validate_iri};
+use crate::{Profile, YamlError, admit_count, profile::validate_iri};
 use purrdf_core::{
     ContentDigest,
     cover::{VerbatimSpan, reconstruct_with_memory},
 };
 use purrdf_lex::{
-    allocation::Memory,
+    allocation::{Ceiling, Memory},
     yaml::{self, NodeKind, Span, SyntaxKeyPolicy, SyntaxStream},
 };
 

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 use crate::{
-    Ceiling, Document, Profile, SourceDocument, YamlError, admit_count, analyze,
+    Document, Profile, SourceDocument, YamlError, admit_count, analyze,
     profile::{SPECIFICATION, TERMS},
 };
 use purrdf_core::{
@@ -10,7 +10,7 @@ use purrdf_core::{
     datatype::{XSD_INTEGER, XSD_STRING},
 };
 use purrdf_lex::{
-    allocation::{Memory, OrderedTable, StorageError},
+    allocation::{Ceiling, Memory, OrderedTable, StorageError},
     yaml::{
         Attachment, Chomping, CollectionStyle, ExplicitTag, NodeId, NodeKind, ScalarStyle, Span,
         TriviaKind,
