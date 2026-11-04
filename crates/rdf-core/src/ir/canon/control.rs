@@ -6,7 +6,9 @@
 use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use super::{CANON_PROFILE_VERSION, CanonHash, CanonPresentation};
+use super::{
+    CANON_PROFILE_VERSION, CanonHash, CanonPresentation, RdfcRefusalObservation, RdfcRootProgress,
+};
 
 /// A logical search ceiling, selected explicitly by the caller.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -189,6 +191,7 @@ pub struct CanonicalizationControl<'a> {
     policy: SearchPolicy,
     stop: Option<&'a dyn crate::StopSignal>,
     receipts: Vec<SearchReceipt>,
+    last_rdfc_refusal: Option<RdfcRefusalObservation>,
 }
 
 impl<'a> CanonicalizationControl<'a> {
@@ -199,6 +202,7 @@ impl<'a> CanonicalizationControl<'a> {
             policy,
             stop,
             receipts: Vec::new(),
+            last_rdfc_refusal: None,
         }
     }
 
@@ -206,6 +210,22 @@ impl<'a> CanonicalizationControl<'a> {
     #[must_use]
     pub fn receipts(&self) -> &[SearchReceipt] {
         &self.receipts
+    }
+
+    /// Read the last run's finite RDFC observation and its exact receipt position.
+    /// A successful or non-RDFC last run has no such observation. Earlier runs are
+    /// never substituted, and consuming the receipts does not transfer this observation.
+    #[must_use]
+    pub fn last_rdfc_refusal(&self) -> Option<(SearchPosition, RdfcRefusalObservation)> {
+        self.last_rdfc_refusal.map(|observation| {
+            // Finalization installs an observation only after appending its receipt.
+            let index = self
+                .receipts
+                .len()
+                .checked_sub(1)
+                .expect("a finalized RDFC observation has a receipt");
+            (SearchPosition(index), observation)
+        })
     }
 
     /// Consume this control and transfer its finalized execution evidence.
@@ -224,7 +244,12 @@ impl<'a> CanonicalizationControl<'a> {
     /// Append only finalized evidence owned by an actual child control. Composite
     /// callers choose their deterministic join order; no arbitrary receipt can be
     /// inserted through this API and no aggregate ceiling is introduced.
+    /// An empty child preserves the last observation. A nonempty child replaces
+    /// it with its last run's observation, including absence after success.
     pub fn append_completed(&mut self, mut child: Self) {
+        if !child.receipts.is_empty() {
+            self.last_rdfc_refusal = child.last_rdfc_refusal;
+        }
         self.receipts.append(&mut child.receipts);
     }
 
@@ -246,6 +271,7 @@ impl<'a> CanonicalizationControl<'a> {
         configuration: SearchConfiguration,
         operation: impl FnOnce(&SearchRun<'_>) -> Result<T, E>,
     ) -> Result<T, E> {
+        self.last_rdfc_refusal = None;
         let run = SearchRun::new(self.policy, self.stop);
         let result = operation(&run);
         self.receipts.push(SearchReceipt {
@@ -262,6 +288,7 @@ impl<'a> CanonicalizationControl<'a> {
                     .then_some(SearchRefusal::Stopped)
             }),
         });
+        self.last_rdfc_refusal = run.rdfc_refusal.get();
         result
     }
 }
@@ -272,6 +299,7 @@ pub(super) struct SearchRun<'a> {
     work: Cell<SearchWork>,
     phase: Cell<CanonPhase>,
     refusal: Cell<Option<SearchRefusal>>,
+    rdfc_refusal: Cell<Option<RdfcRefusalObservation>>,
 }
 
 impl<'a> SearchRun<'a> {
@@ -288,7 +316,23 @@ impl<'a> SearchRun<'a> {
             }),
             phase: Cell::new(CanonPhase::Preparation),
             refusal: Cell::new(None),
+            rdfc_refusal: Cell::new(None),
         }
+    }
+
+    pub(super) fn observe_rdfc_refusal(&self, observation: RdfcRefusalObservation) {
+        self.rdfc_refusal.set(Some(observation));
+    }
+
+    pub(super) fn observe_rdfc_root_progress(&self, progress: RdfcRootProgress) {
+        // Only the RDFC driver's BudgetExceeded branch calls this, after charge
+        // refusal has installed the observation for that same invocation.
+        let mut observation = self
+            .rdfc_refusal
+            .get()
+            .expect("an RDFC budget refusal has active-path evidence");
+        observation.first_degree_group = Some(progress);
+        self.rdfc_refusal.set(Some(observation));
     }
     pub(super) fn stop(&self) -> Option<&dyn crate::StopSignal> {
         self.stop
