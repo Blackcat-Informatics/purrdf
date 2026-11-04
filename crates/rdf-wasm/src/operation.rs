@@ -338,12 +338,10 @@ impl JobError {
             .map(|presentation| presentation.to_json().to_string())
     }
 
-    /// A storage refusal's original diagnostic record. Capacity counts remain decimal
+    /// The original diagnostic record. Capacity counts remain decimal
     /// strings, including values wider than either a JavaScript number or a native ID.
     pub(crate) fn diagnostic_json(&self) -> Option<String> {
-        self.diagnostic
-            .storage_error()
-            .map(|_| self.diagnostic.to_json().to_string())
+        Some(self.diagnostic.to_json().to_string())
     }
 
     /// The JavaScript error this failure is thrown as: its message, its `code`, and,
@@ -1309,6 +1307,7 @@ mod tests {
             "ntriples",
             None,
             None,
+            None,
         )
         .expect("parses")
         .view()
@@ -1440,6 +1439,7 @@ mod tests {
         let frozen = crate::dataset::Dataset::parse(
             "<http://example.org/s> <http://example.org/p> <http://example.org/o> .\n",
             "ntriples",
+            None,
             None,
             None,
         )

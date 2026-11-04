@@ -3,6 +3,12 @@
 
 # Native ownership and WASM execution
 
+The exact package case `configured YAML input crosses wasm-bindgen with native error records`
+in `jsonld-configured.test.mjs` checks the appended text-options argument, the
+preserved `rememberEmptyGraphs` slot, and native code/location records on real
+JavaScript `Error` objects. Run only that named case for configured input.
+Native Rust owns YAML grammar, selection and resource-account correctness.
+
 Native Rust owns general semantics, grammar, arithmetic, refusal, ownership and
 conformance. A WASM build, 32-bit value, shared test runner, or historical
 selection does not justify replaying an ordinary Rust suite on WASM.
@@ -198,6 +204,8 @@ These exact package cases cover the heap driver's host boundaries:
 | `update-coordinates.test.mjs` / `UPDATE host coordinate errors precede mutation and release every claim` | Raw UPDATE argument positions preserve coordinate refusal and release the host dataset claim |
 | `async-concurrency.test.mjs` / `a request as deep as the synchronous lane evaluates answers on a job's region` | Actual per-job shadow-stack bounds, floor refusal, idle-pointer restoration, reuse and nonzero JSPI suspension |
 | `async-concurrency.test.mjs` / `a trap poisons every entry point of the instance, and jobs that fault without trapping poison nothing` | The existing armed WASM trap during async SERVICE handling poisons active and parked jobs and every exported surface; ordinary host faults leave the instance reusable |
+| `panic-poison.test.mjs` / `a panic in a synchronous call poisons every entry point, and typed errors poison nothing` | An armed real WASM panic reaches the panic hook and linked poison gate, rejects suspended host jobs and gates every export; native coded JavaScript errors leave the instance usable |
+| `trap-poison.test.mjs` / `a trap that is not a panic, in a synchronous call, poisons every entry point` | An armed real WASM trap unbalances the linked gate and the host observes permanent poisoning, while prior coded JavaScript errors preserve reuse |
 
 Names such as `wasm_determinism` or `product_wasm` do not make their entire native
 registration a WASM obligation. Unselected general tests remain native. Adding

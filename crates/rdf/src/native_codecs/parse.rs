@@ -443,6 +443,28 @@ pub fn parse_dataset_reporting_failure(
 ) -> Result<ParseOutcome, Box<ParseFailure>> {
     let format = classify(media_type).map_err(|e| ParseFailure::before_parsing(e, base_iri))?;
 
+    if let Some(yaml) = options.yaml_ld {
+        if format != NativeRdfFormat::YamlLd {
+            return Err(ParseFailure::before_parsing(
+                RdfDiagnostic::error(
+                    "yamlld-input-options-format",
+                    "YAML-LD input options require YAML-LD input",
+                ),
+                base_iri,
+            ));
+        }
+        let mut base =
+            base_scope_for(base_iri).map_err(|error| ParseFailure::before_parsing(error, None))?;
+        let dataset = super::jsonld::yaml::parse_into_scope(bytes, &mut base, &yaml)
+            .map_err(|error| ParseFailure::before_parsing(error, base_iri))?;
+        return Ok(ParseOutcome {
+            dataset,
+            spans: options.track_source_spans.then(SpanTable::default),
+            document_base: base.current().cloned(),
+            document_prefixes: Vec::new(),
+        });
+    }
+
     if format.tokenizer_carries_spans() {
         // Line/Turtle family: parsed here, through the SAME `text_parse` front-end and
         // fold `LineCodec::parse` drives, rather than through the codec seam — because
@@ -622,6 +644,7 @@ pub fn parse_dataset_controlled<'a, A: Admission, C: Progress>(
         base_iri,
         ParseOptions {
             track_source_spans: true,
+            yaml_ld: None,
         },
         RunContext::new(admission, progress),
     )
@@ -1884,6 +1907,7 @@ mod tests {
         );
         let options = ParseOptions {
             track_source_spans: true,
+            yaml_ld: None,
         };
         let table = parse_dataset_with(nt.as_bytes(), "application/n-triples", None, &options)
             .expect("parse")
@@ -1924,6 +1948,7 @@ mod tests {
         let nt = format!("{line1}{line2}{line3}");
         let options = ParseOptions {
             track_source_spans: true,
+            yaml_ld: None,
         };
         let table = parse_dataset_with(nt.as_bytes(), "application/n-triples", None, &options)
             .expect("parse")
@@ -1966,6 +1991,7 @@ mod tests {
         );
         let options = ParseOptions {
             track_source_spans: true,
+            yaml_ld: None,
         };
         let table = parse_dataset_with(ttl.as_bytes(), "text/turtle", None, &options)
             .expect("parse")
@@ -2004,6 +2030,7 @@ mod tests {
                 None,
                 ParseOptions {
                     track_source_spans: true,
+                    yaml_ld: None,
                 },
             )
             .unwrap_or_else(|_| panic!("tracked source acquisition"));
@@ -2214,7 +2241,10 @@ mod tests {
                 ttl.as_bytes(),
                 "text/turtle",
                 Some("https://example.org/base/"),
-                &ParseOptions { track_source_spans },
+                &ParseOptions {
+                    track_source_spans,
+                    yaml_ld: None,
+                },
             )
             .expect("parse");
             assert_eq!(

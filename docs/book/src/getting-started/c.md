@@ -43,7 +43,7 @@ int main(void) {
     PurrdfError *error = NULL;
 
     int rc = purrdf_parse((const uint8_t *)doc, strlen(doc), "text/turtle",
-                          NULL, NULL, &dataset, &error);
+                          NULL, NULL, NULL, 0, &dataset, &error);
     if (rc != PURRDF_STATUS_OK) return 1;
 
     size_t quad_count = 0;

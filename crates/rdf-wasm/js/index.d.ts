@@ -733,7 +733,7 @@ export class DataFactory {
 export class Dataset implements Iterable<Quad> {
   /** Omitted or true remembers empty named graphs; false selects row-driven existence. */
   constructor(rememberEmptyGraphs?: boolean);
-  static parse(input: string, format: string, base?: string | null, rememberEmptyGraphs?: boolean): Dataset;
+  static parse(input: string, format: string, base?: string | null, rememberEmptyGraphs?: boolean, inputOptions?: string | null): Dataset;
   /** The policy retained by snapshots, matches and applied synchronous/asynchronous UPDATEs. */
   readonly rememberEmptyGraphs: boolean;
   static from(quads?: Iterable<Quad> | null): Dataset;
@@ -1486,15 +1486,27 @@ export interface PurrdfError extends Error {
   readonly executionReceiptJson?: string;
   readonly code: string;
   /**
-   * Original `purrdf-diagnostic-v1` record for native storage refusal. Its optional
+   * Original `purrdf-diagnostic-v1` record for native semantic or resource failure. Its optional
    * `capacity` record carries `space`, `attempted` and `limit`; both counts are exact
-   * decimal strings. Present on synchronous and asynchronous storage failures alike.
+   * decimal strings. Original line positions are exact decimal strings.
    */
   readonly diagnostic?: {
     readonly schema: "purrdf-diagnostic-v1";
     readonly severity: string;
     readonly code: string;
     readonly message: string;
+    readonly location?: {
+      readonly path?: string;
+      readonly logical?: string;
+      readonly subject?: string;
+      readonly line?: string;
+      readonly column?: number;
+      readonly gtsTermId?: string;
+      readonly gtsQuadIndex?: string;
+      readonly gtsReifierId?: string;
+      readonly gtsFrameIndex?: string;
+      readonly gtsSegmentIndex?: string;
+    };
     readonly capacity?: {
       readonly space: string;
       readonly attempted: string;

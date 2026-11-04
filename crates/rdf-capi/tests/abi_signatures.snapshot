@@ -17,7 +17,7 @@
 #
 # Regenerate by running `cargo test -p purrdf-capi --test abi_signatures` and
 # pasting the ACTUAL block it prints. Never hand-tune a single line.
-abi-version 0.18.0
+abi-version 0.19.0
 const char *purrdf_error_canonicalization_json(const PurrdfError *error)
 const char *purrdf_error_execution_receipt_json(const PurrdfError *error)
 const char *purrdf_error_message(const PurrdfError *err)
@@ -67,7 +67,7 @@ int32_t purrdf_graph_insert(PurrdfGraph *graph, const PurrdfTermView *s, const P
 int32_t purrdf_graph_remove(PurrdfGraph *graph, const PurrdfTermView *s, const PurrdfTermView *p, const PurrdfTermView *o, const PurrdfTermView *g, uint8_t *out_changed, PurrdfError **out_error)
 int32_t purrdf_jsonld_context_compile(const uint8_t *options_json, size_t options_len, PurrdfJsonLdContext **out_context, PurrdfError **out_error)
 int32_t purrdf_lift(const uint8_t *archive, size_t archive_len, const char *profile, const uint8_t *config_json, size_t config_len, PurrdfDataset **out_dataset, PurrdfBuffer **out_loss_ledger_json, PurrdfError **out_error)
-int32_t purrdf_parse(const uint8_t *bytes, size_t len, const char *media_type, const char *base_iri, const char *source_name, PurrdfDataset **out_dataset, PurrdfError **out_error)
+int32_t purrdf_parse(const uint8_t *bytes, size_t len, const char *media_type, const char *base_iri, const char *source_name, const uint8_t *input_options, size_t input_options_len, PurrdfDataset **out_dataset, PurrdfError **out_error)
 int32_t purrdf_project(const PurrdfDataset *dataset, const char *profile, const uint8_t *config_json, size_t config_len, PurrdfBuffer **out_archive, PurrdfBuffer **out_loss_ledger_json, PurrdfError **out_error)
 int32_t purrdf_project_with_assets(const PurrdfDataset *dataset, const char *profile, const uint8_t *config_json, size_t config_len, const uint8_t *assets_archive, size_t assets_len, PurrdfBuffer **out_archive, PurrdfBuffer **out_loss_ledger_json, PurrdfError **out_error)
 int32_t purrdf_quads_for_pattern(const PurrdfDataset *dataset, const PurrdfTermView *s, const PurrdfTermView *p, const PurrdfTermView *o, const PurrdfGraphMatch *g, PurrdfCursor **out_cursor, PurrdfError **out_error)

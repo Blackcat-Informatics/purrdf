@@ -108,6 +108,8 @@ impl ViewOp for ConvertOp<'_> {
 /// two optional transforms. Grouping them keeps [`run`]'s signature small and lets
 /// the transform lane borrow them by reference.
 pub(crate) struct ConvertOptions<'a> {
+    /// Command-local input configuration file.
+    pub(crate) yamlld_input_options: Option<&'a std::path::Path>,
     /// The `--from` input-format override. Applies to EVERY source in the list.
     pub(crate) from: Option<CliRdfFormat>,
     /// The `--to` output-format override.
@@ -141,7 +143,7 @@ pub(crate) fn run(
     report_target: &ReportTarget,
     canonical: &mut crate::canonical::Request,
 ) -> Result<(), CliError> {
-    let sources = Sources::new(
+    let mut sources = Sources::new(
         input,
         options.inputs,
         options.from,
@@ -152,6 +154,28 @@ pub(crate) fn run(
     // fails before the first two are read. `--base` is decided later, once the target is
     // resolved too: whether it can be spent depends on both legs.
     let formats = sources.resolve_formats()?;
+    let input_options = if let Some(path) = options.yamlld_input_options {
+        if formats
+            .iter()
+            .any(|format| *format != SourceFormat::Native(purrdf_rdf::NativeRdfFormat::YamlLd))
+        {
+            return Err(CliError::Usage(
+                "--yamlld-input-options requires every input to be YAML-LD".into(),
+            ));
+        }
+        use std::io::Read;
+        let file = std::fs::File::open(path)
+            .map_err(|error| CliError::Runtime(format!("{}: {error}", path.display())))?;
+        let mut bytes = Vec::new();
+        file.take((purrdf_validate::rdf_input::MAX_OPTIONS_BYTES + 1) as u64)
+            .read_to_end(&mut bytes)
+            .map_err(|error| CliError::Runtime(format!("{}: {error}", path.display())))?;
+        purrdf_validate::rdf_input::options(&bytes).map_err(CliError::native)?;
+        Some(bytes)
+    } else {
+        None
+    };
+    sources.input_options = input_options.as_deref();
 
     refuse_inapplicable_combinations(options, report_target)?;
 
@@ -184,6 +208,7 @@ pub(crate) fn run(
     // union takes concrete datasets.
     if let (Some(only), [source_format]) = (sources.single(), formats.as_slice())
         && !source_format.is_gts()
+        && sources.input_options.is_none()
     {
         return convert_one_view(
             only,
@@ -401,7 +426,9 @@ fn run_with_transforms(
             // The closure is what gets serialized; the report is what `--report` carries,
             // so a converted document can be traced back to the run that derived it.
             match (sources.single(), formats) {
-                (Some(only), [source_format]) if !source_format.is_gts() => {
+                (Some(only), [source_format])
+                    if !source_format.is_gts() && sources.input_options.is_none() =>
+                {
                     report::materialize_reported_over_input(
                         only,
                         *source_format,

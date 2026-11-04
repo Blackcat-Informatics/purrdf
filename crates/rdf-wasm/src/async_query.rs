@@ -2854,8 +2854,8 @@ impl AsyncJob {
             .and_then(JobError::presentation_json)
     }
 
-    /// A storage failure's original diagnostic JSON, or `undefined` for other
-    /// failures and unfinished or successful jobs. Capacity counts are decimal strings.
+    /// A failure's original diagnostic JSON, or `undefined` for unfinished or
+    /// successful jobs. Capacity counts and line positions are decimal strings.
     #[wasm_bindgen(getter, js_name = errorDiagnosticJson)]
     pub fn error_diagnostic_json(&self) -> Option<String> {
         self.inner
@@ -4833,7 +4833,7 @@ mod tests {
     const SRJ: &[u8] = br#"{"head":{"vars":["x"]},"results":{"bindings":[{"x":{"type":"uri","value":"http://example.org/r"}}]}}"#;
 
     fn seed() -> Dataset {
-        Dataset::parse(SEED_NT, "ntriples", None, None).expect("seed parses")
+        Dataset::parse(SEED_NT, "ntriples", None, None, None).expect("seed parses")
     }
 
     /// An options object as a twin passes it: entries by key, the handlers and the
@@ -6857,7 +6857,8 @@ mod tests {
     fn a_local_service_answers_in_process_and_an_unlisted_one_still_fails() {
         let engine = QueryEngine::new();
         let dataset = seed();
-        let remote = Dataset::parse(REMOTE_NT, "ntriples", None, None).expect("remote parses");
+        let remote =
+            Dataset::parse(REMOTE_NT, "ntriples", None, None, None).expect("remote parses");
         let mut local = options();
         local
             .add_local_frozen(ENDPOINT.to_owned(), remote.view().freeze().expect("freeze"))
@@ -6978,7 +6979,8 @@ mod tests {
     fn an_explain_job_measures_a_service_join_the_offline_lane_cannot() {
         let engine = QueryEngine::new();
         let dataset = seed();
-        let remote = Dataset::parse(REMOTE_NT, "ntriples", None, None).expect("remote parses");
+        let remote =
+            Dataset::parse(REMOTE_NT, "ntriples", None, None, None).expect("remote parses");
         let mut local = options();
         local
             .add_local_frozen(ENDPOINT.to_owned(), remote.view().freeze().expect("freeze"))
@@ -7249,7 +7251,7 @@ mod tests {
                 AsyncOperationKind::Update,
                 AsyncOperationKind::UpdateGoverned,
             ] {
-                let mut dataset = Dataset::parse(trig, "trig", None, remember).expect("TriG");
+                let mut dataset = Dataset::parse(trig, "trig", None, remember, None).expect("TriG");
                 let id = dataset.identity();
                 let job = begin(
                     &engine,
@@ -8018,6 +8020,7 @@ mod tests {
             "ntriples",
             None,
             None,
+            None,
         )
         .expect("registry parses");
         let mut local = options();
@@ -8319,7 +8322,7 @@ mod tests {
     #[test]
     fn every_sparql_job_evaluates_under_the_selected_law() {
         let engine = QueryEngine::new();
-        let dataset = Dataset::parse(LAW_DATA, "ntriples", None, None).expect("parses");
+        let dataset = Dataset::parse(LAW_DATA, "ntriples", None, None, None).expect("parses");
         for (law, non_capturing, backreference) in LAWS {
             for (query, expected) in [
                 (ASK_NON_CAPTURING, non_capturing),
@@ -8421,7 +8424,8 @@ mod tests {
                 AsyncOperationKind::Update,
                 AsyncOperationKind::UpdateGoverned,
             ] {
-                let mut target = Dataset::parse(LAW_DATA, "ntriples", None, None).expect("parses");
+                let mut target =
+                    Dataset::parse(LAW_DATA, "ntriples", None, None, None).expect("parses");
                 let job = law_job(&engine, &target, kind, INSERT_BACKREFERENCE, law);
                 if kind == AsyncOperationKind::UpdateGoverned {
                     assert!(job.take_update_outcome().expect("an outcome").is_applied());
@@ -8443,7 +8447,7 @@ mod tests {
     #[test]
     fn a_native_resource_refusal_fails_the_job() {
         let engine = QueryEngine::new();
-        let dataset = Dataset::parse(LAW_DATA, "ntriples", None, None).expect("parses");
+        let dataset = Dataset::parse(LAW_DATA, "ntriples", None, None, None).expect("parses");
         let ask =
             |bytes: usize| format!("ASK {{ FILTER(REGEX(\"aa\", \"{}\")) }}", "a".repeat(bytes));
         for law in [XPATH_20, XPATH_31] {

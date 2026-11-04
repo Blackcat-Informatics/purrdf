@@ -2752,7 +2752,7 @@ mod tests {
         for remember in [None, Some(true), Some(false)] {
             let kept = remember != Some(false);
             for governed in [false, true] {
-                let mut dataset = Dataset::parse(trig, "trig", None, remember).expect("TriG");
+                let mut dataset = Dataset::parse(trig, "trig", None, remember, None).expect("TriG");
                 assert_eq!(dataset.remember_empty_graphs(), kept);
                 let mut matched = dataset
                     .match_pattern(None, None, None, None)
@@ -3049,6 +3049,7 @@ mod tests {
             "ntriples",
             None,
             None,
+            None,
         )
         .expect("seed dataset parses");
         let constructed = QueryEngine::new()
@@ -3080,7 +3081,7 @@ mod tests {
     const PLAIN_CONSTRUCT: &str = "CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }";
 
     fn seed() -> Dataset {
-        Dataset::parse(SEED_NT, "ntriples", None, None).expect("seed dataset parses")
+        Dataset::parse(SEED_NT, "ntriples", None, None, None).expect("seed dataset parses")
     }
 
     /// The DEFAULT entry point never answers a graph-carrying result with nothing.
@@ -3227,7 +3228,8 @@ mod tests {
     /// carries named graphs even though no `DESCRIBE` ever names one.
     #[test]
     fn a_describe_carries_its_graphs_and_refuses_a_single_graph_format() {
-        let source = Dataset::parse(GRAPH_STAR_TRIG, "trig", None, None).expect("TriG parses");
+        let source =
+            Dataset::parse(GRAPH_STAR_TRIG, "trig", None, None, None).expect("TriG parses");
         let described = QueryEngine::new()
             .describe(
                 &source,

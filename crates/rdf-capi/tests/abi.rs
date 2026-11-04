@@ -53,6 +53,88 @@ use purrdf::version::{
 const ATTACHED_ARCHIVE_SHA256: &str =
     "d714b63370b0026a28281f605794520fd4d1bc388ae8e5fdd367c5152cb95f6b";
 
+#[test]
+fn configured_yamlld_parse_abi_transports_options_and_native_diagnostics() {
+    let yaml = b"'@id': first\nhttps://example.org/p: one\n---\n'@id': second\nhttps://example.org/p: two\n";
+    let media = CString::new("application/ld+yaml").unwrap();
+    let base = CString::new("https://example.org/").unwrap();
+    let all = br#"{"version":1,"yaml_ld":{"extract_all_scripts":true}}"#;
+    unsafe {
+        for (options, expected) in [(None, 1), (Some(all.as_slice()), 2)] {
+            let mut dataset = std::ptr::null_mut();
+            let mut error = std::ptr::null_mut();
+            let status = purrdf_parse(
+                yaml.as_ptr(),
+                yaml.len(),
+                media.as_ptr(),
+                base.as_ptr(),
+                std::ptr::null(),
+                options.map_or(std::ptr::null(), <[u8]>::as_ptr),
+                options.map_or(0, <[u8]>::len),
+                &mut dataset,
+                &mut error,
+            );
+            assert_eq!(status, PurrdfStatus::Ok as i32);
+            let mut count = 0;
+            assert_eq!(
+                purrdf_dataset_quad_count(dataset, &mut count),
+                PurrdfStatus::Ok as i32
+            );
+            assert_eq!(count, expected);
+            purrdf_dataset_free(dataset);
+        }
+        let limits = br#"{"version":1,"yaml_ld":{"syntax":{"max_input_bytes":0}}}"#;
+        for (input, format, options, code) in [
+            (
+                yaml.as_slice(),
+                "application/ld+yaml",
+                limits.as_slice(),
+                "native-yaml-input-limit",
+            ),
+            (
+                b"42: value\n".as_slice(),
+                "application/ld+yaml",
+                all.as_slice(),
+                "mapping-key-error",
+            ),
+            (
+                b"".as_slice(),
+                "text/turtle",
+                all.as_slice(),
+                "yamlld-input-options-format",
+            ),
+        ] {
+            let format = CString::new(format).unwrap();
+            let mut dataset = std::ptr::null_mut();
+            let mut error = std::ptr::null_mut();
+            assert_ne!(
+                purrdf_parse(
+                    input.as_ptr(),
+                    input.len(),
+                    format.as_ptr(),
+                    base.as_ptr(),
+                    std::ptr::null(),
+                    options.as_ptr(),
+                    options.len(),
+                    &mut dataset,
+                    &mut error
+                ),
+                PurrdfStatus::Ok as i32
+            );
+            assert!(dataset.is_null());
+            let record =
+                std::ffi::CStr::from_ptr(purrdf::error::purrdf_error_presentation_json(error))
+                    .to_str()
+                    .unwrap();
+            assert!(record.contains(code), "{record}");
+            if code != "yamlld-input-options-format" {
+                assert!(record.contains("location"), "{record}");
+            }
+            purrdf_error_free(error);
+        }
+    }
+}
+
 /// A zeroed output term view the cursor fills.
 fn out_view() -> PurrdfTermView {
     iri_view("")
@@ -136,6 +218,8 @@ unsafe fn parse(media: &str, doc: &str) -> *mut PurrdfDataset {
             media.as_ptr(),
             std::ptr::null(),
             std::ptr::null(),
+            std::ptr::null(),
+            0,
             &raw mut dataset,
             &raw mut error,
         );
@@ -181,7 +265,7 @@ fn abi_version_is_the_current_minor() {
     // from the previous, differently-shaped one. `tests/abi_signatures.rs` holds the
     // exact prototype list this triple describes, so *which* signature moved is
     // reported there rather than as an opaque digest mismatch.
-    assert_eq!((version.major, version.minor, version.patch), (0, 18, 0));
+    assert_eq!((version.major, version.minor, version.patch), (0, 19, 0));
 }
 
 /// Every place this crate SPELLS the ABI version in prose agrees with the constants.
@@ -1189,6 +1273,8 @@ fn parse_rejects_malformed_turtle_without_aborting() {
             media.as_ptr(),
             std::ptr::null(),
             std::ptr::null(),
+            std::ptr::null(),
+            0,
             &raw mut dataset,
             &raw mut error,
         );

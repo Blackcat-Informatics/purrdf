@@ -219,6 +219,7 @@ mod tests {
             "ntriples",
             None,
             None,
+            None,
         )
         .expect("parse");
         let first = dataset.project("lpg-csv", CONFIG).expect("project");
@@ -240,7 +241,7 @@ mod tests {
     fn wasm_projection_shim_executes_every_research_object_profile() {
         for &(profile, config) in RESEARCH_CONFIGS {
             let dataset =
-                Dataset::parse(RESEARCH_SOURCE, "turtle", None, None).expect("parse source");
+                Dataset::parse(RESEARCH_SOURCE, "turtle", None, None, None).expect("parse source");
             let first = dataset.project(profile, config).expect("project profile");
             let second = dataset.project(profile, config).expect("repeat profile");
             assert_eq!(first.profile, profile);
@@ -253,7 +254,8 @@ mod tests {
 
     #[test]
     fn wasm_projection_shim_executes_write_only_dcat_rdf_deterministically() {
-        let dataset = Dataset::parse(RESEARCH_SOURCE, "turtle", None, None).expect("parse source");
+        let dataset =
+            Dataset::parse(RESEARCH_SOURCE, "turtle", None, None, None).expect("parse source");
         let first = dataset
             .project("dcat-rdf", DCAT_RDF_CONFIG)
             .expect("project dcat-rdf");
@@ -266,7 +268,7 @@ mod tests {
 
     #[test]
     fn wasm_projection_shim_executes_write_only_void_deterministically() {
-        let dataset = Dataset::parse(VOID_SOURCE, "trig", None, None).expect("parse source");
+        let dataset = Dataset::parse(VOID_SOURCE, "trig", None, None, None).expect("parse source");
         let first = dataset.project("void", VOID_CONFIG).expect("project VoID");
         let second = dataset.project("void", VOID_CONFIG).expect("repeat VoID");
         assert_eq!(first.profile, "void");
@@ -292,7 +294,8 @@ mod tests {
         .expect("assets")
         .to_ustar()
         .expect("asset archive");
-        let dataset = Dataset::parse(&source, "turtle", None, None).expect("parse attached source");
+        let dataset =
+            Dataset::parse(&source, "turtle", None, None, None).expect("parse attached source");
         let first = dataset
             .project_with_assets("ro-crate-1.3", &config, &assets)
             .expect("attached project");
@@ -316,6 +319,7 @@ mod tests {
             "ntriples",
             None,
             None,
+            None,
         )
         .expect("parse terms source");
         let first = dataset
@@ -332,7 +336,7 @@ mod tests {
     #[test]
     fn wasm_projection_shim_exposes_write_only_curated_okf_terms() {
         let dataset =
-            Dataset::parse(OKF_TERMS_SOURCE, "trig", None, None).expect("parse terms source");
+            Dataset::parse(OKF_TERMS_SOURCE, "trig", None, None, None).expect("parse terms source");
         let first = dataset
             .project("okf-terms", OKF_TERMS_CONFIG)
             .expect("project OKF terms");
