@@ -311,23 +311,7 @@ struct Fold<N> {
     next: N,
 }
 
-/// Full C/F case mapping shared by streaming and source-tagged normalization.
-pub(crate) fn fold_scalar(c: char, mut emit: impl FnMut(char)) {
-    if c.is_ascii() {
-        emit(c.to_ascii_lowercase());
-        return;
-    }
-    let record = lookup_two_stage(&tables::FOLD_INDEX, &tables::FOLD_BLOCKS, c);
-    if record == 0 {
-        emit(c);
-        return;
-    }
-    let (start, len) = tables::FOLD_RECORDS[usize::from(record)];
-    let start = usize::from(start);
-    for &part in &tables::FOLD_CHARS[start..start + usize::from(len)] {
-        emit(part);
-    }
-}
+pub(crate) use purrdf_lex::unicode::fold_scalar;
 
 impl<N: Stage> Stage for Fold<N> {
     #[inline]

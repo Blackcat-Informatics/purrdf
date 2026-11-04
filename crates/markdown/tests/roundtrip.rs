@@ -139,6 +139,9 @@ fn a_real_split_chain_with_a_shared_cut_declares_its_overlaps_and_roundtrips() {
 #[test]
 fn every_shape_of_document_roundtrips_byte_for_byte() {
     let fixtures: &[&str] = &[
+        // Shared syntax masks literal headings, preserves code/comment bytes,
+        // and exposes container content without changing its original cover.
+        "## Real\r\n```text\r\n## Literal\r\n```\r\n<!-- hidden -->\r\n> ~~~rust\r\n> code\r\n> ~~~\r\n\r\n    indented\r\n",
         // Nothing at all, and nothing but structure.
         "",
         "\n",

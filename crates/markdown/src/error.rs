@@ -42,6 +42,8 @@ use purrdf_core::embedding::EmbeddingError;
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum MarkdownError {
+    /// Native positioned grammar-resource or physical storage refusal.
+    Syntax(crate::syntax::SyntaxError),
     /// The bytes are not UTF-8; the offset is where decoding stopped.
     InvalidUtf8 {
         /// The byte offset of the first invalid sequence.
@@ -187,6 +189,7 @@ pub enum MarkdownError {
 
 impl purrdf_hash::error::StructuredError for MarkdownError {
     purrdf_hash::error_visit! {
+        Syntax(cause) => "markdown-native-syntax" { "cause" => Cause(cause) },
         InvalidUtf8 { valid_up_to } => "markdown-invalid-utf8" { "valid_up_to" => ByteCount(*valid_up_to as u128) },
         EmptySourceId => "markdown-empty-source-id" {},
         InvalidSourceId { found } => "markdown-invalid-source-id" { "found" => Character(*found) },
@@ -208,6 +211,7 @@ impl purrdf_hash::error::StructuredError for MarkdownError {
 impl std::fmt::Display for MarkdownError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Syntax(cause) => cause.fmt(f),
             Self::InvalidUtf8 { valid_up_to } => {
                 write!(f, "source bytes are not UTF-8 after byte {valid_up_to}")
             }
@@ -297,6 +301,7 @@ impl std::error::Error for MarkdownError {
             | Self::MalformedCanonBase { cause, .. } => Some(cause),
             Self::TamperedUnit { cause, .. } => Some(cause),
             Self::CoverDefect { cause } => Some(cause),
+            Self::Syntax(cause) => Some(cause),
             _ => None,
         }
     }

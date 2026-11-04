@@ -757,6 +757,7 @@ version = "3.0.1"
 dependencies = [
  "purrdf-core",
  "purrdf-hash",
+ "purrdf-lex",
  "purrdf-rdf",
  "purrdf-testkit",
 ]
