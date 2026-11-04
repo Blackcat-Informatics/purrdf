@@ -747,6 +747,7 @@ dependencies = [
 name = "purrdf-lex"
 version = "3.0.1"
 dependencies = [
+ "purrdf-alloc-probe",
  "purrdf-hash",
  "purrdf-stack",
  "purrdf-testkit",
