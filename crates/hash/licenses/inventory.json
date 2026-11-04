@@ -1,14 +1,36 @@
 {
-  "components": [],
+  "components": [
+    {
+      "id": "eff-word-alphabet",
+      "license": "CC-BY-4.0",
+      "notices": [
+        "third-party/eff-word-alphabet/0-CC-BY-4.0.txt",
+        "third-party/eff-word-alphabet/1-EFF-NOTICE.txt"
+      ],
+      "paths": [
+        "crates/hash/data/word-id/**",
+        "crates/hash/src/word_id/data.rs",
+        "crates/hash-conformance/data/word-id/**"
+      ],
+      "provenance": [
+        "crates/hash/data/word-id/PROVENANCE.md",
+        "crates/hash/data/word-id/manifest.toml"
+      ],
+      "scope": "EFF-original long wordlist, selected alphabet and generated word data; original attribution and grant apply in addition to the independently written codec's first-party offer",
+      "source": "https://www.eff.org/files/2016/07/18/eff_large_wordlist.txt"
+    }
+  ],
   "files": {
     "CC-BY-4.0.txt": "d557539df68e771cc1eedcc91d13f70fca930e508d11eedcafa4b15db49e3744",
     "LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
     "LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
     "LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c",
-    "NOTICE.txt": "77430cb214e12d4a98902eb8875b795212a4a2cadc80a2f0e97bbf13b74ea30f"
+    "NOTICE.txt": "24e402f2a7f3ea90cf1235c5149ec7e2fc12b30928ef3ff3a3f584199db431fb",
+    "third-party/eff-word-alphabet/0-CC-BY-4.0.txt": "d557539df68e771cc1eedcc91d13f70fca930e508d11eedcafa4b15db49e3744",
+    "third-party/eff-word-alphabet/1-EFF-NOTICE.txt": "164492e87bbd29552b8c407e06d1396d9552b00ae363ef958021ab839010a28a"
   },
   "first_party_license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
-  "package_license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
+  "package_license": "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND CC-BY-4.0",
   "profile": "purrdf-hash",
   "schema": 1
 }

@@ -577,20 +577,14 @@ def self_test() -> int:
 # licence section" the moment this rule reaches a non-crate README.
 LICENCE_HEADING = re.compile(r"^(#{1,6})\s+(?:Licen[cs]|许可|授权)", re.MULTILINE)
 
-# HOW EACH TERM MAY BE WRITTEN. `term.split("-")[0]` reduced the needles to `MIT`,
-# `Apache` and `MulanPSL`, so the VERSION was never checked: a section naming
-# `Apache-1.1 OR MulanPSL-1.0` passed, and so did one reading "MIT only. NOT offered under
-# Apache-2.0 or MulanPSL-2.0" -- a section explicitly REFUSING two of the three, accepted
-# as stating all three. A term with no entry here is a hard failure rather than a fallback
-# to substring matching, so a future licence cannot be silently unchecked.
-# WHITESPACE-TOLERANT, because Markdown wraps. The root README spells its own offer as
-# `[Apache License\n2.0]` across a line break, and a pattern with a literal space matched
-# neither alias -- so the gate would have false-refused this repository's own landing page
-# the moment the rule reached it. `\s+` rather than a space in every multi-word alias.
+# Every term needs explicit version-specific spellings; an unregistered term
+# fails rather than falling back to a substring. Multi-word aliases permit
+# Markdown line wrapping, including `[Apache License\n2.0]` in the root README.
 LICENCE_ALIASES: dict[str, tuple[str, ...]] = {
     "MIT": (r"\bMIT\b",),
     "Unicode-3.0": (r"Unicode-3\.0", r"Unicode\s+License\s+v3"),
     "BSD-3-Clause": (r"BSD-3-Clause",),
+    "CC-BY-4.0": (r"CC-BY-4\.0", r"Creative\s+Commons\s+Attribution\s+4\.0"),
     "Apache-2.0": (
         r"Apache-2\.0",
         r"Apache\s+License,?\s+Version\s+2\.0",

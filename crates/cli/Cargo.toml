@@ -71,6 +71,8 @@ purrdf-validate = { workspace = true }
 # rendered message into `CliError::Runtime`. The integration tests also read the JSON
 # the binary prints (runtime ledgers, SARIF, SPARQL results) with its reader.
 purrdf-lex = { workspace = true }
+# Checked digest word identities use the zero-dependency native identity owner.
+purrdf-hash = { workspace = true }
 # Command-tree argument parsing (`Parser`/`Subcommand`/`ValueEnum`).
 clap = { workspace = true }
 
@@ -110,7 +112,6 @@ purrdf-zstd = { workspace = true }
 # The integration tests recompute the SHA-256 identities the binary prints, in
 # lowercase hex.
 sha2 = { workspace = true }
-purrdf-hash = { workspace = true }
 
 # The real CLI pack path, timed: mmap/immutable vs owned acquisition, verification,
 # and reasoning over a zero-copy `PackView` vs an owned-dataset rebuild.

@@ -187,6 +187,17 @@ identifies the exact Chinese source and the comparison performed. It is not
 human or legal review.
 The complete controlling bilingual MulanPSL text remains the recipient’s license.
 
+## EFF word data compiled into the hash crate
+
+The hash crate also compiles the EFF-derived checked word alphabet under
+Creative Commons Attribution 4.0 International. Its package expression is
+`(MIT OR Apache-2.0 OR MulanPSL-2.0) AND CC-BY-4.0`: the chosen first-party
+grant applies to the independently written codec, and Attribution 4.0 applies
+to inherited word data. The original EFF attribution, precise policy evidence,
+source digest and reproducible selection law are preserved in
+[`crates/hash/data/word-id/PROVENANCE.md`](crates/hash/data/word-id/PROVENANCE.md).
+Recipient inventories carry its original notice and complete license.
+
 ## Unicode data compiled into published crates
 
 Five published crates compile tables generated from the Unicode Character

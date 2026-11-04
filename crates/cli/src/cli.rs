@@ -388,6 +388,12 @@ pub(crate) struct GlobRdfArgs {
 /// The pipeline subcommands.
 #[derive(Subcommand, Debug)]
 pub(crate) enum Command {
+    /// Convert complete checked BLAKE3 word identities with explicit formats.
+    WordId {
+        /// Encode, decode, inspect or stream an ordered batch.
+        #[command(subcommand)]
+        command: crate::word_id::Command,
+    },
     /// Present a full BLAKE3 identity with native emoji, spoken labels and randomart.
     Fingerprint {
         /// Complete 64-digit hexadecimal digest; either case is accepted.
@@ -3132,6 +3138,7 @@ impl Cli {
                 paths.push(PathBuf::from(&args.input));
             }
             Command::GlobSet { .. } | Command::Fingerprint { .. } => {}
+            Command::WordId { command } => command.paths(&mut paths),
         }
         paths
     }

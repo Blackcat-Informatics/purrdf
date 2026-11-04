@@ -1,0 +1,14 @@
+Electronic Frontier Foundation — Long Wordlist, published July 18, 2016.
+Wordlist creator: Joseph Bonneau.
+Source: https://www.eff.org/files/2016/07/18/eff_large_wordlist.txt
+Methodology: https://www.eff.org/deeplinks/2016/07/new-wordlists-random-passphrases
+
+EFF-original material is licensed under Creative Commons Attribution 4.0
+International unless otherwise noted: https://www.eff.org/copyright
+License: https://creativecommons.org/licenses/by/4.0/
+
+PurRDF preserves the original source and derives a subset of 4,096 words,
+lexical ordering, spelling-confusion/token-cost reports and generated lookup
+metadata. These are modifications, not EFF endorsement. Original attribution
+and the Attribution 4.0 grant remain applicable to the inherited word data.
+See PROVENANCE.md for the precise policy evidence and selection rule.

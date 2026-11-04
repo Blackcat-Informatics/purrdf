@@ -33,6 +33,10 @@ purrdf-hash = { workspace = true }
 # Focused WASM execution selects actual backend and SIMD-kernel checks only.
 purrdf-testkit = { workspace = true }
 
+[dev-dependencies]
+# Offline .tiktoken rank-record loading calls the native base64 home.
+purrdf-xsd = { workspace = true }
+
 # Digest throughput at 64 B, 1 KiB and 1 MiB per algorithm and per path the
 # host runs, base16 encoding throughput per path, and BLAKE3 one-shot and
 # streaming throughput per backend. Report-only.
@@ -85,4 +89,8 @@ harness = false
 # Its name is covered by the integration-4 shard's existing [!a-r]* pattern.
 [[test]]
 name = "shake"
+harness = false
+
+[[test]]
+name = "word_id"
 harness = false

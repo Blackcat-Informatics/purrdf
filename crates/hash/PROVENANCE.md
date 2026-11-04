@@ -5,9 +5,12 @@ SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 # Provenance of `purrdf-hash`
 
-Implementation and test code under `src/`, `tests/*.rs` and `benches/`, and under
-`crates/hash-conformance/` (this crate's frozen-vector suites), is first-party.
-Imported oracle data is identified below. The
+Independently written implementation and test code under `src/`, `tests/*.rs`
+and `benches/`, and under `crates/hash-conformance/`, is first-party. Generated
+word data in `src/word_id/data.rs`, its source alphabet and selection reports
+preserve EFF's Attribution 4.0 grant; see
+[`data/word-id/PROVENANCE.md`](data/word-id/PROVENANCE.md). Imported oracle data
+is identified below. The
 initial implementations were written from the specifications below without
 consulting third-party implementations. Subsequent source consultation for
 performance analysis is recorded by algorithm below; no third-party code

@@ -595,17 +595,27 @@ fn validated_len<const ANY_CASE: bool>(text: &str) -> Result<usize, HexError> {
 /// Decode into caller-owned storage, without allocating or growing it.
 /// Lexical/output errors leave the destination unchanged.
 pub fn decode_to_slice(text: &str, output: &mut [u8]) -> Result<usize, HexError> {
-    let needed = decoded_len(text)?;
+    read_to_slice::<true>(text, output)
+}
+
+/// Decode canonical lowercase hex into caller storage, without allocating.
+/// Lexical/output errors leave the destination unchanged.
+pub fn decode_canonical_to_slice(text: &str, output: &mut [u8]) -> Result<usize, HexError> {
+    read_to_slice::<false>(text, output)
+}
+
+fn read_to_slice<const ANY_CASE: bool>(text: &str, output: &mut [u8]) -> Result<usize, HexError> {
+    let needed = validated_len::<ANY_CASE>(text)?;
     if output.len() < needed {
         return Err(HexError::OutputTooShort {
             needed,
             available: output.len(),
         });
     }
-    if decode_into::<true>(text.as_bytes(), &mut output[..needed]) {
+    if decode_into::<ANY_CASE>(text.as_bytes(), &mut output[..needed]) {
         Ok(needed)
     } else {
-        Err(first_invalid::<true>(text.as_bytes()))
+        Err(first_invalid::<ANY_CASE>(text.as_bytes()))
     }
 }
 
