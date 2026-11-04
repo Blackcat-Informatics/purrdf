@@ -552,9 +552,7 @@ impl<P: CorpusProfile> TextSource<P> for TextIndex<P> {
         ordinal: usize,
         _: &WorkspaceCapability,
     ) -> Result<Option<TokenOccurrence>, TextError> {
-        Ok(self
-            .token_occurrences(document)
-            .and_then(|mut tokens| tokens.nth(ordinal)))
+        Ok(self.token_occurrence_at(document, ordinal))
     }
     fn occurrence_document_at(
         &self,

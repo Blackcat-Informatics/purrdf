@@ -1051,6 +1051,19 @@ impl<P: CorpusProfile> TextIndex<P> {
                 .map(move |token| token.projected(&self.terms))
         })
     }
+    /// Project one token directly from its original stream ordinal.
+    pub(crate) fn token_occurrence_at(
+        &self,
+        document: u32,
+        ordinal: usize,
+    ) -> Option<TokenOccurrence> {
+        self.token_streams
+            .get(document as usize)?
+            .as_slice()
+            .get(ordinal)
+            .map(|token| token.projected(&self.terms))
+    }
+
     /// Bound all consecutive positional derivations, including graph aliases.
     /// Each start contributes the product of physical choices through the rest
     /// of its contiguous run. Any one nonempty phrase selects a subset of those
