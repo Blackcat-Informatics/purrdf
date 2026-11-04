@@ -165,6 +165,12 @@ fn decode<'a>(
     let limit = syntax.limit(budget);
     let mode = syntax.mode();
     let escapes = syntax.escapes();
+    budget.limit(
+        raw.start as usize,
+        "link part bytes",
+        raw.len() as usize,
+        limit,
+    )?;
     budget.limit(raw.start as usize, "link part bytes", text.len(), limit)?;
     budget.tick(raw.start as usize, text.len())?;
     let original = &source[raw.range()];

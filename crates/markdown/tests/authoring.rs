@@ -209,6 +209,30 @@ fn authoring_refuses_original_resources_at_their_exact_boundaries() {
             })
         ));
     }
+    let slash_value = format!("a{}", "/".repeat(4095));
+    let comment_value = format!("a<!--{}-->b", "x".repeat(4087));
+    for (prefix, suffix, component, decoded) in [
+        ("<a href=", ">", slash_value.as_str(), "a"),
+        ("[x](", ")", comment_value.as_str(), "ab"),
+        ("[x](d '", "')", comment_value.as_str(), "ab"),
+    ] {
+        let admitted = format!("{prefix}{component}{suffix}");
+        let document = authoring(&admitted, limits()).unwrap();
+        let link = &document.links()[0];
+        let part = link.title.as_ref().unwrap_or(&link.destination);
+        assert_eq!(part.source.len(), 4096);
+        assert_eq!(part.decoded, decoded);
+        let refused = format!("{prefix}x{component}{suffix}");
+        assert!(matches!(
+            authoring(&refused, limits()),
+            Err(SyntaxError::Limit {
+                resource: "link part bytes",
+                actual: 4097,
+                limit: 4096,
+                position,
+            }) if position.byte == prefix.len()
+        ));
+    }
     let nested = format!("    {}text", "> ".repeat(64));
     assert!(authoring(&nested, limits()).is_ok());
     let nested = format!("    {}text", "> ".repeat(65));
