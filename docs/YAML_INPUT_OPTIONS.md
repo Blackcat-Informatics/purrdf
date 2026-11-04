@@ -70,6 +70,10 @@ input selection. Query premise imports retain their default input policy.
 validation. Shapes documents, prepared products, imports and added/removed change
 documents retain their existing input policy. The flag is also valid with
 `--shapes-product`, because the primary data is still parsed.
+`describe` and `project` accept the flag for primary `IN`. Description selectors
+retain their existing base resolution. Projection configuration and assets keep
+their existing input policy; YAML controls are admitted before either is read.
+`lift` reads a carrier archive and does not accept YAML input controls.
 Every selected input must be YAML-LD; pack, GTS and other native formats are
 refused before data acquisition. The bounded named options file is validated
 before primary data, premise imports or rule documents are read; it does not

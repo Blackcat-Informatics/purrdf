@@ -49,6 +49,7 @@ impl ViewOp for ProjectOp<'_> {
 )]
 pub(crate) fn run_project(
     profile: CliProjectionProfile,
+    yamlld_input_options: Option<&std::path::Path>,
     config_path: &str,
     assets_path: Option<&str>,
     from: Option<CliRdfFormat>,
@@ -64,6 +65,10 @@ pub(crate) fn run_project(
             "--jsonld-options cannot be used with projection carrier output".to_owned(),
         ));
     }
+    let source_format = format::resolve(from, input)?;
+    let input_options = yamlld_input_options
+        .map(|path| source::read_yamlld_input_options(path, &[source_format]))
+        .transpose()?;
     let config = read_config(config_path, input)?;
     if assets_path == Some("-") && (config_path == "-" || input == "-") {
         return Err(CliError::Usage(
@@ -75,7 +80,6 @@ pub(crate) fn run_project(
         .transpose()?
         .map(|archive| RoCrateAssets::from_ustar(&archive, config.limits()))
         .transpose()?;
-    let source_format = format::resolve(from, input)?;
     // `project` writes a carrier ARCHIVE, not an RDF document, so the input parse is the
     // only leg a base could reach.
     format::refuse_unconsumable_base(
@@ -86,7 +90,7 @@ pub(crate) fn run_project(
         input,
         source_format,
         base,
-        None,
+        input_options.as_deref(),
         ProjectOp {
             profile,
             config: &config,
