@@ -38,6 +38,26 @@ fn physical_authoring_reads_indent_html_and_line_local_code() {
     assert_eq!(doc.spelling(doc.lines()[0].newline), "\r\n");
     assert_eq!(doc.lines()[8].prose(), "  [c](c)");
     assert_eq!(doc.code_spans().len(), 1);
+    let bom_heading = authoring("\u{feff}  # Title\r\n\u{feff}# ordinary\n", limits()).unwrap();
+    assert_eq!(bom_heading.headings().len(), 1);
+    assert_eq!(bom_heading.headings()[0].text, "Title");
+    assert_eq!(bom_heading.headings()[0].title.start, 7);
+    assert_eq!(
+        bom_heading.spelling(bom_heading.lines()[0].source),
+        "\u{feff}  # Title"
+    );
+    assert_eq!(bom_heading.lines()[1].prose(), "\u{feff}# ordinary");
+    let bom_fence = authoring("\u{feff}```rust\n[hidden](x)\n```\n[live](y)", limits()).unwrap();
+    assert_eq!(bom_fence.links().len(), 1);
+    assert_eq!(bom_fence.links()[0].destination.decoded, "y");
+    assert_eq!(bom_fence.lines()[0].source.start, 0);
+    let fence = &bom_fence.blocks()[0];
+    assert!(
+        matches!(fence.kind, syntax::BlockKind::FencedCode { marker, closed: true, .. } if marker.start == 3)
+    );
+    let bom_definition = authoring("\u{feff}[label]: target", limits()).unwrap();
+    assert_eq!(bom_definition.links()[0].source.start, 3);
+    assert_eq!(bom_definition.links()[0].destination.decoded, "target");
     let listed = authoring("- item\n    ```\n[hidden](x)\n    ```\n[live](y)", limits()).unwrap();
     assert_eq!(
         listed

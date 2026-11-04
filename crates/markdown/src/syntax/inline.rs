@@ -1000,8 +1000,9 @@ pub(super) fn authoring_definition<'a>(
     use super::authoring::{AuthoringLink, AuthoringLinkForm};
     let text = &input.text;
     budget.tick(input.map[0], text.len().saturating_mul(4))?;
-    let from = text.len() - text.trim_start_matches(' ').len();
-    if from > 3 || text.as_bytes().get(from) != Some(&b'[') {
+    let payload = super::payload_start(doc.source, input.map[0]) - input.map[0];
+    let from = text.len() - text[payload..].trim_start_matches(' ').len();
+    if from - payload > 3 || text.as_bytes().get(from) != Some(&b'[') {
         return Ok(());
     }
     let Some(label_end) = text[from + 1..].find("]:").map(|at| at + from + 1) else {

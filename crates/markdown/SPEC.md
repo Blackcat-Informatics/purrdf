@@ -159,8 +159,9 @@ A **byte order mark** (U+FEFF) at byte zero of the source is a statement
 about the encoding. Structure detection MUST skip it, so a document that
 opens with one states the same structure as the document that does not,
 and MUST NOT otherwise account for it: every span still counts the
-source's own bytes, so the mark falls before the first span and it is one
-scalar of the scalar count. At any other offset U+FEFF is ordinary
+source's own bytes. The mark precedes the first detected content or structural
+marker and remains one scalar of the scalar count; original physical-line and
+fenced-block envelopes retain it. At any other offset U+FEFF is ordinary
 content and stays inside the unit that holds it.
 
 ### 2.1 Headings and movements
@@ -270,6 +271,9 @@ Authoring physical lines split at LF and retain a preceding CR as part of the
 original CRLF terminator; a final CR is also kept outside the final payload.
 Bare CR inside a payload stays on that physical line, including within code
 spans and angle destinations. Source positions use this same line rule.
+An initial byte order mark is skipped for structure recognition; physical line
+spans and interpreted prose retain it at its original offset. A byte order mark
+at any later offset remains ordinary content.
 Fences are recognized before comments and remain opaque. A fence retains the
 opening list-column allowance until it closes. Its closing-prefix lookahead
 inspects at most 65 quote/list markers (the authoring profile's 64 levels plus

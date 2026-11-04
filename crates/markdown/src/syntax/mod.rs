@@ -377,6 +377,14 @@ enum Policy {
     Standard,
     Authoring,
 }
+// An initial encoding marker affects recognition, never original coordinates.
+fn payload_start(source: &str, start: usize) -> usize {
+    if start == 0 && source.starts_with('\u{feff}') {
+        3
+    } else {
+        start
+    }
+}
 fn span(start: usize, end: usize) -> Span {
     Span::new(start as u64, end as u64)
 }

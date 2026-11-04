@@ -440,11 +440,7 @@ pub(super) fn read(
         at = next;
         budget.tick(start, at - start + 1)?;
         let line = doc.lines.len();
-        let payload_start = if start == 0 && text.starts_with('\u{feff}') {
-            3
-        } else {
-            start
-        };
+        let payload_start = super::payload_start(text, start);
         let slicing_source = span(
             payload_start,
             end + usize::from(at == end + 2 && b.get(end) == Some(&b'\r')),
@@ -1011,12 +1007,13 @@ fn read_authoring(
         at = next;
         budget.tick(start, (at - start).saturating_mul(4).saturating_add(1))?;
         let line = doc.lines.len();
-        let raw = &text[start..end];
+        let payload = super::payload_start(text, start);
+        let raw = &text[payload..end];
         let is_blank = raw
             .trim_matches(purrdf_lex::terminals::is_unicode_white_space)
             .is_empty();
         let mut markers = Vec::new();
-        let mut content = start;
+        let mut content = payload;
         if !is_blank {
             let mut prefixes = 0;
             loop {
@@ -1088,7 +1085,7 @@ fn read_authoring(
             let first_list = markers
                 .iter()
                 .find(|marker| !marker.quote)
-                .map(|marker| marker.at - start);
+                .map(|marker| marker.at - payload);
             if let Some(first) = first_list {
                 while lists.last().is_some_and(|(column, _)| *column >= first) {
                     lists.pop();
@@ -1120,7 +1117,7 @@ fn read_authoring(
                 let id = add(doc, budget, start, end, parent, kind, line)?;
                 parent = Some(id);
                 if !marker.quote {
-                    budget.push(&mut lists, (marker.at - start, id))?;
+                    budget.push(&mut lists, (marker.at - payload, id))?;
                 }
             }
             previous_blank = false;

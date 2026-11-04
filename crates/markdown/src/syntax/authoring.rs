@@ -467,9 +467,19 @@ pub fn authoring(source: &str, limits: SyntaxLimits) -> Result<AuthoringDocument
             line.source.start as usize,
             visible.text.len().saturating_mul(6),
         )?;
-        let indent = visible.text.len() - visible.text.trim_start_matches(' ').len();
+        // Comment removal preserves the initial mark as a literal scalar;
+        // the recognition offset never rebases this original physical line.
+        let payload =
+            super::payload_start(source, line.source.start as usize) - line.source.start as usize;
+        let indent =
+            visible.text[payload..].len() - visible.text[payload..].trim_start_matches(' ').len();
         let heading = if indent <= 3 {
-            block::authoring_heading(&visible.text, indent, visible.text.len(), Policy::Authoring)
+            block::authoring_heading(
+                &visible.text,
+                payload + indent,
+                visible.text.len(),
+                Policy::Authoring,
+            )
         } else {
             None
         };
