@@ -116,6 +116,10 @@ impl CliOutcome {
 /// A CLI-level failure, carrying its rendered message and its exit classification.
 #[derive(Debug)]
 pub enum CliError {
+    /// Original source-carrier boundary, acquisition or RDF refusal.
+    YamlSource(Box<crate::YamlSourceFailure>),
+    /// Original RDF parse or serialization diagnostic and native cause.
+    Diagnostic(RdfDiagnostic),
     /// Original output-target open, write or flush failure.
     OutputIo(std::io::Error),
     /// The failed output's cleanup, retaining the original native failure.
@@ -197,6 +201,7 @@ impl CliError {
             | Self::GlobSetMatch(_)
             | Self::GlobRdf(_)
             | Self::GlobRdfStorage(_) => 1,
+            Self::YamlSource(_) | Self::Diagnostic(_) => 1,
             Self::Fingerprint(_) => 1,
             Self::DownstreamClosed => 0,
         }
@@ -208,6 +213,8 @@ purrdf_lex::variant_from!(CliError { WordId(crate::WordIdFailure) via Box::new }
 impl fmt::Display for CliError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::YamlSource(error) => error.fmt(f),
+            Self::Diagnostic(error) => error.fmt(f),
             Self::OutputIo(error) => error.fmt(f),
             Self::PartialOutputRemoved { original, path } => write!(
                 f,
@@ -253,6 +260,8 @@ impl fmt::Display for CliError {
 impl std::error::Error for CliError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::YamlSource(error) => Some(&**error),
+            Self::Diagnostic(error) => Some(error),
             Self::OutputIo(error) => Some(error),
             Self::PartialOutputRemoved { original, .. } => Some(&**original),
             Self::FileIdentity(error) => Some(error),
@@ -325,8 +334,10 @@ pub(crate) fn argv_iri_refusal(
 // Every library failure the pipeline propagates with `?` is a runtime failure (exit 1)
 // carrying the library error's rendered message.
 purrdf_lex::variant_from!(CliError {
+    Diagnostic(RdfDiagnostic)
+});
+purrdf_lex::variant_from!(CliError {
     Runtime(
-        RdfDiagnostic,
         purrdf_rdf::ProjectionError,
         purrdf_rdf::TransportError,
         std::io::Error,

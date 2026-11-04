@@ -122,7 +122,10 @@ mod source;
 mod update;
 mod validate;
 mod word_id;
+mod yaml_source;
+pub use source::RawReadError;
 pub use word_id::Failure as WordIdFailure;
+pub use yaml_source::Failure as YamlSourceFailure;
 
 // The one derivation of a filesystem input's RFC-8089 `file://` retrieval IRI, re-exported
 // so the integration tests assert against the pipeline's own function instead of keeping a
@@ -194,6 +197,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
         && matches!(
             &cli.cmd,
             Command::GlobRdf(_)
+                | Command::YamlSource { .. }
                 | Command::WordId { .. }
                 | Command::Glob { .. }
                 | Command::GlobSet { .. }
@@ -256,6 +260,15 @@ fn dispatch_with_request(
         })
         .transpose()?;
     match &cli.cmd {
+        Command::YamlSource { command } => {
+            cli::refuse_document_flags(
+                &ledger_target,
+                jsonld_options.as_ref(),
+                "yaml-source accepts no loss ledger",
+                "yaml-source accepts no JSON-LD options",
+            )?;
+            command.run(canonical)
+        }
         Command::WordId { command } => {
             cli::refuse_document_flags(
                 &ledger_target,

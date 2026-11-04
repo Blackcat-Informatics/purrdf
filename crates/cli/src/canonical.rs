@@ -178,7 +178,7 @@ impl Request {
 }
 
 /// Resolve existing symlinks and a new output's existing parent, without guessing on I/O refusal.
-fn resolve(path: &Path) -> Result<PathBuf, CliError> {
+pub(crate) fn resolve(path: &Path) -> Result<PathBuf, CliError> {
     match path.canonicalize() {
         Ok(path) => Ok(path),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -192,9 +192,12 @@ fn resolve(path: &Path) -> Result<PathBuf, CliError> {
                     path.display()
                 ))
             })?;
-            Ok(parent.canonicalize()?.join(name))
+            Ok(parent
+                .canonicalize()
+                .map_err(CliError::FileIdentity)?
+                .join(name))
         }
-        Err(error) => Err(error.into()),
+        Err(error) => Err(CliError::FileIdentity(error)),
     }
 }
 

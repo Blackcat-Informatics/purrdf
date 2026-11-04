@@ -63,6 +63,8 @@ sha2 = { workspace = true }
 # The workspace's one JSON value and writer: the hand-rolled SARIF model writes
 # itself as a `purrdf_lex::json::Value` and prints through `write_pretty`.
 purrdf-lex = { workspace = true }
+# Source-preserving YAML profile, projection and verified reconstruction.
+purrdf-yaml = { workspace = true }
 # The pure geographic engine and its exact coordinate/quantity representation.
 purrdf-geo-kernel = { workspace = true }
 purrdf-xsd = { workspace = true }

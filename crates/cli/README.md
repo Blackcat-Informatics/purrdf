@@ -20,13 +20,14 @@ text/XML/JSON codecs, the pack container, the SPARQL 1.2 evaluator, and the
 entailment closures — so anything the CLI does, it does with byte-for-byte the
 same behavior as the Rust, Python, WebAssembly, and C surfaces.
 
-Every invocation is one `Source → [transform] → Sink` pipeline, exposed as seventeen
+Every invocation is one `Source → [transform] → Sink` pipeline, exposed as
 subcommands:
 
 | Subcommand | Pipeline |
 |---|---|
 | [`geo`](#geo) | execute a geographic scalar, batch, conversion, cover or point-index request |
 | [`convert`](#convert) | transcode RDF between syntaxes and the native pack container |
+| [`yaml-source`](#yaml-source) | export YAML presentation as RDF and reconstruct its exact source bytes |
 | [`query`](#query) | evaluate a SPARQL query over an RDF or pack data source |
 | `update` | atomically apply a SPARQL UPDATE to an RDF source |
 | [`reason`](#reason) | materialize an entailment regime's closure over a source graph |
@@ -1541,3 +1542,51 @@ configuration described in [YAML-LD input options](../../docs/YAML_INPUT_OPTIONS
 Every input must be YAML-LD, including during canonicalization or entailment.
 Other commands reject this command-local flag. Existing output options remain
 independent.
+
+## `yaml-source`
+
+`yaml-source` exports presentation metadata independently of semantic YAML-LD
+conversion. Supply a named profile JSON file with an explicit name, version and
+namespace:
+
+```json
+{"version":1,"name":"authored-yaml","profile_version":1,"vocabulary":"https://example.org/yaml#"}
+```
+
+```sh
+purrdf yaml-source export --source-iri https://example.org/source --profile profile.json --root-output root.txt source.yaml metadata.nq
+purrdf yaml-source reconstruct --root "$(cat root.txt)" --profile profile.json metadata.nq restored.yaml
+```
+
+Export writes lossless N-Quads. The stream root is an RDF subject in that graph;
+`--root-output` optionally writes the same IRI plus a newline to a distinct named
+file. Reconstruction requires that exact root and matching profile and writes
+verified original bytes, including BOM, comments and line endings, without adding
+a newline. Input and primary output accept `-`; profile and root output require
+named files. Aliasing source, profile and output paths is refused. Source bytes
+are read raw, including when a filename resembles a compressed format.
+
+The existing file-identity guard supports comparisons of two existing files on
+Unix. Other platforms refuse that comparison, including between an existing
+profile and source input. Use both stdin and stdout and omit `--root-output` to
+avoid paired existing-file comparisons. A new output destination alone still
+requires comparing the existing profile and named input.
+
+The profile's optional `bounds.syntax` accepts `max_input_bytes`,
+`max_allocation_bytes`, `max_occurrences`, `max_depth`, `aliases` and
+`max_documents`. Other bounds are `max_cover_spans`, `max_partition_bytes`,
+`max_statements`, `max_payload_bytes`, `max_projection_bytes` and
+`max_decode_bytes`. All numeric bounds are unsigned integer lexemes through
+4,294,967,295; `aliases` is boolean. Omitted fields inherit the native defaults:
+16 MiB input, 128 MiB lexical storage, 1,048,576 occurrences/documents, depth 128,
+aliases enabled, 2,097,153 cover spans, 64 MiB partition, 2,097,152 statements,
+512 MiB payload/projection each and 256 MiB decode storage.
+
+Profile JSON acquisition is capped at 16 KiB; its decoder separately admits
+128 KiB, four containers and 64 values. Native profile construction, source
+acquisition, Lex, partition, projection, copied root and reconstruction phases
+have separate ownership. Reconstruction's `--max-rdf-bytes` defaults to 64 MiB
+and limits raw acquisition only; caller RDF/parser storage is outside native
+decode admission. Export uses the existing streamed serializer, with its
+proportional SerGraph/index and separate 64 KiB staging window. There is no
+total output-byte or combined process-memory promise.
