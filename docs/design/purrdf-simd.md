@@ -871,6 +871,7 @@ floor of 0 and says so. A crate-level row names no function and has no cells.
 | `mime.crate` | `purrdf-mime` | — | — | — | — | — | — | leave | lossless MIME parsing and RDF projection use ordered structural state and the shared lexical, transfer and digest homes; `crates/mime/benches/` does not exist, so no MIME benchmark site is registered | — | — | — | — | — | — | — | — |
 | `glob.crate` | `purrdf-glob` | — | — | — | — | — | — | leave | the scalar compiled matcher uses two retry checkpoints and deterministic work accounting; `crates/glob/benches/` does not exist, so no glob benchmark site is registered | — | — | — | — | — | — | — | — |
 | `toml.crate` | `purrdf-toml` | — | — | — | — | — | — | leave | lossless TOML parsing and RDF projection use explicit structural frames and the shared escape, temporal and digest homes; `crates/toml/benches/` does not exist, so no TOML benchmark site is registered | — | — | — | — | — | — | — | — |
+| `yaml.crate` | `purrdf-yaml` | — | — | — | — | — | — | leave | source-preserving YAML analysis, RDF projection and strict reconstruction use the shared lexical, byte-cover and digest homes; `crates/yaml/benches/` does not exist, so no YAML carrier benchmark site is registered | — | — | — | — | — | — | — | — |
 | `stack.crate` | `purrdf-stack` | — | — | — | — | — | — | leave | a stack-pointer read and one comparison against a thread-local floor, with no loop to vectorize; `crates/stack/benches/` does not exist | — | — | — | — | — | — | — | — |
 | `wasm-link.crate` | `wasm-link` | — | — | — | — | — | — | leave | an unpublished host tool that post-links the wasm package once per build, with no runtime hot path; `crates/wasm-link/benches/` does not exist | — | — | — | — | — | — | — | — |
 | `hash-conformance.crate` | `purrdf-hash-conformance` | — | — | — | — | — | — | leave | the unpublished frozen-vector conformance suites of `purrdf-hash`, with no hot path of its own; `crates/hash-conformance/benches/` times `purrdf-hash`'s digests, base16 encoding, BLAKE3 backends and table hasher, whose sites are `purrdf-hash`'s | — | — | — | — | — | — | — | — |
@@ -1086,6 +1087,7 @@ when a member has no row.
 | `purrdf-text` | `crates/text` | present | `text.bm25f`, `text.unicode-ascii-lower`, `text.dictionary-storage`, `text.dictionary-lattice`, `text.emoji-recognition`, `text.phonetic-spelling`, `text.phonetic-distance`, `text.surface-build`, `text.surface-substring` |
 | `purrdf-validate` | `crates/validate` | absent | `validate.crate` |
 | `purrdf-xsd` | `crates/xsd` | present | `xsd.whitespace`, `xsd.canonical-double`, `xsd.exact-arith`, `xsd.rfc3339-lexical` |
+| `purrdf-yaml` | `crates/yaml` | absent | `yaml.crate` |
 | `purrdf-zstd` | `crates/zstd` | absent | `zstd.match-length` |
 
 ---

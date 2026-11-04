@@ -40,6 +40,7 @@
 //! in memory.
 
 use crate::ContentDigest;
+use purrdf_lex::allocation::{Admission, Memory, Resident, StorageError};
 
 mod emit;
 pub use emit::{ByteCover, CoverBuilder, DelimitedCover, EmitError, SpanReference};
@@ -80,6 +81,8 @@ pub struct VerbatimSpan<'a> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ReconstructError {
+    /// Original physical storage or admission refusal.
+    Storage(StorageError),
     /// A span ends before it starts.
     InvertedSpan {
         /// The span's declared first byte.
@@ -160,6 +163,7 @@ pub enum ReconstructError {
 impl std::fmt::Display for ReconstructError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Storage(cause) => cause.fmt(f),
             Self::InvertedSpan {
                 byte_start,
                 byte_end,
@@ -230,10 +234,12 @@ impl std::fmt::Display for ReconstructError {
     }
 }
 
-impl std::error::Error for ReconstructError {}
+purrdf_hash::error_sources!(ReconstructError, Storage);
+purrdf_lex::variant_from!(ReconstructError { Storage(StorageError) });
 
 impl purrdf_hash::error::StructuredError for ReconstructError {
     purrdf_hash::error_visit! {
+        Storage(cause) => "cover-storage" { "cause" => Cause(cause) },
         InvertedSpan { byte_start, byte_end } => "cover-inverted-span" { "byte_start" => ByteCount(u128::from(*byte_start)), "byte_end" => ByteCount(u128::from(*byte_end)) },
         SpanOutOfBounds { byte_start, byte_end, byte_length } => "cover-span-out-of-bounds" { "byte_start" => ByteCount(u128::from(*byte_start)), "byte_end" => ByteCount(u128::from(*byte_end)), "byte_length" => ByteCount(u128::from(*byte_length)) },
         SpanLengthMismatch { byte_start, byte_end, text_bytes } => "cover-span-length-mismatch" { "byte_start" => ByteCount(u128::from(*byte_start)), "byte_end" => ByteCount(u128::from(*byte_end)), "text_bytes" => ByteCount(*text_bytes as u128) },
@@ -273,18 +279,42 @@ pub fn reconstruct(
     source_digest: &ContentDigest,
     spans: &[VerbatimSpan<'_>],
 ) -> Result<String, ReconstructError> {
-    let bytes = reconstruct_over(
+    let mut resident = Resident;
+    reconstruct_with_memory(
         byte_length,
         source_digest,
-        spans.iter().map(|span| ByteSpan {
-            byte_start: span.byte_start,
-            byte_end: span.byte_end,
-            bytes: span.text.as_bytes(),
-            continues: span.continues,
-        }),
-    )?;
-    String::from_utf8(bytes).map_err(|error| ReconstructError::InvalidUtf8 {
-        valid_up_to: error.utf8_error().valid_up_to(),
+        spans,
+        &mut Memory::new(&mut resident),
+    )
+}
+
+/// Reconstruct UTF-8 through the caller's physical account, admitting sorting
+/// and output storage before allocation. Error-report digest strings use their
+/// own fallible resident account, independently of refused reconstruction scratch.
+///
+/// # Errors
+/// Preserves the cover law and returns original storage/admission refusals.
+pub fn reconstruct_with_memory<S: Admission + ?Sized>(
+    byte_length: u64,
+    source_digest: &ContentDigest,
+    spans: &[VerbatimSpan<'_>],
+    memory: &mut Memory<'_, S>,
+) -> Result<String, ReconstructError> {
+    memory.try_scope(|memory| {
+        let bytes = reconstruct_over(
+            byte_length,
+            source_digest,
+            spans.iter().map(|span| ByteSpan {
+                byte_start: span.byte_start,
+                byte_end: span.byte_end,
+                bytes: span.text.as_bytes(),
+                continues: span.continues,
+            }),
+            memory,
+        )?;
+        String::from_utf8(bytes).map_err(|error| ReconstructError::InvalidUtf8 {
+            valid_up_to: error.utf8_error().valid_up_to(),
+        })
     })
 }
 
@@ -297,171 +327,195 @@ pub fn reconstruct_bytes(
     source_digest: &ContentDigest,
     spans: &[ByteSpan<'_>],
 ) -> Result<Vec<u8>, ReconstructError> {
-    reconstruct_over(byte_length, source_digest, spans.iter().copied())
+    let mut resident = Resident;
+    reconstruct_bytes_with_memory(
+        byte_length,
+        source_digest,
+        spans,
+        &mut Memory::new(&mut resident),
+    )
 }
 
-fn reconstruct_over<'a>(
+/// Reconstruct arbitrary bytes with admitted sorting/output under the same law.
+/// # Errors
+/// Returns the same typed coverage, digest and storage refusals as the UTF-8 entry.
+pub fn reconstruct_bytes_with_memory<S: Admission + ?Sized>(
+    byte_length: u64,
+    source_digest: &ContentDigest,
+    spans: &[ByteSpan<'_>],
+    memory: &mut Memory<'_, S>,
+) -> Result<Vec<u8>, ReconstructError> {
+    reconstruct_over(byte_length, source_digest, spans.iter().copied(), memory)
+}
+
+fn reconstruct_over<'a, S: Admission + ?Sized>(
     byte_length: u64,
     source_digest: &ContentDigest,
     spans: impl IntoIterator<Item = ByteSpan<'a>>,
+    memory: &mut Memory<'_, S>,
 ) -> Result<Vec<u8>, ReconstructError> {
-    let mut ordered = Vec::new();
-    for span in spans {
-        if span.byte_end < span.byte_start {
-            return Err(ReconstructError::InvertedSpan {
-                byte_start: span.byte_start,
-                byte_end: span.byte_end,
-            });
-        }
-        if span.byte_end > byte_length {
-            return Err(ReconstructError::SpanOutOfBounds {
-                byte_start: span.byte_start,
-                byte_end: span.byte_end,
-                byte_length,
-            });
-        }
-        if span.bytes.len() as u64 != span.byte_end - span.byte_start {
-            return Err(ReconstructError::SpanLengthMismatch {
-                byte_start: span.byte_start,
-                byte_end: span.byte_end,
-                text_bytes: span.bytes.len(),
-            });
-        }
-        if span.byte_start < span.byte_end {
-            ordered.push(span);
-        }
-    }
-    // The bytes are inside the sort key so the order is total: two spans
-    // over one range with different payloads — no lawful cover has them,
-    // but a hostile one may — sort the same way on every run and every
-    // host, and the walk below therefore accepts or refuses such a
-    // cover deterministically rather than by allocation order.
-    ordered.sort_unstable_by_key(|s| (s.byte_start, s.byte_end, s.bytes));
-
-    // The coverage walk, before a buffer exists: `frontier` is one past
-    // the last covered byte, and `owner` the span that put it there.
-    // Every refusal about the cover is found here, so the allocation
-    // below is bounded by the spans in hand — a `byte_length` past
-    // their total is refused as the uncovered run it is.
-    //
-    // An overlap is answered against the span the `continues` edge
-    // **declares**, never against whichever span happens to hold the
-    // frontier. The two part company on a real chain: two pieces of a
-    // split can end at the same cut, and the continuation of the later
-    // one then overlaps bytes the frontier credits to the earlier. A
-    // lawful producer's declared piece covers the whole overlap — a
-    // continuation starts inside the piece it continues — so the
-    // declared piece is the one span the shared bytes can always be
-    // held against, and a declaration that does not cover them is no
-    // answer for them and refuses exactly as no declaration does.
-    //
-    // The sorted vector is its own index: a declared piece is found by
-    // binary search over the very ordering the walk reads, so the
-    // lookup costs no second structure and nothing is built for the
-    // common cover — the one with no overlap at all.
-    // The first span of the equal-range group, so a duplicated range is
-    // answered by the same representative on every run.
-    let find = |key: (u64, u64)| -> Option<&ByteSpan<'_>> {
-        let at = ordered.partition_point(|s| (s.byte_start, s.byte_end) < key);
-        ordered
-            .get(at)
-            .filter(|s| (s.byte_start, s.byte_end) == key)
-    };
-    let mut frontier = 0u64;
-    let mut owner: Option<&ByteSpan<'_>> = None;
-    for span in &ordered {
-        if span.byte_start > frontier {
-            return Err(ReconstructError::UncoveredRange {
-                byte_start: frontier,
-                byte_end: span.byte_start,
-            });
-        }
-        if span.byte_start < frontier {
-            let covering = owner.expect("bytes below the frontier have an owner");
-            let shared_end = frontier.min(span.byte_end);
-            // The declared piece must start STRICTLY before the
-            // continuation — the split law's own geometry, and the
-            // clause that closes self-reference: a span naming its own
-            // range would be found, cover its own overlap, and agree
-            // with itself byte for byte, laundering any overlap into
-            // legality. Strictly-earlier makes self-declaration and
-            // same-start declaration answer for nothing, and a
-            // duplicated range is then always refused at its second
-            // twin, deterministically.
-            let declared = span
-                .continues
-                .and_then(find)
-                .filter(|p| p.byte_start < span.byte_start && shared_end <= p.byte_end);
-            let Some(piece) = declared else {
-                return Err(ReconstructError::UndeclaredOverlap {
+    memory.try_scope(|memory| {
+        let mut ordered = Vec::new();
+        for span in spans {
+            if span.byte_end < span.byte_start {
+                return Err(ReconstructError::InvertedSpan {
                     byte_start: span.byte_start,
                     byte_end: span.byte_end,
-                    covered_start: covering.byte_start,
-                    covered_end: covering.byte_end,
-                });
-            };
-            // Both narrowings are bounded by a resident byte slice's
-            // length — `shared` by this span's bytes, `from + shared`
-            // by the declared piece's, both via the length check
-            // above — so neither can truncate on a 32-bit target.
-            let shared = (shared_end - span.byte_start) as usize;
-            let of_continuation = &span.bytes[..shared];
-            let from = (span.byte_start - piece.byte_start) as usize;
-            let of_piece = &piece.bytes[from..from + shared];
-            // One slice comparison decides — the compiler lowers it to
-            // a memcmp — and only a refusal pays to locate the byte.
-            if of_continuation != of_piece {
-                let differs = of_continuation
-                    .iter()
-                    .zip(of_piece)
-                    .position(|(a, b)| a != b)
-                    .expect("the slices differ, so some byte does");
-                return Err(ReconstructError::OverlapDisagreement {
-                    at: span.byte_start + differs as u64,
                 });
             }
+            if span.byte_end > byte_length {
+                return Err(ReconstructError::SpanOutOfBounds {
+                    byte_start: span.byte_start,
+                    byte_end: span.byte_end,
+                    byte_length,
+                });
+            }
+            if span.bytes.len() as u64 != span.byte_end - span.byte_start {
+                return Err(ReconstructError::SpanLengthMismatch {
+                    byte_start: span.byte_start,
+                    byte_end: span.byte_end,
+                    text_bytes: span.bytes.len(),
+                });
+            }
+            if span.byte_start < span.byte_end {
+                memory.push(&mut ordered, span)?;
+            }
         }
-        if span.byte_end > frontier {
-            frontier = span.byte_end;
-            owner = Some(span);
-        }
-    }
-    if frontier < byte_length {
-        return Err(ReconstructError::UncoveredRange {
-            byte_start: frontier,
-            byte_end: byte_length,
-        });
-    }
+        // The bytes are inside the sort key so the order is total: two spans
+        // over one range with different payloads — no lawful cover has them,
+        // but a hostile one may — sort the same way on every run and every
+        // host, and the walk below therefore accepts or refuses such a
+        // cover deterministically rather than by allocation order.
+        ordered.sort_unstable_by_key(|s| (s.byte_start, s.byte_end, s.bytes));
 
-    // The cover is proven, so the walk below appends every byte exactly
-    // once: each span contributes the suffix past the bytes already
-    // written — its whole text at a meet, the unshared tail at a
-    // declared overlap, nothing when it lies inside what is written —
-    // so there is no zero-fill pass and no byte is copied twice. The
-    // length fits an allocation because the cover equals it: every
-    // covered byte is a byte of some span's text, and those texts are
-    // slices already resident in memory.
-    let capacity =
-        usize::try_from(byte_length).expect("a proven cover is at most the resident spans' bytes");
-    let mut bytes = Vec::with_capacity(capacity);
-    for span in &ordered {
-        let written = bytes.len() as u64;
-        if span.byte_end > written {
-            // Bounded by this span's own text: the proven cover keeps
-            // `written` between `byte_start` and `byte_end`, whose
-            // distance is the payload length, checked above.
-            let skip = (written - span.byte_start) as usize;
-            bytes.extend_from_slice(&span.bytes[skip..]);
+        // The coverage walk, before a buffer exists: `frontier` is one past
+        // the last covered byte, and `owner` the span that put it there.
+        // Every refusal about the cover is found here, so the allocation
+        // below is bounded by the spans in hand — a `byte_length` past
+        // their total is refused as the uncovered run it is.
+        //
+        // An overlap is answered against the span the `continues` edge
+        // **declares**, never against whichever span happens to hold the
+        // frontier. The two part company on a real chain: two pieces of a
+        // split can end at the same cut, and the continuation of the later
+        // one then overlaps bytes the frontier credits to the earlier. A
+        // lawful producer's declared piece covers the whole overlap — a
+        // continuation starts inside the piece it continues — so the
+        // declared piece is the one span the shared bytes can always be
+        // held against, and a declaration that does not cover them is no
+        // answer for them and refuses exactly as no declaration does.
+        //
+        // The sorted vector is its own index: a declared piece is found by
+        // binary search over the very ordering the walk reads, so the
+        // lookup costs no second structure and nothing is built for the
+        // common cover — the one with no overlap at all.
+        // The first span of the equal-range group, so a duplicated range is
+        // answered by the same representative on every run.
+        let find = |key: (u64, u64)| -> Option<&ByteSpan<'_>> {
+            let at = ordered.partition_point(|s| (s.byte_start, s.byte_end) < key);
+            ordered
+                .get(at)
+                .filter(|s| (s.byte_start, s.byte_end) == key)
+        };
+        let mut frontier = 0u64;
+        let mut owner: Option<&ByteSpan<'_>> = None;
+        for span in &ordered {
+            if span.byte_start > frontier {
+                return Err(ReconstructError::UncoveredRange {
+                    byte_start: frontier,
+                    byte_end: span.byte_start,
+                });
+            }
+            if span.byte_start < frontier {
+                let covering = owner.expect("bytes below the frontier have an owner");
+                let shared_end = frontier.min(span.byte_end);
+                // The declared piece must start STRICTLY before the
+                // continuation — the split law's own geometry, and the
+                // clause that closes self-reference: a span naming its own
+                // range would be found, cover its own overlap, and agree
+                // with itself byte for byte, laundering any overlap into
+                // legality. Strictly-earlier makes self-declaration and
+                // same-start declaration answer for nothing, and a
+                // duplicated range is then always refused at its second
+                // twin, deterministically.
+                let declared = span
+                    .continues
+                    .and_then(find)
+                    .filter(|p| p.byte_start < span.byte_start && shared_end <= p.byte_end);
+                let Some(piece) = declared else {
+                    return Err(ReconstructError::UndeclaredOverlap {
+                        byte_start: span.byte_start,
+                        byte_end: span.byte_end,
+                        covered_start: covering.byte_start,
+                        covered_end: covering.byte_end,
+                    });
+                };
+                // Both narrowings are bounded by a resident byte slice's
+                // length — `shared` by this span's bytes, `from + shared`
+                // by the declared piece's, both via the length check
+                // above — so neither can truncate on a 32-bit target.
+                let shared = (shared_end - span.byte_start) as usize;
+                let of_continuation = &span.bytes[..shared];
+                let from = (span.byte_start - piece.byte_start) as usize;
+                let of_piece = &piece.bytes[from..from + shared];
+                // One slice comparison decides — the compiler lowers it to
+                // a memcmp — and only a refusal pays to locate the byte.
+                if of_continuation != of_piece {
+                    let differs = of_continuation
+                        .iter()
+                        .zip(of_piece)
+                        .position(|(a, b)| a != b)
+                        .expect("the slices differ, so some byte does");
+                    return Err(ReconstructError::OverlapDisagreement {
+                        at: span.byte_start + differs as u64,
+                    });
+                }
+            }
+            if span.byte_end > frontier {
+                frontier = span.byte_end;
+                owner = Some(span);
+            }
         }
-    }
-    let digest = ContentDigest::of(&bytes);
-    if digest != *source_digest {
-        return Err(ReconstructError::DigestMismatch {
-            expected: source_digest.to_hex(),
-            reconstructed: digest.to_hex(),
-        });
-    }
-    Ok(bytes)
+        if frontier < byte_length {
+            return Err(ReconstructError::UncoveredRange {
+                byte_start: frontier,
+                byte_end: byte_length,
+            });
+        }
+
+        // The cover is proven, so the walk below appends every byte exactly
+        // once: each span contributes the suffix past the bytes already
+        // written — its whole text at a meet, the unshared tail at a
+        // declared overlap, nothing when it lies inside what is written —
+        // so there is no zero-fill pass and no byte is copied twice. The
+        // length fits an allocation because the cover equals it: every
+        // covered byte is a byte of some span's text, and those texts are
+        // slices already resident in memory.
+        let capacity = usize::try_from(byte_length).map_err(|_| StorageError::SizeOverflow)?;
+        let mut bytes = Vec::new();
+        memory.reserve(&mut bytes, capacity)?;
+        for span in &ordered {
+            let written = bytes.len() as u64;
+            if span.byte_end > written {
+                // Bounded by this span's own text: the proven cover keeps
+                // `written` between `byte_start` and `byte_end`, whose
+                // distance is the payload length, checked above.
+                let skip = (written - span.byte_start) as usize;
+                bytes.extend_from_slice(&span.bytes[skip..]);
+            }
+        }
+        memory.release_vec(ordered)?;
+        let digest = ContentDigest::of(&bytes);
+        if digest != *source_digest {
+            let mut resident = Resident;
+            let mut reporting = Memory::new(&mut resident);
+            return Err(ReconstructError::DigestMismatch {
+                expected: reporting.format(source_digest)?,
+                reconstructed: reporting.format(&digest)?,
+            });
+        }
+        Ok(bytes)
+    })
 }
 
 #[cfg(test)]
@@ -496,6 +550,41 @@ mod tests {
                 },
             ],
         )
+    }
+
+    #[test]
+    fn admitted_reconstruction_refuses_storage_and_refunds_only_destroyed_scratch() {
+        struct Boundary(usize);
+        impl Admission for Boundary {
+            fn resize(&mut self, live: usize) -> Result<(), StorageError> {
+                if live > self.0 {
+                    Err(StorageError::AdmissionFailed)
+                } else {
+                    Ok(())
+                }
+            }
+        }
+        let (length, digest, spans) = covered();
+        let mut boundary = Boundary(1);
+        let mut memory = Memory::new(&mut boundary);
+        assert!(matches!(
+            reconstruct_with_memory(length, &digest, &spans, &mut memory),
+            Err(ReconstructError::Storage(StorageError::AdmissionFailed))
+        ));
+        assert_eq!(memory.admitted_bytes(), 0);
+        let mut boundary = Boundary(1024);
+        let mut memory = Memory::new(&mut boundary);
+        let text = reconstruct_with_memory(length, &digest, &spans, &mut memory).unwrap();
+        assert_eq!(text, "ab\ncd");
+        assert_eq!(memory.admitted_bytes(), text.capacity());
+        memory.release_string(text).unwrap();
+        assert_eq!(memory.admitted_bytes(), 0);
+        let wrong = ContentDigest::of(b"wrong");
+        assert!(matches!(
+            reconstruct_with_memory(length, &wrong, &spans, &mut memory),
+            Err(ReconstructError::DigestMismatch { .. })
+        ));
+        assert_eq!(memory.admitted_bytes(), 0);
     }
 
     #[test]
