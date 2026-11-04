@@ -729,6 +729,7 @@ fn dispatch_with_request(
         )
         .map(|()| CliOutcome::Complete),
         Command::Describe {
+            yamlld_input_options,
             iris,
             from,
             to,
@@ -737,6 +738,7 @@ fn dispatch_with_request(
             output,
         } => describe::run(
             &describe::DescribeOptions {
+                yamlld_input_options: yamlld_input_options.as_deref(),
                 iris,
                 from: *from,
                 to: *to,
@@ -750,6 +752,7 @@ fn dispatch_with_request(
         )
         .map(|()| CliOutcome::Complete),
         Command::Project {
+            yamlld_input_options,
             profile,
             config,
             assets,
@@ -759,6 +762,7 @@ fn dispatch_with_request(
             output,
         } => projection::run_project(
             *profile,
+            yamlld_input_options.as_deref(),
             config,
             assets.as_deref(),
             *from,

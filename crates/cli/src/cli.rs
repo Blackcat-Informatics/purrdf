@@ -1128,6 +1128,10 @@ pub(crate) enum Command {
     },
     /// Project RDF into a deterministic graph, tabular, or research-object USTAR carrier.
     Project {
+        /// Closed version-one YAML-LD Basic input-options JSON file, for primary IN only.
+        /// Projection configuration and assets keep their existing input policy.
+        #[arg(long, value_name = "PATH")]
+        yamlld_input_options: Option<PathBuf>,
         /// Closed projection carrier profile.
         #[arg(long, value_enum)]
         profile: CliProjectionProfile,
@@ -1586,6 +1590,9 @@ pub(crate) enum Command {
     /// `convert` — a description whose statement layer cannot survive the target syntax
     /// records the drop instead of losing it silently.
     Describe {
+        /// Closed version-one YAML-LD Basic input-options JSON file, for primary IN only.
+        #[arg(long, value_name = "PATH")]
+        yamlld_input_options: Option<PathBuf>,
         /// A resource to describe: repeatable, and at least one is required. Several are
         /// described as ONE union subgraph (the same union `DESCRIBE <a> <b>` returns), not
         /// as several documents. A RELATIVE reference resolves against the base in force —
@@ -2993,12 +3000,14 @@ impl Cli {
                 paths.push(PathBuf::from(input));
             }
             Command::Project {
+                yamlld_input_options,
                 config,
                 assets,
                 input,
                 output,
                 ..
             } => {
+                paths.extend(yamlld_input_options.iter().cloned());
                 paths.push(PathBuf::from(config));
                 if let Some(path) = assets {
                     paths.push(PathBuf::from(path));
@@ -3064,7 +3073,13 @@ impl Cli {
                 paths.push(PathBuf::from(data));
                 paths.push(PathBuf::from(output));
             }
-            Command::Describe { input, output, .. } => {
+            Command::Describe {
+                input,
+                output,
+                yamlld_input_options,
+                ..
+            } => {
+                paths.extend(yamlld_input_options.iter().cloned());
                 paths.push(PathBuf::from(input));
                 paths.push(PathBuf::from(output));
             }

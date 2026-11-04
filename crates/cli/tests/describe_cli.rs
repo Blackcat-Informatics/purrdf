@@ -25,6 +25,67 @@
 mod support;
 use support::{code, pipe, run, stderr, stdout, write_file};
 
+/// Explicit document selection reaches the shared selector/base path before output.
+#[test]
+fn configured_yamlld_input_reaches_describe_selection() {
+    let dir = purrdf_testkit::temp_dir!().expect("temporary inputs");
+    let input = write_file(
+        dir.path(),
+        "input.yamlld",
+        "'@id': first\nhttps://example.org/p: one\n---\n'@id': second\nhttps://example.org/p: two\n",
+    );
+    let config = write_file(
+        dir.path(),
+        "all.json",
+        r#"{"version":1,"yaml_ld":{"extract_all_scripts":true}}"#,
+    );
+    let mut args = vec![
+        "describe",
+        "--iri",
+        "second",
+        "--base",
+        "https://example.org/",
+        "--to",
+        "nquads",
+    ];
+    let mut first_args = args.clone();
+    first_args.push(&input);
+    let first = run(&first_args);
+    assert_eq!(code(&first), 0, "{}", stderr(&first));
+    assert_eq!(stdout(&first), "");
+    args.extend(["--yamlld-input-options", &config, &input]);
+    let selected = run(&args);
+    assert_eq!(code(&selected), 0, "{}", stderr(&selected));
+    assert_eq!(
+        stdout(&selected),
+        "<https://example.org/second> <https://example.org/p> \"two\" .\n"
+    );
+    let limited = write_file(
+        dir.path(),
+        "limited.json",
+        r#"{"version":1,"yaml_ld":{"syntax":{"max_input_bytes":0}}}"#,
+    );
+    let output = write_file(dir.path(), "output.nq", "unchanged destination");
+    let refused = run(&[
+        "describe",
+        "--iri",
+        "second",
+        "--base",
+        "https://example.org/",
+        "--yamlld-input-options",
+        &limited,
+        &input,
+        &output,
+    ]);
+    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+    assert!(stderr(&refused).contains("native-yaml-input-limit"));
+    assert_eq!(stdout(&refused), "");
+    assert_eq!(
+        std::fs::read_to_string(&output).unwrap(),
+        "unchanged destination"
+    );
+}
+
 /// A graph exercising every SCBD rule at once:
 ///
 /// * `alice → bob` is OUTGOING from the subject;
