@@ -968,6 +968,64 @@ export class ProjectionLift {
   free(): void;
 }
 
+/** A computed YAML source root and an ordinary mutable Dataset. */
+export class YamlSourceExport {
+  private constructor();
+  readonly root: string;
+  /** Move the Dataset out once. It survives freeing this result. */
+  takeDataset(): Dataset | undefined;
+  free(): void;
+}
+
+/** Original diagnostic-backed native failure and its retained admission. */
+export class YamlSourceCause {
+  private constructor();
+  /** Typed native fields, including exact codes and byte/line/column positions. */
+  readonly json: string;
+  free(): void;
+}
+
+export interface YamlSourceFailure extends Error {
+  readonly code: string;
+  readonly diagnostic: object;
+  readonly nativeCauseJson?: string;
+  /** Free this owned cause when it is no longer needed. */
+  readonly nativeCause?: YamlSourceCause;
+}
+
+/**
+ * Export original YAML bytes under an explicit absolute source IRI and a closed
+ * version-one native profile encoded as UTF-8 JSON bytes. The profile requires
+ * version, name, profile_version and vocabulary; bounds are optional.
+ *
+ * Rust checks the 16 KiB profile cap before copying profile bytes, decodes the
+ * profile, then checks its source-byte cap before copying source bytes. Captured
+ * buffers must be Uint8Array views over non-shared ArrayBuffer storage; detached
+ * or invalidated views throw. Copies use fallible admitted native storage held
+ * through the operation. Host buffers/string glue, bridge copies, Dataset
+ * ownership and native phase accounts remain separate.
+ *
+ * @throws {YamlSourceFailure | TypeError} Native refusals retain typed causes;
+ *   host buffer failures are caught exceptions and leave the instance reusable.
+ */
+export function yamlSourceExport(
+  source: Uint8Array,
+  sourceIri: string,
+  profileJson: Uint8Array,
+): YamlSourceExport;
+
+/**
+ * Reconstruct the current native Dataset snapshot under an explicit root/profile.
+ * Returns independently owned original bytes after native verification succeeds.
+ * Profile admission matches yamlSourceExport; snapshot and decode/reparse accounts
+ * remain separate. Later Dataset mutations cannot change the returned Uint8Array.
+ */
+export function yamlSourceReconstruct(
+  dataset: Dataset,
+  root: string,
+  profileJson: Uint8Array,
+): Uint8Array;
+
 /**
  * One closure of one document under one SPARQL entailment regime: the canonical
  * N-Quads and the byte-stable rendered reasoning report. Returned by
