@@ -66,7 +66,7 @@ receipt = {
 CAPTURE
 module="$scratch/fixture.wasm"
 wasm-bindgen --target nodejs --out-name fixture --out-dir "$scratch" "$module"
-cp crates/rdf-wasm/js/src/purrdf_jspi.mjs "$scratch/purrdf_jspi.mjs"
+cp crates/rdf-wasm/js/src/purrdf_jspi.mjs crates/rdf-wasm/js/src/purrdf_bytes.mjs "$scratch/"
 cp scripts/fixtures/wasm-identity-transport.ts "$scratch/identity.ts"
 "$root/crates/rdf-wasm/js/node_modules/.bin/tsc" --ignoreConfig --strict --target ES2020 --lib ES2020,DOM,ESNext.Disposable --module commonjs --noEmit "$scratch/identity.ts"
 node scripts/fixtures/wasm-dataset-identity.cjs "$scratch/fixture.js"
