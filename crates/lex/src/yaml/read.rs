@@ -441,9 +441,7 @@ const fn is_break(byte: Option<u8>) -> bool {
     matches!(byte, Some(b'\n' | b'\r'))
 }
 
-const fn is_flow_indicator(byte: Option<u8>) -> bool {
-    matches!(byte, Some(b',' | b'[' | b']' | b'{' | b'}'))
-}
+use super::scalar::flow_indicator as is_flow_indicator;
 
 macro_rules! admit {
     ($parser:ident, $operation:expr) => {{
@@ -480,7 +478,7 @@ impl<'a, B: Builder> Parser<'a, B> {
 
     /// Whether the byte at `at` is a space, tab, line break or the end.
     fn blank_at(&self, at: usize) -> bool {
-        matches!(self.peek_at(at), None | Some(b' ' | b'\t' | b'\n' | b'\r'))
+        super::scalar::blank(self.peek_at(at))
     }
 
     /// Whether the cursor is on the indicator `c` followed by a blank.
@@ -528,9 +526,7 @@ impl<'a, B: Builder> Parser<'a, B> {
     /// of a line, followed by a blank).
     fn at_marker(&self) -> bool {
         self.pos == self.line_start(self.pos)
-            && (self.bytes[self.pos..].starts_with(b"---")
-                || self.bytes[self.pos..].starts_with(b"..."))
-            && self.blank_at(self.pos + 3)
+            && super::scalar::document_marker(&self.bytes[self.pos..])
     }
 
     fn skip_inline_space(&mut self) {
@@ -1058,12 +1054,12 @@ impl<'a, B: Builder> Parser<'a, B> {
         let start = self.pos;
         let mut end = self.pos;
         loop {
+            if super::scalar::plain_end(self.bytes, self.pos, false) {
+                break;
+            }
             match self.peek() {
-                None | Some(b'\n' | b'\r') => break,
                 Some(b' ' | b'\t') => self.pos += 1,
-                Some(b':') if self.blank_at(self.pos + 1) => break,
-                Some(b'#') if matches!(self.bytes[self.pos - 1], b' ' | b'\t') => break,
-                Some(_) => {
+                _ => {
                     self.pos += self.text[self.pos..]
                         .chars()
                         .next()
@@ -1143,17 +1139,12 @@ impl<'a, B: Builder> Parser<'a, B> {
         let start = self.pos;
         let mut end = self.pos;
         loop {
+            if super::scalar::plain_end(self.bytes, self.pos, true) {
+                break;
+            }
             match self.peek() {
-                None | Some(b'\n' | b'\r' | b',' | b'[' | b']' | b'{' | b'}') => break,
                 Some(b' ' | b'\t') => self.pos += 1,
-                Some(b':')
-                    if self.blank_at(self.pos + 1)
-                        || is_flow_indicator(self.peek_at(self.pos + 1)) =>
-                {
-                    break;
-                }
-                Some(b'#') if matches!(self.bytes[self.pos - 1], b' ' | b'\t') => break,
-                Some(_) => {
+                _ => {
                     self.pos += self.text[self.pos..]
                         .chars()
                         .next()
@@ -1380,29 +1371,14 @@ impl<'a, B: Builder> Parser<'a, B> {
                 .map(|c| (c, 2 + width))
                 .ok_or_else(|| self.error(ErrorKind::Escape, at))
         };
-        let short = match self.peek_at(at + 1) {
-            Some(b'0') => '\0',
-            Some(b'a') => '\u{7}',
-            Some(b'b') => '\u{8}',
-            Some(b't' | b'\t') => '\t',
-            Some(b'n') => '\n',
-            Some(b'v') => '\u{b}',
-            Some(b'f') => '\u{c}',
-            Some(b'r') => '\r',
-            Some(b'e') => '\u{1b}',
-            Some(b' ') => ' ',
-            Some(b'"') => '"',
-            Some(b'/') => '/',
-            Some(b'\\') => '\\',
-            Some(b'N') => '\u{85}',
-            Some(b'_') => '\u{a0}',
-            Some(b'L') => '\u{2028}',
-            Some(b'P') => '\u{2029}',
-            Some(b'x') => return hex(2),
-            Some(b'u') => return hex(4),
-            Some(b'U') => return hex(8),
-            _ => return Err(self.error(ErrorKind::Escape, at)),
-        };
+        let name = self
+            .peek_at(at + 1)
+            .ok_or_else(|| self.error(ErrorKind::Escape, at))?;
+        if let Some(width) = super::scalar::hex_width(name) {
+            return hex(width);
+        }
+        let short =
+            super::scalar::short_escape(name).ok_or_else(|| self.error(ErrorKind::Escape, at))?;
         Ok((short, 2))
     }
 
