@@ -9,6 +9,7 @@
 //! No code in this module performs network I/O or supplies a vocabulary default.
 
 mod compiler;
+pub(in crate::native_codecs::jsonld) use compiler::is_control;
 mod options;
 mod strict;
 #[cfg(test)]
@@ -248,6 +249,7 @@ pub struct JsonLdTermDefinition {
     direction_mapping: Option<JsonLdNullable<JsonLdDirection>>,
     containers: BTreeSet<JsonLdContainer>,
     index_mapping: Option<String>,
+    index_term: Option<String>,
     nest: Option<String>,
     scoped_context: Option<Value>,
     scoped_context_base: Option<String>,
@@ -304,6 +306,10 @@ impl JsonLdTermDefinition {
     /// Expanded custom index-property mapping, when configured.
     pub fn index_mapping(&self) -> Option<&str> {
         self.index_mapping.as_deref()
+    }
+
+    pub(in crate::native_codecs::jsonld) fn index_term(&self) -> Option<&str> {
+        self.index_term.as_deref()
     }
 
     /// `@nest` keyword or alias used by the term.
@@ -660,7 +666,54 @@ impl CompiledJsonLdContext {
 
     /// Apply a node-local context over this compiled active context.
     pub fn apply_local_context(&self, context: &Value) -> Result<Self, RdfDiagnostic> {
-        compiler::apply_context(self, context, self.base_iri(), false)
+        compiler::apply_context(self, context, self.base_iri(), false, true)
+    }
+
+    pub(in crate::native_codecs::jsonld) fn apply_document_context(
+        &self,
+        context: &Value,
+        document_url: Option<&str>,
+    ) -> Result<Self, RdfDiagnostic> {
+        compiler::apply_context(self, context, document_url, false, true)
+    }
+
+    pub(in crate::native_codecs::jsonld) fn apply_type_scope(
+        &self,
+        definition: &JsonLdTermDefinition,
+        propagate: bool,
+    ) -> Result<Self, RdfDiagnostic> {
+        // Structural callers filter immutable definitions for a scoped context.
+        compiler::apply_context(
+            self,
+            definition
+                .scoped_context
+                .as_ref()
+                .expect("type-scoped definition"),
+            definition.scoped_context_base.as_deref(),
+            false,
+            propagate,
+        )
+    }
+
+    pub(in crate::native_codecs::jsonld) fn apply_property_scope(
+        &self,
+        definition: &JsonLdTermDefinition,
+    ) -> Result<Self, RdfDiagnostic> {
+        // Structural callers filter immutable definitions for a scoped context.
+        compiler::apply_context(
+            self,
+            definition
+                .scoped_context
+                .as_ref()
+                .expect("property-scoped definition"),
+            definition.scoped_context_base.as_deref(),
+            true,
+            true,
+        )
+    }
+
+    pub(in crate::native_codecs::jsonld) fn previous_context(&self) -> Option<Self> {
+        compiler::previous_context(self)
     }
 
     /// Active context inherited by a nested node object under `@propagate` rules.

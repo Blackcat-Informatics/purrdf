@@ -1,118 +1,40 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Context-aware expansion from compact JSON-LD-star into the typed carrier.
-
-use crate::native_codecs::syntax::check_language_tag;
-use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
-
-use purrdf_lex::json::{self, Number, Object as Map, Value as JsonValue};
-use purrdf_lex::walk::WorkList;
+//! Context-free node-map construction and RDF lowering of expanded documents.
 
 use super::carrier::{Document, Literal, NamedGraph, Node, Part, Term, Triple, Value};
 use super::{
-    CompiledJsonLdContext, JsonLdContainer, JsonLdDirection, JsonLdNullable, JsonLdTermDefinition,
-    JsonLdTypeMapping, RDF_FIRST, RDF_JSON, RDF_NIL, RDF_REIFIES, RDF_REST, RDF_TYPE, RdfDataset,
-    RdfDiagnostic, RdfQuad, RdfTerm, XSD_STRING, decode, validated_iri_term,
+    RDF_FIRST, RDF_JSON, RDF_NIL, RDF_REIFIES, RDF_REST, RDF_TYPE, RdfDataset, RdfDiagnostic,
+    RdfQuad, RdfTerm, XSD_STRING, decode, validated_iri_term as native_iri_term,
 };
+use crate::native_codecs::syntax::check_language_tag;
 use crate::{RdfLiteral, RdfTextDirection, RdfTriple};
 use purrdf_core::collections::{ListVocab, build_rdf_list};
-use purrdf_iri::langtag;
+use purrdf_lex::json::{self, Number, Value as JsonValue};
+use purrdf_lex::walk::WorkList;
+use purrdf_xsd::datatype::{XSD_BOOLEAN, XSD_DOUBLE, XSD_INTEGER};
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
-use purrdf_xsd::datatype::XSD_BOOLEAN;
-use purrdf_xsd::datatype::XSD_DOUBLE;
-use purrdf_xsd::datatype::XSD_INTEGER;
+pub(super) fn expanded_to_dataset(document: JsonValue) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+    carrier_to_dataset(expanded_to_carrier(document)?)
+}
 
-pub(super) fn expand_document(
-    document: JsonValue,
-    context: &CompiledJsonLdContext,
-) -> Result<Document, RdfDiagnostic> {
-    // The reserved-label pre-pass reads the whole parsed document, for the same
-    // reason the lowering pass does: a minted blank label must not collide with one
-    // used anywhere. It retains labels, not values.
+pub(super) fn expanded_to_carrier(document: JsonValue) -> Result<Document, RdfDiagnostic> {
     let mut builder = Builder::new(&document);
-    let mut frames: WorkList<_, 8> = WorkList::with(vec![document].into_iter());
-    while let Some(frame) = frames.top_mut() {
-        let Some(mut entry) = frame.next() else {
-            frames.pop();
-            continue;
-        };
-        match &mut entry {
-            JsonValue::Array(entries) => frames.push(core::mem::take(entries).into_iter()),
-            JsonValue::Null => {}
-            JsonValue::Object(_) => builder.expand_graph_entry(&mut entry, None, context)?,
-            _ => {
-                return Err(decode(
-                    "JSON-LD document entries must be objects, arrays or null",
-                ));
-            }
-        }
+    for entry in into_values(document) {
+        builder.graph_entry(entry, None, None)?;
     }
     Ok(builder.finish())
 }
 
-/// The base in force at the END of `document`.
-///
-/// A JSON-LD document moves the base with its own top-level `@context` `@base`, which may
-/// establish one, replace the caller's, or (with `null`) clear it — all three are answers
-/// the parse leg has to be able to report, and `None` here means "no base in force", never
-/// "not asked".
-///
-/// This asks the SAME [`object_context`] the expander applies, not a second reading of
-/// `@base`, so the answer cannot drift from the base expansion actually resolved against;
-/// and it only pays for that application when the document really carries a top-level
-/// `@context` (`@context` is the one JSON-LD keyword that cannot be aliased, so the key
-/// test is exact). Nested contexts are deliberately out of reach: a `@context` inside a
-/// `@graph` member governs that member, never the document.
-pub(super) fn document_base(
-    document: &JsonValue,
-    context: &CompiledJsonLdContext,
-) -> Result<Option<String>, RdfDiagnostic> {
-    let mut base = context.base_iri().map(str::to_owned);
-    let mut frames: WorkList<_, 8> = WorkList::with(std::slice::from_ref(document).iter());
-    while let Some(frame) = frames.top_mut() {
-        let Some(entry) = frame.next() else {
-            frames.pop();
-            continue;
-        };
-        if let JsonValue::Array(entries) = entry {
-            frames.push(entries.iter());
-            continue;
-        }
-        let Some(object) = entry.as_object() else {
-            continue;
-        };
-        if !object.contains_key("@context") {
-            continue;
-        }
-        base = object_context(context, object)?
-            .base_iri()
-            .map(str::to_owned);
-    }
-    Ok(base)
-}
-
-pub(super) fn carrier_to_dataset(mut document: Document) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
-    // The reserved-label pre-pass reads the whole carrier, and has to: a minted
-    // list node must not collide with a blank label used ANYWHERE in the document,
-    // which is not knowable from one node. But what it retains is labels — an
-    // index — not node bodies, so it does not stand in the way of releasing each
-    // node once its quads exist.
+fn carrier_to_dataset(mut document: Document) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     let mut lowerer = Lowerer::new(&document);
-
-    // Nodes are DRAINED rather than borrowed. Each is dropped as soon as it has
-    // been lowered, so the carrier shrinks while the quad table grows instead of
-    // the two standing at full size together. The emitted quads are unchanged:
-    // this is the same walk in the same order, differing only in who owns the node
-    // while it happens.
     for node in core::mem::take(&mut document.default_nodes) {
         lowerer.lower_node(&node, None)?;
     }
-    // Every named graph the document declares, including one whose `@graph` is
-    // empty: it contributes no quad, so without the declaration it would vanish.
-    let mut declared_graphs = Vec::with_capacity(document.named_graphs.len());
+    let mut declared_graphs = Vec::new();
     for mut graph in core::mem::take(&mut document.named_graphs) {
         let graph_name = id_term(&graph.id)?;
         for node in core::mem::take(&mut graph.nodes) {
@@ -123,18 +45,11 @@ pub(super) fn carrier_to_dataset(mut document: Document) -> Result<Arc<RdfDatase
     crate::native_quads::dataset_from_quads_declaring(&lowerer.quads, &declared_graphs)
 }
 
-#[derive(Debug, Clone, Copy)]
-enum NodeDisposition {
-    Merge,
-    Detached,
-}
-
 struct Builder {
     graphs: BTreeMap<Option<String>, BTreeMap<String, Node>>,
     reserved_blank_nodes: BTreeSet<String>,
     next_blank_node: u64,
 }
-
 impl Builder {
     fn new(document: &JsonValue) -> Self {
         let mut reserved_blank_nodes = BTreeSet::new();
@@ -145,7 +60,15 @@ impl Builder {
             next_blank_node: 0,
         }
     }
-
+    fn fresh_blank_node(&mut self) -> String {
+        loop {
+            let id = format!("_:jsonld{}", self.next_blank_node);
+            self.next_blank_node += 1;
+            if self.reserved_blank_nodes.insert(id.clone()) {
+                return id;
+            }
+        }
+    }
     fn finish(mut self) -> Document {
         for nodes in self.graphs.values_mut() {
             for node in nodes.values_mut() {
@@ -173,17 +96,6 @@ impl Builder {
             named_graphs,
         }
     }
-
-    fn fresh_blank_node(&mut self) -> String {
-        loop {
-            let id = format!("_:jsonld{}", self.next_blank_node);
-            self.next_blank_node += 1;
-            if self.reserved_blank_nodes.insert(id.clone()) {
-                return id;
-            }
-        }
-    }
-
     fn merge_node(&mut self, graph: Option<&str>, mut fragment: Node) {
         let nodes = self.graphs.entry(graph.map(str::to_owned)).or_default();
         let target = nodes
@@ -201,968 +113,249 @@ impl Builder {
         }
         target.sort_values();
     }
-
-    fn add_property(
+    fn graph_entry(
         &mut self,
+        mut entry: JsonValue,
         graph: Option<&str>,
-        subject: String,
-        property: String,
-        value: Value,
-    ) {
-        let mut node = Node::new(subject);
-        node.properties.entry(property).or_default().push(value);
-        self.merge_node(graph, node);
-    }
-
-    /// Takes `&mut` so `@graph` can be DRAINED rather than walked in place.
-    ///
-    /// A document's `@graph` array is the bulk of it, and expanding it by reference
-    /// left the whole parsed tree standing beside the whole carrier being built from
-    /// it — both resident at once, which is what made parsing cost multiples of the
-    /// document. Taking each node out as it is expanded lets the tree shrink while the
-    /// carrier grows, so the two trade off instead of stacking.
-    ///
-    /// Only `@graph` is drained, and only because `expand_node` demonstrably ignores
-    /// it: its keyword match has an empty `"@graph" | "@index" => {}` arm, with a
-    /// comment saying this function processes the member first. `@included` is NOT
-    /// drained — `expand_node` does handle that one — so its (rare, small) values are
-    /// cloned for the recursion and left where the node path expects to find them.
-    ///
-    /// Emission ORDER is unchanged: graph nodes, then `@included`, then co-resident
-    /// node members. Blank-node labels are minted in walk order, so reordering these
-    /// would silently relabel every anonymous node in the output.
-    fn expand_graph_entry(
-        &mut self,
-        entry: &mut JsonValue,
-        graph: Option<&str>,
-        context: &CompiledJsonLdContext,
+        assigned: Option<String>,
     ) -> Result<(), RdfDiagnostic> {
-        // `object_context` borrows the PARENT context, not the entry, so the active
-        // context outlives the entry borrow that produced it.
-        let active = {
-            let object = entry
-                .as_object()
-                .ok_or_else(|| decode("JSON-LD graph entry must be an object"))?;
-            object_context(context, object)?
-        };
-
-        // Everything the drain and the tail need, captured as OWNED data so the read
-        // of `entry` ends before the write to it begins. `@graph` may be reached
-        // through a term alias, so what is taken out is the ORIGINAL key that expanded
-        // to it rather than the literal `"@graph"`.
-        let plan = {
-            let object = entry
-                .as_object()
-                .ok_or_else(|| decode("JSON-LD graph entry must be an object"))?;
-            let members = expanded_members(&active, object)?;
-            member(&members, "@graph").map(|graph_value| {
-                let has_node_members = members.iter().any(|entry| {
-                    !matches!(
-                        entry.expanded.as_str(),
-                        "@context" | "@graph" | "@id" | "@included" | "@index"
-                    )
-                });
-                GraphEntryPlan {
-                    graph_key: graph_value.original.to_owned(),
-                    id_value: member(&members, "@id").map(|entry| entry.value.clone()),
-                    included: member(&members, "@included").map(|entry| entry.value.clone()),
-                    has_node_members,
-                }
-            })
-        };
-
-        let Some(plan) = plan else {
-            return self
-                .expand_node(entry, graph, &active, NodeDisposition::Merge)
-                .map(|_| ());
-        };
-
-        // Minted BEFORE the recursion, exactly as before: blank-node labels are
-        // issued in walk order, so moving this would relabel anonymous nodes.
-        let graph_id = if let Some(id) = &plan.id_value {
-            Some(expand_id_value(&active, id)?)
-        } else if plan.has_node_members {
-            Some(self.fresh_blank_node())
-        } else {
-            graph.map(str::to_owned)
-        };
-
-        // THE DRAIN. Each node is released as it is expanded, so the parsed tree
-        // shrinks while the carrier grows instead of the two standing at full size
-        // together — which is what made parsing cost a multiple of the document.
-        //
-        // Removing the member is safe precisely here: `expand_node` ignores `@graph`
-        // (its keyword match has an empty `"@graph" | "@index" => {}` arm, with a
-        // comment saying this function processes the member first), so the tail below
-        // sees exactly what it saw before. `@included` is NOT removed — `expand_node`
-        // does handle that one — so it is cloned for the recursion and left in place.
-        let drained = entry
+        let object = entry
             .as_object_mut()
-            .and_then(|object| object.remove(&plan.graph_key))
-            .unwrap_or(JsonValue::Null);
-        // The graph is declared by its `@graph` member, not by its contents: an empty
-        // `{"@id": g, "@graph": []}` is a declared empty named graph, as the value-
-        // position path (`expand_graph_contents`) already records it.
-        if let Some(id) = graph_id.as_deref() {
-            self.graphs.entry(Some(id.to_owned())).or_default();
+            .ok_or_else(|| decode("expanded graph entry must be an object"))?;
+        if object.contains_key("@index") {
+            return Err(decode(
+                "data-bearing @index metadata has no RDF dataset representation",
+            ));
         }
-        for mut node in into_values(drained) {
-            self.expand_graph_entry(&mut node, graph_id.as_deref(), &active.child_context())?;
-        }
-        if let Some(included) = plan.included {
-            for included in non_null_values(&included) {
-                self.expand_graph_entry_in_place(included, graph, &active.child_context())?;
+        if let Some(contents) = object.remove("@graph") {
+            let node_members = object
+                .keys()
+                .any(|key| !matches!(key.as_str(), "@id" | "@included"));
+            let id = assigned
+                .or_else(|| {
+                    object
+                        .get("@id")
+                        .and_then(JsonValue::as_str)
+                        .map(str::to_owned)
+                })
+                .unwrap_or_else(|| self.fresh_blank_node());
+            self.graphs.entry(Some(id.clone())).or_default();
+            for child in into_values(contents) {
+                self.graph_entry(child, Some(&id), None)?;
             }
-        }
-
-        // A graph object may also be a node object. Its @type, ordinary properties,
-        // @reverse, and @nest members describe the graph name in the containing graph
-        // and must not disappear merely because @graph is present. A pure @id/@graph
-        // wrapper, however, contributes no node statement of its own.
-        if plan.has_node_members {
-            if plan.id_value.is_some() {
-                self.expand_node(entry, graph, &active, NodeDisposition::Merge)?;
-            } else {
-                let object = entry
-                    .as_object()
-                    .ok_or_else(|| decode("JSON-LD graph entry must be an object"))?;
-                let mut node = object.clone();
-                insert_expanded_control(
-                    &mut node,
-                    &active,
-                    "@id",
-                    JsonValue::String(
-                        graph_id.expect("mixed graph object minted a graph identifier"),
-                    ),
-                )?;
-                self.expand_node(
-                    &JsonValue::Object(node),
-                    graph,
-                    &active,
-                    NodeDisposition::Merge,
-                )?;
+            if node_members {
+                self.node(entry, graph, Some(id), true)?;
+            } else if let Some(included) = object.remove("@included") {
+                for child in into_values(included) {
+                    self.graph_entry(child, graph, None)?;
+                }
             }
+        } else {
+            self.node(entry, graph, assigned, true)?;
         }
         Ok(())
     }
-
-    /// [`Builder::expand_graph_entry`] for a value the caller holds only by reference.
-    ///
-    /// It CLONES, and that is worth stating plainly rather than dressing up: the
-    /// draining entry point needs `&mut` to take `@graph` out, and a nested graph
-    /// value — an `@graph` inside a value object, or an `@index`/`@id` container —
-    /// arrives as a borrowed member of a structure the caller is still walking.
-    ///
-    /// What makes it acceptable HERE and not at the document level is the bound. A
-    /// nested graph value is bounded by the value object holding it; the document's
-    /// own `@graph` is bounded by nothing, which is why draining that one is the
-    /// entire point. Cloning the bounded case to keep one code path is a better trade
-    /// than a second expander that could drift from this one.
-    fn expand_graph_entry_in_place(
+    fn node(
         &mut self,
-        entry: &JsonValue,
+        mut raw: JsonValue,
         graph: Option<&str>,
-        context: &CompiledJsonLdContext,
-    ) -> Result<(), RdfDiagnostic> {
-        self.expand_graph_entry(&mut entry.clone(), graph, context)
-    }
-
-    fn expand_node(
-        &mut self,
-        value: &JsonValue,
-        graph: Option<&str>,
-        context: &CompiledJsonLdContext,
-        disposition: NodeDisposition,
+        id: Option<String>,
+        merge: bool,
     ) -> Result<Node, RdfDiagnostic> {
-        let object = value
-            .as_object()
-            .ok_or_else(|| decode("JSON-LD node must be an object"))?;
-        let active = object_context(context, object)?;
-        let members = expanded_members(&active, object)?;
-        let id = member(&members, "@id")
-            .map(|entry| expand_id_value(&active, entry.value))
-            .transpose()?
+        let object = raw
+            .as_object_mut()
+            .ok_or_else(|| decode("expanded node must be an object"))?;
+        if object.contains_key("@index") {
+            return Err(decode(
+                "data-bearing @index metadata has no RDF dataset representation",
+            ));
+        }
+        let id = id
+            .or_else(|| {
+                object
+                    .get("@id")
+                    .and_then(JsonValue::as_str)
+                    .map(str::to_owned)
+            })
             .unwrap_or_else(|| self.fresh_blank_node());
         let mut node = Node::new(id);
-
-        if let Some(types) = member(&members, "@type") {
-            for value in as_values(types.value) {
-                let compact = value
-                    .as_str()
-                    .or_else(|| {
-                        value
-                            .as_object()
-                            .and_then(|object| {
-                                expanded_member(&active, object, "@id").ok().flatten()
-                            })
-                            .and_then(JsonValue::as_str)
-                    })
-                    .ok_or_else(|| decode("@type value must be an IRI string"))?;
-                // Expansion §13.4.4 expands `@type` with BOTH vocab and documentRelative
-                // set. Passing `false` for the second flag made `@type` the one IRI
-                // position in the codec that could not see a base the document itself
-                // declared: `{"@context":{"@base":"http://example.org/"},"@type":"Thing"}`
-                // failed while the sibling `@id` in the same document resolved.
-                node.types
-                    .push(expand_required(&active, compact, true, true)?);
+        for (key, raw) in std::mem::take(object).into_members() {
+            match key.as_str() {
+                "@id" => {}
+                "@type" => {
+                    for rdf_type in into_values(raw) {
+                        node.types.push(
+                            rdf_type
+                                .as_str()
+                                .ok_or_else(|| decode("expanded @type must contain IRIs"))?
+                                .to_owned(),
+                        );
+                    }
+                }
+                "@included" => {
+                    for child in into_values(raw) {
+                        self.graph_entry(child, graph, None)?;
+                    }
+                }
+                "@reverse" => {
+                    let mut raw = raw;
+                    for (property, raw) in std::mem::take(
+                        raw.as_object_mut()
+                            .ok_or_else(|| decode("expanded @reverse must be an object"))?,
+                    )
+                    .into_members()
+                    {
+                        for raw in into_values(raw) {
+                            let mut value = self.value(raw, graph)?;
+                            let Term::Id(target) =
+                                std::mem::replace(&mut value.term, Term::Id(node.id.clone()))
+                            else {
+                                return Err(decode("reverse property requires node values"));
+                            };
+                            let mut reverse = Node::new(target);
+                            reverse
+                                .properties
+                                .entry(property.clone())
+                                .or_default()
+                                .push(value);
+                            self.merge_node(graph, reverse);
+                        }
+                    }
+                }
+                keyword if super::context::is_control(keyword) => {
+                    return Err(decode(format!(
+                        "unsupported expanded node keyword `{keyword}`"
+                    )));
+                }
+                _ => {
+                    for raw in into_values(raw) {
+                        let value = self.value(raw, graph)?;
+                        node.properties.entry(key.clone()).or_default().push(value);
+                    }
+                }
             }
         }
-
-        self.expand_node_members(&mut node, &members, graph, &active)?;
         node.sort_values();
-        if matches!(disposition, NodeDisposition::Merge) {
+        if merge {
             self.merge_node(graph, node.clone());
         }
         Ok(node)
     }
-
-    fn expand_node_members(
-        &mut self,
-        node: &mut Node,
-        members: &[ExpandedMember<'_>],
-        graph: Option<&str>,
-        context: &CompiledJsonLdContext,
-    ) -> Result<(), RdfDiagnostic> {
-        for entry in members {
-            match entry.expanded.as_str() {
-                "@context" | "@id" | "@type" => {}
-                "@included" => {
-                    for included in as_values(entry.value) {
-                        self.expand_node(
-                            included,
-                            graph,
-                            &context.child_context(),
-                            NodeDisposition::Merge,
-                        )?;
-                    }
-                }
-                "@nest" => {
-                    for nested in as_values(entry.value) {
-                        let object = nested
-                            .as_object()
-                            .ok_or_else(|| decode("@nest value must be an object"))?;
-                        let nested_members = expanded_members(context, object)?;
-                        self.expand_node_members(node, &nested_members, graph, context)?;
-                    }
-                }
-                "@reverse" => {
-                    let reverse = entry
-                        .value
-                        .as_object()
-                        .ok_or_else(|| decode("@reverse value must be an object"))?;
-                    let reverse_members = expanded_members(context, reverse)?;
-                    for reverse_entry in reverse_members {
-                        if reverse_entry.expanded.starts_with('@') {
-                            return Err(decode(format!(
-                                "unsupported keyword `{}` inside @reverse",
-                                reverse_entry.expanded
-                            )));
-                        }
-                        self.expand_property(node, graph, context, &reverse_entry, true)?;
-                    }
-                }
-                // `expand_graph_entry` processes this member before asking the node
-                // path to retain any co-resident node statements.
-                "@graph" | "@index" => {}
-                keyword if keyword.starts_with('@') => {
-                    return Err(decode(format!(
-                        "unsupported JSON-LD node keyword `{keyword}`"
-                    )));
-                }
-                _ => self.expand_property(node, graph, context, entry, false)?,
-            }
-        }
-        Ok(())
-    }
-
-    fn expand_property(
-        &mut self,
-        node: &mut Node,
-        graph: Option<&str>,
-        context: &CompiledJsonLdContext,
-        entry: &ExpandedMember<'_>,
-        reverse_block: bool,
-    ) -> Result<(), RdfDiagnostic> {
-        let definition = context.term(entry.original);
-        let scoped = context.scoped_context(entry.original)?;
-        let value_context = scoped.as_ref().unwrap_or(context);
-        let values = self.expand_property_values(entry.value, graph, value_context, definition)?;
-        let reverse =
-            reverse_block ^ definition.is_some_and(JsonLdTermDefinition::is_reverse_property);
-        if reverse {
-            for mut value in values {
-                let Term::Id(target) =
-                    std::mem::replace(&mut value.term, Term::Id(node.id.clone()))
-                else {
-                    return Err(decode(format!(
-                        "reverse property `{}` requires node-reference values",
-                        entry.original
-                    )));
-                };
-                self.add_property(graph, target, entry.expanded.clone(), value);
-            }
-        } else {
-            node.properties
-                .entry(entry.expanded.clone())
-                .or_default()
-                .extend(values);
-        }
-        Ok(())
-    }
-
-    fn expand_property_values(
-        &mut self,
-        raw: &JsonValue,
-        graph: Option<&str>,
-        context: &CompiledJsonLdContext,
-        definition: Option<&JsonLdTermDefinition>,
-    ) -> Result<Vec<Value>, RdfDiagnostic> {
-        if definition.is_some_and(|definition| {
-            definition.type_mapping() == Some(&JsonLdTypeMapping::Json)
-                && !definition.containers().contains(&JsonLdContainer::Set)
-        }) {
-            return Ok(vec![expand_scalar(raw, context, definition)?]);
-        }
-        if definition
-            .is_some_and(|definition| definition.containers().contains(&JsonLdContainer::Graph))
-        {
-            return self.expand_graph_container(raw, graph, context, definition);
-        }
-        if definition
-            .is_some_and(|definition| definition.containers().contains(&JsonLdContainer::Language))
-        {
-            return expand_language_map(raw, context, definition);
-        }
-        if definition
-            .is_some_and(|definition| definition.containers().contains(&JsonLdContainer::Id))
-        {
-            return self.expand_id_map(raw, graph, context, definition);
-        }
-        if definition
-            .is_some_and(|definition| definition.containers().contains(&JsonLdContainer::Type))
-        {
-            return self.expand_type_map(raw, graph, context, definition);
-        }
-        if definition
-            .is_some_and(|definition| definition.containers().contains(&JsonLdContainer::Index))
-            && raw.as_object().is_some()
-        {
-            return self.expand_index_map(raw, graph, context, definition);
-        }
-        if definition
-            .is_some_and(|definition| definition.containers().contains(&JsonLdContainer::List))
-        {
-            let mut items = Vec::new();
-            for raw in as_values(raw) {
-                if let Some(value) = self.expand_value(raw, graph, context, definition)? {
-                    items.push(value);
-                }
-            }
-            return Ok(vec![Value::plain(Term::List(items))]);
-        }
-        if let Some(object) = raw.as_object() {
-            let active = object_context(context, object)?;
-            let members = expanded_members(&active, object)?;
-            if let Some(set) = member(&members, "@set") {
-                reject_unexpected_members(&members, "@set object", &["@context", "@set"])?;
-                return self.expand_property_values(set.value, graph, &active, definition);
-            }
-        }
-        let mut values = Vec::new();
-        for raw in as_values(raw) {
-            if let Some(value) = self.expand_value(raw, graph, context, definition)? {
-                values.push(value);
-            }
-        }
-        Ok(values)
-    }
-
-    fn expand_value(
-        &mut self,
-        raw: &JsonValue,
-        graph: Option<&str>,
-        context: &CompiledJsonLdContext,
-        definition: Option<&JsonLdTermDefinition>,
-    ) -> Result<Option<Value>, RdfDiagnostic> {
-        if raw.is_null() {
-            return Ok(None);
-        }
-        if raw.as_object().is_none() {
-            return expand_scalar(raw, context, definition).map(Some);
-        }
+    fn value(&mut self, mut raw: JsonValue, graph: Option<&str>) -> Result<Value, RdfDiagnostic> {
         let object = raw
-            .as_object()
-            .expect("non-object values returned before this point");
-        let active = object_context(context, object)?;
-        let members = expanded_members(&active, object)?;
-        if let Some(set) = member(&members, "@set") {
-            reject_unexpected_members(&members, "@set object", &["@context", "@set"])?;
-            let values = self.expand_property_values(set.value, graph, &active, definition)?;
-            if let [only] = values.as_slice() {
-                return Ok(Some(only.clone()));
-            }
-            return Err(decode("nested @set value must contain exactly one value"));
+            .as_object_mut()
+            .ok_or_else(|| decode("expanded property value must be an object"))?;
+        if object.contains_key("@index") {
+            return Err(decode(
+                "data-bearing @index metadata has no RDF dataset representation",
+            ));
         }
-        let mut value = if let Some(list) = member(&members, "@list") {
-            reject_unexpected_members(
-                &members,
-                "@list object",
-                &["@annotation", "@context", "@list"],
+        let annotations = object.remove("@annotation");
+        let term = if let Some(list) = object.remove("@list") {
+            Term::List(
+                into_values(list)
+                    .into_iter()
+                    .map(|raw| self.value(raw, graph))
+                    .collect::<Result<_, _>>()?,
+            )
+        } else if object.contains_key("@value") {
+            Term::Literal(literal(object)?)
+        } else if let Some(mut triple) = object.remove("@triple") {
+            let triple = triple
+                .as_object_mut()
+                .ok_or_else(|| decode("expanded @triple must be an object"))?;
+            let subject = self.value(
+                triple
+                    .remove("@subject")
+                    .ok_or_else(|| decode("triple missing subject"))?,
+                graph,
             )?;
-            let mut items = Vec::new();
-            for item in as_values(list.value) {
-                if let Some(value) = self.expand_value(item, graph, &active, definition)? {
-                    items.push(value);
-                }
+            let object = self.value(
+                triple
+                    .remove("@object")
+                    .ok_or_else(|| decode("triple missing object"))?,
+                graph,
+            )?;
+            if !subject.annotations.is_empty() || !object.annotations.is_empty() {
+                return Err(decode("triple components cannot carry annotations"));
             }
-            Value::plain(Term::List(items))
-        } else if let Some(graph_value) = member(&members, "@graph") {
-            reject_unexpected_members(
-                &members,
-                "@graph object",
-                &["@annotation", "@context", "@graph", "@id", "@index"],
-            )?;
-            let graph_id = member(&members, "@id")
-                .map(|entry| expand_id_value(&active, entry.value))
-                .transpose()?
-                .unwrap_or_else(|| self.fresh_blank_node());
-            if member(&members, "@index").is_some() {
+            if matches!(subject.term, Term::Literal(_) | Term::List(_)) {
                 return Err(decode(
-                    "data-bearing @index metadata has no RDF dataset representation",
+                    "RDF triple-term subject must be an identifier or triple",
                 ));
             }
-            self.expand_graph_contents(graph_value.value, &graph_id, &active)?;
-            Value::plain(Term::Id(graph_id))
-        } else if let Some(triple) = member(&members, "@triple") {
-            Value::plain(Term::Triple(Box::new(self.expand_triple(
-                triple.value,
-                graph,
-                &active,
-            )?)))
-        } else if member(&members, "@value").is_some_and(|member| member.value.is_null()) {
-            reject_unexpected_members(
-                &members,
-                "@value object",
-                &[
-                    "@annotation",
-                    "@context",
-                    "@direction",
-                    "@language",
-                    "@type",
-                    "@value",
-                ],
-            )?;
-            if member(&members, "@annotation").is_some() {
-                return Err(decode("null @value object cannot carry @annotation"));
-            }
-            return Ok(None);
-        } else if member(&members, "@value").is_some() {
-            reject_unexpected_members(
-                &members,
-                "@value object",
-                &[
-                    "@annotation",
-                    "@context",
-                    "@direction",
-                    "@language",
-                    "@type",
-                    "@value",
-                ],
-            )?;
-            Value::plain(Term::Literal(expand_value_object(&members, &active)?))
-        } else if let Some(id) = member(&members, "@id") {
-            let id = expand_id_value(&active, id.value)?;
-            let has_node_content = members.iter().any(|member| {
-                !matches!(member.expanded.as_str(), "@context" | "@id" | "@annotation")
-            });
-            if has_node_content {
-                let mut node_object = object.clone();
-                node_object.remove("@annotation");
-                self.expand_node(
-                    &JsonValue::Object(node_object),
-                    graph,
-                    &active,
-                    NodeDisposition::Merge,
-                )?;
-            }
-            Value::plain(Term::Id(id))
+            let predicate = triple
+                .get("@predicate")
+                .and_then(JsonValue::as_str)
+                .ok_or_else(|| decode("expanded triple predicate must be an IRI"))?
+                .to_owned();
+            Term::Triple(Box::new(Triple {
+                subject: Box::new(subject.into_term()),
+                predicate,
+                object: Box::new(object.into_term()),
+            }))
+        } else if object.contains_key("@graph") {
+            let id = object
+                .get("@id")
+                .and_then(JsonValue::as_str)
+                .map_or_else(|| self.fresh_blank_node(), str::to_owned);
+            self.graph_entry(raw, graph, Some(id.clone()))?;
+            Term::Id(id)
         } else {
-            let node = self.expand_node(raw, graph, &active, NodeDisposition::Merge)?;
-            Value::plain(Term::Id(node.id))
+            Term::Id(self.node(raw, graph, None, true)?.id)
         };
-
-        if let Some(annotation) = member(&members, "@annotation") {
-            for annotation in non_null_values(annotation.value) {
-                value.annotations.push(self.expand_node(
-                    annotation,
-                    graph,
-                    &active,
-                    NodeDisposition::Detached,
-                )?);
+        let mut value = Value::plain(term);
+        if let Some(annotations) = annotations {
+            for annotation in into_values(annotations) {
+                value
+                    .annotations
+                    .push(self.node(annotation, graph, None, false)?);
             }
         }
-        Ok(Some(value))
+        Ok(value)
     }
-
-    fn expand_graph_container(
-        &mut self,
-        raw: &JsonValue,
-        graph: Option<&str>,
-        context: &CompiledJsonLdContext,
-        definition: Option<&JsonLdTermDefinition>,
-    ) -> Result<Vec<Value>, RdfDiagnostic> {
-        let definition = definition.expect("@graph container requires a term definition");
-        let containers = definition.containers();
-        if containers.contains(&JsonLdContainer::Id) || containers.contains(&JsonLdContainer::Index)
-        {
-            let map = raw
-                .as_object()
-                .ok_or_else(|| decode("@graph map container value must be an object"))?;
-            let mut values = Vec::new();
-            for (key, entries) in map {
-                for entry in non_null_values(entries) {
-                    let graph_id = if containers.contains(&JsonLdContainer::Id) && key != "@none" {
-                        expand_required(context, key, false, true)?
-                    } else {
-                        self.fresh_blank_node()
-                    };
-                    self.expand_graph_contents(entry, &graph_id, context)?;
-                    if containers.contains(&JsonLdContainer::Index) && key != "@none" {
-                        let index_mapping = definition.index_mapping().ok_or_else(|| {
-                            decode("data-bearing @index metadata has no RDF dataset representation")
-                        })?;
-                        self.add_property(
-                            graph,
-                            graph_id.clone(),
-                            index_mapping.to_owned(),
-                            Value::plain(Term::Literal(Literal {
-                                lexical: key.clone(),
-                                datatype: None,
-                                language: None,
-                                direction: None,
-                            })),
-                        );
-                    }
-                    values.push(Value::plain(Term::Id(graph_id)));
-                }
-            }
-            return Ok(values);
-        }
-
-        let mut values = Vec::new();
-        for entry in non_null_values(raw) {
-            let graph_id = self.fresh_blank_node();
-            self.expand_graph_contents(entry, &graph_id, context)?;
-            values.push(Value::plain(Term::Id(graph_id)));
-        }
-        Ok(values)
-    }
-
-    fn expand_graph_contents(
-        &mut self,
-        raw: &JsonValue,
-        graph_id: &str,
-        context: &CompiledJsonLdContext,
-    ) -> Result<(), RdfDiagnostic> {
-        self.graphs.entry(Some(graph_id.to_owned())).or_default();
-        for entry in non_null_values(raw) {
-            self.expand_graph_entry_in_place(entry, Some(graph_id), &context.child_context())?;
-        }
-        Ok(())
-    }
-
-    fn expand_triple(
-        &mut self,
-        raw: &JsonValue,
-        graph: Option<&str>,
-        context: &CompiledJsonLdContext,
-    ) -> Result<Triple, RdfDiagnostic> {
-        let object = raw
-            .as_object()
-            .ok_or_else(|| decode("@triple must be an object"))?;
-        let members = expanded_members(context, object)?;
-        reject_unexpected_members(
-            &members,
-            "@triple object",
-            &[
-                "@annotation",
-                "@context",
-                "@object",
-                "@predicate",
-                "@subject",
-            ],
-        )?;
-        if member(&members, "@annotation").is_some() {
-            return Err(decode(
-                "@annotation is not permitted inside a @triple object in RDF 1.2",
-            ));
-        }
-        let subject =
-            member(&members, "@subject").ok_or_else(|| decode("@triple missing @subject"))?;
-        let predicate =
-            member(&members, "@predicate").ok_or_else(|| decode("@triple missing @predicate"))?;
-        let object =
-            member(&members, "@object").ok_or_else(|| decode("@triple missing @object"))?;
-        let subject = self
-            .expand_value(subject.value, graph, context, None)?
-            .ok_or_else(|| decode("@triple @subject cannot be null"))?;
-        let object = self
-            .expand_value(object.value, graph, context, None)?
-            .ok_or_else(|| decode("@triple @object cannot be null"))?;
-        if !subject.annotations.is_empty() || !object.annotations.is_empty() {
-            return Err(decode(
-                "@annotation is not permitted inside a @triple component in RDF 1.2",
-            ));
-        }
-        if matches!(subject.term, Term::Literal(_) | Term::List(_)) {
-            return Err(decode("@triple @subject must be a node or triple term"));
-        }
-        let predicate = predicate
-            .value
-            .as_str()
-            .ok_or_else(|| decode("@triple @predicate must be a string"))?;
-        Ok(Triple {
-            subject: Box::new(subject.into_term()),
-            predicate: expand_required(context, predicate, true, false)?,
-            object: Box::new(object.into_term()),
-        })
-    }
-
-    fn expand_id_map(
-        &mut self,
-        raw: &JsonValue,
-        graph: Option<&str>,
-        context: &CompiledJsonLdContext,
-        definition: Option<&JsonLdTermDefinition>,
-    ) -> Result<Vec<Value>, RdfDiagnostic> {
-        let object = raw
-            .as_object()
-            .ok_or_else(|| decode("@id container value must be an object"))?;
-        let mut result = Vec::new();
-        for (key, entries) in object {
-            for entry in non_null_values(entries) {
-                let id = if key == "@none" {
-                    None
-                } else {
-                    Some(expand_required(context, key, false, true)?)
-                };
-                result.push(self.expand_container_node(
-                    entry,
-                    graph,
-                    context,
-                    definition,
-                    id.as_deref(),
-                    None,
-                    None,
-                )?);
-            }
-        }
-        Ok(result)
-    }
-
-    fn expand_type_map(
-        &mut self,
-        raw: &JsonValue,
-        graph: Option<&str>,
-        context: &CompiledJsonLdContext,
-        definition: Option<&JsonLdTermDefinition>,
-    ) -> Result<Vec<Value>, RdfDiagnostic> {
-        let object = raw
-            .as_object()
-            .ok_or_else(|| decode("@type container value must be an object"))?;
-        let mut result = Vec::new();
-        for (key, entries) in object {
-            let rdf_type = (key != "@none")
-                .then(|| expand_required(context, key, true, false))
-                .transpose()?;
-            for entry in non_null_values(entries) {
-                result.push(self.expand_container_node(
-                    entry,
-                    graph,
-                    context,
-                    definition,
-                    None,
-                    rdf_type.as_deref(),
-                    None,
-                )?);
-            }
-        }
-        Ok(result)
-    }
-
-    fn expand_index_map(
-        &mut self,
-        raw: &JsonValue,
-        graph: Option<&str>,
-        context: &CompiledJsonLdContext,
-        definition: Option<&JsonLdTermDefinition>,
-    ) -> Result<Vec<Value>, RdfDiagnostic> {
-        let object = raw
-            .as_object()
-            .ok_or_else(|| decode("@index container value must be an object"))?;
-        let index_mapping = definition.and_then(JsonLdTermDefinition::index_mapping);
-        let mut result = Vec::new();
-        for (key, entries) in object {
-            if key != "@none" && index_mapping.is_none() {
-                return Err(decode(
-                    "data-bearing @index metadata has no RDF dataset representation",
-                ));
-            }
-            for entry in non_null_values(entries) {
-                result.push(
-                    self.expand_container_node(
-                        entry,
-                        graph,
-                        context,
-                        definition,
-                        None,
-                        None,
-                        (key != "@none").then_some((
-                            index_mapping.expect("checked mapped index"),
-                            key.as_str(),
-                        )),
-                    )?,
-                );
-            }
-        }
-        Ok(result)
-    }
-
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "container expansion keeps independent id, type, and index injections explicit"
-    )]
-    fn expand_container_node(
-        &mut self,
-        raw: &JsonValue,
-        graph: Option<&str>,
-        context: &CompiledJsonLdContext,
-        definition: Option<&JsonLdTermDefinition>,
-        id: Option<&str>,
-        rdf_type: Option<&str>,
-        index: Option<(&str, &str)>,
-    ) -> Result<Value, RdfDiagnostic> {
-        let mut object = match raw {
-            JsonValue::Object(object) => object.clone(),
-            _ => {
-                return self
-                    .expand_value(raw, graph, context, definition)?
-                    .ok_or_else(|| decode("container value cannot be null"));
-            }
-        };
-        if let Some(id) = id {
-            insert_expanded_control(
-                &mut object,
-                context,
-                "@id",
-                JsonValue::String(id.to_owned()),
-            )?;
-        }
-        if let Some(rdf_type) = rdf_type {
-            insert_expanded_control(
-                &mut object,
-                context,
-                "@type",
-                JsonValue::String(rdf_type.to_owned()),
-            )?;
-        }
-        let node = self.expand_node(
-            &JsonValue::Object(object),
-            graph,
-            context,
-            NodeDisposition::Merge,
-        )?;
-        if let Some((property, value)) = index {
-            self.add_property(
-                graph,
-                node.id.clone(),
-                property.to_owned(),
-                Value::plain(Term::Literal(Literal {
-                    lexical: value.to_owned(),
-                    datatype: None,
-                    language: None,
-                    direction: None,
-                })),
-            );
-        }
-        Ok(Value::plain(Term::Id(node.id)))
+}
+fn into_values(mut value: JsonValue) -> Vec<JsonValue> {
+    match &mut value {
+        JsonValue::Array(values) => std::mem::take(values),
+        JsonValue::Null => Vec::new(),
+        _ => vec![value],
     }
 }
 
-fn expand_language_map(
-    raw: &JsonValue,
-    context: &CompiledJsonLdContext,
-    definition: Option<&JsonLdTermDefinition>,
-) -> Result<Vec<Value>, RdfDiagnostic> {
-    let object = raw
-        .as_object()
-        .ok_or_else(|| decode("@language container value must be an object"))?;
-    let direction = effective_direction(context, definition);
-    let mut values = Vec::new();
-    for (language, entries) in object {
-        for entry in non_null_values(entries) {
-            let lexical = entry
-                .as_str()
-                .ok_or_else(|| decode("language-map values must be strings"))?;
-            values.push(Value::plain(Term::Literal(Literal {
-                lexical: lexical.to_owned(),
-                datatype: None,
-                language: (language != "@none").then(|| langtag::identity_fold(language)),
-                direction: direction.map(str::to_owned),
-            })));
-        }
-    }
-    Ok(values)
-}
-
-fn expand_scalar(
-    raw: &JsonValue,
-    context: &CompiledJsonLdContext,
-    definition: Option<&JsonLdTermDefinition>,
-) -> Result<Value, RdfDiagnostic> {
-    if let Some(mapping) = definition.and_then(JsonLdTermDefinition::type_mapping) {
-        match mapping {
-            JsonLdTypeMapping::Id | JsonLdTypeMapping::Vocab => {
-                let value = raw
-                    .as_str()
-                    .ok_or_else(|| decode("@id/@vocab coercion requires a string"))?;
-                return Ok(Value::plain(Term::Id(expand_required(
-                    context,
-                    value,
-                    matches!(mapping, JsonLdTypeMapping::Vocab),
-                    matches!(mapping, JsonLdTypeMapping::Id),
-                )?)));
-            }
-            JsonLdTypeMapping::Json => {
-                return Ok(Value::plain(Term::Literal(Literal {
-                    lexical: rdf_json_lexical(raw)?,
-                    datatype: Some(RDF_JSON.to_owned()),
-                    language: None,
-                    direction: None,
-                })));
-            }
-            JsonLdTypeMapping::Datatype(datatype) => {
-                return Ok(Value::plain(Term::Literal(Literal {
-                    lexical: scalar_lexical_for_datatype(raw, Some(datatype))?,
-                    datatype: Some(datatype.clone()),
-                    language: None,
-                    direction: None,
-                })));
-            }
-            JsonLdTypeMapping::None => {}
-        }
-    }
-    let (lexical, datatype) = match raw {
-        JsonValue::String(value) => (value.clone(), None),
-        JsonValue::Bool(value) => (value.to_string(), Some(XSD_BOOLEAN.to_owned())),
-        JsonValue::Number(value) if value.as_i64().is_some() || value.as_u64().is_some() => {
-            (value.to_string(), Some(XSD_INTEGER.to_owned()))
-        }
-        JsonValue::Number(value) => (canonical_json_double(value)?, Some(XSD_DOUBLE.to_owned())),
-        _ => {
-            return Err(decode(
-                "JSON-LD scalar must be a string, number, or boolean",
-            ));
-        }
-    };
-    Ok(Value::plain(Term::Literal(Literal {
-        lexical,
-        datatype,
-        language: if raw.as_str().is_some() {
-            effective_language(context, definition).map(str::to_owned)
-        } else {
-            None
-        },
-        direction: if raw.as_str().is_some() {
-            effective_direction(context, definition).map(str::to_owned)
-        } else {
-            None
-        },
-    })))
-}
-
-fn expand_value_object(
-    members: &[ExpandedMember<'_>],
-    context: &CompiledJsonLdContext,
-) -> Result<Literal, RdfDiagnostic> {
-    let value = member(members, "@value")
-        .expect("caller checked @value member")
-        .value;
-    let expanded_type = member(members, "@type")
-        .map(|entry| {
-            entry
-                .value
-                .as_str()
-                .ok_or_else(|| decode("@type in a value object must be a string"))
-                // Same §13.4.4 step: a value object's `@type` is not a separate position,
-                // so a relative datatype resolves against the document base exactly as a
-                // node object's `@type` does.
-                .and_then(|value| expand_required(context, value, true, true))
-        })
-        .transpose()?;
-    let json_keyword = expanded_type.as_deref() == Some("@json");
-    let datatype = expanded_type.map(|datatype| {
-        if datatype == "@json" {
-            RDF_JSON.to_owned()
-        } else {
-            datatype
-        }
-    });
-    let language = member(members, "@language")
-        .map(|entry| {
-            entry
-                .value
-                .as_str()
-                .map(langtag::identity_fold)
-                .ok_or_else(|| decode("@language must be a string"))
-        })
-        .transpose()?;
-    let direction = member(members, "@direction")
-        .map(|entry| {
-            let direction = entry
-                .value
-                .as_str()
-                .ok_or_else(|| decode("@direction must be a string"))?;
-            if JsonLdDirection::from_str_token(direction).is_none() {
-                return Err(decode("@direction must be `ltr` or `rtl`"));
-            }
-            Ok(direction.to_owned())
-        })
-        .transpose()?;
-    if datatype.is_some() && (language.is_some() || direction.is_some()) {
-        return Err(decode(
-            "JSON-LD value object cannot combine @type with @language/@direction",
-        ));
-    }
-    if json_keyword {
-        return Ok(Literal {
-            lexical: rdf_json_lexical(value)?,
-            datatype,
-            language: None,
-            direction: None,
-        });
-    }
-    let inferred_datatype = if datatype.is_none() {
-        match value {
+fn literal(object: &json::Object) -> Result<Literal, RdfDiagnostic> {
+    // The sole caller selected this branch with contains_key on the same map.
+    let value = object.get("@value").expect("expanded value object");
+    let explicit = object.get("@type").and_then(JsonValue::as_str);
+    let datatype = match explicit {
+        Some("@json") => Some(RDF_JSON.to_owned()),
+        Some(datatype) if datatype != XSD_STRING => Some(datatype.to_owned()),
+        Some(_) => None,
+        None => match value {
             JsonValue::Bool(_) => Some(XSD_BOOLEAN.to_owned()),
             JsonValue::Number(number) if number.as_i64().is_some() || number.as_u64().is_some() => {
                 Some(XSD_INTEGER.to_owned())
             }
             JsonValue::Number(_) => Some(XSD_DOUBLE.to_owned()),
             _ => None,
-        }
-    } else {
-        None
+        },
     };
-    let datatype = datatype
-        .filter(|datatype| datatype != XSD_STRING)
-        .or(inferred_datatype);
-    let lexical = scalar_lexical_for_datatype(value, datatype.as_deref())?;
+    let lexical = if explicit == Some("@json") {
+        rdf_json_lexical(value)?
+    } else {
+        scalar_lexical_for_datatype(value, datatype.as_deref())?
+    };
     Ok(Literal {
         lexical,
         datatype,
-        language,
-        direction,
+        language: object
+            .get("@language")
+            .and_then(JsonValue::as_str)
+            .map(str::to_owned),
+        direction: object
+            .get("@direction")
+            .and_then(JsonValue::as_str)
+            .map(str::to_owned),
     })
 }
 
@@ -1205,181 +398,6 @@ fn canonical_json_double(value: &Number) -> Result<String, RdfDiagnostic> {
                 "JSON number `{value}` is outside the xsd:double value space"
             ))
         })
-}
-
-fn effective_language<'a>(
-    context: &'a CompiledJsonLdContext,
-    definition: Option<&'a JsonLdTermDefinition>,
-) -> Option<&'a str> {
-    match definition.and_then(JsonLdTermDefinition::language_mapping) {
-        Some(JsonLdNullable::Null) => None,
-        Some(JsonLdNullable::Value(language)) => Some(language),
-        None => context.default_language(),
-    }
-}
-
-fn effective_direction(
-    context: &CompiledJsonLdContext,
-    definition: Option<&JsonLdTermDefinition>,
-) -> Option<&'static str> {
-    match definition.and_then(JsonLdTermDefinition::direction_mapping) {
-        Some(JsonLdNullable::Null) => None,
-        Some(JsonLdNullable::Value(direction)) => Some(direction.as_str()),
-        None => context.default_direction().map(JsonLdDirection::as_str),
-    }
-}
-
-/// The context in force for `object`: the parent's, BORROWED, when the object declares no
-/// `@context` of its own — the common case, which used to deep-clone the whole compiled
-/// context (term map, inverse index) for every node, value and graph object visited.
-fn object_context<'a>(
-    parent: &'a CompiledJsonLdContext,
-    object: &Map,
-) -> Result<Cow<'a, CompiledJsonLdContext>, RdfDiagnostic> {
-    object.get("@context").map_or_else(
-        || Ok(Cow::Borrowed(parent)),
-        |local| parent.apply_local_context(local).map(Cow::Owned),
-    )
-}
-
-/// What [`Builder::expand_graph_entry`] reads out of an entry before it writes to it.
-///
-/// Owned, deliberately: the drain needs a mutable borrow of the entry, so everything
-/// the read phase learned has to survive the end of the immutable one.
-struct GraphEntryPlan {
-    /// The original (possibly aliased) key that expanded to `@graph`.
-    graph_key: String,
-    /// The `@id` member's value, when present.
-    id_value: Option<JsonValue>,
-    /// The `@included` member's value, when present.
-    included: Option<JsonValue>,
-    /// Whether the entry carries node members beside its graph members.
-    has_node_members: bool,
-}
-
-struct ExpandedMember<'a> {
-    original: &'a str,
-    expanded: String,
-    value: &'a JsonValue,
-}
-
-fn expanded_members<'a>(
-    context: &CompiledJsonLdContext,
-    object: &'a Map,
-) -> Result<Vec<ExpandedMember<'a>>, RdfDiagnostic> {
-    let mut seen = BTreeSet::new();
-    let mut members = Vec::with_capacity(object.len());
-    for (key, value) in object {
-        let Some(expanded) = context.expand_iri(key, true, false)? else {
-            continue;
-        };
-        if expanded.starts_with('@') && !seen.insert(expanded.clone()) {
-            return Err(decode(format!(
-                "JSON-LD object has multiple members expanding to `{expanded}`"
-            )));
-        }
-        members.push(ExpandedMember {
-            original: key,
-            expanded,
-            value,
-        });
-    }
-    Ok(members)
-}
-
-fn member<'a, 'b>(
-    members: &'b [ExpandedMember<'a>],
-    keyword: &str,
-) -> Option<&'b ExpandedMember<'a>> {
-    members.iter().find(|entry| entry.expanded == keyword)
-}
-
-fn expanded_member<'a>(
-    context: &CompiledJsonLdContext,
-    object: &'a Map,
-    keyword: &str,
-) -> Result<Option<&'a JsonValue>, RdfDiagnostic> {
-    let members = expanded_members(context, object)?;
-    Ok(member(&members, keyword).map(|member| member.value))
-}
-
-fn reject_unexpected_members(
-    members: &[ExpandedMember<'_>],
-    shape: &str,
-    allowed: &[&str],
-) -> Result<(), RdfDiagnostic> {
-    if let Some(member) = members
-        .iter()
-        .find(|member| !allowed.contains(&member.expanded.as_str()))
-    {
-        return Err(decode(format!(
-            "{shape} contains unexpected member `{}`",
-            member.original
-        )));
-    }
-    Ok(())
-}
-
-fn expand_required(
-    context: &CompiledJsonLdContext,
-    value: &str,
-    vocab: bool,
-    document_relative: bool,
-) -> Result<String, RdfDiagnostic> {
-    context
-        .expand_iri(value, vocab, document_relative)?
-        .ok_or_else(|| decode(format!("`{value}` has a null JSON-LD IRI mapping")))
-}
-
-fn expand_id_value(
-    context: &CompiledJsonLdContext,
-    value: &JsonValue,
-) -> Result<String, RdfDiagnostic> {
-    let value = value
-        .as_str()
-        .ok_or_else(|| decode("@id must be a string"))?;
-    if value.starts_with("_:") {
-        Ok(value.to_owned())
-    } else {
-        expand_required(context, value, false, true)
-    }
-}
-
-/// [`as_values`]' owning twin: yields the values so each can be released as it is
-/// consumed, rather than borrowed out of a tree that has to outlive the walk.
-fn into_values(mut value: JsonValue) -> Vec<JsonValue> {
-    match &mut value {
-        JsonValue::Array(values) => std::mem::take(values),
-        JsonValue::Null => Vec::new(),
-        _ => vec![value],
-    }
-}
-
-fn as_values(value: &JsonValue) -> &[JsonValue] {
-    match value {
-        JsonValue::Array(values) => values,
-        value => std::slice::from_ref(value),
-    }
-}
-
-fn non_null_values(value: &JsonValue) -> impl Iterator<Item = &JsonValue> {
-    as_values(value).iter().filter(|value| !value.is_null())
-}
-
-fn insert_expanded_control(
-    object: &mut Map,
-    context: &CompiledJsonLdContext,
-    keyword: &str,
-    value: JsonValue,
-) -> Result<(), RdfDiagnostic> {
-    if expanded_member(context, object, keyword)?.is_some() {
-        return Err(decode(format!(
-            "container map value already defines `{keyword}`"
-        )));
-    }
-    object.insert(keyword.to_owned(), value);
-    object.sort_keys();
-    Ok(())
 }
 
 fn collect_blank_node_ids(value: &JsonValue, output: &mut BTreeSet<String>) {
@@ -1627,6 +645,18 @@ fn reserve_blank_id(id: &str, output: &mut BTreeSet<String>) {
 /// would envelope an envelope and lose that identity.
 ///
 /// [`BlankScope`]: crate::BlankScope
+fn validated_iri_term(iri: &str) -> Result<RdfTerm, RdfDiagnostic> {
+    purrdf_iri::BaseScope::empty()
+        .resolve(iri)
+        .map_err(|source| {
+            RdfDiagnostic::error(
+                source.diagnostic_code(),
+                format!("invalid RDF IRI: {source}"),
+            )
+        })?;
+    native_iri_term(iri)
+}
+
 fn id_term(id: &str) -> Result<RdfTerm, RdfDiagnostic> {
     if let Some(token) = id.strip_prefix("_:") {
         if token.is_empty() {
@@ -1667,10 +697,10 @@ fn id_term(id: &str) -> Result<RdfTerm, RdfDiagnostic> {
 /// # Why the check is here and not at the three `@language` entry points
 ///
 /// A language tag reaches the carrier from three places — a value object's
-/// `@language` member ([`expand_value_object`]), a `@container: "@language"`
-/// map key ([`expand_language_map`]), and the `@context` default / term
-/// `@language` mapping applied to a bare string ([`effective_language`], via
-/// [`expand_scalar`]). All three converge HERE: [`lower_literal`] is the only
+/// `@language` member ([`literal`]), a `@container: "@language"`
+/// map key (the structural language-map stage), and the `@context` default / term
+/// `@language` mapping applied to a bare string (the structural value-expansion stage, via
+/// the structural scalar stage). All three converge HERE: [`lower_literal`] is the only
 /// function in this module that builds a language-tagged [`RdfLiteral`], and
 /// [`Lowerer::lower_term`] is the only caller. Gating the funnel
 /// is therefore complete by construction, where three entry-point gates would be

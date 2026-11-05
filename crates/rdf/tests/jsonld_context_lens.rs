@@ -341,6 +341,10 @@ fn direct_set_objects_expand_and_lossy_value_shapes_fail_closed() {
 
     for (description, input) in [
         (
+            "set annotations have no statement to annotate",
+            br#"{"@id":"https://example.org/s","https://example.org/p":{"@set":[{"@id":"https://example.org/o"}],"@annotation":[{"https://example.org/q":"v"}]}}"#.as_slice(),
+        ),
+        (
             "value object property",
             br#"{"@id":"https://example.org/s","https://example.org/p":{"@value":"v","https://example.org/lost":"x"}}"#.as_slice(),
         ),

@@ -106,6 +106,7 @@ struct Compiler<'a> {
     remote_stack: Vec<String>,
     remote_cache: BTreeMap<String, Arc<Value>>,
     override_protected: bool,
+    default_propagate: bool,
 }
 
 pub(super) fn compile(
@@ -127,6 +128,7 @@ pub(super) fn compile(
         remote_stack: Vec::new(),
         remote_cache: BTreeMap::new(),
         override_protected: false,
+        default_propagate: true,
     };
     compiler.charge_value(context, 0)?;
     let canonical_context = canonicalize(context)?;
@@ -167,6 +169,7 @@ pub(super) fn compile_scoped(
         context,
         definition.scoped_context_base.as_deref(),
         true,
+        true,
     )
     .map(Some)
 }
@@ -176,6 +179,7 @@ pub(super) fn apply_context(
     context: &Value,
     base_url: Option<&str>,
     override_protected: bool,
+    propagate: bool,
 ) -> Result<CompiledJsonLdContext, RdfDiagnostic> {
     let limits = JsonLdContextLimits::default();
     let mut compiler = Compiler {
@@ -186,17 +190,12 @@ pub(super) fn apply_context(
         remote_stack: Vec::new(),
         remote_cache: BTreeMap::new(),
         override_protected,
+        default_propagate: propagate,
     };
     compiler.charge_value(context, 0)?;
     let canonical_context = canonicalize(context)?;
     let mut active = parent.active.clone();
-    compiler.process_context(
-        &mut active,
-        &canonical_context,
-        base_url.or(parent.active.base_iri.as_deref()),
-        false,
-        0,
-    )?;
+    compiler.process_context(&mut active, &canonical_context, base_url, false, 0)?;
     let inverse = build_inverse_context(&active);
     Ok(CompiledJsonLdContext {
         canonical_context,
@@ -223,6 +222,16 @@ pub(super) fn child_context(parent: &CompiledJsonLdContext) -> CompiledJsonLdCon
         active,
         registry: parent.registry.clone(),
     }
+}
+
+pub(super) fn previous_context(parent: &CompiledJsonLdContext) -> Option<CompiledJsonLdContext> {
+    let active = parent.active.previous_context.as_deref()?.clone();
+    Some(CompiledJsonLdContext {
+        canonical_context: parent.canonical_context.clone(),
+        inverse: build_inverse_context(&active),
+        active,
+        registry: parent.registry.clone(),
+    })
 }
 
 fn extract_context(value: &Value) -> Result<&Value, RdfDiagnostic> {
@@ -324,13 +333,13 @@ impl Compiler<'_> {
         if select_propagation {
             let propagate = match local {
                 Value::Object(object) => match object.get("@propagate") {
-                    None => true,
+                    None => self.default_propagate,
                     Some(Value::Bool(value)) => *value,
                     Some(_) => {
                         return Err(context_error("JSON-LD @propagate must be boolean"));
                     }
                 },
-                _ => true,
+                _ => self.default_propagate,
             };
             if !propagate && active.previous_context.is_none() {
                 active.previous_context = Some(Arc::new(active.clone()));
@@ -856,6 +865,7 @@ impl Compiler<'_> {
                 direction_mapping: None,
                 containers,
                 index_mapping: None,
+                index_term: None,
                 nest: None,
                 scoped_context: None,
                 scoped_context_base: None,
@@ -1044,6 +1054,10 @@ impl Compiler<'_> {
             direction_mapping,
             containers,
             index_mapping,
+            index_term: object
+                .get("@index")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
             nest,
             scoped_context,
             scoped_context_base,
@@ -1276,6 +1290,7 @@ fn empty_definition(protected: bool) -> JsonLdTermDefinition {
         direction_mapping: None,
         containers: BTreeSet::new(),
         index_mapping: None,
+        index_term: None,
         nest: None,
         scoped_context: None,
         scoped_context_base: None,
@@ -1539,6 +1554,10 @@ fn validate_container_combination(
     Ok(())
 }
 
+pub(in crate::native_codecs::jsonld) fn is_control(value: &str) -> bool {
+    is_keyword(value) || is_extension_control(value)
+}
+
 fn is_keyword(value: &str) -> bool {
     KEYWORDS.contains(&value)
 }
@@ -1758,7 +1777,7 @@ pub(super) fn expand_iri(
     vocab: bool,
     document_relative: bool,
 ) -> Result<Option<String>, RdfDiagnostic> {
-    if is_keyword(value) || is_extension_control(value) {
+    if is_control(value) {
         return Ok(Some(value.to_owned()));
     }
     if is_keyword_form(value) {
@@ -1785,25 +1804,17 @@ pub(super) fn expand_iri(
             .and_then(|definition| definition.iri_mapping.as_deref())
         {
             let expanded = format!("{mapping}{suffix}");
-            validate_iri_or_blank_node(&expanded, "expanded compact IRI")?;
             return Ok(Some(expanded));
         }
-        if let Ok(parsed) = purrdf_iri::parse(value)
-            && parsed.has_scheme()
-        {
-            return Ok(Some(value.to_owned()));
-        }
-        return Err(context_error(format!(
-            "compact IRI `{value}` uses an undefined prefix `{prefix}`"
-        )));
+        return Ok(Some(value.to_owned()));
     }
     if vocab && let Some(mapping) = &active.vocab_mapping {
         return Ok(Some(format!("{mapping}{value}")));
     }
-    if document_relative {
+    if document_relative && active.base_iri.is_some() {
         return resolve_reference(value, active.base_iri.as_deref(), "IRI").map(Some);
     }
-    Err(no_vocab_expansion(value))
+    Ok(Some(value.to_owned()))
 }
 
 pub(super) fn compact_iri(
