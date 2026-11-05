@@ -155,6 +155,7 @@ mod rendering;
 use purrdf_lex::allocation::{Admission, Memory};
 use purrdf_lex::walk::WorkList;
 mod control;
+mod memo;
 use control::SearchRun;
 pub use control::{
     CanonOutput, CanonPhase, CanonSelection, CanonicalizationControl, SearchConfiguration,
@@ -1412,7 +1413,7 @@ pub enum CanonPresentation {
 ///
 /// Keyed on the id type of the view it was collected from, so the same component
 /// machinery serves a flat dataset, a composite view and a delta view alike.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Component<Id> {
     /// A genuine dataset quad.
     Quad { s: Id, p: Id, o: Id, g: Option<Id> },
@@ -2911,7 +2912,11 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         }
     }
 
-    fn collect_incidence(&mut self) -> Result<(), CanonError<D::ReadError>> {
+    fn collect_incidence<S: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<memo::Footprints<D::Id>, CanonError<D::ReadError>> {
+        let mut footprints = memo::Footprints::new();
         let mut blank_set: BTreeSet<D::Id> = BTreeSet::new();
         let mut incident: BTreeMap<D::Id, Vec<Component<D::Id>>> = BTreeMap::new();
         collect_components::<_, D::ReadError>(
@@ -2927,12 +2932,16 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                         incident.entry(b).or_default().push(comp);
                     }
                     Ok(())
-                })
+                })?;
+                footprints
+                    .push(comp, seen, memory)
+                    .map_err(CanonError::Storage)
             },
         )?;
         self.blanks = blank_set.into_iter().collect();
         self.incident = incident;
-        Ok(())
+        footprints.finish();
+        Ok(footprints)
     }
 
     fn check_stop(&self) -> Result<(), CanonError> {
@@ -3036,13 +3045,21 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         {
             return Err(CanonError::ReservedVocabulary(violation));
         }
-        self.collect_incidence()?;
-        self.run.phase(CanonPhase::Search);
-        self.run_inner()?;
-        Ok(self)
+        let source = self.ds;
+        rendering::ScratchGrant::deferred(|| source.reserve_workspace(0)).run(|memory| {
+            let footprints = self.collect_incidence(memory)?;
+            self.run.phase(CanonPhase::Search);
+            self.run_inner(&footprints, memory)?;
+            footprints.release(memory).map_err(CanonError::Storage)?;
+            Ok(self)
+        })
     }
 
-    fn run_inner(&mut self) -> Result<(), CanonError<D::ReadError>> {
+    fn run_inner<S: Admission + ?Sized>(
+        &mut self,
+        footprints: &memo::Footprints<D::Id>,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), CanonError<D::ReadError>> {
         // §4.4 step 3: first-degree hash of every blank, grouped by hash.
         let mut by_hash: BTreeMap<HashHex, Vec<D::Id>> = BTreeMap::new();
         for &b in &self.blanks {
@@ -3080,8 +3097,9 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                 }
                 let mut temp = IdIssuer::new(TEMP_PREFIX);
                 temp.issue(b);
-                let (result_hash, result_issuer) =
-                    self.hash_n_degree(b, temp).inspect_err(|error| {
+                let (result_hash, result_issuer) = self
+                    .hash_n_degree(b, temp, footprints, memory)
+                    .inspect_err(|error| {
                         if matches!(error, CanonError::BudgetExceeded(_)) {
                             self.run.observe_rdfc_root_progress(RdfcRootProgress {
                                 first_degree_group_size: group.len(),
@@ -3126,10 +3144,12 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
     }
 
     /// Hash N-Degree Quads (RDFC-1.0 §4.8): the gossip-path permutation search.
-    fn hash_n_degree(
+    fn hash_n_degree<S: Admission + ?Sized>(
         &self,
         identifier: D::Id,
         issuer: IdIssuer<D::Id>,
+        footprints: &memo::Footprints<D::Id>,
+        memory: &mut Memory<'_, S>,
     ) -> Result<IssuedHash<D::Id>, CanonError<D::ReadError>> {
         let mut frame = self.n_degree_frame(identifier, issuer, || {
             (
@@ -3140,149 +3160,155 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                 None,
             )
         })?;
+        let mut memo = memo::Memo::new(footprints).map_err(CanonError::Storage)?;
+        let mut reused = None;
         let mut parents: WorkList<NDegreeFrame<D::Id>, 8> = WorkList::default();
         loop {
             let frame_identifier = frame.identifier;
-            if let Some(group) = frame.group.as_mut() {
-                if let Some(mut candidate) = group.candidate.take() {
-                    if let Some(related) = candidate.recursion.next() {
-                        // §4.8 step 5.4.5: suspend this path while its child runs.
-                        self.check_stop().map_err(CanonError::with_read_error)?;
-                        let child_issuer = candidate.issuer.clone();
-                        candidate.pending = Some(related);
-                        group.candidate = Some(candidate);
-                        let child = self.n_degree_frame(related, child_issuer, || {
-                            let depth = parents.len();
-                            let observation = self.refusal_group(
-                                self.blank_ordinal(frame_identifier),
-                                depth,
-                                &frame.issuer,
-                                group,
-                            );
-                            let parent_group = observation.active.group;
-                            let context = RdfcSearchContext::ChildFrame {
-                                root_ordinal: self.blank_ordinal(identifier),
-                                frame_ordinal: self.blank_ordinal(related),
-                                depth: depth + 1,
-                                parent_group,
-                            };
-                            let (path, groups) = self.refusal_path(observation, &mut parents);
-                            (context, path, Some(groups))
-                        })?;
-                        parents.push(frame);
-                        frame = child;
-                        continue;
-                    }
-                    // 5.4.6: first path wins ties, exactly as in permutation order.
-                    if group
-                        .chosen_path
-                        .as_ref()
-                        .is_none_or(|best| candidate.path.as_str() < best.as_str())
-                    {
-                        group.chosen_path = Some(candidate.path);
-                        group.chosen_issuer = Some(candidate.issuer);
-                    }
-                }
-
-                if let Some(perm) = group.permutations.next() {
-                    // Charge after obtaining each permutation, including pruned ones.
-                    self.charge_search(SearchEvent::RdfcPermutation, || {
-                        let frame_ordinal = self.blank_ordinal(frame_identifier);
-                        let depth = parents.len();
-                        let observation =
-                            self.refusal_group(frame_ordinal, depth, &frame.issuer, group);
-                        let group = observation.active.group;
-                        let context = RdfcSearchContext::Permutation {
-                            root_ordinal: self.blank_ordinal(identifier),
-                            frame_ordinal,
-                            depth,
-                            group,
-                        };
-                        let (path, groups) = self.refusal_path(observation, &mut parents);
-                        (context, path, Some(groups))
-                    })
-                    .map_err(CanonError::with_read_error)?;
-                    let mut issuer = frame.issuer.clone();
-                    let mut path = String::new();
-                    let mut recursion = Vec::new();
-                    let mut pruned = false;
-                    for related in perm {
-                        self.check_stop().map_err(CanonError::with_read_error)?;
-                        if let Some(id) = self.canonical.issued_for(related) {
-                            path.push_str("_:");
-                            path.push_str(id);
-                        } else {
-                            if !issuer.has(related) {
-                                recursion.push(related);
-                            }
-                            path.push_str("_:");
-                            path.push_str(issuer.issue(related));
+            if reused.is_none() {
+                if let Some(group) = frame.group.as_mut() {
+                    if let Some(mut candidate) = group.candidate.take() {
+                        if let Some(related) = candidate.recursion.next() {
+                            // §4.8 step 5.4.5: suspend this path while its child runs.
+                            self.check_stop().map_err(CanonError::with_read_error)?;
+                            let child_issuer = candidate.issuer.clone();
+                            candidate.pending = Some(related);
+                            group.candidate = Some(candidate);
+                            let mut child = self.n_degree_frame(related, child_issuer, || {
+                                let depth = parents.len();
+                                let observation = self.refusal_group(
+                                    self.blank_ordinal(frame_identifier),
+                                    depth,
+                                    &frame.issuer,
+                                    group,
+                                );
+                                let parent_group = observation.active.group;
+                                let context = RdfcSearchContext::ChildFrame {
+                                    root_ordinal: self.blank_ordinal(identifier),
+                                    frame_ordinal: self.blank_ordinal(related),
+                                    depth: depth + 1,
+                                    parent_group,
+                                };
+                                let (path, groups) = self.refusal_path(observation, &mut parents);
+                                (context, path, Some(groups))
+                            })?;
+                            reused = memo.lookup(self, related, &mut child.issuer, memory)?;
+                            parents.push(frame);
+                            frame = child;
+                            continue;
                         }
-                        // 5.4.4.3: appending cannot repair a strictly greater
-                        // lexicographic prefix, even when it is shorter than best.
+                        // 5.4.6: first path wins ties, exactly as in permutation order.
                         if group
                             .chosen_path
                             .as_ref()
-                            .is_some_and(|best| path.as_str() > best.as_str())
+                            .is_none_or(|best| candidate.path.as_str() < best.as_str())
                         {
-                            pruned = true;
-                            break;
+                            group.chosen_path = Some(candidate.path);
+                            group.chosen_issuer = Some(candidate.issuer);
                         }
                     }
-                    if !pruned {
-                        group.candidate = Some(NDegreeCandidate {
-                            issuer,
-                            path,
-                            recursion: recursion.into_iter(),
-                            pending: None,
-                        });
+
+                    if let Some(perm) = group.permutations.next() {
+                        // Charge after obtaining each permutation, including pruned ones.
+                        self.charge_search(SearchEvent::RdfcPermutation, || {
+                            let frame_ordinal = self.blank_ordinal(frame_identifier);
+                            let depth = parents.len();
+                            let observation =
+                                self.refusal_group(frame_ordinal, depth, &frame.issuer, group);
+                            let group = observation.active.group;
+                            let context = RdfcSearchContext::Permutation {
+                                root_ordinal: self.blank_ordinal(identifier),
+                                frame_ordinal,
+                                depth,
+                                group,
+                            };
+                            let (path, groups) = self.refusal_path(observation, &mut parents);
+                            (context, path, Some(groups))
+                        })
+                        .map_err(CanonError::with_read_error)?;
+                        let mut issuer = frame.issuer.clone();
+                        let mut path = String::new();
+                        let mut recursion = Vec::new();
+                        let mut pruned = false;
+                        for related in perm {
+                            self.check_stop().map_err(CanonError::with_read_error)?;
+                            if let Some(id) = self.canonical.issued_for(related) {
+                                path.push_str("_:");
+                                path.push_str(id);
+                            } else {
+                                if !issuer.has(related) {
+                                    recursion.push(related);
+                                }
+                                path.push_str("_:");
+                                path.push_str(issuer.issue(related));
+                            }
+                            // 5.4.4.3: appending cannot repair a strictly greater
+                            // lexicographic prefix, even when it is shorter than best.
+                            if group
+                                .chosen_path
+                                .as_ref()
+                                .is_some_and(|best| path.as_str() > best.as_str())
+                            {
+                                pruned = true;
+                                break;
+                            }
+                        }
+                        if !pruned {
+                            group.candidate = Some(NDegreeCandidate {
+                                issuer,
+                                path,
+                                recursion: recursion.into_iter(),
+                                pending: None,
+                            });
+                        }
+                        continue;
+                    }
+
+                    // 5.5–5.6: finish this related-hash group and adopt its winner.
+                    let group = frame.group.take().expect("the active group is present");
+                    frame
+                        .data
+                        .push_str(group.chosen_path.as_deref().unwrap_or(""));
+                    if let Some(issuer) = group.chosen_issuer {
+                        frame.issuer = issuer;
                     }
                     continue;
                 }
 
-                // 5.5–5.6: finish this related-hash group and adopt its winner.
-                let group = frame.group.take().expect("the active group is present");
-                frame
-                    .data
-                    .push_str(group.chosen_path.as_deref().unwrap_or(""));
-                if let Some(issuer) = group.chosen_issuer {
-                    frame.issuer = issuer;
-                }
-                continue;
-            }
-
-            if let Some((hash, related)) = frame.related.next() {
-                self.check_stop().map_err(CanonError::with_read_error)?;
-                frame.data.push_str(hash.as_str());
-                let fixed_label = |id| {
-                    self.canonical
-                        .issued_for(id)
-                        .or_else(|| frame.issuer.issued_for(id))
-                };
-                let mut permutations = permutations(&related);
-                if related.iter().all(|&id| fixed_label(id).is_some()) {
-                    // Every candidate has no recursion and the same final issuer.
-                    // Choose its minimum fixed-label concatenation once, retaining
-                    // the complete group inventory for refusal observations.
-                    permutations.items.sort_unstable_by(|&left, &right| {
-                        fixed_label_order(
-                            fixed_label(left).expect("the group has only fixed labels"),
-                            fixed_label(right).expect("the group has only fixed labels"),
-                        )
+                if let Some((hash, related)) = frame.related.next() {
+                    self.check_stop().map_err(CanonError::with_read_error)?;
+                    frame.data.push_str(hash.as_str());
+                    let fixed_label = |id| {
+                        self.canonical
+                            .issued_for(id)
+                            .or_else(|| frame.issuer.issued_for(id))
+                    };
+                    let mut permutations = permutations(&related);
+                    if related.iter().all(|&id| fixed_label(id).is_some()) {
+                        // Every candidate has no recursion and the same final issuer.
+                        // Choose its minimum fixed-label concatenation once, retaining
+                        // the complete group inventory for refusal observations.
+                        permutations.items.sort_unstable_by(|&left, &right| {
+                            fixed_label_order(
+                                fixed_label(left).expect("the group has only fixed labels"),
+                                fixed_label(right).expect("the group has only fixed labels"),
+                            )
+                        });
+                        permutations.single = true;
+                    }
+                    frame.group = Some(NDegreeGroup {
+                        permutations,
+                        chosen_path: None,
+                        chosen_issuer: None,
+                        candidate: None,
                     });
-                    permutations.single = true;
+                    continue;
                 }
-                frame.group = Some(NDegreeGroup {
-                    permutations,
-                    chosen_path: None,
-                    chosen_issuer: None,
-                    candidate: None,
-                });
-                continue;
             }
-
-            let hash = digest_hex(self.hash, frame.data.as_bytes());
+            let cached = reused.take();
+            let hash = cached.unwrap_or_else(|| digest_hex(self.hash, frame.data.as_bytes()));
             let Some(mut parent) = parents.pop() else {
+                memo.release(memory).map_err(CanonError::Storage)?;
                 return Ok((hash, frame.issuer));
             };
             let group = parent.group.as_mut().expect("a child has a parent group");
@@ -3290,6 +3316,16 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                 .candidate
                 .as_mut()
                 .expect("a child has a suspended candidate");
+            if cached.is_none() {
+                memo.completed(
+                    self,
+                    frame_identifier,
+                    &frame.issuer,
+                    &candidate.issuer,
+                    hash,
+                    memory,
+                )?;
+            }
             let related = candidate
                 .pending
                 .take()
@@ -6534,6 +6570,9 @@ mod tests {
         pre_faulted: bool,
         faulted_by_read: std::cell::Cell<bool>,
         unlatched_resolution: bool,
+        observe_only: bool,
+        reads: std::cell::Cell<usize>,
+        reservations: std::cell::Cell<usize>,
     }
 
     impl FlatProbeView {
@@ -6545,6 +6584,9 @@ mod tests {
                 pre_faulted: true,
                 faulted_by_read: std::cell::Cell::new(false),
                 unlatched_resolution: false,
+                observe_only: false,
+                reads: std::cell::Cell::new(0),
+                reservations: std::cell::Cell::new(0),
             }
         }
 
@@ -6556,14 +6598,24 @@ mod tests {
                 pre_faulted: false,
                 faulted_by_read: std::cell::Cell::new(false),
                 unlatched_resolution: false,
+                observe_only: false,
+                reads: std::cell::Cell::new(0),
+                reservations: std::cell::Cell::new(0),
             }
+        }
+
+        fn observed(inner: Arc<RdfDataset>) -> Self {
+            let mut view = Self::faults_on_first_read(inner);
+            view.observe_only = true;
+            view
         }
 
         /// Flip the fault latch: called from every row-reading accessor below, never
         /// from a lookup accessor, so `faulted_by_read` records "some row stream was
         /// touched" rather than "the view was touched at all".
         fn mark_read(&self) {
-            if !self.unlatched_resolution {
+            self.reads.set(self.reads.get() + 1);
+            if !self.observe_only && !self.unlatched_resolution {
                 self.faulted_by_read.set(true);
             }
         }
@@ -6594,6 +6646,7 @@ mod tests {
         /// [`mark_read`](Self::mark_read), so a run that only resolves ids the drain
         /// closure already holds never manufactures a fault it didn't earn.
         fn resolve(&self, id: TermId) -> Result<Self::TermGuard<'_>, Self::ReadError> {
+            self.reads.set(self.reads.get() + 1);
             if self.unlatched_resolution {
                 return Err(FlatProbeFault("resolution failed without a sticky cause"));
             }
@@ -6603,7 +6656,17 @@ mod tests {
         /// A point lookup; does not trip [`mark_read`](Self::mark_read), matching
         /// [`resolve`](Self::resolve).
         fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError> {
+            self.reads.set(self.reads.get() + 1);
             self.checked_read(|_| self.inner.as_ref().term_id_by_value(value))
+        }
+
+        fn reserve_workspace(
+            &self,
+            _: u64,
+        ) -> Result<impl crate::WorkspaceReservation<Error = Self::ReadError> + '_, Self::ReadError>
+        {
+            self.reservations.set(self.reservations.get() + 1);
+            Ok(crate::NoopReservation::<FlatProbeFault>::default())
         }
 
         /// A point lookup; does not trip [`mark_read`](Self::mark_read).
@@ -7320,8 +7383,10 @@ mod tests {
             CanonHash::Sha256,
             &run,
         );
+        let mut storage = purrdf_lex::allocation::Resident;
+        let mut memory = Memory::new(&mut storage);
         assert!(matches!(
-            state.collect_incidence(),
+            memory.try_scope(|memory| state.collect_incidence(memory)),
             Err(CanonError::Stopped)
         ));
         assert_eq!(state.blanks, []);
@@ -7357,14 +7422,19 @@ mod tests {
                 CanonHash::Sha256,
                 &run,
             );
-            state.collect_incidence().unwrap();
+            let mut storage = purrdf_lex::allocation::Resident;
+            let mut memory = Memory::new(&mut storage);
+            let footprints = state.collect_incidence(&mut memory).unwrap();
             for &blank in &state.blanks {
                 let hash = state.hash_first_degree(blank).unwrap();
                 state.first_degree.insert(blank, hash);
             }
             let mut issuer = IdIssuer::new(TEMP_PREFIX);
             issuer.issue(blanks[0]);
-            let (_, issuer) = state.hash_n_degree(blanks[0], issuer).unwrap();
+            let (_, issuer) = state
+                .hash_n_degree(blanks[0], issuer, &footprints, &mut memory)
+                .unwrap();
+            footprints.release(&mut memory).unwrap();
             assert_eq!(issuer.order(), blanks);
             // One entry per blank, plus one permutation at each endpoint
             // and two at each internal node: COUNT + 2 * (COUNT - 1).
@@ -7386,7 +7456,9 @@ mod tests {
             CanonHash::Sha256,
             &run,
         );
-        state.collect_incidence().unwrap();
+        let mut storage = purrdf_lex::allocation::Resident;
+        let mut memory = Memory::new(&mut storage);
+        let footprints = state.collect_incidence(&mut memory).unwrap();
         for &blank in &state.blanks {
             let hash = state.hash_first_degree(blank).unwrap();
             state.first_degree.insert(blank, hash);
@@ -7396,13 +7468,295 @@ mod tests {
         let mut issuer = IdIssuer::new(TEMP_PREFIX);
         issuer.issue(blank);
         assert!(matches!(
-            state.hash_n_degree(blank, issuer),
+            memory.try_scope(|memory| state.hash_n_degree(blank, issuer, &footprints, memory)),
             Err(CanonError::Stopped)
         ));
         assert!(
             state.run.work().total() > 1,
             "the search reached permutation work"
         );
+        footprints.release(&mut memory).unwrap();
+    }
+
+    struct MemoFixture {
+        view: FlatProbeView,
+        root: TermId,
+        branches: [TermId; 6],
+        tails: [TermId; 6],
+        unrelated: TermId,
+    }
+
+    fn memo_fixture() -> MemoFixture {
+        let mut builder = RdfDatasetBuilder::new();
+        let predicate = iri(&mut builder, "link");
+        let anchor = iri(&mut builder, "anchor");
+        let root = builder.intern_blank("root", BlankScope::DEFAULT).unwrap();
+        let branches = std::array::from_fn(|index| {
+            builder
+                .intern_blank(&format!("branch{index}"), BlankScope::DEFAULT)
+                .unwrap()
+        });
+        let tails = std::array::from_fn(|index| {
+            builder
+                .intern_blank(&format!("tail{index}"), BlankScope::DEFAULT)
+                .unwrap()
+        });
+        let unrelated = builder
+            .intern_blank("unrelated", BlankScope::DEFAULT)
+            .unwrap();
+        for (&branch, &tail) in branches.iter().zip(&tails) {
+            builder.push_quad(root, predicate, branch, None).unwrap();
+            builder.push_quad(branch, predicate, tail, None).unwrap();
+            builder.push_quad(tail, predicate, anchor, None).unwrap();
+        }
+        builder
+            .push_quad(unrelated, predicate, anchor, None)
+            .unwrap();
+        MemoFixture {
+            view: FlatProbeView::observed(builder.freeze().unwrap()),
+            root,
+            branches,
+            tails,
+            unrelated,
+        }
+    }
+
+    fn memo_entry(root: TermId, branches: impl IntoIterator<Item = TermId>) -> IdIssuer<TermId> {
+        let mut issuer = IdIssuer::new(TEMP_PREFIX);
+        issuer.issue(root);
+        for id in branches {
+            issuer.issue(id);
+        }
+        issuer
+    }
+
+    /// Other preissued branches do not replace the caller's prefix, while focus
+    /// label, reached frontier labels and the next temporary counter remain key inputs.
+    #[test]
+    fn unknown_subsearch_reuse_preserves_caller_prefix_and_exact_context() {
+        let fixture = memo_fixture();
+        let run = SearchRun::new(SearchPolicy::Unlimited, None);
+        let mut state = CanonState::new(
+            &fixture.view,
+            CanonScope::Dataset,
+            CanonPresentation::Overlay,
+            CanonHash::Sha256,
+            &run,
+        );
+        let mut storage = purrdf_lex::allocation::Resident;
+        let mut memory = Memory::new(&mut storage);
+        let footprints = state.collect_incidence(&mut memory).unwrap();
+        for &id in &state.blanks {
+            state
+                .first_degree
+                .insert(id, state.hash_first_degree(id).unwrap());
+        }
+        let entry = memo_entry(fixture.root, fixture.branches);
+        let (hash, completed) = state
+            .hash_n_degree(fixture.branches[0], entry.clone(), &footprints, &mut memory)
+            .unwrap();
+        let mut memo = memo::Memo::new(&footprints).unwrap();
+        memo.completed(
+            &state,
+            fixture.branches[0],
+            &completed,
+            &entry,
+            hash,
+            &mut memory,
+        )
+        .unwrap();
+        let mut order = fixture.branches;
+        order.swap(4, 5);
+        let alternate = memo_entry(fixture.root, order);
+        let (expected_hash, expected) = state
+            .hash_n_degree(
+                fixture.branches[0],
+                alternate.clone(),
+                &footprints,
+                &mut memory,
+            )
+            .unwrap();
+        let mut frame = state
+            .n_degree_frame(fixture.branches[0], alternate.clone(), || {
+                (
+                    RdfcSearchContext::InitialFrame {
+                        root_ordinal: state.blank_ordinal(fixture.branches[0]),
+                    },
+                    RdfcActivePath::UnbuiltRoot,
+                    None,
+                )
+            })
+            .unwrap();
+        let reads = fixture.view.reads.get();
+        let work = run.work();
+        assert!(
+            memo.lookup(&state, fixture.branches[0], &mut frame.issuer, &mut memory)
+                .unwrap()
+                == Some(hash)
+        );
+        assert_eq!(
+            fixture.view.reads.get(),
+            reads,
+            "resident reuse performs no source reads"
+        );
+        assert_eq!(run.work(), work, "replay adds no search charges");
+        assert_eq!(
+            &frame.issuer.order()[..alternate.order().len()],
+            alternate.order()
+        );
+        assert!(hash == expected_hash);
+        assert_eq!(frame.issuer.order(), expected.order());
+        assert_eq!(frame.issuer.issued, expected.issued);
+        assert_eq!(
+            &frame.issuer.order()[alternate.order().len()..],
+            &[fixture.tails[0]]
+        );
+
+        let mut frontier_order = fixture.branches;
+        frontier_order[5] = fixture.tails[0];
+        let newly_labeled_tail = memo_entry(fixture.root, frontier_order);
+        let mut focus_order = fixture.branches;
+        focus_order.swap(0, 1);
+        let changed_focus = memo_entry(fixture.root, focus_order);
+        let mut changed_frontier = IdIssuer::new(TEMP_PREFIX);
+        for id in [fixture.branches[1], fixture.branches[0], fixture.root]
+            .into_iter()
+            .chain(fixture.branches[2..].iter().copied())
+        {
+            changed_frontier.issue(id);
+        }
+        let mut changed_counter = entry;
+        changed_counter.issue(fixture.unrelated);
+        for (name, mut issuer) in [
+            ("new frontier", newly_labeled_tail),
+            ("focus label", changed_focus),
+            ("frontier label", changed_frontier),
+            ("next counter", changed_counter),
+        ] {
+            assert!(
+                memo.lookup(&state, fixture.branches[0], &mut issuer, &mut memory)
+                    .unwrap()
+                    .is_none(),
+                "a changed {name} must miss"
+            );
+        }
+        memo.release(&mut memory).unwrap();
+        let mut seed = IdIssuer::new(TEMP_PREFIX);
+        seed.issue(fixture.root);
+        let (_, result) = state
+            .hash_n_degree(fixture.root, seed, &footprints, &mut memory)
+            .unwrap();
+        let expected_order: Vec<_> = std::iter::once(fixture.root)
+            .chain(fixture.branches)
+            .chain(fixture.tails)
+            .collect();
+        assert_eq!(
+            result.order(),
+            expected_order,
+            "the first equal candidate retains its complete issuance order"
+        );
+        footprints.release(&mut memory).unwrap();
+        assert_eq!(memory.admitted_bytes(), 0);
+    }
+
+    /// Cancellation after charged source initialization interrupts new resident
+    /// key work, without new reads/charges, and cannot prevent mandatory cleanup.
+    #[test]
+    fn resident_subsearch_cancellation_preserves_charges_reads_and_cleanup() {
+        let fixture = memo_fixture();
+        let signal = CanonStopAfter::new(usize::MAX);
+        let run = SearchRun::new(SearchPolicy::Unlimited, Some(&signal));
+        let mut state = CanonState::new(
+            &fixture.view,
+            CanonScope::Dataset,
+            CanonPresentation::Overlay,
+            CanonHash::Sha256,
+            &run,
+        );
+        let mut storage = purrdf_lex::allocation::Resident;
+        let mut memory = Memory::new(&mut storage);
+        let footprints = state.collect_incidence(&mut memory).unwrap();
+        for &id in &state.blanks {
+            state
+                .first_degree
+                .insert(id, state.hash_first_degree(id).unwrap());
+        }
+        let entry = memo_entry(fixture.root, fixture.branches);
+        let (hash, completed) = state
+            .hash_n_degree(fixture.branches[0], entry.clone(), &footprints, &mut memory)
+            .unwrap();
+        let mut memo = memo::Memo::new(&footprints).unwrap();
+        memo.completed(
+            &state,
+            fixture.branches[0],
+            &completed,
+            &entry,
+            hash,
+            &mut memory,
+        )
+        .unwrap();
+        let mut frame = state
+            .n_degree_frame(fixture.branches[0], entry, || {
+                (
+                    RdfcSearchContext::InitialFrame {
+                        root_ordinal: state.blank_ordinal(fixture.branches[0]),
+                    },
+                    RdfcActivePath::UnbuiltRoot,
+                    None,
+                )
+            })
+            .unwrap();
+        let reads = fixture.view.reads.get();
+        let work = run.work();
+        signal.0.store(3, std::sync::atomic::Ordering::Relaxed);
+        assert!(matches!(
+            memo.lookup(&state, fixture.branches[0], &mut frame.issuer, &mut memory),
+            Err(CanonError::Stopped)
+        ));
+        assert_eq!(fixture.view.reads.get(), reads);
+        assert_eq!(run.work(), work);
+        memo.release(&mut memory).unwrap();
+        footprints.release(&mut memory).unwrap();
+        assert_eq!(
+            memory.admitted_bytes(),
+            0,
+            "a latched stop must not skip destruction/refunds"
+        );
+    }
+
+    /// Empty issuance retains the original reserved-vocabulary reservation only.
+    #[test]
+    fn empty_issuance_does_not_acquire_a_footprint_reservation() {
+        let view = FlatProbeView::observed(RdfDatasetBuilder::new().freeze().unwrap());
+        let run = SearchRun::new(SearchPolicy::Unlimited, None);
+        CanonState::new(
+            &view,
+            CanonScope::Dataset,
+            CanonPresentation::Overlay,
+            CanonHash::Sha256,
+            &run,
+        )
+        .issue_labels()
+        .unwrap();
+        assert_eq!(view.reservations.get(), 1);
+        assert_eq!(run.work().total(), 0);
+    }
+
+    /// The first positive scratch layout retains the provider's exact original
+    /// cause rather than translating a real resource refusal into a cache miss.
+    #[test]
+    fn positive_deferred_admission_retains_the_original_provider_cause() {
+        let cause = FlatProbeFault("first positive footprint admission refused");
+        let result = rendering::ScratchGrant::deferred(|| {
+            Err::<crate::NoopReservation<FlatProbeFault>, _>(cause.clone())
+        })
+        .run(|memory| {
+            let mut bytes = Vec::new();
+            memory.push(&mut bytes, 0_u8).map_err(CanonError::Storage)?;
+            memory.release_vec(bytes).map_err(CanonError::Storage)?;
+            Ok(())
+        });
+        assert_eq!(result, Err(CanonError::Read(cause)));
     }
 
     /// Label completion is not permission to return a truncated canonical document.

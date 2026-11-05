@@ -8,25 +8,74 @@ use purrdf_lex::allocation::{Admission, Memory, StorageError};
 use super::CanonError;
 use crate::WorkspaceReservation;
 
-pub(super) struct ScratchGrant<R: WorkspaceReservation> {
-    reservation: R,
+type ReservationFactory<R> = fn() -> Result<R, <R as WorkspaceReservation>::Error>;
+
+pub(super) struct ScratchGrant<R: WorkspaceReservation, F = ReservationFactory<R>> {
+    reservation: Option<R>,
+    factory: Option<F>,
     failure: Option<R::Error>,
 }
 
-impl<R: WorkspaceReservation> Admission for ScratchGrant<R> {
+impl<R, F> Admission for ScratchGrant<R, F>
+where
+    R: WorkspaceReservation,
+    F: FnOnce() -> Result<R, R::Error>,
+{
     fn resize(&mut self, bytes: usize) -> Result<(), StorageError> {
-        super::ownership::resize_reservation(&mut self.reservation, &mut self.failure, bytes)
+        if self.failure.is_some() {
+            return Err(StorageError::AdmissionFailed);
+        }
+        if self.reservation.is_none() {
+            if bytes == 0 {
+                return Ok(());
+            }
+            let factory = self
+                .factory
+                .take()
+                .expect("an uninitialized scratch grant retains its factory");
+            self.reservation = Some(factory().map_err(|cause| {
+                self.failure = Some(cause);
+                StorageError::AdmissionFailed
+            })?);
+        }
+        super::ownership::resize_reservation(
+            self.reservation
+                .as_mut()
+                .expect("positive scratch growth initialized its reservation"),
+            &mut self.failure,
+            bytes,
+        )
     }
 }
 
 impl<R: WorkspaceReservation> ScratchGrant<R> {
     pub(super) fn new(reservation: R) -> Self {
         Self {
-            reservation,
+            reservation: Some(reservation),
+            factory: None,
             failure: None,
         }
     }
 
+    /// Empty scratch does not acquire a provider reservation. The first positive
+    /// layout requires the original capability and preserves its typed refusal.
+    pub(super) fn deferred<F>(factory: F) -> ScratchGrant<R, F>
+    where
+        F: FnOnce() -> Result<R, R::Error>,
+    {
+        ScratchGrant {
+            reservation: None,
+            factory: Some(factory),
+            failure: None,
+        }
+    }
+}
+
+impl<R, F> ScratchGrant<R, F>
+where
+    R: WorkspaceReservation,
+    F: FnOnce() -> Result<R, R::Error>,
+{
     /// The body destroys all scratch before returning; only independently owned
     /// results may leave. Failed locals die before `try_scope` refunds them, and
     /// the concrete source guard outlives both the body and its memory.
