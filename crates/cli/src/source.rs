@@ -122,9 +122,9 @@ use purrdf_core::{
     dataset_from_view, verify_pack,
 };
 use purrdf_rdf::{
-    NativeRdfFormat, ParseOptions, ParseOutcome, SerializeOutcome, SourceFormat, TransportEncoding,
+    NativeRdfFormat, ParseOutcome, SerializeOutcome, SourceFormat, TransportEncoding,
     decode_transport, detect_transport, import_gts_events, parse_dataset_from_reader,
-    parse_dataset_with, serialize_dataset_to_format, sniff_transport, transport_reader,
+    serialize_dataset_to_format, sniff_transport, transport_reader,
 };
 
 use crate::error::CliError;
@@ -439,7 +439,7 @@ pub(crate) fn load_native(
 
 /// Read an RDF text source at `path` WHOLE and report everything its one parse learned:
 /// the dataset, the base the document ended under, and the prefix map its syntax declared
-/// (`purrdf_rdf::parse_dataset_with`).
+/// (`purrdf_validate::rdf_input::parse`).
 ///
 /// [`load_native`] is the lane for data, which streams a line-oriented syntax and needs
 /// neither; this is the lane for a document whose DECLARATIONS are part of what it means —
@@ -451,11 +451,17 @@ pub(crate) fn load_native_document(
     path: &str,
     format: NativeRdfFormat,
     base: Option<&str>,
+    input_options: Option<&[u8]>,
 ) -> Result<ParseOutcome, CliError> {
+    if input_options.is_some() && format != NativeRdfFormat::YamlLd {
+        return Err(CliError::Usage(
+            "YAML-LD input options require YAML-LD input".into(),
+        ));
+    }
     let base = effective_base(path, format, base)?;
     let base = base.as_deref();
     let bytes = read_bytes_with_transport(path, TransportPolicy::Detect)?;
-    parse_dataset_with(&bytes, format.media_type(), base, &ParseOptions::default())
+    purrdf_validate::rdf_input::parse(&bytes, format.media_type(), base, input_options)
         .map_err(|error| with_cli_base_hint(&error, base))
 }
 

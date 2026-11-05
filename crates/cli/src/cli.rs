@@ -1232,6 +1232,14 @@ pub(crate) enum Command {
         /// Shapes, products, imports and change documents keep their existing policy.
         #[arg(long, value_name = "PATH")]
         yamlld_input_options: Option<PathBuf>,
+        /// Independent YAML-LD Basic input options for the root shapes document only.
+        #[arg(
+            long,
+            value_name = "PATH",
+            requires = "shapes",
+            conflicts_with = "shapes_product"
+        )]
+        shapes_yamlld_input_options: Option<PathBuf>,
         /// The SHACL shapes graph `FILE`, or `-` for stdin (which requires `--shapes-from`).
         /// Exactly one of this and `--shapes-product` is required: they are two spellings of
         /// the same input, a document to parse or a preparation to restore.
@@ -1858,6 +1866,9 @@ pub(crate) enum Command {
         /// Bounded YAML-LD Basic input options for the primary data graph only.
         #[arg(long, value_name = "PATH", conflicts_with = "check")]
         yamlld_input_options: Option<PathBuf>,
+        /// Independent YAML-LD Basic input options for the root shapes document only.
+        #[arg(long, value_name = "PATH", requires = "shapes", conflicts_with_all = ["srl", "check"])]
+        shapes_yamlld_input_options: Option<PathBuf>,
         /// Output format override; inferred from the output extension when omitted.
         #[arg(long, value_enum)]
         to: Option<CliRdfFormat>,
@@ -1976,6 +1987,9 @@ pub(crate) enum Command {
         /// Bounded YAML-LD Basic input options for the primary data graph only.
         #[arg(long, value_name = "PATH")]
         yamlld_input_options: Option<PathBuf>,
+        /// Independent YAML-LD Basic input options for the root shapes document only.
+        #[arg(long, value_name = "PATH", requires = "shapes")]
+        shapes_yamlld_input_options: Option<PathBuf>,
         /// Base IRI for resolving relative IRIs while parsing the DATA graph.
         #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
         base: Option<String>,
@@ -2038,6 +2052,9 @@ pub(crate) enum ShapesCommand {
     /// **2** for a usage error. `shapes lint clean true|false` and `shapes lint findings N`
     /// are always written to stderr.
     Lint {
+        /// Bounded YAML-LD Basic input options for the root shapes document only.
+        #[arg(long, value_name = "PATH")]
+        yamlld_input_options: Option<PathBuf>,
         /// Shapes-graph format override; inferred from the path's extension when omitted.
         #[arg(long, value_enum)]
         from: Option<CliRdfFormat>,
@@ -2201,6 +2218,9 @@ pub(crate) enum ShaclCommand {
     /// identical bytes — no hash-iteration order, no wall clock and no randomness reach the
     /// writer.
     Pack {
+        /// Bounded YAML-LD Basic input options for the root shapes document only.
+        #[arg(long, value_name = "PATH")]
+        yamlld_input_options: Option<PathBuf>,
         /// The shapes graph `FILE`, read as Turtle unless `--shapes-from` names another
         /// syntax. Its prefix map — the fallback prefix environment every SHACL-SPARQL and
         /// SHACL-AF query resolves against — is recorded in the product.
@@ -3063,6 +3083,7 @@ impl Cli {
             }
             Command::Validate {
                 yamlld_input_options,
+                shapes_yamlld_input_options,
                 shapes,
                 shapes_product,
                 import,
@@ -3073,6 +3094,7 @@ impl Cli {
                 ..
             } => {
                 paths.extend(yamlld_input_options.iter().cloned());
+                paths.extend(shapes_yamlld_input_options.iter().cloned());
                 if let Some(path) = shapes {
                     paths.push(PathBuf::from(path));
                 }
@@ -3129,9 +3151,11 @@ impl Cli {
                 input,
                 output,
                 yamlld_input_options,
+                shapes_yamlld_input_options,
                 ..
             } => {
                 paths.extend(yamlld_input_options.iter().cloned());
+                paths.extend(shapes_yamlld_input_options.iter().cloned());
                 if let Some(path) = shapes {
                     paths.push(PathBuf::from(path));
                 }
@@ -3156,9 +3180,11 @@ impl Cli {
                 input,
                 output,
                 yamlld_input_options,
+                shapes_yamlld_input_options,
                 ..
             } => {
                 paths.extend(yamlld_input_options.iter().cloned());
+                paths.extend(shapes_yamlld_input_options.iter().cloned());
                 paths.push(PathBuf::from(shapes));
                 for pair in import {
                     if let Some((_, path)) = pair.split_once('=') {
@@ -3181,8 +3207,10 @@ impl Cli {
                     shapes,
                     import,
                     out,
+                    yamlld_input_options,
                     ..
                 } => {
+                    paths.extend(yamlld_input_options.iter().cloned());
                     paths.push(PathBuf::from(shapes));
                     for pair in import {
                         if let Some((_, path)) = pair.split_once('=') {
@@ -3207,8 +3235,10 @@ impl Cli {
                     import,
                     input,
                     output,
+                    yamlld_input_options,
                     ..
                 } => {
+                    paths.extend(yamlld_input_options.iter().cloned());
                     for pair in import {
                         if let Some((_, path)) = pair.split_once('=') {
                             paths.push(PathBuf::from(path));

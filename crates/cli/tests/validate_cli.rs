@@ -3563,3 +3563,122 @@ fn a_product_must_hold_every_link() {
         stdout(&holds)
     );
 }
+
+/// Independent data and shapes controls precede acquisition and preserve native shapes metadata.
+#[test]
+fn configured_yamlld_controls_reach_validation_shapes() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let shapes = write_file(dir.path(), "shapes.yamlld", support::YAML_SHAPES_DOCUMENTS);
+    let data = write_file(
+        dir.path(),
+        "data.nq",
+        "<https://example.org/alice> <https://example.org/p> \"value\" .\n",
+    );
+    let all = write_file(
+        dir.path(),
+        "all.json",
+        r#"{"version":1,"yaml_ld":{"extract_all_scripts":true}}"#,
+    );
+    for (controls, conforms) in [(None, true), (Some(all.as_str()), false)] {
+        let mut args = vec!["validate", "--shapes", &shapes, "--format", "ntriples"];
+        if let Some(controls) = controls {
+            args.extend(["--shapes-yamlld-input-options", controls]);
+        }
+        args.push(&data);
+        let out = run(&args);
+        assert_eq!(code(&out), 0, "{}", stderr(&out));
+        assert!(
+            stderr(&out).contains(&format!("shacl conforms {conforms}\n")),
+            "{}",
+            stderr(&out)
+        );
+    }
+    let yaml_data = write_file(
+        dir.path(),
+        "data.yamlld",
+        "'@id': https://example.org/alice\nhttps://example.org/p: value\n---\n'@id': https://example.org/alice\nhttps://example.org/required: present\n",
+    );
+    for (controls, conforms) in [(None, false), (Some(all.as_str()), true)] {
+        let mut args = vec![
+            "validate",
+            "--shapes",
+            &shapes,
+            "--shapes-yamlld-input-options",
+            &all,
+            "--format",
+            "ntriples",
+        ];
+        if let Some(controls) = controls {
+            args.extend(["--yamlld-input-options", controls]);
+        }
+        args.push(&yaml_data);
+        let out = run(&args);
+        assert_eq!(code(&out), 0, "{}", stderr(&out));
+        assert!(
+            stderr(&out).contains(&format!("shacl conforms {conforms}\n")),
+            "{}",
+            stderr(&out)
+        );
+    }
+    let missing = dir.path().join("missing.yamlld");
+    let missing = missing.to_str().unwrap();
+    let product = dir.path().join("missing.purrshp");
+    let refused = run(&[
+        "validate",
+        "--shapes-product",
+        product.to_str().unwrap(),
+        "--shapes-yamlld-input-options",
+        &all,
+        missing,
+    ]);
+    assert_eq!(code(&refused), 2, "{}", stderr(&refused));
+    let output = write_file(dir.path(), "report.nt", "unchanged report");
+    let limited = write_file(
+        dir.path(),
+        "limited.json",
+        r#"{"version":1,"yaml_ld":{"syntax":{"max_input_bytes":0}}}"#,
+    );
+    let malformed = write_file(dir.path(), "malformed.json", "{");
+    let import = format!("https://example.org/import={missing}");
+    for (controls, root, input, imports, diagnostic) in [
+        (
+            limited.as_str(),
+            shapes.as_str(),
+            data.as_str(),
+            false,
+            "native-yaml-input-limit",
+        ),
+        (
+            malformed.as_str(),
+            missing,
+            missing,
+            true,
+            "rdf-input-options",
+        ),
+    ] {
+        let mut args = vec![
+            "validate",
+            "--shapes",
+            root,
+            "--shapes-yamlld-input-options",
+            controls,
+            "--format",
+            "ntriples",
+        ];
+        if imports {
+            args.extend(["--import", &import, "--changes", missing]);
+        }
+        args.extend([input, &output]);
+        let refused = run(&args);
+        assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+        assert!(
+            stderr(&refused).contains(diagnostic),
+            "{}",
+            stderr(&refused)
+        );
+        assert_eq!(
+            std::fs::read_to_string(&output).unwrap(),
+            "unchanged report"
+        );
+    }
+}

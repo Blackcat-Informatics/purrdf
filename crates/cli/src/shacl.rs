@@ -146,6 +146,7 @@ use crate::{sink, source};
 pub(crate) fn pack(
     shapes: &str,
     shapes_format: SourceFormat,
+    yamlld_input_options: Option<&std::path::Path>,
     base: Option<&str>,
     imports: &[String],
     shapes_graph: Option<&str>,
@@ -153,6 +154,9 @@ pub(crate) fn pack(
     out: &str,
     canonical: &mut crate::canonical::Request,
 ) -> Result<(), CliError> {
+    let input_options = yamlld_input_options
+        .map(|path| source::read_yamlld_input_options(path, &[shapes_format]))
+        .transpose()?;
     let effective_base = source::effective_base(shapes, NativeRdfFormat::Turtle, base)?;
     if effective_base.is_none() {
         return Err(CliError::Usage(format!(
@@ -178,6 +182,7 @@ pub(crate) fn pack(
         shapes_format,
         effective_base.as_deref(),
         "--shapes",
+        input_options.as_deref(),
         canonical,
     )?;
     let table = crate::shapes_source::shapes_imports(&root, imports, canonical)?;

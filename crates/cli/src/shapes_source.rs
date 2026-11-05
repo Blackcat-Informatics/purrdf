@@ -116,8 +116,14 @@ pub(crate) fn read_shapes_document(
     format: SourceFormat,
     base: Option<&str>,
     what: &str,
+    input_options: Option<&[u8]>,
     canonical: &mut crate::canonical::Request,
 ) -> Result<ShapesDocument, CliError> {
+    if input_options.is_some() && format != SourceFormat::Native(NativeRdfFormat::YamlLd) {
+        return Err(CliError::Usage(
+            "YAML-LD input options require YAML-LD input".into(),
+        ));
+    }
     let native = match format {
         SourceFormat::Native(native) => native,
         SourceFormat::Pack | SourceFormat::Gts => {
@@ -141,7 +147,7 @@ pub(crate) fn read_shapes_document(
             .map_err(|errors| CliError::Runtime(format!("{what} {path}: {}", errors.join("\n"))))?;
         (dataset, document_base, prefixes)
     } else {
-        let outcome = source::load_native_document(path, native, base)?;
+        let outcome = source::load_native_document(path, native, base, input_options)?;
         let document_base = outcome.document_base_iri().map(str::to_owned);
         (outcome.dataset, document_base, outcome.document_prefixes)
     };
@@ -188,6 +194,7 @@ pub(crate) fn shapes_imports(
             pair.format,
             Some(pair.iri),
             &format!("--import {}", pair.iri),
+            None,
             canonical,
         )?;
         for loaded in &document.loaded {

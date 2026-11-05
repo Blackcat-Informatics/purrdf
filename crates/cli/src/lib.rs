@@ -637,6 +637,7 @@ fn dispatch_with_request(
         ),
         Command::Validate {
             yamlld_input_options,
+            shapes_yamlld_input_options,
             shapes,
             shapes_product,
             expect_identity,
@@ -669,6 +670,7 @@ fn dispatch_with_request(
         } => validate::run(
             &validate::ValidateOptions {
                 yamlld_input_options: yamlld_input_options.as_deref(),
+                shapes_yamlld_input_options: shapes_yamlld_input_options.as_deref(),
                 shacl_profile: shacl_profile.as_deref(),
                 input,
                 output,
@@ -810,6 +812,7 @@ fn dispatch_with_request(
         Command::Shacl { command } => match command {
             ShaclCommand::Pack {
                 shapes,
+                yamlld_input_options,
                 shapes_from,
                 base,
                 import,
@@ -822,6 +825,7 @@ fn dispatch_with_request(
                     purrdf_rdf::SourceFormat::Native(purrdf_rdf::NativeRdfFormat::Turtle),
                     CliRdfFormat::to_source_format,
                 ),
+                yamlld_input_options.as_deref(),
                 base.as_deref(),
                 import,
                 shapes_graph.as_deref(),
@@ -853,6 +857,7 @@ fn dispatch_with_request(
             xpath_regex,
             from,
             yamlld_input_options,
+            shapes_yamlld_input_options,
             to,
             base,
             input,
@@ -877,6 +882,7 @@ fn dispatch_with_request(
                 xpath_regex: *xpath_regex,
                 from: *from,
                 yamlld_input_options: yamlld_input_options.as_deref(),
+                shapes_yamlld_input_options: shapes_yamlld_input_options.as_deref(),
                 to: *to,
                 base: base.as_deref(),
                 input,
@@ -902,6 +908,7 @@ fn dispatch_with_request(
             xpath_regex,
             from,
             yamlld_input_options,
+            shapes_yamlld_input_options,
             base,
             input,
             output,
@@ -923,6 +930,7 @@ fn dispatch_with_request(
                 xpath_regex: *xpath_regex,
                 from: *from,
                 yamlld_input_options: yamlld_input_options.as_deref(),
+                shapes_yamlld_input_options: shapes_yamlld_input_options.as_deref(),
                 base: base.as_deref(),
                 input,
                 output,
@@ -935,6 +943,7 @@ fn dispatch_with_request(
         Command::Shapes { command } => match command {
             ShapesCommand::Lint {
                 from,
+                yamlld_input_options,
                 base,
                 import,
                 box_role_vocab,
@@ -944,6 +953,7 @@ fn dispatch_with_request(
             } => shapes_tools::run_lint(
                 &shapes_tools::LintOptions {
                     from: *from,
+                    yamlld_input_options: yamlld_input_options.as_deref(),
                     base: base.as_deref(),
                     imports: import,
                     box_role_vocab: box_role_vocab.as_deref(),

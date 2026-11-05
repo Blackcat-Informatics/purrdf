@@ -1886,3 +1886,207 @@ fn configured_yamlld_input_reaches_node_expression_data() {
         );
     }
 }
+
+/// All three tools admit root controls before acquisition and retain native final-base metadata.
+#[test]
+fn configured_yamlld_controls_reach_shapes_documents() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let shapes = write_file(
+        dir.path(),
+        "tools.yamlld",
+        r"
+'@graph':
+  - '@id': https://example.org/Shape
+    '@type': http://www.w3.org/ns/shacl#NodeShape
+    http://www.w3.org/ns/shacl#targetNode:
+      '@id': https://example.org/first
+    http://www.w3.org/ns/shacl#rule:
+      '@id': https://example.org/Rule
+  - '@id': https://example.org/Rule
+    '@type': http://www.w3.org/ns/shacl#TripleRule
+    http://www.w3.org/ns/shacl#subject:
+      '@id': http://www.w3.org/ns/shacl#this
+    http://www.w3.org/ns/shacl#predicate:
+      '@id': https://example.org/derived
+    http://www.w3.org/ns/shacl#object:
+      '@id': https://example.org/seen
+---
+'@context':
+  '@base': https://example.org/final-base
+'@graph':
+  - '@id': https://example.org/header
+    '@type': http://www.w3.org/2002/07/owl#Ontology
+    http://www.w3.org/2002/07/owl#imports:
+      '@id': https://example.org/final-base
+  - '@id': https://example.org/Shape
+    http://www.w3.org/ns/shacl#targetNode:
+      '@id': https://example.org/second
+  - '@id': https://example.org/Expression
+    http://www.w3.org/ns/shacl#path:
+      '@id': https://example.org/p
+  - '@id': https://example.org/Lint
+    '@type': http://www.w3.org/ns/shacl#NodeShape
+    http://www.w3.org/ns/shacl#xone:
+      '@list': []
+",
+    );
+    let data = write_file(
+        dir.path(),
+        "data.nq",
+        "<https://example.org/first> <https://example.org/p> \"value\" .\n",
+    );
+    let all = write_file(
+        dir.path(),
+        "all.json",
+        r#"{"version":1,"yaml_ld":{"extract_all_scripts":true}}"#,
+    );
+    for configured in [false, true] {
+        let mut rules = vec!["rules", "--shapes", &shapes, "--to", "ntriples"];
+        let mut expr = vec![
+            "node-expr",
+            "--shapes",
+            &shapes,
+            "--expr",
+            "https://example.org/Expression",
+            "--focus",
+            "https://example.org/first",
+        ];
+        let mut lint = vec!["shapes", "lint"];
+        if configured {
+            rules.extend(["--shapes-yamlld-input-options", &all]);
+            expr.extend(["--shapes-yamlld-input-options", &all]);
+            lint.extend(["--yamlld-input-options", &all]);
+        }
+        rules.push(&data);
+        expr.push(&data);
+        lint.push(&shapes);
+        let ruled = run(&rules);
+        assert_eq!(code(&ruled), 0, "{}", stderr(&ruled));
+        assert_eq!(
+            stdout(&ruled).lines().count(),
+            if configured { 2 } else { 1 }
+        );
+        assert_eq!(
+            stdout(&ruled).contains("<https://example.org/second>"),
+            configured
+        );
+        let evaluated = run(&expr);
+        assert_eq!(code(&evaluated), 0, "{}", stderr(&evaluated));
+        assert_eq!(
+            stdout(&evaluated),
+            if configured {
+                "\"value\"\n"
+            } else {
+                "<https://example.org/Expression>\n"
+            }
+        );
+        let linted = run(&lint);
+        assert_eq!(code(&linted), i32::from(configured), "{}", stderr(&linted));
+        assert!(
+            stdout(&linted).starts_with("load accepted\n"),
+            "{}",
+            stdout(&linted)
+        );
+        assert_eq!(
+            stdout(&linted).contains("diagnostic xone-minListLength <https://example.org/Lint>"),
+            configured
+        );
+    }
+    let missing = dir.path().join("missing.yamlld");
+    let missing = missing.to_str().unwrap();
+    let missing_srl = dir.path().join("missing.srl");
+    let missing_srl = missing_srl.to_str().unwrap();
+    for check in [false, true] {
+        let mut args = vec![
+            "rules",
+            "--srl",
+            missing_srl,
+            "--shapes-yamlld-input-options",
+            &all,
+        ];
+        if check {
+            args.push("--check");
+        }
+        let refused = run(&args);
+        assert_eq!(code(&refused), 2, "{}", stderr(&refused));
+    }
+    let limited = write_file(
+        dir.path(),
+        "limited.json",
+        r#"{"version":1,"yaml_ld":{"syntax":{"max_input_bytes":0}}}"#,
+    );
+    let malformed = write_file(dir.path(), "malformed.json", "{");
+    let output = write_file(dir.path(), "output.txt", "unchanged output");
+    let proof = write_file(dir.path(), "proof.txt", "unchanged proof");
+    let explain = format!("--explain={proof}");
+    let import = format!("https://example.org/import={missing}");
+    for (controls, root, input, auxiliary, diagnostic) in [
+        (
+            limited.as_str(),
+            shapes.as_str(),
+            data.as_str(),
+            false,
+            "native-yaml-input-limit",
+        ),
+        (
+            malformed.as_str(),
+            missing,
+            missing,
+            true,
+            "rdf-input-options",
+        ),
+    ] {
+        let mut rules = vec![
+            "rules",
+            "--shapes",
+            root,
+            "--to",
+            "ntriples",
+            "--shapes-yamlld-input-options",
+            controls,
+            &explain,
+        ];
+        let mut expr = vec![
+            "node-expr",
+            "--shapes",
+            root,
+            "--focus",
+            "https://example.org/first",
+            "--shapes-yamlld-input-options",
+            controls,
+        ];
+        let mut lint = vec!["shapes", "lint", "--yamlld-input-options", controls];
+        if auxiliary {
+            rules.extend(["--yamlld-input-options", &all, "--import", &import]);
+            expr.extend([
+                "--yamlld-input-options",
+                &all,
+                "--import",
+                &import,
+                "--expr-turtle-file",
+                missing,
+            ]);
+            lint.extend(["--import", &import]);
+        } else {
+            expr.extend(["--expr", "https://example.org/Expression"]);
+        }
+        rules.extend([input, &output]);
+        expr.extend([input, &output]);
+        lint.extend([root, &output]);
+        for args in [rules, expr, lint] {
+            let refused = run(&args);
+            assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+            assert!(
+                stderr(&refused).contains(diagnostic),
+                "{}",
+                stderr(&refused)
+            );
+            assert_eq!(stdout(&refused), "");
+            assert_eq!(
+                std::fs::read_to_string(&output).unwrap(),
+                "unchanged output"
+            );
+            assert_eq!(std::fs::read_to_string(&proof).unwrap(), "unchanged proof");
+        }
+    }
+}
