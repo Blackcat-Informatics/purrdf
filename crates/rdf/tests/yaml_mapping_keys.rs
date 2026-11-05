@@ -17,10 +17,71 @@
 //!   on the text (`1: a` with `"1": b` repeats a key).
 
 use purrdf_rdf::native_codecs::jsonld::{
-    YamlLdOptions, parse_yamlld_with_options, yamlld_to_jsonld, yamlld_to_jsonld_with_options,
+    CompiledJsonLdContext, JsonLdContextRegistry, YamlLdOptions, parse_yamlld_with_context,
+    parse_yamlld_with_options, yamlld_to_jsonld, yamlld_to_jsonld_with_options,
 };
 use purrdf_rdf::native_codecs::parse_dataset;
 use purrdf_rdf::{DatasetSink, OkfBundle, OkfConfig, lift_okf_bundle};
+
+#[test]
+fn configured_yamlld_context_reaches_shared_expansion() {
+    let registry = JsonLdContextRegistry::new([(
+        "https://example.org/context",
+        br#"{"@context":{"p":{"@id":"https://example.org/p","@type":"@id"}}}"#.as_slice(),
+    )])
+    .expect("offline property context");
+    let initial = purrdf_lex::json::read_slice(
+        br#"{"label":"https://example.org/label"}"#,
+        purrdf_lex::json::Limits::DEFAULT,
+    )
+    .unwrap();
+    let context = CompiledJsonLdContext::compile_with_registry(
+        &initial,
+        Some("https://example.org/docs/source.yamlld"),
+        &registry,
+    )
+    .expect("initial terms, document base and offline registry");
+    let source = concat!(
+        "--- {'@context': 'https://example.org/context', '@id': first, p: object, label: one}\n",
+        "--- {'@context': 'https://example.org/context', '@id': second, p: other, label: two}\n",
+    );
+    let first = concat!(
+        "<https://example.org/docs/first> <https://example.org/p> <https://example.org/docs/object> .\n",
+        "<https://example.org/docs/first> <https://example.org/label> \"one\" .\n",
+    );
+    let all = format!(
+        "{first}<https://example.org/docs/second> <https://example.org/p> <https://example.org/docs/other> .\n<https://example.org/docs/second> <https://example.org/label> \"two\" .\n"
+    );
+    for (extract_all_scripts, expected) in [(false, first), (true, all.as_str())] {
+        let options = YamlLdOptions {
+            extract_all_scripts,
+            ..YamlLdOptions::DEFAULT
+        };
+        let actual = parse_yamlld_with_context(source.as_bytes(), &context, &options)
+            .expect("configured YAML-LD construction");
+        let expected = parse_dataset(expected.as_bytes(), "application/n-quads", None).unwrap();
+        assert!(
+            purrdf_rdf::datasets_isomorphic(
+                &actual,
+                &expected,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap(),
+            "configured context with extract_all_scripts={extract_all_scripts}"
+        );
+    }
+    let mut refused = YamlLdOptions::DEFAULT;
+    refused.syntax.syntax.max_input_bytes = 0;
+    assert_eq!(
+        parse_yamlld_with_context(source.as_bytes(), &context, &refused)
+            .unwrap_err()
+            .code,
+        "native-yaml-input-limit"
+    );
+}
 
 #[test]
 fn basic_selection_routes_default_and_options_through_one_jsonld_engine() {

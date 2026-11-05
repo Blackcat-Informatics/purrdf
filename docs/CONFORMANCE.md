@@ -166,6 +166,17 @@ under `max_serialization_bytes`, in addition to the already admitted Basic
 value. Direct RDF parsing does not serialize or spend that allowance. The byte
 input ceiling is checked before UTF-8 decoding scans the input.
 
+The native `native_codecs::jsonld::parse_yamlld_with_context` entry takes an
+explicit `CompiledJsonLdContext` and `YamlLdOptions`. Compile the context with
+`CompiledJsonLdContext::compile_with_registry` to supply initial terms, a caller
+document IRI for relative identifiers and an immutable offline context registry.
+Inline context and base directives use the shared JSON-LD engine; context lookup
+does not acquire network or filesystem documents. YAML admission and first/all
+selection remain controlled by the supplied options. The native
+`yaml_mapping_keys::configured_yamlld_context_reaches_shared_expansion` case
+checks this boundary. It does not qualify foreign context-input controls or the
+pinned W3C expansion family.
+
 The implementation applies the draft's document-loading and mapping-key
 requirements in two phases. The complete stream must have valid YAML syntax,
 acyclic document-local aliases, mapping/sequence/null roots and string mapping
