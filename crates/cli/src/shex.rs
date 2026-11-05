@@ -188,6 +188,8 @@ pub(crate) struct ShexOptions<'a> {
     pub(crate) imports: &'a [String],
     /// `--data`: the data graph, or `-`.
     pub(crate) data: &'a str,
+    /// YAML-LD Basic options for the data graph only.
+    pub(crate) yamlld_input_options: Option<&'a std::path::Path>,
     /// `--from`: the data-graph format override.
     pub(crate) from: Option<CliRdfFormat>,
     /// `--base`: the base relative IRIs in the DATA graph and the shape map resolve against.
@@ -240,9 +242,19 @@ pub(crate) fn run(
     check_map_syntax(options)?;
 
     let data_format = format::resolve(options.from, options.data)?;
+    let input_options = options
+        .yamlld_input_options
+        .map(|path| source::read_yamlld_input_options(path, &[data_format]))
+        .transpose()?;
     // No `--base` refusal here, unlike every other subcommand: see the module documentation
     // for why this run's base can never be inert.
-    let data = source::load_dataset(options.data, data_format, options.base, None, canonical)?;
+    let data = source::load_dataset(
+        options.data,
+        data_format,
+        options.base,
+        input_options.as_deref(),
+        canonical,
+    )?;
 
     let schema_base = schema_base(options.schema)?;
     let schema = read_schema(options.schema, options.schema_from, schema_base.as_deref())?;

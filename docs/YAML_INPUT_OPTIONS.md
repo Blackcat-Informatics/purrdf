@@ -77,7 +77,17 @@ their existing input policy; YAML controls are admitted before either is read.
 `reason` and `consistency` accept the flag for primary `IN` only. Imports retain
 their existing controls and `--from` scoping. Reason admits the options before RIF
 rule acquisition; consistency retains its lossless N-Quads crossing and existing
-proof/check-proof behavior. `entails` retains its current two-input policy.
+proof/check-proof behavior.
+`entails --yamlld-input-options PATH` configures only `--premise`;
+`--conclusion-yamlld-input-options PATH` independently configures only
+`--conclusion` and requires that graph question, conflicting with `--pattern`.
+Premise controls also apply in pattern mode. Both requested configurations are
+decoded before any RDF source is read. Each configured role must resolve to
+YAML-LD; the other role may use a different inferred format. Imports retain their
+existing input policy and global `--from` scoping.
+`shex --yamlld-input-options PATH` configures only `--data`, with configuration
+decoding before data, schema or schema-import acquisition. Schema syntax, imports,
+shape-map selectors and base policy retain their existing behavior.
 Every selected input must be YAML-LD; pack, GTS and other native formats are
 refused before data acquisition. The bounded named options file is validated
 before primary data, premise imports or rule documents are read; it does not
