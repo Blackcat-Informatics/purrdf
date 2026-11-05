@@ -703,6 +703,7 @@ fn write_yaml_header<W: IoWrite>(
     out: &mut W,
 ) -> Result<(), RdfDiagnostic> {
     let url = schema_url.unwrap_or(BUNDLED_SCHEMA_REF);
+    context::validate_yaml_schema_url(url)?;
     out.write_all(b"# yaml-language-server: $schema=")
         .and_then(|()| out.write_all(url.as_bytes()))
         .and_then(|()| {

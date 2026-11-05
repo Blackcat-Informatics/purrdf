@@ -827,6 +827,19 @@ fn validate_absolute_iri(iri: &str, description: &str) -> Result<(), RdfDiagnost
     }
 }
 
+/// Admit the reference written verbatim into a single-line YAML editor comment.
+pub(super) fn validate_yaml_schema_url(schema_url: &str) -> Result<(), RdfDiagnostic> {
+    if schema_url.is_empty()
+        || schema_url.chars().any(char::is_whitespace)
+        || purrdf_iri::parse(schema_url).is_err()
+    {
+        return Err(context_error(format!(
+            "invalid YAML-LD schema IRI reference `{schema_url}`"
+        )));
+    }
+    Ok(())
+}
+
 fn context_error(message: impl Into<String>) -> RdfDiagnostic {
     RdfDiagnostic::error("jsonld-context-invalid", message)
 }
