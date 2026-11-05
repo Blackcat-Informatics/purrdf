@@ -1571,6 +1571,24 @@ int32_t purrdf_document_flatten(const uint8_t *source,
                                 PurrdfError **out_error);
 
 /**
+ * Frame separate source/frame bytes through the native two-document operation.
+ * Success publishes one owned UTF-8 JSON buffer without a newline or NUL.
+ * Release the buffer with `purrdf_buffer_free` and errors with `purrdf_error_free`.
+ * # Safety
+ * All three inputs must be non-null and readable for their addressable lengths.
+ * Output/error slots must be writable, initially empty and independent of input
+ * storage. Aliased slots are refused without writing through either.
+ */
+int32_t purrdf_document_frame(const uint8_t *source,
+                              size_t source_len,
+                              const uint8_t *frame,
+                              size_t frame_len,
+                              const uint8_t *request_json,
+                              size_t request_len,
+                              PurrdfBuffer **out_buffer,
+                              PurrdfError **out_error);
+
+/**
  * Materialize an RDF document under a SPARQL entailment regime.
  *
  * `document` is parsed as N-Quads, which accepts an N-Triples document

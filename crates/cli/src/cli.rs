@@ -418,6 +418,18 @@ pub(crate) enum Command {
         /// Flattened JSON destination, or - for standard output.
         output: String,
     },
+    /// Frame original source and frame documents without constructing an RDF dataset.
+    DocumentFrame {
+        /// Closed version-one request JSON path, or - for standard input.
+        #[arg(long)]
+        request: String,
+        /// Original source path, or - for standard input.
+        input: String,
+        /// Original frame path, or - for standard input.
+        frame: String,
+        /// Framed JSON destination, or - for standard output.
+        output: String,
+    },
     /// Export and reconstruct exact YAML presentation through RDF metadata.
     YamlSource {
         #[command(subcommand)]
@@ -2991,6 +3003,18 @@ impl Cli {
                 output,
             } => {
                 paths.extend([request, input, output].into_iter().map(PathBuf::from));
+            }
+            Command::DocumentFrame {
+                request,
+                input,
+                frame,
+                output,
+            } => {
+                paths.extend(
+                    [request, input, frame, output]
+                        .into_iter()
+                        .map(PathBuf::from),
+                );
             }
             Command::YamlSource { command } => paths.extend(command.paths()),
             Command::Glob { pattern, .. } => {

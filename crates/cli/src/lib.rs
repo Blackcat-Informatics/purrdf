@@ -202,6 +202,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                 | Command::DocumentExpand { .. }
                 | Command::DocumentCompact { .. }
                 | Command::DocumentFlatten { .. }
+                | Command::DocumentFrame { .. }
                 | Command::YamlSource { .. }
                 | Command::WordId { .. }
                 | Command::Glob { .. }
@@ -301,7 +302,28 @@ fn dispatch_with_request(
                 &format!("{command} accepts no loss ledger"),
                 &format!("{command} accepts no JSON-LD serialization options"),
             )?;
-            document_expansion::run(operation, request, input, output, canonical)
+            document_expansion::run(operation, request, input, None, output, canonical)
+        }
+        Command::DocumentFrame {
+            request,
+            input,
+            frame,
+            output,
+        } => {
+            cli::refuse_document_flags(
+                &ledger_target,
+                jsonld_options.as_ref(),
+                "document-frame accepts no loss ledger",
+                "document-frame accepts no JSON-LD serialization options",
+            )?;
+            document_expansion::run(
+                purrdf_validate::document::Operation::Frame,
+                request,
+                input,
+                Some(frame),
+                output,
+                canonical,
+            )
         }
         Command::YamlSource { command } => {
             cli::refuse_document_flags(

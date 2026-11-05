@@ -146,6 +146,7 @@ import init, {
   expandDocument,
   compactDocument,
   flattenDocument,
+  frameDocument,
 } from "./pkg/purrdf_wasm.js";
 import {
   assertAsyncQueries,
@@ -1788,4 +1789,5 @@ export {
   expandDocument,
   compactDocument,
   flattenDocument,
+  frameDocument,
 };

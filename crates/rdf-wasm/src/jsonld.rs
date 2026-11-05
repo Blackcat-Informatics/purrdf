@@ -42,7 +42,7 @@ fn capture_error(error: host::ByteCaptureError, operation: Operation) -> JsValue
 /// Throws original host buffer errors or native diagnostic/cause records.
 #[wasm_bindgen(js_name = expandDocument)]
 pub fn expand_document(source: &JsValue, request_json: &JsValue) -> Result<String, JsValue> {
-    run(source, request_json, Operation::Expand)
+    run(source, None, request_json, Operation::Expand)
 }
 
 /// Compact source/request byte buffers under an explicit output context.
@@ -51,7 +51,7 @@ pub fn expand_document(source: &JsValue, request_json: &JsValue) -> Result<Strin
 /// Throws original host buffer errors or native diagnostic/cause records.
 #[wasm_bindgen(js_name = compactDocument)]
 pub fn compact_document(source: &JsValue, request_json: &JsValue) -> Result<String, JsValue> {
-    run(source, request_json, Operation::Compact)
+    run(source, None, request_json, Operation::Compact)
 }
 
 /// Flatten source/request byte buffers, optionally compacting under an output context.
@@ -60,10 +60,28 @@ pub fn compact_document(source: &JsValue, request_json: &JsValue) -> Result<Stri
 /// Throws original host buffer errors or native diagnostic/cause records.
 #[wasm_bindgen(js_name = flattenDocument)]
 pub fn flatten_document(source: &JsValue, request_json: &JsValue) -> Result<String, JsValue> {
-    run(source, request_json, Operation::Flatten)
+    run(source, None, request_json, Operation::Flatten)
 }
 
-fn run(source: &JsValue, request_json: &JsValue, operation: Operation) -> Result<String, JsValue> {
+/// Frame original source/frame byte buffers with independent context roles.
+/// Request validation precedes admitted capture of either document.
+/// # Errors
+/// Throws original host buffer errors or retained native diagnostic/cause records.
+#[wasm_bindgen(js_name = frameDocument)]
+pub fn frame_document(
+    source: &JsValue,
+    frame: &JsValue,
+    request_json: &JsValue,
+) -> Result<String, JsValue> {
+    run(source, Some(frame), request_json, Operation::Frame)
+}
+
+fn run(
+    source: &JsValue,
+    frame: Option<&JsValue>,
+    request_json: &JsValue,
+    operation: Operation,
+) -> Result<String, JsValue> {
     let bytes =
         host::CapturedBytes::capture(request_json, purrdf_validate::rdf_input::MAX_OPTIONS_BYTES)
             .map_err(|error| capture_error(error, operation))?;
@@ -71,7 +89,17 @@ fn run(source: &JsValue, request_json: &JsValue, operation: Operation) -> Result
         document::request(&bytes.bytes, operation).map_err(operation::native_diagnostic_to_js)?;
     let source = host::CapturedBytes::capture(source, request.max_input_bytes())
         .map_err(|error| capture_error(error, operation))?;
-    document::execute_decoded(&source.bytes, &request).map_err(operation::native_diagnostic_to_js)
+    let frame = frame
+        .map(|frame| {
+            host::CapturedBytes::capture(frame, request.max_input_bytes())
+                .map_err(|error| capture_error(error, operation))
+        })
+        .transpose()?;
+    match frame {
+        Some(frame) => document::frame_decoded(&source.bytes, &frame.bytes, &request),
+        None => document::execute_decoded(&source.bytes, &request),
+    }
+    .map_err(operation::native_diagnostic_to_js)
 }
 
 /// An immutable JSON-LD 1.1 context compiled once and reusable across datasets.
