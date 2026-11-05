@@ -11,6 +11,7 @@ use purrdf_lex::json::{self, Object, Value};
 use super::{
     CompiledJsonLdContext, JSON_LD_SERIALIZE_OPTIONS_VERSION, JsonLdContextLimits,
     JsonLdContextRegistry, canonicalize, context_error, parse_strict_json,
+    validate_yaml_schema_url,
 };
 use crate::RdfDiagnostic;
 
@@ -134,14 +135,7 @@ impl JsonLdSerializeOptions {
         schema_url: impl Into<String>,
     ) -> Result<Self, RdfDiagnostic> {
         let schema_url = schema_url.into();
-        if schema_url.is_empty()
-            || schema_url.chars().any(char::is_whitespace)
-            || purrdf_iri::parse(&schema_url).is_err()
-        {
-            return Err(context_error(format!(
-                "invalid YAML-LD schema IRI reference `{schema_url}`"
-            )));
-        }
+        validate_yaml_schema_url(&schema_url)?;
         self.yaml_schema_url = Some(schema_url);
         Ok(self)
     }
