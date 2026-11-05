@@ -17,7 +17,9 @@ use std::fmt::Write as _;
 use purrdf_lex::json::{self as lex_json, Value};
 use purrdf_rdf::native_codecs::jsonld::{
     CompiledJsonLdContext, JsonLdContextRegistry, JsonLdSerializeOptions, derive_jsonld_context,
-    parse_jsonld, parse_jsonld_with_context, serialize_dataset_to_jsonld_with_options,
+    parse_jsonld, parse_jsonld_with_context, serialize_dataset_to_jsonld_with_context,
+    serialize_dataset_to_jsonld_with_options, serialize_dataset_to_yamlld_with_context,
+    serialize_dataset_to_yamlld_with_options, yamlld_to_jsonld,
 };
 use purrdf_rdf::{
     RdfDatasetBuilder, RdfLiteral, canonical_flat_nquads, datasets_isomorphic, parse_dataset,
@@ -87,6 +89,219 @@ fn aliases_base_vocab_and_coercions_compact_and_expand_losslessly() {
     assert_eq!(node["knows"], "ex:bob");
     assert_eq!(node["age"], "42");
     assert!(node.get("https://schema.org/name").is_none());
+
+    let options = JsonLdSerializeOptions::context(&context, None).unwrap();
+    assert!(options.compact_arrays());
+    let explicit = options.clone().with_compact_arrays(true).unwrap();
+    assert_eq!(
+        serialize_dataset_to_jsonld_with_options(&dataset, &explicit).unwrap(),
+        compacted
+    );
+    let compiled = CompiledJsonLdContext::compile(&context, None).unwrap();
+    assert_eq!(
+        serialize_dataset_to_jsonld_with_context(&dataset, &compiled).unwrap(),
+        compacted
+    );
+    let yaml = serialize_dataset_to_yamlld_with_options(&dataset, &options).unwrap();
+    assert_eq!(
+        serialize_dataset_to_yamlld_with_options(&dataset, &explicit).unwrap(),
+        yaml
+    );
+    assert_eq!(
+        serialize_dataset_to_yamlld_with_context(&dataset, &compiled, None).unwrap(),
+        yaml
+    );
+    let retained = options.with_compact_arrays(false).unwrap();
+    assert!(!retained.compact_arrays());
+    let false_json = serialize_dataset_to_jsonld_with_options(&dataset, &retained).unwrap();
+    let false_value = read_output(&false_json);
+    assert_eq!(
+        false_value["graph"][0],
+        json!({
+            "id":"ex:alice", "type":["ex:Person"], "name":["Alice"],
+            "knows":["ex:bob"], "age":["42"]
+        })
+    );
+    let false_yaml = serialize_dataset_to_yamlld_with_options(&dataset, &retained).unwrap();
+    assert_eq!(
+        read_output(&yamlld_to_jsonld(false_yaml.as_bytes()).unwrap()),
+        false_value
+    );
+    for output in [
+        &false_json,
+        &yamlld_to_jsonld(false_yaml.as_bytes()).unwrap(),
+    ] {
+        let reopened = parse_jsonld(output.as_bytes(), None).unwrap();
+        assert!(
+            datasets_isomorphic(
+                &dataset,
+                &reopened,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+        );
+    }
+    let schema = purrdf_jsonschema::Schema::from_document(
+        &purrdf_jsonschema::Metaschemas::new(
+            purrdf_testkit::jsonschema_metaschemas::all()
+                .map(|(uri, text)| (uri, lex_json::read(text).unwrap())),
+        )
+        .unwrap(),
+        "https://example.org/options-schema",
+        JsonLdSerializeOptions::json_schema(),
+    )
+    .unwrap();
+    for mode in ["context", "derived", "expanded"] {
+        for policy in [
+            json!(true),
+            json!(false),
+            json!("false"),
+            json!(null),
+            json!(0),
+        ] {
+            let mut request = json!({"version":1,"mode":"derived"});
+            let object = request.as_object_mut().unwrap();
+            object.insert("mode", Value::String(mode.to_owned()));
+            object.insert("compact_arrays", policy.clone());
+            if mode == "context" {
+                object.insert("context", context.clone());
+            }
+            let valid = mode != "expanded" && policy.as_bool().is_some();
+            assert_eq!(schema.is_valid(&request).unwrap(), valid, "{request:?}");
+            let decoded =
+                JsonLdSerializeOptions::from_json(lex_json::write_compact(&request).as_bytes());
+            assert_eq!(decoded.is_ok(), valid, "{request:?}");
+            if let Ok(decoded) = decoded {
+                assert_eq!(decoded.compact_arrays(), policy.as_bool().unwrap());
+            } else {
+                assert!(decoded.unwrap_err().message.contains("compact_arrays"));
+            }
+        }
+    }
+    for policy in [true, false] {
+        assert!(
+            JsonLdSerializeOptions::expanded()
+                .with_compact_arrays(policy)
+                .is_err()
+        );
+    }
+    let derived = JsonLdSerializeOptions::derived()
+        .with_compact_arrays(false)
+        .unwrap();
+    let output = serialize_dataset_to_jsonld_with_options(&dataset, &derived).unwrap();
+    let reopened = parse_jsonld(output.as_bytes(), None).unwrap();
+    assert!(
+        datasets_isomorphic(
+            &dataset,
+            &reopened,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+    );
+    assert!(
+        read_output(&output)["@graph"][0]["@type"]
+            .as_array()
+            .is_some()
+    );
+
+    // One carrier walk covers maps, scoped/nested values and multi-node graph identity.
+    let rich_context = json!({
+        "ex":{"@id":"https://example.org/","@prefix":true},
+        "details":"@nest", "name":{"@id":"ex:name","@nest":"details"},
+        "label":{"@id":"ex:label","@container":"@language"},
+        "member":{"@id":"ex:member","@container":"@id"},
+        "knownBy":{"@reverse":"ex:knows","@type":"@id"},
+        "friend":{"@id":"ex:friend","@context":{"local":"ex:local"}},
+        "items":{"@id":"ex:items","@container":"@list"},
+        "graphs":{"@id":"ex:graph","@container":["@graph","@id"],"@context":{"gp":"ex:p"}},
+        "indexed":{"@id":"ex:indexed","@container":["@graph","@index"],"@index":"ex:key"},
+        "plain":{"@id":"ex:plain","@container":"@graph"},
+        "typed":{"@id":"ex:typed","@container":"@type"},
+        "entries":{"@id":"ex:entry","@container":"@index"}
+    });
+    let mut authored = json!({"@id":"ex:alice",
+        "details":{"name":"Alice"}, "label":{"en":"hello"},
+        "member":{"ex:bob":{}}, "knownBy":"ex:bob",
+        "friend":{"@id":"_:friend","local":"scoped"}, "items":["one"],
+        "graphs":{"ex:g":[{"@id":"ex:a","ex:p":"a"},{"@id":"ex:b","ex:p":"b"}]},
+        "indexed":{"row":[{"@graph":[{"@id":"ex:c","ex:p":"c"},{"@id":"ex:d","ex:p":"d"}]}]},
+        "plain":[{"@included":[{"@id":"ex:e","ex:p":"e"},{"@id":"ex:f","ex:p":"f"}]}],
+        "typed":{"ex:Person":{"@id":"ex:person"}},
+        "entries":{"@none":{"@id":"ex:entry"}}
+    });
+    authored
+        .as_object_mut()
+        .unwrap()
+        .insert("@context", rich_context.clone());
+    let rich = parse_jsonld(lex_json::write_compact(&authored).as_bytes(), None).unwrap();
+    let rich_options = JsonLdSerializeOptions::context(&rich_context, None)
+        .unwrap()
+        .with_compact_arrays(false)
+        .unwrap();
+    let rich_json = serialize_dataset_to_jsonld_with_options(&rich, &rich_options).unwrap();
+    let rich_value = read_output(&rich_json);
+    let alice = rich_value["@graph"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["@id"] == "ex:alice")
+        .unwrap();
+    assert_eq!(alice["details"]["name"], json!(["Alice"]));
+    assert_eq!(alice["label"]["en"], json!(["hello"]));
+    assert_eq!(alice["member"]["ex:bob"], json!([{}]));
+    assert_eq!(alice["knownBy"], json!(["ex:bob"]));
+    assert!(
+        alice["friend"][0]["@id"]
+            .as_str()
+            .unwrap()
+            .starts_with("_:")
+    );
+    assert_eq!(alice["items"], json!(["one"]));
+    assert_eq!(
+        alice["graphs"]["ex:g"],
+        json!([
+            {"@id":"ex:a","gp":["a"]},{"@id":"ex:b","gp":["b"]}
+        ])
+    );
+    assert_eq!(
+        alice["indexed"]["row"],
+        json!([{"@graph":[
+            {"@id":"ex:c","ex:p":[{"@value":"c"}]},{"@id":"ex:d","ex:p":[{"@value":"d"}]}
+        ]}])
+    );
+    assert_eq!(
+        alice["plain"],
+        json!([{"@included":[
+            {"@id":"ex:e","ex:p":[{"@value":"e"}]},{"@id":"ex:f","ex:p":[{"@value":"f"}]}
+        ]}])
+    );
+    // Unsupported ordinary type/index map producers retain lossless regular properties.
+    assert_eq!(alice["ex:typed"], json!([{"@id":"ex:person"}]));
+    assert_eq!(alice["ex:entry"], json!([{"@id":"ex:entry"}]));
+    let rich_yaml = serialize_dataset_to_yamlld_with_options(&rich, &rich_options).unwrap();
+    let rich_yaml_json = yamlld_to_jsonld(rich_yaml.as_bytes()).unwrap();
+    assert_eq!(read_output(&rich_yaml_json), rich_value);
+    for output in [&rich_json, &rich_yaml_json] {
+        let reopened = parse_jsonld(output.as_bytes(), None).unwrap();
+        assert!(
+            datasets_isomorphic(
+                &rich,
+                &reopened,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap(),
+            "{output}"
+        );
+    }
 
     let reparsed = parse_jsonld(compacted.as_bytes(), None).expect("expand compact JSON-LD");
     assert!(
@@ -463,6 +678,88 @@ fn rdf_json_collapses_only_when_its_lexical_form_is_canonical() {
             .unwrap()
         );
     }
+    let retained = JsonLdSerializeOptions::context(&context, None)
+        .unwrap()
+        .with_compact_arrays(false)
+        .unwrap();
+    for lexical in ["1", "1.0", "[1,2]", r#"{"a":1}"#, r#"{"a":1.0}"#] {
+        let quoted = lex_json::write_compact(&Value::String(lexical.to_owned()));
+        let source = format!(
+            "<https://example.org/s> <https://example.org/json> {quoted}^^<http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON> .\n"
+        );
+        let dataset = parse_nquads(&source);
+        let output = serialize_dataset_to_jsonld_with_options(&dataset, &retained).unwrap();
+        let value = read_output(&output);
+        assert!(value["@graph"][0].get("json").is_none());
+        assert_eq!(
+            value["@graph"][0]["ex:json"],
+            Value::Array(vec![Value::Object(
+                lex_json::Object::new()
+                    .with("@type", "rdf:JSON")
+                    .with("@value", lexical)
+            )])
+        );
+        let yaml = serialize_dataset_to_yamlld_with_options(&dataset, &retained).unwrap();
+        let yaml_json = yamlld_to_jsonld(yaml.as_bytes()).unwrap();
+        assert_eq!(read_output(&yaml_json), value);
+        for document in [&output, &yaml_json] {
+            let reopened = parse_jsonld(document.as_bytes(), None).unwrap();
+            assert!(
+                datasets_isomorphic(
+                    &dataset,
+                    &reopened,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
+                )
+                .unwrap()
+            );
+        }
+    }
+    let dataset = parse_nquads(annotated);
+    let output = serialize_dataset_to_jsonld_with_options(&dataset, &retained).unwrap();
+    let value = read_output(&output);
+    let literal = &value["@graph"][0]["ex:json"][0];
+    assert_eq!(literal["@value"], "1");
+    assert_eq!(literal["@type"], "rdf:JSON");
+    assert_eq!(
+        literal["@annotation"][0]["ex:note"],
+        json!([{"@value":"annotation"}])
+    );
+    let reopened = parse_jsonld(output.as_bytes(), None).unwrap();
+    assert!(
+        datasets_isomorphic(
+            &dataset,
+            &reopened,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+    );
+    let triple_source = "<https://example.org/r> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <https://example.org/s> <https://example.org/p> <https://example.org/o> )>> .\n";
+    let dataset = parse_nquads(triple_source);
+    let output = serialize_dataset_to_jsonld_with_options(&dataset, &retained).unwrap();
+    assert_eq!(
+        read_output(&output)["@graph"][0]["rdf:reifies"][0]["@triple"],
+        json!({
+            "@subject":{"@id":"ex:s"}, "@predicate":"ex:p", "@object":{"@id":"ex:o"}
+        })
+    );
+    let reopened = parse_jsonld(output.as_bytes(), None).unwrap();
+    assert!(
+        datasets_isomorphic(
+            &dataset,
+            &reopened,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+    );
     let opaque_array = "<https://example.org/s> <https://example.org/json> \"[1,2]\"^^<http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON> .\n";
     let (dataset, compacted) = serialize_with_context(opaque_array, &context);
     assert_eq!(read_output(&compacted)["@graph"][0]["json"], json!([1, 2]));

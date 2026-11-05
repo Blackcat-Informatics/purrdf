@@ -33,6 +33,13 @@ emitting output.
 }
 ```
 
+Context and derived modes accept `"compact_arrays": false` to retain eligible
+singleton collections as arrays in both JSON-LD and YAML-LD. Omission and explicit
+`true` preserve the existing output. Scalar keyword positions and list item arrays
+keep their required shapes. RDF JSON literals use the lossless typed lexical form
+when arrays are retained. Expanded mode rejects this field, including `true`.
+In Rust, use `options.with_compact_arrays(false)?` and `options.compact_arrays()`.
+
 ## Rust
 
 ```rust

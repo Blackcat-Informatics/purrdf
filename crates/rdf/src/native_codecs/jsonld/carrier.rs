@@ -23,6 +23,26 @@ use super::{
     increment_multiplicity,
 };
 
+/// Immutable output-shape policy, independent of the compiled input/output context.
+#[derive(Clone, Copy)]
+pub(super) struct CompactionPolicy {
+    pub(super) compact_arrays: bool,
+}
+
+impl CompactionPolicy {
+    pub(super) const DEFAULT: Self = Self {
+        compact_arrays: true,
+    };
+
+    fn collection(self, values: Vec<JsonValue>, force_array: bool) -> JsonValue {
+        if self.compact_arrays && !force_array && values.len() == 1 {
+            values.into_iter().next().expect("one collection value")
+        } else {
+            JsonValue::Array(values)
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Document {
     pub(super) default_nodes: Vec<Node>,
@@ -131,8 +151,9 @@ impl Document {
         self,
         writer: W,
         context: &CompiledJsonLdContext,
+        policy: CompactionPolicy,
     ) -> Result<(), RdfDiagnostic> {
-        self.write_compacted(&mut Stream::new(writer, Spelling::Json), context)
+        self.write_compacted(&mut Stream::new(writer, Spelling::Json), context, policy)
     }
 
     /// The same document as [`Document::write_compacted_json`], emitted as YAML.
@@ -140,14 +161,16 @@ impl Document {
         self,
         writer: W,
         context: &CompiledJsonLdContext,
+        policy: CompactionPolicy,
     ) -> Result<(), RdfDiagnostic> {
-        self.write_compacted(&mut Stream::new(writer, Spelling::Yaml), context)
+        self.write_compacted(&mut Stream::new(writer, Spelling::Yaml), context, policy)
     }
 
     fn write_compacted<W: Write>(
         self,
         stream: &mut Stream<W>,
         context: &CompiledJsonLdContext,
+        policy: CompactionPolicy,
     ) -> Result<(), RdfDiagnostic> {
         let (document, graph_index_plans) = self.compact(context)?;
         let skeleton = Object::new().with("@context", context.canonical_context().clone());
@@ -166,6 +189,7 @@ impl Document {
             context,
             graph_index_plans: &graph_index_plans,
             named_by_id: &named_by_id,
+            policy,
         };
         stream.frame(skeleton.with(graph_key.as_str(), ()), &graph_key, |graph| {
             for node in &document.default_nodes {
@@ -188,6 +212,7 @@ struct CompactionScope<'a> {
     context: &'a CompiledJsonLdContext,
     graph_index_plans: &'a GraphIndexPlans,
     named_by_id: &'a BTreeMap<&'a str, &'a NamedGraph>,
+    policy: CompactionPolicy,
 }
 
 impl CompactionScope<'_> {
@@ -198,7 +223,7 @@ impl CompactionScope<'_> {
         scope: Option<&str>,
         embedded_graphs: &mut BTreeSet<String>,
     ) -> Result<JsonValue, RdfDiagnostic> {
-        let mut compacted = node.compacted_json(self.context)?;
+        let mut compacted = node.compacted_json(self.context, self.policy)?;
         apply_graph_containers(
             node,
             scope,
@@ -208,6 +233,7 @@ impl CompactionScope<'_> {
             self.named_by_id,
             embedded_graphs,
             self.graph_index_plans,
+            self.policy,
         )?;
         Ok(compacted)
     }
@@ -434,36 +460,37 @@ pub(super) struct NamedGraph {
 impl NamedGraph {
     fn compacted_contents(
         &self,
-        context: &CompiledJsonLdContext,
-        document: &Document,
-        named_by_id: &BTreeMap<&str, &Self>,
+        scope: &CompactionScope<'_>,
         embedded_graphs: &mut BTreeSet<String>,
-        graph_index_plans: &GraphIndexPlans,
         force_array: bool,
+        graph_wrapper: Option<&str>,
     ) -> Result<JsonValue, RdfDiagnostic> {
+        let policy = scope.policy;
+        let compact_body = graph_wrapper.is_some() || policy.compact_arrays;
         let nodes = self
             .nodes
             .iter()
-            .map(|node| {
-                let mut compacted = node.compacted_json(context)?;
-                apply_graph_containers(
-                    node,
-                    Some(self.id.as_str()),
-                    &mut compacted,
-                    context,
-                    document,
-                    named_by_id,
-                    embedded_graphs,
-                    graph_index_plans,
-                )?;
-                Ok(compacted)
-            })
+            .map(|node| scope.node(node, Some(self.id.as_str()), embedded_graphs))
             .collect::<Result<Vec<_>, RdfDiagnostic>>()?;
-        Ok(if !force_array && let [only] = nodes.as_slice() {
-            only.clone()
-        } else {
-            JsonValue::Array(nodes)
-        })
+        if !policy.compact_arrays
+            && nodes.len() > 1
+            && let Some(wrapper) = graph_wrapper
+        {
+            // An outer graph collection must retain this body as one graph.
+            // Map injection accepts @graph; a simple graph container uses @included
+            // so expansion wraps the included nodes together in exactly one graph.
+            return Ok(JsonValue::Object(Object::new().with(
+                scope.context.compact_iri(wrapper, true)?,
+                JsonValue::Array(nodes),
+            )));
+        }
+        Ok(CompactionPolicy {
+            compact_arrays: compact_body,
+        }
+        .collection(
+            nodes,
+            force_array && (policy.compact_arrays || !compact_body),
+        ))
     }
 }
 
@@ -668,6 +695,7 @@ fn apply_graph_containers(
     named_by_id: &BTreeMap<&str, &NamedGraph>,
     embedded_graphs: &mut BTreeSet<String>,
     graph_index_plans: &GraphIndexPlans,
+    policy: CompactionPolicy,
 ) -> Result<(), RdfDiagnostic> {
     for (iri, values) in &node.properties {
         if values.is_empty()
@@ -737,6 +765,16 @@ fn apply_graph_containers(
         let scoped = context.scoped_context(&term)?;
         let value_context = scoped.as_ref().unwrap_or(context);
         let force_array = definition.containers().contains(&JsonLdContainer::Set);
+        let value_scope = CompactionScope {
+            document,
+            context: value_context,
+            graph_index_plans,
+            named_by_id,
+            policy,
+        };
+        // Index/plain grouping owns collection retention; its graph body must not
+        // introduce a second singleton array. ID maps retain the body collection.
+        // Recursive node properties always receive the caller policy.
         let graph_value = if let Some(index_plan) = index_plan {
             debug_assert_eq!(
                 definition.index_mapping(),
@@ -759,20 +797,14 @@ fn apply_graph_containers(
                 )
                 .or_default()
                 .push(named.compacted_contents(
-                    value_context,
-                    document,
-                    named_by_id,
+                    &value_scope,
                     embedded_graphs,
-                    graph_index_plans,
                     force_array,
+                    Some("@graph"),
                 )?);
             }
             JsonValue::Object(Object::from_iter(map.into_iter().map(|(index, values)| {
-                let value = if !force_array && let [only] = values.as_slice() {
-                    only.clone()
-                } else {
-                    JsonValue::Array(values)
-                };
+                let value = policy.collection(values, force_array);
                 (index, value)
             })))
         } else if has_id_map {
@@ -787,14 +819,7 @@ fn apply_graph_containers(
                 insert_unique(
                     &mut map,
                     &compact_id(value_context, id, false)?,
-                    named.compacted_contents(
-                        value_context,
-                        document,
-                        named_by_id,
-                        embedded_graphs,
-                        graph_index_plans,
-                        force_array,
-                    )?,
+                    named.compacted_contents(&value_scope, embedded_graphs, force_array, None)?,
                 )?;
             }
             JsonValue::Object(Object::from_iter(map))
@@ -808,22 +833,16 @@ fn apply_graph_containers(
                     .get(id.as_str())
                     .expect("graph-container eligibility checked named graph");
                 bodies.push(named.compacted_contents(
-                    value_context,
-                    document,
-                    named_by_id,
+                    &value_scope,
                     embedded_graphs,
-                    graph_index_plans,
                     force_array,
+                    Some("@included"),
                 )?);
             }
-            if !force_array && let [only] = bodies.as_slice() {
-                only.clone()
-            } else {
-                JsonValue::Array(bodies)
-            }
+            policy.collection(bodies, force_array)
         };
 
-        remove_regular_property(node, compacted, context, iri, values)?;
+        remove_regular_property(node, compacted, context, iri, values, policy)?;
         insert_compacted_property(compacted, context, &term, definition, graph_value)?;
     }
     Ok(())
@@ -835,12 +854,13 @@ fn remove_regular_property(
     context: &CompiledJsonLdContext,
     iri: &str,
     values: &[Value],
+    policy: CompactionPolicy,
 ) -> Result<(), RdfDiagnostic> {
     let object = compacted
         .as_object_mut()
         .expect("a compacted carrier node is an object");
     let mut terms = BTreeSet::new();
-    let json_eligible = scalar_json_eligible(values);
+    let json_eligible = scalar_json_eligible(values, policy);
     for value in values {
         terms.insert(select_property_term(context, iri, value, json_eligible)?);
     }
@@ -985,7 +1005,11 @@ impl Node {
         JsonValue::Object(Object::from_iter(node))
     }
 
-    fn compacted_json(&self, context: &CompiledJsonLdContext) -> Result<JsonValue, RdfDiagnostic> {
+    fn compacted_json(
+        &self,
+        context: &CompiledJsonLdContext,
+        policy: CompactionPolicy,
+    ) -> Result<JsonValue, RdfDiagnostic> {
         let mut node = BTreeMap::new();
         insert_unique(
             &mut node,
@@ -999,21 +1023,13 @@ impl Node {
                 .iter()
                 .map(|iri| context.compact_iri(iri, true).map(JsonValue::String))
                 .collect::<Result<Vec<_>, _>>()?;
-            insert_unique(
-                &mut node,
-                &type_key,
-                if let [only] = types.as_slice() {
-                    only.clone()
-                } else {
-                    JsonValue::Array(types)
-                },
-            )?;
+            insert_unique(&mut node, &type_key, policy.collection(types, false))?;
         }
 
         let mut nested: BTreeMap<String, BTreeMap<String, JsonValue>> = BTreeMap::new();
         for (iri, values) in &self.properties {
             let mut by_term: BTreeMap<String, Vec<&Value>> = BTreeMap::new();
-            let json_eligible = scalar_json_eligible(values);
+            let json_eligible = scalar_json_eligible(values, policy);
             for value in values {
                 let term = select_property_term(context, iri, value, json_eligible)?;
                 by_term.entry(term).or_default().push(value);
@@ -1027,7 +1043,8 @@ impl Node {
                 }
                 let scoped = context.scoped_context(&term)?;
                 let value_context = scoped.as_ref().unwrap_or(context);
-                let compacted = compact_property_values(value_context, &term, definition, &values)?;
+                let compacted =
+                    compact_property_values(value_context, &term, definition, &values, policy)?;
                 if let Some(nest) = definition.and_then(JsonLdTermDefinition::nest) {
                     let nest_key = if nest == "@nest" {
                         compact_keyword(context, "@nest")?
@@ -1055,7 +1072,7 @@ impl Node {
             insert_unique(
                 &mut node,
                 &term,
-                compact_property_values(context, &term, Some(definition), &values)?,
+                compact_property_values(context, &term, Some(definition), &values, policy)?,
             )?;
         }
         for (nest, values) in nested {
@@ -1237,24 +1254,26 @@ impl Value {
                     Some(items) => JsonValue::Object(Object::new().with("@list", items)),
                     None => value.term.expanded_json(),
                 };
-                Ok(value.with_annotation(term, value.annotations.iter().map(Node::expanded_json)))
+                Ok(value.with_annotation(
+                    term,
+                    value.annotations.iter().map(Node::expanded_json),
+                    CompactionPolicy::DEFAULT,
+                ))
             });
         folded.unwrap_or_else(|never| match never {})
     }
 
     /// `json` with this value's annotation nodes, already written, under
-    /// `@annotation`: one node bare, several as an array, none left out.
+    /// `@annotation`, using the collection policy; none are left out.
     fn with_annotation(
         &self,
         mut json: JsonValue,
         annotations: impl Iterator<Item = JsonValue>,
+        policy: CompactionPolicy,
     ) -> JsonValue {
         if !self.annotations.is_empty() {
             let annotations: Vec<JsonValue> = annotations.collect();
-            let annotation = match <[JsonValue; 1]>::try_from(annotations) {
-                Ok([one]) => one,
-                Err(several) => JsonValue::Array(several),
-            };
+            let annotation = policy.collection(annotations, false);
             json.as_object_mut()
                 .expect("every typed carrier term emits a JSON object")
                 .insert("@annotation".to_owned(), annotation);
@@ -1413,13 +1432,14 @@ fn common_list_preferences(values: &[Value]) -> (JsonLdTermSelectionKind, Vec<St
     }
 }
 
-fn scalar_json_eligible(values: &[Value]) -> bool {
+fn scalar_json_eligible(values: &[Value], policy: CompactionPolicy) -> bool {
     let [value] = values else {
         return false;
     };
     // Canonical lexical eligibility remains in literal_preferences. This gate
     // supplies only the property cardinality and annotation constraints.
-    value.annotations.is_empty()
+    policy.compact_arrays
+        && value.annotations.is_empty()
         && matches!(&value.term, Term::Literal(literal) if literal.datatype.as_deref() == Some(super::RDF_JSON))
 }
 
@@ -1657,26 +1677,35 @@ fn compact_property_values(
     term: &str,
     definition: Option<&JsonLdTermDefinition>,
     values: &[&Value],
+    policy: CompactionPolicy,
 ) -> Result<JsonValue, RdfDiagnostic> {
     if definition.is_some_and(|definition| definition.containers().contains(&JsonLdContainer::Id)) {
-        return compact_id_map(context, term, definition, values);
+        return compact_id_map(context, term, definition, values, policy);
     }
     if definition
         .is_some_and(|definition| definition.containers().contains(&JsonLdContainer::Language))
     {
-        return compact_language_map(context, term, definition, values);
+        return compact_language_map(context, term, definition, values, policy);
     }
     let compacted = values
         .iter()
-        .map(|value| value.compacted_json(context, definition))
+        .map(|value| value.compacted_json(context, definition, policy))
         .collect::<Result<Vec<_>, _>>()?;
     let force_array = definition
         .is_some_and(|definition| definition.containers().contains(&JsonLdContainer::Set));
-    Ok(if !force_array && let [only] = compacted.as_slice() {
-        only.clone()
-    } else {
-        JsonValue::Array(compacted)
-    })
+    // A list-container value already IS its ordered item array. Retaining an
+    // outer singleton here would manufacture another list level on expansion.
+    if !policy.compact_arrays
+        && definition
+            .is_some_and(|definition| definition.containers().contains(&JsonLdContainer::List))
+        && compacted.len() == 1
+    {
+        return Ok(compacted
+            .into_iter()
+            .next()
+            .expect("one list-container value"));
+    }
+    Ok(policy.collection(compacted, force_array))
 }
 
 fn compact_id_map(
@@ -1684,6 +1713,7 @@ fn compact_id_map(
     term: &str,
     definition: Option<&JsonLdTermDefinition>,
     values: &[&Value],
+    policy: CompactionPolicy,
 ) -> Result<JsonValue, RdfDiagnostic> {
     let definition = definition.expect("@id container requires a term definition");
     let mut id_map: BTreeMap<String, Vec<JsonValue>> = BTreeMap::new();
@@ -1706,11 +1736,7 @@ fn compact_id_map(
     let force_array = definition.containers().contains(&JsonLdContainer::Set);
     Ok(JsonValue::Object(Object::from_iter(
         id_map.into_iter().map(|(id, values)| {
-            let value = if !force_array && let [only] = values.as_slice() {
-                only.clone()
-            } else {
-                JsonValue::Array(values)
-            };
+            let value = policy.collection(values, force_array);
             (id, value)
         }),
     )))
@@ -1721,6 +1747,7 @@ fn compact_language_map(
     term: &str,
     definition: Option<&JsonLdTermDefinition>,
     values: &[&Value],
+    policy: CompactionPolicy,
 ) -> Result<JsonValue, RdfDiagnostic> {
     let definition = definition.expect("language container requires a term definition");
     let mut language_map: BTreeMap<String, Vec<JsonValue>> = BTreeMap::new();
@@ -1752,11 +1779,7 @@ fn compact_language_map(
     let force_array = definition.containers().contains(&JsonLdContainer::Set);
     Ok(JsonValue::Object(Object::from_iter(
         language_map.into_iter().map(|(language, values)| {
-            let value = if !force_array && let [only] = values.as_slice() {
-                only.clone()
-            } else {
-                JsonValue::Array(values)
-            };
+            let value = policy.collection(values, force_array);
             (language, value)
         }),
     )))
@@ -1767,6 +1790,7 @@ impl Value {
         &self,
         context: &CompiledJsonLdContext,
         definition: Option<&JsonLdTermDefinition>,
+        policy: CompactionPolicy,
     ) -> Result<JsonValue, RdfDiagnostic> {
         self.fold_lists(|value, depth, items| {
             // List-item compaction inherits the property term's
@@ -1777,7 +1801,7 @@ impl Value {
                 (0, _) | (1, None) => definition,
                 _ => None,
             };
-            value.compacted_one(context, own, items)
+            value.compacted_one(context, own, items, policy)
         })
     }
 
@@ -1788,6 +1812,7 @@ impl Value {
         context: &CompiledJsonLdContext,
         definition: Option<&JsonLdTermDefinition>,
         items: Option<Vec<JsonValue>>,
+        policy: CompactionPolicy,
     ) -> Result<JsonValue, RdfDiagnostic> {
         let compacted = match (&self.term, items) {
             (Term::List(_), Some(values)) => {
@@ -1821,9 +1846,9 @@ impl Value {
             (Term::Literal(literal), _) => {
                 compact_literal(context, definition, literal, self.annotations.is_empty())?
             }
-            (Term::Triple(triple), _) => {
-                JsonValue::Object(Object::new().with("@triple", triple.compacted_json(context)?))
-            }
+            (Term::Triple(triple), _) => JsonValue::Object(
+                Object::new().with("@triple", triple.compacted_json(context, policy)?),
+            ),
             (Term::List(_), None) => unreachable!("a list value is folded from its items"),
         };
         if self.annotations.is_empty() {
@@ -1835,18 +1860,22 @@ impl Value {
         let annotations = self
             .annotations
             .iter()
-            .map(|node| node.compacted_json(context))
+            .map(|node| node.compacted_json(context, policy))
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(self.with_annotation(compacted, annotations.into_iter()))
+        Ok(self.with_annotation(compacted, annotations.into_iter(), policy))
     }
 }
 
 impl Triple {
-    fn compacted_json(&self, context: &CompiledJsonLdContext) -> Result<JsonValue, RdfDiagnostic> {
+    fn compacted_json(
+        &self,
+        context: &CompiledJsonLdContext,
+        policy: CompactionPolicy,
+    ) -> Result<JsonValue, RdfDiagnostic> {
         Ok(JsonValue::Object(Object::from_iter(BTreeMap::from([
             (
                 "@object".to_owned(),
-                compact_component(context, &self.object)?,
+                compact_component(context, &self.object, policy)?,
             ),
             (
                 "@predicate".to_owned(),
@@ -1854,7 +1883,7 @@ impl Triple {
             ),
             (
                 "@subject".to_owned(),
-                compact_component(context, &self.subject)?,
+                compact_component(context, &self.subject, policy)?,
             ),
         ]))))
     }
@@ -1863,8 +1892,9 @@ impl Triple {
 fn compact_component(
     context: &CompiledJsonLdContext,
     term: &Term,
+    policy: CompactionPolicy,
 ) -> Result<JsonValue, RdfDiagnostic> {
-    Value::plain(term.clone()).compacted_json(context, None)
+    Value::plain(term.clone()).compacted_json(context, None, policy)
 }
 
 fn compact_literal(

@@ -47,9 +47,9 @@ use purrdf_core::collections::{ListCellUse, convertible_list_cells};
 use purrdf_lex::json::{Object, Value};
 
 use self::carrier::{
-    Document as CarrierDocument, Literal as CarrierLiteral, NamedGraph as CarrierNamedGraph,
-    Node as CarrierNode, Part as CarrierPart, Term as CarrierTerm, Triple as CarrierTriple,
-    Value as CarrierValue,
+    CompactionPolicy, Document as CarrierDocument, Literal as CarrierLiteral,
+    NamedGraph as CarrierNamedGraph, Node as CarrierNode, Part as CarrierPart, Term as CarrierTerm,
+    Triple as CarrierTriple, Value as CarrierValue,
 };
 
 use super::NativeRdfFormat;
@@ -408,7 +408,7 @@ fn write_ser_graph(graph: &SerGraph, out: &mut TextSink<'_>) -> Result<(), RdfDi
     let carrier = build_carrier(graph, false)?;
     match base_only_context(graph)? {
         None => write_carrier_expanded(&carrier, out),
-        Some(context) => write_carrier_compacted(carrier, &context, out),
+        Some(context) => write_carrier_compacted(carrier, &context, CompactionPolicy::DEFAULT, out),
     }
 }
 
@@ -428,16 +428,32 @@ pub(crate) fn write_ser_graph_with_options(
     match options.mode() {
         JsonLdSerializeMode::Expanded => match base_only_context(graph)? {
             None => write_carrier_expanded(&carrier, out),
-            Some(context) => write_carrier_compacted(carrier, &context, out),
+            Some(context) => {
+                write_carrier_compacted(carrier, &context, CompactionPolicy::DEFAULT, out)
+            }
         },
         JsonLdSerializeMode::Context(context) => {
             let merged = context_with_base(context, graph)?;
-            write_carrier_compacted(carrier, merged.as_ref().unwrap_or(context), out)
+            write_carrier_compacted(
+                carrier,
+                merged.as_ref().unwrap_or(context),
+                CompactionPolicy {
+                    compact_arrays: options.compact_arrays(),
+                },
+                out,
+            )
         }
         JsonLdSerializeMode::Derived => {
             let context = derived::derive_context(&carrier)?;
             let merged = context_with_base(&context, graph)?;
-            write_carrier_compacted(carrier, merged.as_ref().unwrap_or(&context), out)
+            write_carrier_compacted(
+                carrier,
+                merged.as_ref().unwrap_or(&context),
+                CompactionPolicy {
+                    compact_arrays: options.compact_arrays(),
+                },
+                out,
+            )
         }
     }
 }
@@ -505,10 +521,11 @@ fn write_carrier_expanded(
 fn write_carrier_compacted(
     carrier: CarrierDocument,
     context: &CompiledJsonLdContext,
+    policy: CompactionPolicy,
     out: &mut TextSink<'_>,
 ) -> Result<(), RdfDiagnostic> {
     let mut bounded = BoundedJsonOutput::new(out, MAX_JSON_LD_DOCUMENT_BYTES);
-    carrier.write_compacted_json(&mut bounded, context)
+    carrier.write_compacted_json(&mut bounded, context, policy)
 }
 
 /// The whole-`String` spelling of [`write_carrier_compacted`].
@@ -517,7 +534,7 @@ fn serialize_carrier_compacted(
     context: &CompiledJsonLdContext,
 ) -> Result<String, RdfDiagnostic> {
     let mut out = TextSink::in_memory();
-    write_carrier_compacted(carrier, context, &mut out)?;
+    write_carrier_compacted(carrier, context, CompactionPolicy::DEFAULT, &mut out)?;
     finish_json_output(out)
 }
 
@@ -644,7 +661,7 @@ pub fn serialize_dataset_to_yamlld_with_context<D: DatasetView>(
         // finished, rather than being ended by a `drop` call that reads as a no-op.
         let mut bounded = BoundedJsonOutput::new(&mut out, MAX_JSON_LD_DOCUMENT_BYTES);
         write_yaml_header(schema_url, &mut bounded)?;
-        carrier.write_compacted_yaml(&mut bounded, context)?;
+        carrier.write_compacted_yaml(&mut bounded, context, CompactionPolicy::DEFAULT)?;
     }
     finish_json_output(out)
 }
@@ -661,7 +678,9 @@ fn write_ser_graph_to_yamlld(
     write_yaml_header(schema_url, &mut bounded)?;
     match base_only_context(graph)? {
         None => carrier.write_expanded_yaml(&mut bounded, &build_context()),
-        Some(context) => carrier.write_compacted_yaml(&mut bounded, &context),
+        Some(context) => {
+            carrier.write_compacted_yaml(&mut bounded, &context, CompactionPolicy::DEFAULT)
+        }
     }
 }
 
@@ -677,16 +696,30 @@ pub(crate) fn write_ser_graph_to_yamlld_with_options(
     match options.mode() {
         JsonLdSerializeMode::Expanded => match base_only_context(graph)? {
             None => carrier.write_expanded_yaml(&mut bounded, &build_context()),
-            Some(context) => carrier.write_compacted_yaml(&mut bounded, &context),
+            Some(context) => {
+                carrier.write_compacted_yaml(&mut bounded, &context, CompactionPolicy::DEFAULT)
+            }
         },
         JsonLdSerializeMode::Context(context) => {
             let merged = context_with_base(context, graph)?;
-            carrier.write_compacted_yaml(&mut bounded, merged.as_ref().unwrap_or(context))
+            carrier.write_compacted_yaml(
+                &mut bounded,
+                merged.as_ref().unwrap_or(context),
+                CompactionPolicy {
+                    compact_arrays: options.compact_arrays(),
+                },
+            )
         }
         JsonLdSerializeMode::Derived => {
             let context = derived::derive_context(&carrier)?;
             let merged = context_with_base(&context, graph)?;
-            carrier.write_compacted_yaml(&mut bounded, merged.as_ref().unwrap_or(&context))
+            carrier.write_compacted_yaml(
+                &mut bounded,
+                merged.as_ref().unwrap_or(&context),
+                CompactionPolicy {
+                    compact_arrays: options.compact_arrays(),
+                },
+            )
         }
     }
 }
