@@ -67,9 +67,17 @@ accept the same flag for their sole `--data` document. Query applies it in ordin
 governed, explain and entailment execution, using its existing filename-based
 input selection. Query premise imports retain their default input policy.
 `validate` accepts the flag for primary `IN`, on both whole-graph and incremental
-validation. Prepared products, imports and added/removed change documents retain their existing
-input policy. The flag is also valid with
+validation. Prepared products retain their existing input policy. The flag is also valid with
 `--shapes-product`, because the primary data is still parsed.
+Validation accepts independent `--changes-yamlld-input-options PATH` and
+`--changes-removed-yamlld-input-options PATH` for added and removed documents.
+Each requires its matching change document and is also valid with a shapes
+product. Both roles and formats are admitted before either change options file is read;
+all requested controls decode before RDF or product acquisition and shapes-base
+filesystem resolution. A configured role requires YAML-LD, while the other may
+use another format. The existing `--changes-from` override applies to both;
+otherwise each format is inferred independently. Unconfigured roles keep native
+defaults, independently of primary, shapes, import and neighboring controls.
 `describe` and `project` accept the flag for primary `IN`. Description selectors
 retain their existing base resolution. Projection configuration and assets keep
 their existing input policy; YAML controls are admitted before either is read.

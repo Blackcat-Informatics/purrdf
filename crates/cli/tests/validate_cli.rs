@@ -3682,3 +3682,281 @@ fn configured_yamlld_controls_reach_validation_shapes() {
         );
     }
 }
+
+/// Added and removed documents carry independent controls through real affected-node validation.
+#[test]
+fn configured_yamlld_changes_reach_added_and_removed_roles() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let shapes = write_file(dir.path(), "shapes.ttl", SHAPES);
+    let valid = write_file(
+        dir.path(),
+        "valid.ttl",
+        "@prefix ex: <http://example.org/> .\nex:alice a ex:Person ; ex:age 42 .\nex:bob a ex:Person ; ex:age 7 .\n",
+    );
+    let additions = write_file(
+        dir.path(),
+        "added.yamlld",
+        "'@id': http://example.org/alice\nhttp://example.org/age: 43\n---\n'@id': http://example.org/bob\nhttp://example.org/age: nope\n",
+    );
+    let removal_neighbor = write_file(
+        dir.path(),
+        "neighbor.yamlld",
+        "'@id': http://example.org/alice\nhttp://example.org/age: 42\n---\n'@id': http://example.org/bob\nhttp://example.org/age: nope\n",
+    );
+    let all = write_file(
+        dir.path(),
+        "all.json",
+        r#"{"version":1,"yaml_ld":{"extract_all_scripts":true}}"#,
+    );
+    let first = write_file(dir.path(), "first.json", r#"{"version":1,"yaml_ld":{}}"#);
+    for selected in [false, true] {
+        let mut args = vec![
+            "validate",
+            "--shapes",
+            &shapes,
+            "--changes",
+            &additions,
+            "--changes-removed",
+            &removal_neighbor,
+            "--changes-removed-yamlld-input-options",
+            &first,
+        ];
+        if selected {
+            args.extend(["--changes-yamlld-input-options", &all]);
+        }
+        args.push(&valid);
+        let out = run(&args);
+        assert_eq!(code(&out), 0, "{}", stderr(&out));
+        assert!(
+            stderr(&out).contains(&format!("shacl conforms {}\n", !selected)),
+            "{}",
+            stderr(&out)
+        );
+        assert!(
+            stderr(&out).contains(&format!(
+                "shacl change-expansion bounded {}\n",
+                if selected { 2 } else { 1 }
+            )),
+            "{}",
+            stderr(&out)
+        );
+        assert_eq!(
+            stdout(&out).contains("DatatypeConstraintComponent"),
+            selected
+        );
+        assert_eq!(stdout(&out).contains("<http://example.org/bob>"), selected);
+    }
+    // A named target remains after removing both of its age values; Bob also changes.
+    let invalid = write_file(
+        dir.path(),
+        "invalid.ttl",
+        "@prefix ex: <http://example.org/> .\nex:alice a ex:Person ; ex:age 42, \"nope\" .\nex:bob a ex:Person ; ex:age 7 .\n",
+    );
+    let removals = write_file(
+        dir.path(),
+        "removed.yamlld",
+        "'@id': http://example.org/alice\nhttp://example.org/age: 42\n---\n'@id': http://example.org/alice\nhttp://example.org/age: nope\n",
+    );
+    let ordinary_addition = write_file(
+        dir.path(),
+        "touch.nq",
+        "<http://example.org/bob> <http://example.org/age> \"8\"^^<http://www.w3.org/2001/XMLSchema#integer> .\n",
+    );
+    for selected in [false, true] {
+        let mut args = vec![
+            "validate",
+            "--shapes",
+            &shapes,
+            "--changes",
+            &ordinary_addition,
+            "--changes-removed",
+            &removals,
+        ];
+        if selected {
+            args.extend(["--changes-removed-yamlld-input-options", &all]);
+        }
+        args.push(&invalid);
+        let out = run(&args);
+        assert_eq!(code(&out), 0, "{}", stderr(&out));
+        assert!(
+            stderr(&out).contains(&format!("shacl conforms {selected}\n")),
+            "{}",
+            stderr(&out)
+        );
+        assert!(
+            stderr(&out).contains("shacl change-expansion bounded 2\n"),
+            "{}",
+            stderr(&out)
+        );
+        assert_eq!(
+            stdout(&out).contains("DatatypeConstraintComponent"),
+            !selected
+        );
+        assert_eq!(
+            stdout(&out).contains("<http://example.org/alice>"),
+            !selected
+        );
+    }
+    let product = dir.path().join("shapes.purrshp");
+    let product = product.to_str().unwrap();
+    let receipt = dir.path().join("receipt.json");
+    let receipt = receipt.to_str().unwrap();
+    let packed = run(&[
+        "shacl",
+        "pack",
+        "--shapes",
+        &shapes,
+        "--out",
+        product,
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        receipt,
+    ]);
+    assert_eq!(code(&packed), 0, "{}", stderr(&packed));
+    let restored = run(&[
+        "validate",
+        "--shapes-product",
+        product,
+        "--changes",
+        &additions,
+        "--changes-yamlld-input-options",
+        &all,
+        "--changes-removed",
+        &removal_neighbor,
+        "--changes-removed-yamlld-input-options",
+        &first,
+        &valid,
+    ]);
+    assert_eq!(code(&restored), 0, "{}", stderr(&restored));
+    assert!(stderr(&restored).contains("shacl conforms false\n"));
+    assert!(stdout(&restored).contains("<http://example.org/bob>"));
+    assert!(stdout(&restored).contains("DatatypeConstraintComponent"));
+}
+
+/// Both change roles and formats admit before options, RDF and filesystem-base acquisition.
+#[test]
+fn configured_change_options_precede_source_acquisition() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let missing_root = dir.path().join("missing.ttl");
+    let missing_root = missing_root.to_str().unwrap();
+    let missing_yaml = dir.path().join("missing.yamlld");
+    let missing_yaml = missing_yaml.to_str().unwrap();
+    let missing_options = dir.path().join("missing.json");
+    let missing_options = missing_options.to_str().unwrap();
+    for (flag, other_role) in [
+        ("--changes-yamlld-input-options", "--changes-removed"),
+        ("--changes-removed-yamlld-input-options", "--changes"),
+    ] {
+        let refused = run(&[
+            "validate",
+            "--shapes",
+            missing_root,
+            other_role,
+            missing_yaml,
+            flag,
+            missing_options,
+            missing_root,
+        ]);
+        assert_eq!(code(&refused), 2, "{}", stderr(&refused));
+        assert!(stderr(&refused).contains(flag));
+    }
+    for override_format in [false, true] {
+        let mut args = vec![
+            "validate",
+            "--shapes",
+            missing_root,
+            "--changes",
+            missing_yaml,
+            "--changes-yamlld-input-options",
+            missing_options,
+            "--changes-removed",
+            if override_format {
+                missing_yaml
+            } else {
+                missing_root
+            },
+            "--changes-removed-yamlld-input-options",
+            missing_options,
+        ];
+        if override_format {
+            args.extend(["--changes-from", "nquads"]);
+        }
+        args.push(missing_root);
+        let refused = run(&args);
+        assert_eq!(code(&refused), 2, "{}", stderr(&refused));
+        assert!(stderr(&refused).contains("YAML-LD"), "{}", stderr(&refused));
+        assert!(stderr(&refused).contains(if override_format {
+            "--changes-yamlld-input-options"
+        } else {
+            "--changes-removed-yamlld-input-options"
+        }));
+    }
+    let valid_options = write_file(dir.path(), "valid.json", r#"{"version":1,"yaml_ld":{}}"#);
+    let malformed = write_file(dir.path(), "malformed.json", "{");
+    let oversized = write_file(dir.path(), "oversized.json", &" ".repeat(16_385));
+    let output = write_file(dir.path(), "report.nt", "unchanged report");
+    for (shape_flag, final_options) in [("--shapes", &malformed), ("--shapes-product", &oversized)]
+    {
+        let refused = run(&[
+            "validate",
+            shape_flag,
+            missing_root,
+            "--changes",
+            missing_yaml,
+            "--changes-yamlld-input-options",
+            &valid_options,
+            "--changes-removed",
+            missing_yaml,
+            "--changes-removed-yamlld-input-options",
+            final_options,
+            missing_root,
+            &output,
+        ]);
+        assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+        assert!(
+            stderr(&refused).contains("rdf-input-options"),
+            "{}",
+            stderr(&refused)
+        );
+        assert_eq!(stdout(&refused), "");
+        assert_eq!(
+            std::fs::read_to_string(&output).unwrap(),
+            "unchanged report"
+        );
+    }
+    let shapes = write_file(dir.path(), "shapes.ttl", SHAPES);
+    let data = write_file(dir.path(), "data.ttl", DATA);
+    let removed = write_file(
+        dir.path(),
+        "removed.yamlld",
+        "'@id': http://example.org/alice\nhttp://example.org/age: nope\n",
+    );
+    let limited = write_file(
+        dir.path(),
+        "limited.json",
+        r#"{"version":1,"yaml_ld":{"syntax":{"max_input_bytes":0}}}"#,
+    );
+    let refused = run(&[
+        "validate",
+        "--shapes",
+        &shapes,
+        "--changes-removed",
+        &removed,
+        "--changes-removed-yamlld-input-options",
+        &limited,
+        &data,
+        &output,
+    ]);
+    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+    assert!(
+        stderr(&refused).contains("native-yaml-input-limit"),
+        "{}",
+        stderr(&refused)
+    );
+    assert_eq!(stdout(&refused), "");
+    assert_eq!(
+        std::fs::read_to_string(&output).unwrap(),
+        "unchanged report"
+    );
+}
