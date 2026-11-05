@@ -835,6 +835,18 @@ def compile_gts_with_report(base_data: bytes, base_format: RdfFormat, *, base_sc
 def to_json_ld(data: bytes, *, format: RdfFormat, options_json: str | None=..., context: CompiledJsonLdContext | None=..., base: str | None=...) -> str:
     ...
 
+def expand_document(source: bytes, *, request_json: bytes) -> str:
+    """Expand original document bytes under a closed version-one request."""
+    ...
+
+def compact_document(source: bytes, *, request_json: bytes) -> str:
+    """Compact source bytes using the explicit request output context."""
+    ...
+
+def flatten_document(source: bytes, *, request_json: bytes) -> str:
+    """Flatten source bytes, optionally compacting under an output context."""
+    ...
+
 def serialize_jsonld(data: bytes, *, format: RdfFormat, output_format: str, options_json: str | None=..., context: CompiledJsonLdContext | None=..., yaml_schema_url: str | None=...) -> str:
     ...
 
