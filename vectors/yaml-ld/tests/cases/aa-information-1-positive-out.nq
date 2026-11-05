@@ -1,0 +1,4 @@
+<http://people.example/Homer> <http://schema.org/name> "Homer Simpson" .
+<http://people.example/Homer> <http://schema.org/nationality> <http://publication.europa.eu/resource/authority/country/ITA> .
+<http://people.example/Lisa> <http://schema.org/name> "Lisa Simpson" .
+<http://people.example/Lisa> <http://schema.org/nationality> <http://publication.europa.eu/resource/authority/country/ITA> .

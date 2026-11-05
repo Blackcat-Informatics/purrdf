@@ -1,0 +1,16 @@
+%TAG !xsd! http://www.w3.org/2001/XMLSchema%23
+---
+"@context":
+  "@vocab": http://example.com/
+yint: 123
+yfloat: 123.45
+ystring: string
+ynull: null
+ybool: true
+integer: !xsd!integer 123
+decimal: !xsd!decimal 123.456
+double: !xsd!double 123.456e78
+bool: !xsd!boolean true
+date: !xsd!date "2022-08-08"
+time: !xsd!time "12:00:00.000"
+dateTime: !xsd!dateTime "2022-08-08T12:00:00.000"

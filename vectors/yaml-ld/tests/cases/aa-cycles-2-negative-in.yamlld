@@ -1,0 +1,8 @@
+# Document with anchor/reference cycle
+"@context":
+  "@vocab": http://example.com/
+
+"@graph": &node1
+  - "@id": http://example.org/test#example
+    "@type": t1
+    "ref": *node1

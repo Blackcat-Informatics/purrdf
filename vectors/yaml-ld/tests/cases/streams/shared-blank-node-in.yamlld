@@ -1,0 +1,9 @@
+"@context":
+  ex: https://example.org/
+"@id": _:shared
+ex:first: first
+---
+"@context":
+  ex: https://example.org/
+"@id": _:shared
+ex:second: second

@@ -1,0 +1,29 @@
+# Commends are white space
+"@context":
+  "@vocab": http://example.com/
+"@id": http://example.org/test#example
+"@type": t1
+this-is#not: a comment
+notacomment:
+  - |
+    --- >
+    line1
+    # no comment
+    line3
+key:    # Comment
+  value
+art: |
+  # ASCII Art
+  --- |
+    \//||\/||
+    // ||  ||__
+commentonly: |
+  # Comment only.
+hr: # 1998 hr ranking
+  - Mark McGwire
+  - Sammy Sosa
+rbi:
+  # 1998 rbi ranking
+  - Sammy Sosa
+  - Ken Griffey
+

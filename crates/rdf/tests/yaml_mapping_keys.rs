@@ -295,3 +295,135 @@ fn okf_frontmatter_reads_scalar_keys_as_text_and_keeps_them_unique() {
         assert!(error.contains("must be a string"), "{refused:?}: {error}");
     }
 }
+
+/// Every normative ToRDF entry in the publication-day W3C YAML-LD snapshot.
+#[test]
+fn pinned_w3c_normative_rdf_construction() {
+    use purrdf_lex::json::{self, Limits};
+
+    const SELECTED: &[&str] = &[
+        "#aa-information-1-positive",
+        "#shared-blank-node-from-stream",
+        "#empty-document-from-stream-rdf",
+        "#empty-document-rdf",
+        "#empty-document-rdf-all",
+        "#zero-documents-rdf",
+        "#zero-documents-rdf-all",
+        "#all-empty-rdf",
+        "#all-empty-rdf-all",
+        "#leading-empty-rdf",
+        "#trailing-empty-rdf",
+    ];
+    const EXCLUDED: &[&str] = &[
+        "#cir-scalar-core-2-positive",
+        "#cir-scalar-other-2-positive",
+    ];
+    let root = purrdf_testkit::paths::workspace_root().join("vectors/yaml-ld/tests");
+    let manifest = json::read_slice(
+        &std::fs::read(root.join("manifest.jsonld")).expect("pinned YAML-LD manifest exists"),
+        Limits::DEFAULT,
+    )
+    .expect("pinned YAML-LD manifest JSON");
+    let entries = manifest["sequence"].as_array().expect("manifest sequence");
+    assert_eq!(entries.len(), 97, "complete pinned manifest inventory");
+    let base = manifest["baseIri"].as_str().expect("manifest base IRI");
+    assert_eq!(base, "https://w3c.github.io/yaml-ld/tests/");
+    let mut selected = Vec::new();
+    let mut excluded = Vec::new();
+    for entry in entries {
+        let id = entry["@id"].as_str().expect("fixture ID");
+        let types = entry["@type"].as_array().expect("fixture types");
+        if !types
+            .iter()
+            .any(|kind| kind.as_str() == Some("jld:ToRDFTest"))
+        {
+            continue;
+        }
+        assert_eq!(types.len(), 2, "{id}: expected ToRDF evaluation type pair");
+        assert!(
+            types
+                .iter()
+                .any(|kind| kind.as_str() == Some("jld:PositiveEvaluationTest")),
+            "{id}: positive evaluation"
+        );
+        let options = entry.get("option").map(|value| {
+            value
+                .as_object()
+                .unwrap_or_else(|| panic!("{id}: options object"))
+        });
+        if let Some(options) = options
+            && (options.contains_key("extendedYAML") || options.contains_key("normative"))
+        {
+            assert_eq!(options.len(), 2, "{id}: explicit Extended YAML exclusion");
+            assert_eq!(options["extendedYAML"].as_bool(), Some(true), "{id}");
+            assert_eq!(options["normative"].as_bool(), Some(false), "{id}");
+            excluded.push(id);
+            continue;
+        }
+        if let Some(options) = options {
+            for key in options.keys() {
+                assert_eq!(key, "extractAllScripts", "{id}: unexpected option");
+            }
+        }
+        selected.push(entry);
+    }
+    assert_eq!(
+        selected
+            .iter()
+            .map(|entry| entry["@id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        SELECTED,
+        "every normative ToRDF ID is selected exactly once"
+    );
+    assert_eq!(
+        excluded, EXCLUDED,
+        "only the two informative ToRDF entries are excluded"
+    );
+    for entry in selected {
+        let id = entry["@id"].as_str().unwrap();
+        let input = entry["input"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{id}: input path"));
+        let expected = entry["expect"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{id}: expected N-Quads path"));
+        for path in [input, expected] {
+            assert!(
+                path.starts_with("cases/")
+                    && std::path::Path::new(path)
+                        .components()
+                        .all(|part| matches!(part, std::path::Component::Normal(_))),
+                "{id}: local pinned fixture path {path}"
+            );
+        }
+        let extract_all_scripts = entry.get("option").is_some_and(|options| {
+            options["extractAllScripts"]
+                .as_bool()
+                .unwrap_or_else(|| panic!("{id}: boolean extractAllScripts"))
+        });
+        let options = YamlLdOptions {
+            extract_all_scripts,
+            ..YamlLdOptions::DEFAULT
+        };
+        let source = std::fs::read(root.join(input))
+            .unwrap_or_else(|error| panic!("{id}: {input}: {error}"));
+        let actual = parse_yamlld_with_options(&source, Some(&format!("{base}{input}")), &options)
+            .unwrap_or_else(|error| panic!("{id}: YAML-LD construction: {error}"));
+        let oracle = std::fs::read(root.join(expected))
+            .unwrap_or_else(|error| panic!("{id}: {expected}: {error}"));
+        let expected = parse_dataset(&oracle, "application/n-quads", None)
+            .unwrap_or_else(|error| panic!("{id}: pinned N-Quads: {error}"));
+        assert!(
+            purrdf_rdf::datasets_isomorphic(
+                &actual,
+                &expected,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap_or_else(|error| panic!("{id}: dataset comparison: {error}")),
+            "{id}: constructed dataset differs from upstream N-Quads"
+        );
+    }
+}

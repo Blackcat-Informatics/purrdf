@@ -1,0 +1,3 @@
+"@context": context.yamlld
+"@id": http://example.org/test#example
+value: 2018-04-01

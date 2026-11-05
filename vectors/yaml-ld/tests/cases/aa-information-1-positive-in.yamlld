@@ -1,0 +1,14 @@
+"@context":
+  "@vocab": "http://schema.org/"
+  "countries": "http://publication.europa.eu/resource/authority/country/"
+"@included":
+- "@id": http://people.example/Homer
+  name: Homer Simpson
+  nationality:
+    &xQ7pK9
+    "@id": countries:ITA
+- "@id": http://people.example/Lisa
+  name: Lisa Simpson
+  nationality:
+    &jK3mN2
+    "@id": countries:ITA

@@ -1,0 +1,14 @@
+# A mapping key MUST be a string.
+"@context":
+  "@vocab": https://example.com/
+  "@base": https://example.com/
+
+"@id": https://example.com/my-opinions
+
+# Explanation for this syntax:
+#   https://yaml.org/spec/1.2.2/#example-mapping-between-sequences
+? {"@id": https://en.wikipedia.org/wiki/Earth, "@type": Flat}
+: true
+
+? { "@id": https://en.wikipedia.org/wiki/Tyrannosaurus_Rex, "@type": Scary}
+: false
