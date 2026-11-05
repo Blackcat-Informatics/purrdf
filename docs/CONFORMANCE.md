@@ -232,6 +232,39 @@ Native cases live in `crates/lex/tests/yaml_syntax.rs`,
 combined admission, native routing, JSON-LD entry arrays, explicit blank-label
 sharing and anonymous alias copies. Their scope is the native Basic input path.
 
+Native `expand_jsonld_with_context` and `expand_yamlld_with_context` return the
+expanded JSON-LD document as an owned value array. JSON and YAML dataset parsing
+use this same stage before context-free node-map construction and RDF lowering.
+The stage implements ordinary document expansion from the
+[JSON-LD 1.1 API Recommendation of 16 July 2020](https://www.w3.org/TR/2020/REC-json-ld11-api-20200716/#expansion-algorithm).
+It preserves nested and repeated node objects, anonymous objects without minted
+identifiers, list order, indexes, graph/reverse/included structure and original
+JSON values, including `@json` payloads. RDF lexical conversion and node merging
+occur afterward. Standard unmapped-property dropping replaces the earlier
+undefined-property refusal. Unmapped index metadata succeeds structurally and
+is explicitly refused by RDF lowering; custom index mappings emit RDF properties.
+
+`JsonLdExpansionLimits::max_allocation_bytes` controls a new, separate native
+construction account, defaulting to 32 GiB. Output copies and working buffers
+are admitted before allocation, with released scratch refunded after destruction.
+The original decoded JSON/Basic value and native context/compiler/resolver state and native normalization scratch
+remain outside this account. JSON input still has its existing 4 GiB, depth 128
+and 33,554,432-value limits; YAML retains its explicit phase limits. This is not
+a combined process-memory limit or the serializer's separate working envelope.
+The native structural APIs accept explicit limits; ordinary dataset parsing
+uses their default. Foreign signatures and input-options schemas are unchanged.
+
+The native `configured_yamlld_context_reaches_shared_expansion` case includes an
+expected structural oracle and native resource refusal. The
+`pinned_w3c_structural_expansion_samples` case compares unchanged comment,
+acyclic-alias and two-document-stream fixtures with their expected structures
+using the actual manifest selection. These are samples, not a qualified Expand
+family. The pinned scalar context document is a bare vocabulary mapping without
+the required remote `@context` wrapper; its corpus-policy question remains
+unqualified. No wrapper is synthesized and registry/import invariants remain.
+This native capability does not establish full JSON-LD or YAML-LD conformance,
+HTML document loading, framing, compaction or flattening algorithm coverage.
+
 The upstream YAML-LD corpus is pinned at repository revision
 `fafcf7ae69d5e5cb7402e71dfd5cd2c03c18f29f`, the publication-day cutoff, under
 [`vectors/yaml-ld`](../vectors/yaml-ld/PROVENANCE.md). Its unchanged manifest has

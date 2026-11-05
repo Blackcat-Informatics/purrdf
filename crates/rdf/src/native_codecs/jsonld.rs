@@ -19,10 +19,12 @@ mod carrier;
 pub mod context;
 mod derived;
 mod expand;
+mod structural;
+pub use structural::JsonLdExpansionLimits;
 pub(super) mod yaml;
 pub use yaml::{
-    YamlLdOptions, parse_yamlld_with_context, parse_yamlld_with_options,
-    yamlld_to_jsonld_with_options,
+    YamlLdOptions, expand_yamlld_with_context, parse_yamlld_with_context,
+    parse_yamlld_with_options, yamlld_to_jsonld_with_options,
 };
 
 pub use context::{
@@ -1850,10 +1852,12 @@ fn value_into_scope(
         default = CompiledJsonLdContext::compile(&Value::Object(Object::new()), scope_base(base))?;
         &default
     };
-    let in_force = expand::document_base(&value, context)?;
-    // `value` is MOVED here: the base question is already answered, so the parsed
-    // document need not outlive the expansion that consumes it.
-    let dataset = expand_to_dataset(value, context)?;
+    let expanded = structural::expand(&value, context, JsonLdExpansionLimits::DEFAULT)?;
+    let in_force = expanded.document_base;
+    // Structural expansion owns its output; release the original decoded input
+    // before constructing the RDF node map.
+    drop(value);
+    let dataset = expand::expanded_to_dataset(expanded.value)?;
     // Only a document that MOVED the base rewrites the scope. When the two agree, the
     // base in force is still the caller's and its `BaseOrigin::Caller` provenance is the
     // truthful one; overwriting it would claim the document said something it did not.
@@ -1897,8 +1901,24 @@ fn expand_to_dataset(
     value: Value,
     context: &CompiledJsonLdContext,
 ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
-    let carrier = expand::expand_document(value, context)?;
-    expand::carrier_to_dataset(carrier)
+    let expanded = structural::expand(&value, context, JsonLdExpansionLimits::DEFAULT)?;
+    drop(value);
+    expand::expanded_to_dataset(expanded.value)
+}
+
+/// Expand native JSON-LD to its document structure before RDF node-map lowering.
+///
+/// Returns an array retaining nested nodes, indexes and original JSON values.
+/// Input/context admission remains separate from the explicit construction limit.
+/// # Errors
+/// Returns original input, context, structural or native construction refusals.
+pub fn expand_jsonld_with_context(
+    bytes: &[u8],
+    context: &CompiledJsonLdContext,
+    limits: &JsonLdExpansionLimits,
+) -> Result<Value, RdfDiagnostic> {
+    let value = context::parse_document(bytes)?;
+    structural::expand(&value, context, *limits).map(|expanded| expanded.value)
 }
 
 /// Validate `iri` as an absolute IRI and return the native term.
@@ -2145,7 +2165,9 @@ mod carrier_law_tests {
         let document = context::parse_document(compacted.as_bytes()).expect("strict JSON");
         let initial =
             CompiledJsonLdContext::compile(&Object::new().into(), None).expect("empty context");
-        let reexpanded = expand::expand_document(document, &initial).expect("re-expansion");
+        let structure = structural::expand(&document, &initial, JsonLdExpansionLimits::DEFAULT)
+            .expect("structural expansion");
+        let reexpanded = expand::expanded_to_carrier(structure.value).expect("node map");
         assert_eq!(expanded, reexpanded, "compacted document:\n{compacted}");
     }
 

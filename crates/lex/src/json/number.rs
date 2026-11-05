@@ -38,6 +38,12 @@ use super::{Error, ErrorKind};
 #[derive(Clone)]
 pub struct Number(String);
 
+impl Number {
+    pub(super) fn owned_text_bytes(&self) -> usize {
+        self.0.capacity()
+    }
+}
+
 /// The base-ten exponent of a [`Decimal`]: a machine word until the exponent
 /// leaves `i64`, and its digits after that, so the representation is
 /// canonical and derived equality and hashing are the value's.

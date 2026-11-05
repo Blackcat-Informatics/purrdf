@@ -543,26 +543,63 @@ impl Value {
 
 // ── Drop, Clone, PartialEq over work lists ─────────────────────────────────
 
-struct DroppingValue(Value);
+struct DroppingValue<'a> {
+    value: Value,
+    released: Option<&'a std::cell::Cell<Option<usize>>>,
+}
 
-impl crate::walk::DismantleOwned for DroppingValue {
+impl<'a> DroppingValue<'a> {
+    fn new(value: Value, released: Option<&'a std::cell::Cell<Option<usize>>>) -> Self {
+        if let Some(released) = released {
+            let own = match &value {
+                Value::Null | Value::Bool(_) => Some(0),
+                Value::Number(number) => Some(number.owned_text_bytes()),
+                Value::String(text) => Some(text.capacity()),
+                Value::Array(values) => size_of::<Value>().checked_mul(values.capacity()),
+                Value::Object(object) => {
+                    size_of::<(String, Value)>().checked_mul(object.members.capacity())
+                }
+            };
+            released.set(
+                released
+                    .get()
+                    .zip(own)
+                    .and_then(|(total, own)| total.checked_add(own)),
+            );
+        }
+        Self { value, released }
+    }
+}
+
+impl crate::walk::DismantleOwned for DroppingValue<'_> {
     fn take_child(&mut self) -> Option<Self> {
         loop {
-            let child = match &mut self.0 {
+            let child = match &mut self.value {
                 Value::Array(items) => items.pop(),
-                Value::Object(object) => object.members.pop().map(|(_, value)| value),
+                Value::Object(object) => object.members.pop().map(|(name, value)| {
+                    if let Some(released) = self.released {
+                        released.set(
+                            released
+                                .get()
+                                .and_then(|total| total.checked_add(name.capacity())),
+                        );
+                    }
+                    drop(name);
+                    value
+                }),
                 _ => None,
             }?;
-            if child.has_children() {
-                return Some(Self(child));
+            let child = Self::new(child, self.released);
+            if child.value.has_children() {
+                return Some(child);
             }
             drop(child);
         }
     }
 
     fn store_parent(&mut self, parent: Option<Self>) {
-        let value = parent.map_or(Value::Null, |parent| parent.0);
-        match &mut self.0 {
+        let value = parent.map_or(Value::Null, |parent| parent.value);
+        match &mut self.value {
             Value::Array(items) => {
                 assert!(items.len() < items.capacity());
                 items.push(value);
@@ -576,7 +613,7 @@ impl crate::walk::DismantleOwned for DroppingValue {
     }
 
     fn take_parent(&mut self) -> Option<Self> {
-        let parent = match &mut self.0 {
+        let parent = match &mut self.value {
             Value::Array(items) => items.pop(),
             Value::Object(object) => object.members.pop().map(|(_, value)| value),
             _ => None,
@@ -585,7 +622,11 @@ impl crate::walk::DismantleOwned for DroppingValue {
         if matches!(parent, Value::Null) {
             None
         } else {
-            Some(Self(parent))
+            // This is an already counted ancestor, not a newly entered child.
+            Some(Self {
+                value: parent,
+                released: self.released,
+            })
         }
     }
 }
@@ -595,7 +636,7 @@ impl Drop for Value {
         if self.has_children() {
             // Vacated original array/member slots carry ancestor continuations;
             // a failed native allocation never needs another allocation to drop.
-            crate::walk::dismantle_owned(DroppingValue(mem::take(self)));
+            crate::walk::dismantle_owned(DroppingValue::new(mem::take(self), None));
         }
     }
 }
@@ -685,6 +726,25 @@ impl Value {
             memory.release_vec(copies)?;
             Ok(root)
         })
+    }
+
+    /// Destroy a value originally constructed through `memory`, then refund its
+    /// actual backing layouts. Destruction uses vacated original slots and needs
+    /// no new allocation, including when the account is exactly full.
+    /// This does not adopt a resident value into another account.
+    /// # Errors
+    /// Preserves checked-layout and original refund failures after destruction.
+    pub fn release_with_memory<S: crate::allocation::Admission + ?Sized>(
+        &mut self,
+        memory: &mut crate::allocation::Memory<'_, S>,
+    ) -> Result<(), crate::allocation::StorageError> {
+        let released = std::cell::Cell::new(Some(0usize));
+        crate::walk::dismantle_owned(DroppingValue::new(mem::take(self), Some(&released)));
+        memory.release_bytes(
+            released
+                .get()
+                .ok_or(crate::allocation::StorageError::SizeOverflow)?,
+        )
     }
 }
 

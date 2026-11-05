@@ -97,6 +97,19 @@ pub fn parse_yamlld_with_context(
     super::expand_to_dataset(basic_value(bytes, options)?, context)
 }
 
+/// Expand selected YAML-LD Basic input to JSON-LD document structure.
+/// # Errors
+/// Preserves native YAML admission, context and structural construction refusals.
+pub fn expand_yamlld_with_context(
+    bytes: &[u8],
+    context: &CompiledJsonLdContext,
+    options: &YamlLdOptions,
+    limits: &super::JsonLdExpansionLimits,
+) -> Result<Value, RdfDiagnostic> {
+    let value = basic_value(bytes, options)?;
+    super::structural::expand(&value, context, *limits).map(|expanded| expanded.value)
+}
+
 pub(in crate::native_codecs) fn parse_into_scope(
     bytes: &[u8],
     base: &mut purrdf_iri::BaseScope,

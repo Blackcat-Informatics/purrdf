@@ -17,9 +17,10 @@
 //!   on the text (`1: a` with `"1": b` repeats a key).
 
 use purrdf_rdf::native_codecs::jsonld::{
-    CompiledJsonLdContext, JsonLdContextFormat, JsonLdContextRegistry, YamlLdOptions,
-    parse_yamlld_with_context, parse_yamlld_with_options, yamlld_to_jsonld,
-    yamlld_to_jsonld_with_options,
+    CompiledJsonLdContext, JsonLdContextFormat, JsonLdContextRegistry, JsonLdExpansionLimits,
+    YamlLdOptions, expand_jsonld_with_context, expand_yamlld_with_context,
+    parse_jsonld_with_context, parse_yamlld_with_context, parse_yamlld_with_options,
+    yamlld_to_jsonld, yamlld_to_jsonld_with_options,
 };
 use purrdf_rdf::native_codecs::parse_dataset;
 use purrdf_rdf::{DatasetSink, OkfBundle, OkfConfig, lift_okf_bundle};
@@ -149,6 +150,189 @@ fn configured_yamlld_context_reaches_shared_expansion() {
             "configured context with extract_all_scripts={extract_all_scripts}"
         );
     }
+    let retrieval_registry = JsonLdContextRegistry::new([(
+        "https://doc.example/ctx",
+        br#"{"@context":{"p":"https://example.org/p"}}"#.as_slice(),
+    )])
+    .unwrap();
+    for (initial, subject, expected_subject) in [
+        (
+            r#"{"@base":"https://ids.example/"}"#,
+            "subject",
+            "https://ids.example/subject",
+        ),
+        (
+            r#"{"@base":null}"#,
+            "https://example.org/subject",
+            "https://example.org/subject",
+        ),
+    ] {
+        let context = CompiledJsonLdContext::compile_with_registry(
+            &purrdf_lex::json::read(initial).unwrap(),
+            Some("https://doc.example/file"),
+            &retrieval_registry,
+        )
+        .unwrap();
+        let source = format!(r#"{{"@context":"ctx","@id":"{subject}","p":"value"}}"#);
+        let mut expected = purrdf_lex::json::read(&format!(
+            r#"[{{"@id":"{expected_subject}","https://example.org/p":[{{"@value":"value"}}]}}]"#
+        ))
+        .unwrap();
+        expected.sort_keys();
+        assert_eq!(
+            expand_jsonld_with_context(
+                source.as_bytes(),
+                &context,
+                &JsonLdExpansionLimits::DEFAULT
+            )
+            .unwrap(),
+            expected
+        );
+        // JSON is also valid YAML; both configured callers resolve the same URL.
+        assert_eq!(
+            expand_yamlld_with_context(
+                source.as_bytes(),
+                &context,
+                &YamlLdOptions::DEFAULT,
+                &JsonLdExpansionLimits::DEFAULT
+            )
+            .unwrap(),
+            expected
+        );
+        let expected = parse_dataset(
+            format!("<{expected_subject}> <https://example.org/p> \"value\" .\n").as_bytes(),
+            "application/n-quads",
+            None,
+        )
+        .unwrap();
+        for actual in [
+            parse_jsonld_with_context(source.as_bytes(), &context).unwrap(),
+            parse_yamlld_with_context(source.as_bytes(), &context, &YamlLdOptions::DEFAULT)
+                .unwrap(),
+        ] {
+            assert!(
+                purrdf_rdf::datasets_isomorphic(
+                    &actual,
+                    &expected,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
+                )
+                .unwrap()
+            );
+        }
+    }
+    let structural = br#"{
+      "@context": {"@vocab":"https://example.org/", "items":{"@container":"@list"},
+        "indexed":{"@container":"@index"},"raw":{"@type":"@json"},
+        "english":{"@context":{"@language":"en"}}},
+      "@id":"same",
+      "node":[{"@id":"repeat","label":"one"},{"@id":"repeat","label":"two"},{"label":"anonymous"}],
+      "@graph":[{"@id":"inside","label":"graph"}],
+      "@included":[{"@id":"included","label":"included"}],
+      "@reverse":{"p":{"@id":"back"}},
+      "items":[[1,2],[3,4]],"indexed":{"key":{"label":"index"}},
+      "english":"text", "raw":{"@id":"literal","ordered":[true,null,1e400]}
+    }"#;
+    let mut expected = purrdf_lex::json::read(r#"[{
+      "@id":"https://example.org/docs/same",
+      "@graph":[{"@id":"https://example.org/docs/inside","https://example.org/label":[{"@value":"graph"}]}],
+      "@included":[{"@id":"https://example.org/docs/included","https://example.org/label":[{"@value":"included"}]}],
+      "@reverse":{"https://example.org/p":[{"@id":"https://example.org/docs/back"}]},
+      "https://example.org/node":[{"@id":"https://example.org/docs/repeat","https://example.org/label":[{"@value":"one"}]},{"@id":"https://example.org/docs/repeat","https://example.org/label":[{"@value":"two"}]},{"https://example.org/label":[{"@value":"anonymous"}]}],
+      "https://example.org/items":[{"@list":[{"@list":[{"@value":1},{"@value":2}]},{"@list":[{"@value":3},{"@value":4}]}]}],
+      "https://example.org/indexed":[{"@index":"key","https://example.org/label":[{"@value":"index"}]}],
+      "https://example.org/english":[{"@language":"en","@value":"text"}],
+      "https://example.org/raw":[{"@type":"@json","@value":{"@id":"literal","ordered":[true,null,1e400]}}]
+    }]"#).unwrap();
+    expected.sort_keys();
+    assert_eq!(
+        expand_jsonld_with_context(structural, &context, &JsonLdExpansionLimits::DEFAULT).unwrap(),
+        expected
+    );
+    assert!(
+        expand_jsonld_with_context(
+            structural,
+            &context,
+            &JsonLdExpansionLimits {
+                max_allocation_bytes: 0
+            }
+        )
+        .unwrap_err()
+        .storage_error()
+        .is_some()
+    );
+    let yaml_structure = purrdf_lex::yaml::write(
+        &purrdf_lex::json::read_slice(structural, purrdf_lex::json::Limits::DEFAULT).unwrap(),
+    );
+    assert_eq!(
+        expand_yamlld_with_context(
+            yaml_structure.as_bytes(),
+            &context,
+            &YamlLdOptions::DEFAULT,
+            &JsonLdExpansionLimits::DEFAULT
+        )
+        .unwrap(),
+        expected
+    );
+    let pruned = format!(
+        "[{}]",
+        std::iter::repeat_n(r#"{"@id":"https://example.org/id"}"#, 512)
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    assert_eq!(
+        expand_jsonld_with_context(
+            pruned.as_bytes(),
+            &context,
+            &JsonLdExpansionLimits {
+                max_allocation_bytes: 16 * 1024
+            }
+        )
+        .unwrap(),
+        purrdf_lex::json::Value::Array(Vec::new())
+    );
+    let graphs = br#"[{"@graph":[{"@id":"https://example.org/s","https://example.org/p":"one"}]},{"@graph":[{"@id":"https://example.org/s","https://example.org/p":"two"}]}]"#;
+    let graph_dataset = parse_dataset(graphs, "application/ld+json", None).unwrap();
+    let graph_oracle = parse_dataset(b"<https://example.org/s> <https://example.org/p> \"one\" _:first .\n<https://example.org/s> <https://example.org/p> \"two\" _:second .\n", "application/n-quads", None).unwrap();
+    assert!(
+        purrdf_rdf::datasets_isomorphic(
+            &graph_dataset,
+            &graph_oracle,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+    );
+    for (input, expected) in [
+        (
+            br#"{"@graph":[{"@id":"https://example.org/s","https://example.org/p":"one"}]}"#
+                .as_slice(),
+            b"<https://example.org/s> <https://example.org/p> \"one\" .\n".as_slice(),
+        ),
+        (
+            br#"[{"@graph":[{"@id":"https://example.org/s","https://example.org/p":"one"}]}]"#
+                .as_slice(),
+            b"<https://example.org/s> <https://example.org/p> \"one\" _:graph .\n".as_slice(),
+        ),
+    ] {
+        let actual = parse_dataset(input, "application/ld+json", None).unwrap();
+        let expected = parse_dataset(expected, "application/n-quads", None).unwrap();
+        assert!(
+            purrdf_rdf::datasets_isomorphic(
+                &actual,
+                &expected,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+        );
+    }
     let mut refused = YamlLdOptions::DEFAULT;
     refused.syntax.syntax.max_input_bytes = 0;
     assert_eq!(
@@ -186,9 +370,11 @@ fn basic_selection_routes_default_and_options_through_one_jsonld_engine() {
     let isolated = format!("{source}--- {{'@id': 'https://example.org/t', p: undefined}}\n");
     assert_eq!(
         parse_yamlld_with_options(isolated.as_bytes(), None, &all)
-            .unwrap_err()
-            .code,
-        "jsonld-context-invalid"
+            .unwrap()
+            .quads()
+            .count(),
+        2,
+        "an unmapped property is dropped by standard document expansion"
     );
     assert_eq!(
         purrdf_rdf::serialize_dataset(
@@ -430,6 +616,58 @@ fn okf_frontmatter_reads_scalar_keys_as_text_and_keeps_them_unique() {
     for refused in ["[x]: a", "? [x]\n: a", "{x: y}: a", "producer: {[x]: a}"] {
         let error = lifted(refused).expect_err(refused);
         assert!(error.contains("must be a string"), "{refused:?}: {error}");
+    }
+}
+
+/// Three unchanged upstream samples compared as expanded document structures.
+#[test]
+fn pinned_w3c_structural_expansion_samples() {
+    let root = purrdf_testkit::paths::workspace_root().join("vectors/yaml-ld/tests");
+    let manifest = purrdf_lex::json::read_slice(
+        &std::fs::read(root.join("manifest.jsonld")).unwrap(),
+        purrdf_lex::json::Limits::DEFAULT,
+    )
+    .unwrap();
+    for id in [
+        "#cr-comments-1-positive",
+        "#aa-cycles-1-positive",
+        "#two-documents-from-stream",
+    ] {
+        let entry = manifest["sequence"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["@id"].as_str() == Some(id))
+            .expect("pinned structural sample");
+        let input = entry["input"].as_str().unwrap();
+        let expected = entry["expect"].as_str().unwrap();
+        let extract_all_scripts = entry.get("option").is_some_and(|options| {
+            assert_eq!(options.as_object().unwrap().len(), 1, "{id}");
+            options["extractAllScripts"]
+                .as_bool()
+                .expect("actual boolean selection")
+        });
+        let options = YamlLdOptions {
+            extract_all_scripts,
+            ..YamlLdOptions::DEFAULT
+        };
+        let base = format!("{}{input}", manifest["baseIri"].as_str().unwrap());
+        let context = CompiledJsonLdContext::compile(
+            &purrdf_lex::json::Value::Object(purrdf_lex::json::Object::new()),
+            Some(&base),
+        )
+        .unwrap();
+        let actual = expand_yamlld_with_context(
+            &std::fs::read(root.join(input)).unwrap(),
+            &context,
+            &options,
+            &JsonLdExpansionLimits::DEFAULT,
+        )
+        .unwrap_or_else(|error| panic!("{id}: {error}"));
+        let mut expected =
+            purrdf_lex::yaml::read(&std::fs::read_to_string(root.join(expected)).unwrap()).unwrap();
+        expected.sort_keys();
+        assert_eq!(actual, expected, "{id}: expanded document structure");
     }
 }
 
