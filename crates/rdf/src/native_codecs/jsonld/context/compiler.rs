@@ -1657,34 +1657,19 @@ fn build_inverse_context(active: &ActiveContext) -> InverseContext {
             .or_default()
             .entry(container)
             .or_default();
-        selection
-            .fallback
-            .entry("@none".to_owned())
-            .or_insert_with(|| term.clone());
+        append_inverse_term(&mut selection.fallback, "@none".to_owned(), term);
 
         if definition.reverse_property {
-            selection
-                .types
-                .entry("@reverse".to_owned())
-                .or_insert_with(|| term.clone());
+            append_inverse_term(&mut selection.types, "@reverse".to_owned(), term);
             continue;
         }
         if definition.type_mapping == Some(JsonLdTypeMapping::None) {
-            selection
-                .languages
-                .entry("@any".to_owned())
-                .or_insert_with(|| term.clone());
-            selection
-                .types
-                .entry("@any".to_owned())
-                .or_insert_with(|| term.clone());
+            append_inverse_term(&mut selection.languages, "@any".to_owned(), term);
+            append_inverse_term(&mut selection.types, "@any".to_owned(), term);
             continue;
         }
         if let Some(mapping) = &definition.type_mapping {
-            selection
-                .types
-                .entry(mapping.inverse_key().to_owned())
-                .or_insert_with(|| term.clone());
+            append_inverse_term(&mut selection.types, mapping.inverse_key().to_owned(), term);
             continue;
         }
 
@@ -1694,56 +1679,50 @@ fn build_inverse_context(active: &ActiveContext) -> InverseContext {
         ) {
             (Some(language), Some(direction)) => {
                 let key = explicit_language_direction_key(language, direction);
-                selection
-                    .languages
-                    .entry(key)
-                    .or_insert_with(|| term.clone());
+                append_inverse_term(&mut selection.languages, key, term);
             }
             (Some(language), None) => {
                 let key = match language {
                     JsonLdNullable::Null => "@null".to_owned(),
                     JsonLdNullable::Value(language) => identity_fold(language),
                 };
-                selection
-                    .languages
-                    .entry(key)
-                    .or_insert_with(|| term.clone());
+                append_inverse_term(&mut selection.languages, key, term);
             }
             (None, Some(direction)) => {
                 let key = match direction {
                     JsonLdNullable::Null => "@none".to_owned(),
                     JsonLdNullable::Value(direction) => format!("_{}", direction.as_str()),
                 };
-                selection
-                    .languages
-                    .entry(key)
-                    .or_insert_with(|| term.clone());
+                append_inverse_term(&mut selection.languages, key, term);
             }
             (None, None) => {
                 let default_language = active.default_language.as_deref().unwrap_or("@none");
                 if let Some(direction) = active.default_direction {
-                    selection
-                        .languages
-                        .entry(format!("{default_language}_{}", direction.as_str()))
-                        .or_insert_with(|| term.clone());
+                    append_inverse_term(
+                        &mut selection.languages,
+                        format!("{default_language}_{}", direction.as_str()),
+                        term,
+                    );
                 } else {
-                    selection
-                        .languages
-                        .entry(identity_fold(default_language))
-                        .or_insert_with(|| term.clone());
+                    append_inverse_term(
+                        &mut selection.languages,
+                        identity_fold(default_language),
+                        term,
+                    );
                 }
-                selection
-                    .languages
-                    .entry("@none".to_owned())
-                    .or_insert_with(|| term.clone());
-                selection
-                    .types
-                    .entry("@none".to_owned())
-                    .or_insert_with(|| term.clone());
+                append_inverse_term(&mut selection.languages, "@none".to_owned(), term);
+                append_inverse_term(&mut selection.types, "@none".to_owned(), term);
             }
         }
     }
     inverse
+}
+
+fn append_inverse_term(table: &mut BTreeMap<String, Vec<String>>, key: String, term: &str) {
+    let candidates = table.entry(key).or_default();
+    if candidates.last().is_none_or(|candidate| candidate != term) {
+        candidates.push(term.to_owned());
+    }
 }
 
 fn container_key(containers: &BTreeSet<JsonLdContainer>) -> String {
@@ -1823,6 +1802,27 @@ pub(super) fn compact_iri(
     iri: &str,
     vocab: bool,
     selection: Option<&JsonLdTermSelection>,
+    compact_to_relative: bool,
+) -> Result<String, RdfDiagnostic> {
+    compact_iri_accepting(
+        active,
+        inverse,
+        iri,
+        vocab,
+        selection,
+        compact_to_relative,
+        |_| true,
+    )
+}
+
+pub(super) fn compact_iri_accepting(
+    active: &ActiveContext,
+    inverse: &InverseContext,
+    iri: &str,
+    vocab: bool,
+    selection: Option<&JsonLdTermSelection>,
+    compact_to_relative: bool,
+    accept: impl Fn(&str) -> bool,
 ) -> Result<String, RdfDiagnostic> {
     if is_extension_control(iri) {
         return Ok(iri.to_owned());
@@ -1834,7 +1834,7 @@ pub(super) fn compact_iri(
         validate_absolute_iri(iri, "IRI to compact")?;
     }
     if vocab {
-        if let Some(term) = select_inverse_term(inverse, iri, selection) {
+        if let Some(term) = select_inverse_term(inverse, iri, selection, &accept) {
             return Ok(term.to_owned());
         }
         if let Some(vocab_mapping) = &active.vocab_mapping
@@ -1850,7 +1850,7 @@ pub(super) fn compact_iri(
         return Ok(candidate);
     }
     reject_iri_confused_with_prefix(active, iri)?;
-    if vocab {
+    if vocab || !compact_to_relative {
         return Ok(iri.to_owned());
     }
     Ok(active
@@ -1864,6 +1864,7 @@ fn select_inverse_term<'a>(
     inverse: &'a InverseContext,
     iri: &str,
     selection: Option<&JsonLdTermSelection>,
+    accept: &impl Fn(&str) -> bool,
 ) -> Option<&'a str> {
     let containers = selection.map_or_else(
         || vec!["@none".to_owned()],
@@ -1880,7 +1881,9 @@ fn select_inverse_term<'a>(
             continue;
         };
         if kind == JsonLdTermSelectionKind::Any {
-            if let Some(term) = candidate.fallback.get("@none") {
+            if let Some(terms) = candidate.fallback.get("@none")
+                && let Some(term) = terms.iter().find(|term| accept(term))
+            {
                 return Some(term);
             }
             continue;
@@ -1891,7 +1894,9 @@ fn select_inverse_term<'a>(
             JsonLdTermSelectionKind::Any => unreachable!("handled above"),
         };
         for value in &preferred {
-            if let Some(term) = table.get(value) {
+            if let Some(terms) = table.get(value)
+                && let Some(term) = terms.iter().find(|term| accept(term))
+            {
                 return Some(term);
             }
         }

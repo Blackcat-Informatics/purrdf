@@ -8,7 +8,8 @@ use std::sync::Arc;
 
 use purrdf_lex::json::{self, Object, Value};
 use purrdf_rdf::native_codecs::jsonld::{
-    CompiledJsonLdContext, JsonLdSerializeOptions, parse_jsonld,
+    CompiledJsonLdContext, JsonLdCompactionLimits, JsonLdCompactionPolicy, JsonLdExpansionLimits,
+    JsonLdSerializeOptions, compact_jsonld_with_context, parse_jsonld,
     serialize_dataset_to_jsonld_with_options,
 };
 use purrdf_rdf::{canonical_flat_nquads, datasets_isomorphic, parse_dataset};
@@ -372,6 +373,17 @@ fn pinned_w3c_compaction_vectors_match_the_independent_json_oracle() {
             .unwrap_or_else(|error| panic!("{} invalid context fixture: {error}", vector.id));
         let compiled = CompiledJsonLdContext::compile(&context, None)
             .unwrap_or_else(|error| panic!("{} context did not compile: {error}", vector.id));
+        let input_context =
+            CompiledJsonLdContext::compile(&Value::Object(Object::new()), None).unwrap();
+        let native = compact_jsonld_with_context(
+            vector.input.as_bytes(),
+            &input_context,
+            &compiled,
+            &JsonLdCompactionPolicy::DEFAULT,
+            &JsonLdExpansionLimits::DEFAULT,
+            &JsonLdCompactionLimits::DEFAULT,
+        )
+        .unwrap_or_else(|error| panic!("{} native compaction failed: {error}", vector.id));
         let output = serialize_dataset_to_jsonld_with_options(
             &dataset,
             &JsonLdSerializeOptions::compiled(Arc::new(compiled)),
@@ -381,15 +393,16 @@ fn pinned_w3c_compaction_vectors_match_the_independent_json_oracle() {
         let expected = read_unordered(&vector.expected)
             .unwrap_or_else(|error| panic!("{} invalid expected JSON: {error}", vector.id));
         let actual = flatten_single_carrier_graph(actual);
-        if actual == expected {
+        if actual == expected && native == expected {
             passed += 1;
         } else {
             failures.push(format!(
-                "{} ({}):\nexpected:\n{}\nactual:\n{}",
+                "{} ({}):\nexpected:\n{}\ndataset:\n{}\nnative:\n{}",
                 vector.id,
                 vector.name,
                 json::write_pretty(&expected),
-                json::write_pretty(&actual)
+                json::write_pretty(&actual),
+                json::write_pretty(&native)
             ));
         }
     }

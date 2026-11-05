@@ -68,15 +68,28 @@ impl std::error::Error for NonFiniteNumber {}
 /// decimal integer, any other number as the shortest lexeme that reads back as the
 /// nearest binary64 ([`Number::from_f64`]).
 pub(crate) fn binary64_lexeme(number: &Number) -> Result<String, NonFiniteNumber> {
+    binary64_lexeme_with_memory(
+        number,
+        &mut purrdf_lex::allocation::Memory::new(&mut purrdf_lex::allocation::Resident),
+    )
+    .expect("resident native number spelling allocation")
+    .ok_or_else(|| NonFiniteNumber(number.lexeme().to_owned()))
+}
+
+/// The shared spelling with admitted temporary/output strings; non-finite values
+/// return `None` without constructing an owned error lexeme.
+pub(crate) fn binary64_lexeme_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+    number: &Number,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+) -> Result<Option<String>, purrdf_lex::allocation::StorageError> {
     if let Some(value) = number.as_i64() {
-        return Ok(value.to_string());
+        return memory.format(&value).map(Some);
     }
     if let Some(value) = number.as_u64() {
-        return Ok(value.to_string());
+        return memory.format(&value).map(Some);
     }
-    read_json(|| Number::from_f64(number.as_f64()))
-        .map(Number::into_lexeme)
-        .ok_or_else(|| NonFiniteNumber(number.lexeme().to_owned()))
+    read_json(|| Number::from_f64_with_memory(number.as_f64(), memory))
+        .map(|number| number.map(Number::into_lexeme))
 }
 
 /// `value` with every number respelt by [`binary64_lexeme`], over a heap work list.

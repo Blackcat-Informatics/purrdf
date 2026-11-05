@@ -272,18 +272,18 @@ fn aliases_base_vocab_and_coercions_compact_and_expand_losslessly() {
     assert_eq!(
         alice["indexed"]["row"],
         json!([{"@graph":[
-            {"@id":"ex:c","ex:p":[{"@value":"c"}]},{"@id":"ex:d","ex:p":[{"@value":"d"}]}
+            {"@id":"ex:c","ex:p":["c"]},{"@id":"ex:d","ex:p":["d"]}
         ]}])
     );
     assert_eq!(
         alice["plain"],
         json!([{"@included":[
-            {"@id":"ex:e","ex:p":[{"@value":"e"}]},{"@id":"ex:f","ex:p":[{"@value":"f"}]}
+            {"@id":"ex:e","ex:p":["e"]},{"@id":"ex:f","ex:p":["f"]}
         ]}])
     );
-    // Unsupported ordinary type/index map producers retain lossless regular properties.
-    assert_eq!(alice["ex:typed"], json!([{"@id":"ex:person"}]));
-    assert_eq!(alice["ex:entry"], json!([{"@id":"ex:entry"}]));
+    // The shared document body also produces ordinary type and index maps.
+    assert_eq!(alice["typed"]["@none"], json!(["ex:person"]));
+    assert_eq!(alice["entries"]["@none"], json!([{"@id":"ex:entry"}]));
     let rich_yaml = serialize_dataset_to_yamlld_with_options(&rich, &rich_options).unwrap();
     let rich_yaml_json = yamlld_to_jsonld(rich_yaml.as_bytes()).unwrap();
     assert_eq!(read_output(&rich_yaml_json), rich_value);
@@ -723,10 +723,7 @@ fn rdf_json_collapses_only_when_its_lexical_form_is_canonical() {
     let literal = &value["@graph"][0]["ex:json"][0];
     assert_eq!(literal["@value"], "1");
     assert_eq!(literal["@type"], "rdf:JSON");
-    assert_eq!(
-        literal["@annotation"][0]["ex:note"],
-        json!([{"@value":"annotation"}])
-    );
+    assert_eq!(literal["@annotation"][0]["ex:note"], json!(["annotation"]));
     let reopened = parse_jsonld(output.as_bytes(), None).unwrap();
     assert!(
         datasets_isomorphic(
@@ -1513,7 +1510,7 @@ fn a_well_formed_list_suffix_folds_behind_a_shared_head() {
         .unwrap_or_else(|| panic!("the shared head stays a node: {compacted}"));
     assert_eq!(
         head["http://www.w3.org/1999/02/22-rdf-syntax-ns#rest"]["@list"],
-        json!([{"@value": "two"}]),
+        json!(["two"]),
         "{compacted}"
     );
     let reparsed = parse_jsonld(compacted.as_bytes(), None).expect("expand folded suffix");

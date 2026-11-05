@@ -72,6 +72,67 @@ same application context is used for many datasets. `JsonLdContextRegistry`
 resolves context IRIs and `@import` only from caller-supplied immutable local
 documents; PurRDF never performs network context loading.
 
+## Native document compaction
+
+`compact_expanded_with_context` compacts lexical JSON values before RDF lowering.
+`compact_jsonld_with_context` and `compact_yamlld_with_context` first expand input
+bytes with a compiled input context, then compact with a distinct compiled output
+context. Both return an owned lexical JSON value; YAML input keeps its existing
+selection options and expansion limits. Opaque JSON and native numeric lexemes
+remain document values rather than taking an RDF round trip.
+
+Pass `JsonLdCompactionPolicy` with `compact_arrays` and `compact_to_relative`;
+both default to `true`. Relative selection affects document-position IRIs under
+the compiled base without altering the retained output context. The compact
+operation attaches a non-null context, turns an empty root array into an object,
+and envelopes other remaining arrays with the context's `@graph` alias.
+
+Flattening with an output context composes through that same root operation:
+
+```rust
+use purrdf::native_codecs::jsonld::{
+    JsonLdCompactionLimits, JsonLdCompactionPolicy, JsonLdExpansionLimits,
+    JsonLdFlattenLimits, compact_expanded_with_context, flatten_jsonld_with_context,
+};
+# fn example(bytes: &[u8], input: &purrdf::CompiledJsonLdContext,
+#     output: &purrdf::CompiledJsonLdContext) -> Result<(), purrdf::RdfDiagnostic> {
+let flattened = flatten_jsonld_with_context(
+    bytes, input, &JsonLdExpansionLimits::DEFAULT, &JsonLdFlattenLimits::DEFAULT,
+)?;
+let compacted = compact_expanded_with_context(
+    &flattened, output, &JsonLdCompactionPolicy::DEFAULT,
+    &JsonLdCompactionLimits::DEFAULT,
+)?;
+# let _ = compacted;
+# Ok(())
+# }
+```
+
+`JsonLdCompactionLimits::max_allocation_bytes` defaults to 32 GiB. It admits newly
+owned document output, retained context copies, walk frames and compactor scratch
+before construction. Borrowed input and initial compiled contexts are not charged
+again. Context compilation, scoped context state and native IRI/inverse-selection
+scratch retain their separate semantic limits; those are per compilation, not an
+aggregate retained-byte bound. This is a document-construction account, not a cap
+on total operation memory. Expansion and flattening keep their own accounts.
+
+Configured RDF writers project their prepared RDF nodes into this same compactor,
+retaining streamed envelopes and one-node residency. Lists, reifiers, reverse
+relocation and lossless graph ownership remain RDF preparation. A selected custom
+graph index consumes the actual mapping property's first compacted key and retains
+residual values, graph identifiers and other metadata. It does not substitute
+semantic `@index` metadata for that property.
+
+The shared value-compaction rules can emit plain strings for untyped literals even
+under prefix-only property spellings. Ordinary type/index maps now use the native
+document algorithm as well. Multiple lists retain explicit list objects when one
+list container would combine their identities. If an immutable context shadows
+every lossless spelling, compaction returns an actionable error. These configured
+outputs can be more compact
+than earlier carrier output. Frozen no-base, no-options expanded bytes are retained,
+and RDF JSON literals keep typed lexical forms whenever raw JSON coercion would
+change their spelling, collection shape or annotation identity.
+
 ## CLI
 
 Write the versioned document to a file, then pass it to any RDF-producing CLI
