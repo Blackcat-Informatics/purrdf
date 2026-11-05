@@ -9,6 +9,7 @@
 //! No code in this module performs network I/O or supplies a vocabulary default.
 
 mod compiler;
+mod selection;
 pub(in crate::native_codecs::jsonld) use compiler::is_control;
 mod options;
 mod strict;
@@ -357,9 +358,9 @@ impl ActiveContext {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct InverseSelection {
-    types: BTreeMap<String, String>,
-    languages: BTreeMap<String, String>,
-    fallback: BTreeMap<String, String>,
+    types: BTreeMap<String, Vec<String>>,
+    languages: BTreeMap<String, Vec<String>>,
+    fallback: BTreeMap<String, Vec<String>>,
 }
 
 type InverseContext = BTreeMap<String, BTreeMap<String, InverseSelection>>;
@@ -742,7 +743,7 @@ impl CompiledJsonLdContext {
     /// positions consult the inverse context and prefix definitions; document
     /// positions compact against `@base` where the round-trip is exact.
     pub fn compact_iri(&self, iri: &str, vocab: bool) -> Result<String, RdfDiagnostic> {
-        compiler::compact_iri(&self.active, &self.inverse, iri, vocab, None)
+        compiler::compact_iri(&self.active, &self.inverse, iri, vocab, None, true)
     }
 
     /// Compact an absolute vocabulary IRI using explicit inverse-context value-shape
@@ -756,7 +757,60 @@ impl CompiledJsonLdContext {
         vocab: bool,
         selection: Option<&JsonLdTermSelection>,
     ) -> Result<String, RdfDiagnostic> {
-        compiler::compact_iri(&self.active, &self.inverse, iri, vocab, selection)
+        compiler::compact_iri(&self.active, &self.inverse, iri, vocab, selection, true)
+    }
+
+    pub(in crate::native_codecs::jsonld) fn compact_document_iri(
+        &self,
+        iri: &str,
+        vocab: bool,
+        relative: bool,
+    ) -> Result<String, RdfDiagnostic> {
+        compiler::compact_iri(&self.active, &self.inverse, iri, vocab, None, relative)
+    }
+
+    pub(in crate::native_codecs::jsonld) fn compact_property_iri(
+        &self,
+        iri: &str,
+        value: &Value,
+        reverse: bool,
+        json_eligible: bool,
+        used_lists: &[String],
+    ) -> Result<String, RdfDiagnostic> {
+        selection::compact(self, iri, value, reverse, json_eligible, used_lists)
+    }
+
+    pub(in crate::native_codecs::jsonld) fn property_uses_explicit_values(
+        &self,
+        term: &str,
+        value: &Value,
+    ) -> Result<bool, RdfDiagnostic> {
+        selection::explicit_values(self, term, value)
+    }
+
+    pub(in crate::native_codecs::jsonld) fn property_keeps_index(
+        &self,
+        term: &str,
+        value: &Value,
+    ) -> Result<bool, RdfDiagnostic> {
+        selection::keep_index(self, term, value)
+    }
+
+    fn compact_property_accepting(
+        &self,
+        iri: &str,
+        selection: &JsonLdTermSelection,
+        accept: impl Fn(&str) -> bool,
+    ) -> Result<String, RdfDiagnostic> {
+        compiler::compact_iri_accepting(
+            &self.active,
+            &self.inverse,
+            iri,
+            true,
+            Some(selection),
+            true,
+            accept,
+        )
     }
 }
 

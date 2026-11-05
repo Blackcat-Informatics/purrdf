@@ -87,29 +87,11 @@ ALLOWLIST: dict[tuple[str, str], str] = {
     ("crates/rdf/src/native_codecs/ser_model.rs", "held"): "A work stack of pieces still to be written: a nested triple term is emitted front to back by holding its later pieces and popping the next one. Nothing popped has been written yet; no emitted byte is touched.",
     ("crates/sparql-results/src/json.rs", "held"): "A work stack of pieces still to be written: a nested triple term is emitted front to back by holding its later pieces and popping the next one. Nothing popped has been written yet; no emitted byte is touched.",
     ("crates/sparql-results/src/json_read.rs", "open"): "The SPARQL-JSON READER's stacks of containers and triple terms still open while a document is parsed or a binding decoded; popping one closes it. The reader emits nothing.",
-    (
-        "crates/sparql-results/src/json_read.rs",
-        "scratch.bound",
-    ): "The SPARQL-JSON READER's per-row scratch of which variable columns already have a cell, cleared and resized at the start of each `results.bindings` entry so the buffer is reused across rows. It is decoder bookkeeping over input; the reader emits nothing.",
-    (
-        "crates/sparql-results/src/xml.rs",
-        "held",
-    ): "A work stack of pieces still to be written: a nested triple term is emitted front to back by holding its later pieces and popping the next one. Nothing popped has been written yet; no emitted byte is touched.",
-    (
-        "crates/sparql-results/src/xml_read.rs",
-        "frames",
-    ): "The SPARQL XML results READER's stack of triple terms being decoded. It holds input under construction, not output.",
-    (
-        "crates/rdf/src/native_codecs/rdfxml.rs",
-        "pending",
-    ): "The RDF/XML READER's depth-first work stack over the parsed element tree, "
-    "which collects a document's `xmlns` declarations. It holds input elements "
-    "still to visit, not output.",
-    (
-        "crates/rdf/src/native_codecs/rdfxml.rs",
-        "stack",
-    ): "The RDF/XML writer's open-element stack. Popping it closes a tag; the "
-    "bytes for that tag were already emitted and are not touched.",
+    ("crates/sparql-results/src/json_read.rs", "scratch.bound"): "The SPARQL-JSON READER's per-row scratch of which variable columns already have a cell, cleared and resized at the start of each `results.bindings` entry so the buffer is reused across rows. It is decoder bookkeeping over input; the reader emits nothing.",
+    ("crates/sparql-results/src/xml.rs", "held"): "A work stack of pieces still to be written: a nested triple term is emitted front to back by holding its later pieces and popping the next one. Nothing popped has been written yet; no emitted byte is touched.",
+    ("crates/sparql-results/src/xml_read.rs", "frames"): "The SPARQL XML results READER's stack of triple terms being decoded. It holds input under construction, not output.",
+    ("crates/rdf/src/native_codecs/rdfxml.rs", "pending"): "The RDF/XML READER's depth-first work stack over the parsed element tree, which collects a document's `xmlns` declarations. It holds input elements still to visit, not output.",
+    ("crates/rdf/src/native_codecs/rdfxml.rs", "stack"): "The RDF/XML writer's open-element stack. Popping it closes a tag; the bytes for that tag were already emitted and are not touched.",
     ("crates/rdf/src/native_codecs/jsonld/context/compiler.rs", "self.remote_stack"): "The JSON-LD context compiler's remote-context stack, which exists to detect cyclic `@context` IRIs. It holds IRIs under consideration, not output.",
     ("crates/rdf/src/native_codecs/jsonld/structural.rs", "walk.tasks"): "The structural expander consumes pending traversal tasks; no task is an emitted byte buffer.",
     ("crates/rdf/src/native_codecs/jsonld/structural.rs", "walk.results"): "The structural expander takes its final owned JSON value from an internal result stack before returning; no serialization occurs.",
@@ -167,6 +149,22 @@ ALLOWLIST: dict[tuple[str, str], str] = {
         "self.raw",
     ): "The line reader's INPUT buffer, reused across lines. This is the parse path; "
     "there is no document being emitted here to take anything back from.",
+    ("crates/rdf/src/native_codecs/jsonld/carrier/projection.rs", "projection.tasks"): "The typed RDF projector consumes pending Node, Term and annotation construction frames. These tasks contain borrowed carrier references, not emitted bytes.",
+    ("crates/rdf/src/native_codecs/jsonld/carrier/projection.rs", "projection.results"): "The typed RDF projector transfers its final owned JSON input from a construction result stack before generic compaction or byte serialization.",
+    ("crates/rdf/src/native_codecs/jsonld/carrier/projection.rs", "tasks"): "Typed projection scheduling consumes a reversed Vec of pending tasks while retaining its admitted capacity until explicit release. No task holds emitted bytes.",
+    ("crates/rdf/src/native_codecs/jsonld/carrier/projection.rs", "self.results"): "Projection continuations consume unpublished JSON children to assemble fields, arrays and attached annotations before the generic compactor receives them.",
+    ("crates/rdf/src/native_codecs/jsonld/carrier/projection.rs", "work"): "Canonical RDF JSON eligibility traverses a newly parsed lexical value and inspects number spellings before choosing its projection. This work list never contains emitted bytes.",
+    ("crates/rdf/src/native_codecs/jsonld/compaction.rs", "walk.tasks"): "The generic compactor consumes pending traversal and continuation frames over borrowed input. Frames are not an emitted byte buffer.",
+    ("crates/rdf/src/native_codecs/jsonld/compaction.rs", "walk.results"): "The generic compactor takes its final owned lexical JSON value from an internal result stack before root finishing and any byte serialization.",
+    ("crates/rdf/src/native_codecs/jsonld/compaction.rs", "values"): "Singleton collection compaction takes the sole unpublished JSON value from its owned array after checking its length; no serialized bytes are changed.",
+    ("crates/rdf/src/native_codecs/jsonld/compaction.rs", "self.results"): "Compaction continuations consume owned child JSON values from an internal result stack before assembling their unpublished parent value.",
+    ("crates/rdf/src/native_codecs/jsonld/compaction.rs", "terms"): "Type-scope processing consumes sorted compacted type names from admitted planning scratch before constructing the node. These strings are lookup keys, not an output stream.",
+    ("crates/rdf/src/native_codecs/jsonld/compaction.rs", "used_lists"): "Per-property List-term ownership keys are destroyed before releasing their admitted planning array. They are selector bookkeeping, not emitted text.",
+    ("crates/rdf/src/native_codecs/jsonld/compaction.rs", "explicit_terms"): "Per-property explicit-array encoding keys are destroyed after planning before the admitted key array is released. They never hold emitted document bytes.",
+    ("crates/rdf/src/native_codecs/jsonld/compaction.rs", "self.tasks"): "Parent scheduling temporarily moves pending child frames beneath their continuation. Only traversal order changes; no output bytes are read or modified.",
+    ("crates/rdf/src/native_codecs/jsonld/compaction.rs", "children"): "The temporary child-task staging stack is consumed in its original scheduling order while retaining admitted capacity until release; no task has been serialized.",
+    ("crates/rdf/src/native_codecs/jsonld/compaction.rs", "items"): "Map-key extraction takes the first value from an unpublished JSON metadata array while retaining residual values. The array is document construction, never a drained byte stream.",
+    ("crates/rdf/src/native_codecs/jsonld/compaction.rs", "reversed"): "Reverse-property promotion consumes unpublished owned object members before attaching them to the compacted node. The member vector is not serialized output.",
 }
 
 

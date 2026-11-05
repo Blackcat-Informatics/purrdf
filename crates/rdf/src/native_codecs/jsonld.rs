@@ -14,6 +14,10 @@
 //! explicitly sorted, so the document does not depend on input append order.
 
 mod carrier;
+mod compaction;
+pub use compaction::{
+    JsonLdCompactionLimits, JsonLdCompactionPolicy, compact_expanded_with_context,
+};
 /// Compiled JSON-LD 1.1 contexts, immutable offline registries, and configured
 /// serialization options shared by every JSON-LD/YAML-LD surface.
 pub mod context;
@@ -439,6 +443,7 @@ pub(crate) fn write_ser_graph_with_options(
                 merged.as_ref().unwrap_or(context),
                 CompactionPolicy {
                     compact_arrays: options.compact_arrays(),
+                    ..CompactionPolicy::DEFAULT
                 },
                 out,
             )
@@ -451,6 +456,7 @@ pub(crate) fn write_ser_graph_with_options(
                 merged.as_ref().unwrap_or(&context),
                 CompactionPolicy {
                     compact_arrays: options.compact_arrays(),
+                    ..CompactionPolicy::DEFAULT
                 },
                 out,
             )
@@ -707,6 +713,7 @@ pub(crate) fn write_ser_graph_to_yamlld_with_options(
                 merged.as_ref().unwrap_or(context),
                 CompactionPolicy {
                     compact_arrays: options.compact_arrays(),
+                    ..CompactionPolicy::DEFAULT
                 },
             )
         }
@@ -718,6 +725,7 @@ pub(crate) fn write_ser_graph_to_yamlld_with_options(
                 merged.as_ref().unwrap_or(&context),
                 CompactionPolicy {
                     compact_arrays: options.compact_arrays(),
+                    ..CompactionPolicy::DEFAULT
                 },
             )
         }
@@ -1954,6 +1962,39 @@ pub fn expand_jsonld_with_context(
 ) -> Result<Value, RdfDiagnostic> {
     let value = context::parse_document(bytes)?;
     structural::expand(&value, context, *limits).map(|expanded| expanded.value)
+}
+
+/// Expand JSON-LD bytes under the input context, then compact under a distinct
+/// immutable output context. Each construction operation has its own allowance.
+/// # Errors
+/// Preserves native decoding, expansion, context, shape and construction refusals.
+pub fn compact_jsonld_with_context(
+    bytes: &[u8],
+    input_context: &CompiledJsonLdContext,
+    output_context: &CompiledJsonLdContext,
+    policy: &JsonLdCompactionPolicy,
+    expansion_limits: &JsonLdExpansionLimits,
+    compaction_limits: &JsonLdCompactionLimits,
+) -> Result<Value, RdfDiagnostic> {
+    let expanded = expand_jsonld_with_context(bytes, input_context, expansion_limits)?;
+    compact_expanded_with_context(&expanded, output_context, policy, compaction_limits)
+}
+
+/// Expand selected YAML-LD bytes and compact through the same document body as
+/// JSON-LD. Input selection and expansion keep their existing separate controls.
+/// # Errors
+/// Preserves native YAML, expansion, context, shape and construction refusals.
+pub fn compact_yamlld_with_context(
+    bytes: &[u8],
+    input_context: &CompiledJsonLdContext,
+    output_context: &CompiledJsonLdContext,
+    options: &YamlLdOptions,
+    policy: &JsonLdCompactionPolicy,
+    expansion_limits: &JsonLdExpansionLimits,
+    compaction_limits: &JsonLdCompactionLimits,
+) -> Result<Value, RdfDiagnostic> {
+    let expanded = expand_yamlld_with_context(bytes, input_context, options, expansion_limits)?;
+    compact_expanded_with_context(&expanded, output_context, policy, compaction_limits)
 }
 
 /// Flatten native JSON-LD without choosing an output context or compacting.

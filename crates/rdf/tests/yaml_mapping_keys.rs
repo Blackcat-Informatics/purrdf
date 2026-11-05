@@ -17,14 +17,592 @@
 //!   on the text (`1: a` with `"1": b` repeats a key).
 
 use purrdf_rdf::native_codecs::jsonld::{
-    CompiledJsonLdContext, JsonLdContextFormat, JsonLdContextRegistry, JsonLdExpansionLimits,
-    JsonLdFlattenLimits, YamlLdOptions, expand_jsonld_with_context, expand_yamlld_with_context,
-    flatten_jsonld_with_context, flatten_yamlld_with_context, parse_jsonld_with_context,
-    parse_yamlld_with_context, parse_yamlld_with_options, yamlld_to_jsonld,
-    yamlld_to_jsonld_with_options,
+    CompiledJsonLdContext, JsonLdCompactionLimits, JsonLdCompactionPolicy, JsonLdContextFormat,
+    JsonLdContextRegistry, JsonLdExpansionLimits, JsonLdFlattenLimits, YamlLdOptions,
+    compact_expanded_with_context, compact_jsonld_with_context, compact_yamlld_with_context,
+    expand_jsonld_with_context, expand_yamlld_with_context, flatten_jsonld_with_context,
+    flatten_yamlld_with_context, parse_jsonld_with_context, parse_yamlld_with_context,
+    parse_yamlld_with_options, yamlld_to_jsonld, yamlld_to_jsonld_with_options,
 };
 use purrdf_rdf::native_codecs::parse_dataset;
 use purrdf_rdf::{DatasetSink, OkfBundle, OkfConfig, lift_okf_bundle};
+
+#[test]
+fn document_compaction_preserves_structure_and_native_terms() {
+    use purrdf_lex::json::{self, Value};
+    let expansion = JsonLdExpansionLimits::DEFAULT;
+    let limits = JsonLdCompactionLimits::DEFAULT;
+    let policy = JsonLdCompactionPolicy::DEFAULT;
+    let empty = CompiledJsonLdContext::compile(&json::read("{}").unwrap(), None).unwrap();
+    let check = |source: &str, context: &str, expected: &str, compact_arrays: bool| {
+        let context_value = json::read(context).unwrap();
+        let context = CompiledJsonLdContext::compile(&context_value, None).unwrap();
+        let source = json::read(source).unwrap();
+        let mut expected = json::read(expected).unwrap();
+        if !context_value.is_null() {
+            expected
+                .as_object_mut()
+                .unwrap()
+                .insert("@context", context_value);
+        }
+        let actual = compact_expanded_with_context(
+            &source,
+            &context,
+            &JsonLdCompactionPolicy {
+                compact_arrays,
+                ..policy
+            },
+            &limits,
+        )
+        .unwrap();
+        assert_eq!(actual, expected, "expanded: {source:?}");
+        actual
+    };
+    for (source, context, expected, arrays) in [
+        ("null", "null", "{}", true),
+        ("[]", "null", "{}", true),
+        ("[]", "{}", "{}", false),
+        (r#"[{"@id":"urn:a"}]"#, "{}", r#"{"@id":"urn:a"}"#, true),
+        (
+            r#"[{"@id":"urn:a"}]"#,
+            r#"{"g":"@graph"}"#,
+            r#"{"g":[{"@id":"urn:a"}]}"#,
+            false,
+        ),
+        (
+            r#"[{"@id":"urn:a"},{"@id":"urn:b"}]"#,
+            r#"{"g":"@graph"}"#,
+            r#"{"g":[{"@id":"urn:a"},{"@id":"urn:b"}]}"#,
+            true,
+        ),
+        (
+            r#"[{"@id":"urn:s","@type":["urn:T"],"urn:p":[{"@value":1.0}],"urn:q":[{"@id":"urn:o"}]}]"#,
+            r#"{"T":"urn:T","p":"urn:p","q":{"@id":"urn:q","@type":"@id"}}"#,
+            r#"{"@id":"urn:s","@type":"T","p":1.0,"q":"urn:o"}"#,
+            true,
+        ),
+        (
+            r#"[{"urn:p":[{"@list":[{"@value":"a"},{"@value":"b"}]}]}]"#,
+            r#"{"details":"@nest","p":{"@id":"urn:p","@container":"@list","@nest":"details"}}"#,
+            r#"{"@graph":[{"details":{"p":["a","b"]}}]}"#,
+            false,
+        ),
+        (
+            r#"[{"urn:p":[{"@list":[{"@value":"one","@language":"en"},{"@value":"deux","@language":"fr"}]}]}]"#,
+            r#"{"@language":"en","p":{"@id":"urn:p","@container":"@list","@language":"en"}}"#,
+            r#"{"urn:p":{"@list":["one",{"@language":"fr","@value":"deux"}]}}"#,
+            true,
+        ),
+        (
+            r#"[{"urn:p":[{"@value":"hello","@language":"en"},{"@value":"none"}]}]"#,
+            r#"{"p":{"@id":"urn:p","@container":"@language"}}"#,
+            r#"{"@graph":[{"p":{"en":["hello"],"@none":["none"]}}]}"#,
+            false,
+        ),
+        (
+            r#"[{"urn:p":[{"@id":"urn:a","urn:q":[{"@value":"x"}]},{}]}]"#,
+            r#"{"p":{"@id":"urn:p","@container":"@id"}}"#,
+            r#"{"p":{"urn:a":{"urn:q":"x"},"@none":{}}}"#,
+            true,
+        ),
+        (
+            r#"[{"urn:p":[{"@id":"urn:x","@type":["urn:T"]}]}]"#,
+            r#"{"p":{"@id":"urn:p","@container":"@type","@type":"@id"},"T":"urn:T"}"#,
+            r#"{"p":{"T":"urn:x"}}"#,
+            true,
+        ),
+        (
+            r#"[{"urn:p":[{"@index":"row","@value":"x"},{"@value":"none"}]}]"#,
+            r#"{"p":{"@id":"urn:p","@container":"@index"}}"#,
+            r#"{"p":{"row":"x","@none":"none"}}"#,
+            true,
+        ),
+        (
+            r#"[{"urn:p":[{"@id":"urn:x","urn:key":[{"@value":"row"},{"@value":"residual"}],"urn:q":[{"@value":"x"}]}]}]"#,
+            r#"{"p":{"@id":"urn:p","@container":"@index","@index":"urn:key"}}"#,
+            r#"{"p":{"row":{"@id":"urn:x","urn:key":"residual","urn:q":"x"}}}"#,
+            true,
+        ),
+        (
+            r#"[{"@reverse":{"urn:p":[{"@id":"urn:x"}],"urn:q":[{"@id":"urn:y"}]}}]"#,
+            r#"{"back":{"@reverse":"urn:p","@type":"@id"}}"#,
+            r#"{"@graph":[{"back":["urn:x"],"@reverse":{"urn:q":[{"@id":"urn:y"}]}}]}"#,
+            false,
+        ),
+        (
+            r#"[{"urn:p":[{"@id":"urn:x","urn:q":[{"@value":"scoped"}]}]}]"#,
+            r#"{"p":{"@id":"urn:p","@context":{"q":"urn:q"}}}"#,
+            r#"{"p":{"@id":"urn:x","q":"scoped"}}"#,
+            true,
+        ),
+        (
+            r#"[{"@type":["urn:T"],"urn:q":[{"@value":"local"}],"urn:p":[{"urn:q":[{"@value":"child"}]}]}]"#,
+            r#"{"T":{"@id":"urn:T","@context":{"q":"urn:q"}},"p":"urn:p"}"#,
+            r#"{"@type":"T","q":"local","p":{"urn:q":"child"}}"#,
+            true,
+        ),
+        (
+            r#"[{"urn:p":[{"@graph":[{"@id":"urn:a"},{"@id":"urn:b"}]}]}]"#,
+            r#"{"p":{"@id":"urn:p","@container":"@graph"},"inc":"@included"}"#,
+            r#"{"@graph":[{"p":[{"inc":[{"@id":"urn:a"},{"@id":"urn:b"}]}]}]}"#,
+            false,
+        ),
+        (
+            r#"[{"urn:p":[{"@id":"urn:g","@graph":[{"@id":"urn:a"},{"@id":"urn:b"}]}]}]"#,
+            r#"{"p":{"@id":"urn:p","@container":["@graph","@id"]}}"#,
+            r#"{"@graph":[{"p":{"urn:g":[{"@id":"urn:a"},{"@id":"urn:b"}]}}]}"#,
+            false,
+        ),
+        (
+            r#"[{"urn:p":[{"@index":"row","@graph":[{"@id":"urn:a"},{"@id":"urn:b"}]}]}]"#,
+            r#"{"p":{"@id":"urn:p","@container":["@graph","@index"]}}"#,
+            r#"{"@graph":[{"p":{"row":[{"@graph":[{"@id":"urn:a"},{"@id":"urn:b"}]}]}}]}"#,
+            false,
+        ),
+        (
+            r#"[{"urn:p":[{"@id":"urn:g","@graph":[{"@id":"urn:a"}],"urn:key":[{"@value":"row"},{"@value":"rest"}]}]}]"#,
+            r#"{"p":{"@id":"urn:p","@container":["@graph","@index"],"@index":"urn:key"}}"#,
+            r#"{"p":{"row":{"@id":"urn:g","@graph":[{"@id":"urn:a"}],"urn:key":"rest"}}}"#,
+            true,
+        ),
+        (
+            r#"[{"@included":[{"@id":"urn:i","urn:p":[{"@value":"included"}]}]}]"#,
+            r#"{"inc":"@included","p":"urn:p"}"#,
+            r#"{"inc":{"@id":"urn:i","p":"included"}}"#,
+            true,
+        ),
+        (
+            r#"[{"urn:p":[{"@value":{"@bogus":[1.0,1e999999999999999999999]},"@type":"@json"}]}]"#,
+            r#"{"p":{"@id":"urn:p","@type":"@json"}}"#,
+            r#"{"p":{"@bogus":[1.0,1e999999999999999999999]}}"#,
+            true,
+        ),
+        (
+            r#"[{"urn:p":[{"@value":null,"@type":"@json","@index":"row"}]}]"#,
+            r#"{"p":{"@id":"urn:p","@type":"@json"}}"#,
+            r#"{"urn:p":{"@value":null,"@type":"@json","@index":"row"}}"#,
+            true,
+        ),
+        (
+            r#"[{"urn:p":[{"@value":[1.0],"@type":"@json"},{"@value":[2e0],"@type":"@json"}]}]"#,
+            r#"{"p":{"@id":"urn:p","@type":"@json"}}"#,
+            r#"{"urn:p":[{"@value":[1.0],"@type":"@json"},{"@value":[2e0],"@type":"@json"}]}"#,
+            true,
+        ),
+        (
+            r#"[{"urn:p":[{"@triple":{"@subject":{"@id":"urn:s"},"@predicate":"urn:q","@object":{"@value":1}},"@annotation":[{"@id":"urn:r","urn:note":[{"@value":"note"}]}]}],"@annotation":[{"urn:note":[{"@value":"detached"}]}]}]"#,
+            r#"{"p":"urn:p","note":"urn:note"}"#,
+            r#"{"@graph":[{"p":[{"@triple":{"@subject":{"@id":"urn:s"},"@predicate":"urn:q","@object":{"@value":1}},"@annotation":[{"@id":"urn:r","note":["note"]}]}],"@annotation":[{"note":["detached"]}]}]}"#,
+            false,
+        ),
+    ] {
+        let actual = check(source, context, expected, arrays);
+        if let Some(opaque) = actual
+            .get("p")
+            .filter(|value| value.get("@bogus").is_some())
+        {
+            assert_eq!(
+                json::write_compact(opaque),
+                r#"{"@bogus":[1.0,1e999999999999999999999]}"#,
+                "opaque numeric spelling"
+            );
+        }
+    }
+
+    let multiple_lists = r#"[{"urn:p":[{"@list":[{"@value":"a"}]},{"@list":[{"@value":"b"}]}]}]"#;
+    check(
+        multiple_lists,
+        r#"{"p":{"@id":"urn:p","@container":"@list"}}"#,
+        r#"{"p":["a"],"urn:p":{"@list":["b"]}}"#,
+        true,
+    );
+    check(
+        r#"[{"urn:p":[{"@list":[{"@value":"a","@language":"en"}]},{"@list":[{"@value":"b","@language":"fr"}]}]}]"#,
+        r#"{"urn:p":{"@id":"urn:p","@container":"@list","@language":"en"},"fr":{"@id":"urn:p","@container":"@list","@language":"fr"}}"#,
+        r#"{"urn:p":["a"],"fr":["b"]}"#,
+        true,
+    );
+    check(
+        r#"[{"urn:p":[{"@list":[{"@value":"a","@language":"en"}]},{"@list":[{"@value":"b","@language":"en"}]}]}]"#,
+        r#"{"urn:p":{"@id":"urn:p","@container":"@list","@language":"en"},"en":{"@id":"urn:p","@container":"@list","@language":"en"}}"#,
+        r#"{"en":["a"],"urn:p":["b"]}"#,
+        true,
+    );
+    let shadowed = CompiledJsonLdContext::compile(
+        &json::read(r#"{"urn:p":{"@id":"urn:p","@container":"@list"}}"#).unwrap(),
+        None,
+    )
+    .unwrap();
+    assert!(
+        compact_expanded_with_context(
+            &json::read(multiple_lists).unwrap(),
+            &shadowed,
+            &policy,
+            &limits
+        )
+        .unwrap_err()
+        .message
+        .contains("no lossless property spelling")
+    );
+    assert!(
+        compact_expanded_with_context(
+            &json::read(r#"[{"urn:p":[{"@list":[{"@value":"a"}]}]}]"#).unwrap(),
+            &shadowed,
+            &policy,
+            &limits
+        )
+        .is_ok()
+    );
+
+    let json_shadow = CompiledJsonLdContext::compile(
+        &json::read(r#"{"urn:p":{"@id":"urn:p","@type":"@json"}}"#).unwrap(),
+        None,
+    )
+    .unwrap();
+    assert!(
+        compact_expanded_with_context(
+            &json::read(
+                r#"[{"urn:p":[{"@type":"@json","@value":1},{"@type":"@json","@value":2}]}]"#
+            )
+            .unwrap(),
+            &json_shadow,
+            &policy,
+            &limits
+        )
+        .unwrap_err()
+        .message
+        .contains("no lossless property spelling")
+    );
+    assert!(
+        compact_expanded_with_context(
+            &json::read(r#"[{"urn:p":[{"@type":"@json","@value":1}]}]"#).unwrap(),
+            &json_shadow,
+            &policy,
+            &limits
+        )
+        .is_ok()
+    );
+    for (context, source) in [
+        (
+            r#"{"urn:p":{"@id":"urn:p","@container":"@index"}}"#,
+            r#"[{"urn:p":[{"@value":"a","@index":"row"},{"@value":"b","@index":"@none"}]}]"#,
+        ),
+        (
+            r#"{"urn:p":{"@id":"urn:p","@container":"@language"},"en":"@none"}"#,
+            r#"[{"urn:p":[{"@value":"hello","@language":"en"}]}]"#,
+        ),
+    ] {
+        let context = CompiledJsonLdContext::compile(&json::read(context).unwrap(), None).unwrap();
+        let raw = json::read(source).unwrap();
+        let compacted = compact_expanded_with_context(&raw, &context, &policy, &limits).unwrap();
+        assert_eq!(
+            compacted["urn:p"], raw[0]["urn:p"],
+            "ordinary map shadows use explicit metadata objects"
+        );
+        assert_eq!(
+            expand_jsonld_with_context(
+                json::write_compact(&compacted).as_bytes(),
+                &empty,
+                &expansion
+            )
+            .unwrap(),
+            raw
+        );
+    }
+    check(
+        r#"[{"urn:p":[{"@type":"@json","@value":1},{"@type":"@json","@value":2}]}]"#,
+        r#"{"urn:p":{"@id":"urn:p","@type":"@json"},"safe":{"@id":"urn:p","@type":"@none"}}"#,
+        r#"{"safe":[{"@type":"@json","@value":1},{"@type":"@json","@value":2}]}"#,
+        true,
+    );
+
+    let metadata_list=json::read(r#"[{"urn:p":[{"@list":[{"@value":"a"}],"@index":"row","@annotation":[{"@id":"urn:r"}]}]}]"#).unwrap();
+    let list_context = CompiledJsonLdContext::compile(
+        &json::read(r#"{"urn:p":{"@id":"urn:p","@container":"@list"}}"#).unwrap(),
+        None,
+    )
+    .unwrap();
+    let list_policy = JsonLdCompactionPolicy {
+        compact_arrays: false,
+        ..policy
+    };
+    let compacted =
+        compact_expanded_with_context(&metadata_list, &list_context, &list_policy, &limits)
+            .unwrap();
+    assert_eq!(
+        compacted["@graph"][0]["urn:p"],
+        json::read(r#"{"@list":["a"],"@index":"row","@annotation":[{"@id":"urn:r"}]}"#).unwrap()
+    );
+    assert_eq!(
+        expand_jsonld_with_context(
+            json::write_compact(&compacted).as_bytes(),
+            &empty,
+            &expansion
+        )
+        .unwrap(),
+        metadata_list
+    );
+
+    let indexed_graph =
+        json::read(r#"[{"urn:p":[{"@id":"urn:g","@index":"none","@graph":[{"@id":"urn:a","urn:q":[{"@value":"a"}]}]}]}]"#)
+            .unwrap();
+    let indexed_context = CompiledJsonLdContext::compile(
+        &json::read(r#"{"urn:p":{"@id":"urn:p","@container":["@graph","@index"]},"none":"@none"}"#)
+            .unwrap(),
+        None,
+    )
+    .unwrap();
+    let compacted =
+        compact_expanded_with_context(&indexed_graph, &indexed_context, &policy, &limits).unwrap();
+    assert_eq!(
+        compacted["urn:p"]["none"],
+        json::read(r#"{"@id":"urn:g","@index":"none","@graph":[{"@id":"urn:a","urn:q":"a"}]}"#)
+            .unwrap()
+    );
+    assert_eq!(
+        expand_jsonld_with_context(
+            json::write_compact(&compacted).as_bytes(),
+            &empty,
+            &expansion
+        )
+        .unwrap(),
+        indexed_graph
+    );
+
+    for key in ["@none", "none"] {
+        let mut raw=json::read(r#"[{"urn:p":[{"@id":"urn:g","@graph":[{"@id":"urn:a","urn:q":[{"@value":"a"}]}],"urn:key":[{"@value":"placeholder"}]}]}]"#).unwrap();
+        raw[0]["urn:p"][0]["urn:key"][0]["@value"] = Value::String(key.to_owned());
+        let context=CompiledJsonLdContext::compile(&json::read(r#"{"p":{"@id":"urn:p","@container":["@graph","@index"],"@index":"urn:key"},"none":"@none"}"#).unwrap(),None).unwrap();
+        let compacted = compact_expanded_with_context(&raw, &context, &policy, &limits).unwrap();
+        assert_eq!(compacted["p"][key]["urn:key"], key);
+        assert_eq!(compacted["p"][key]["@id"], "urn:g");
+        let reopened = expand_jsonld_with_context(
+            json::write_compact(&compacted).as_bytes(),
+            &empty,
+            &expansion,
+        )
+        .unwrap();
+        assert_eq!(reopened, raw, "real key that aliases the none sentinel");
+    }
+    // RDF graph ownership must distinguish a real sentinel-looking key as well.
+    let graph_context =
+        json::read(r#"{"p":{"@id":"urn:p","@container":["@graph","@index"],"@index":"urn:key"},"raw":{"@id":"urn:raw","@type":"@json"}}"#)
+            .unwrap();
+    for key in ["@none", ""] {
+        let source = format!(
+            "<urn:s> <urn:p> _:g .\n_:g <urn:key> {} .\n<urn:a> <urn:q> \"inside\" _:g .\n<urn:s> <urn:raw> \"[0.25]\"^^<http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON> .\n",
+            json::write_compact(&Value::String(key.to_owned()))
+        );
+        let dataset = parse_dataset(source.as_bytes(), "application/n-quads", None).unwrap();
+        let options = purrdf_rdf::native_codecs::jsonld::JsonLdSerializeOptions::context(
+            &graph_context,
+            None,
+        )
+        .unwrap();
+        let text = purrdf_rdf::native_codecs::jsonld::serialize_dataset_to_jsonld_with_options(
+            &dataset, &options,
+        )
+        .unwrap();
+        assert_eq!(
+            json::write_compact(&json::read(&text).unwrap()["@graph"][0]["raw"]),
+            "[0.25]",
+            "admitted numeric eligibility on the real RDF caller"
+        );
+        let reopened =
+            purrdf_rdf::native_codecs::jsonld::parse_jsonld(text.as_bytes(), None).unwrap();
+        assert!(
+            purrdf_rdf::datasets_isomorphic(
+                &dataset,
+                &reopened,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap(),
+            "{text}"
+        );
+    }
+
+    let input =
+        CompiledJsonLdContext::compile(&json::read(r#"{"old":"urn:p"}"#).unwrap(), None).unwrap();
+    let output =
+        CompiledJsonLdContext::compile(&json::read(r#"{"new":"urn:p"}"#).unwrap(), None).unwrap();
+    let expected = json::read(r#"{"@context":{"new":"urn:p"},"new":7.0}"#).unwrap();
+    assert_eq!(
+        compact_jsonld_with_context(
+            br#"{"old":7.0}"#,
+            &input,
+            &output,
+            &policy,
+            &expansion,
+            &limits
+        )
+        .unwrap(),
+        expected
+    );
+    assert_eq!(
+        compact_yamlld_with_context(
+            b"old: 7.0\n",
+            &input,
+            &output,
+            &YamlLdOptions::DEFAULT,
+            &policy,
+            &expansion,
+            &limits
+        )
+        .unwrap(),
+        expected
+    );
+    let based = CompiledJsonLdContext::compile(
+        &json::read(r#"{"@base":"https://example.org/dir/"}"#).unwrap(),
+        None,
+    )
+    .unwrap();
+    let expanded = json::read(r#"[{"@id":"https://example.org/dir/item"}]"#).unwrap();
+    for (compact_to_relative, id) in [(true, "item"), (false, "https://example.org/dir/item")] {
+        let actual = compact_expanded_with_context(
+            &expanded,
+            &based,
+            &JsonLdCompactionPolicy {
+                compact_to_relative,
+                ..policy
+            },
+            &limits,
+        )
+        .unwrap();
+        assert_eq!(actual["@id"], id);
+        assert_eq!(actual["@context"], *based.canonical_context());
+    }
+    for malformed in [
+        "[1]",
+        r#"[["scalar"]]"#,
+        r#"[{"urn:p":"scalar"}]"#,
+        r#"[{"@id":1}]"#,
+        r#"[{"@type":"urn:T"}]"#,
+        r#"[{"@value":{},"@type":"urn:T"}]"#,
+        r#"[{"@value":"x","@language":"en","@type":"urn:T"}]"#,
+        r#"[{"@list":{}}]"#,
+        r#"[{"@triple":{"@subject":{"@id":"urn:s"}}}]"#,
+        r#"[{"@reverse":{"urn:p":[{"@value":"literal"}]}}]"#,
+        r#"[{"@annotation":[1]}]"#,
+        r#"[{"@id":"urn:a","@id":"urn:b"}]"#,
+    ] {
+        let invalid = json::read(malformed).unwrap();
+        assert!(
+            compact_expanded_with_context(&invalid, &empty, &policy, &limits).is_err(),
+            "{malformed}"
+        );
+        assert!(
+            compact_expanded_with_context(
+                &json::read(r#"[{"@id":"urn:valid","urn:p":[{"@value":"neighbor"}]}]"#).unwrap(),
+                &empty,
+                &policy,
+                &limits
+            )
+            .is_ok()
+        );
+    }
+    let source = json::read(
+        r#"[{"@id":"urn:valid","urn:p":[{"@value":{"opaque":[1.0]},"@type":"@json"}]}]"#,
+    )
+    .unwrap();
+    assert!(
+        compact_expanded_with_context(
+            &source,
+            &output,
+            &policy,
+            &JsonLdCompactionLimits {
+                max_allocation_bytes: 0
+            }
+        )
+        .is_err()
+    );
+    assert!(compact_expanded_with_context(&source, &output, &policy, &limits).is_ok());
+
+    // Unchanged pinned local-context compaction and context-bearing flatten output.
+    let root = purrdf_testkit::paths::workspace_root().join("vectors/yaml-ld/tests");
+    let manifest =
+        json::read(&std::fs::read_to_string(root.join("manifest.jsonld")).unwrap()).unwrap();
+    for id in [
+        "#compact-local-json-ld-context",
+        "#compact-local-yaml-ld-context",
+        "#flatten",
+    ] {
+        let entry = manifest["sequence"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["@id"] == id)
+            .unwrap();
+        let input_path = entry["input"].as_str().unwrap();
+        let context_path = entry["context"].as_str().unwrap();
+        let context_bytes = std::fs::read(root.join(context_path)).unwrap();
+        let context_value = if context_path.ends_with(".jsonld") {
+            json::read_slice(&context_bytes, json::Limits::DEFAULT).unwrap()
+        } else {
+            purrdf_lex::yaml::read(std::str::from_utf8(&context_bytes).unwrap()).unwrap()
+        };
+        let base = format!("{}{input_path}", manifest["baseIri"].as_str().unwrap());
+        let input_context =
+            CompiledJsonLdContext::compile(&json::read("{}").unwrap(), Some(&base)).unwrap();
+        let output_context = CompiledJsonLdContext::compile(&context_value, Some(&base)).unwrap();
+        let options = YamlLdOptions {
+            extract_all_scripts: entry["option"]
+                .get("extractAllScripts")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            ..YamlLdOptions::DEFAULT
+        };
+        let policy = JsonLdCompactionPolicy {
+            compact_arrays: entry["option"]
+                .get("compactArrays")
+                .and_then(Value::as_bool)
+                .unwrap_or(true),
+            ..policy
+        };
+        let bytes = std::fs::read(root.join(input_path)).unwrap();
+        let expected = purrdf_lex::yaml::read(
+            &std::fs::read_to_string(root.join(entry["expect"].as_str().unwrap())).unwrap(),
+        )
+        .unwrap();
+        let actual = if id == "#flatten" {
+            let flattened = flatten_yamlld_with_context(
+                &bytes,
+                &input_context,
+                &options,
+                &expansion,
+                &JsonLdFlattenLimits::DEFAULT,
+            )
+            .unwrap();
+            compact_expanded_with_context(&flattened, &output_context, &policy, &limits).unwrap()
+        } else {
+            let json_input = purrdf_lex::yaml::read(std::str::from_utf8(&bytes).unwrap()).unwrap();
+            let from_json = compact_jsonld_with_context(
+                json::write_compact(&json_input).as_bytes(),
+                &input_context,
+                &output_context,
+                &policy,
+                &expansion,
+                &limits,
+            )
+            .unwrap();
+            let from_yaml = compact_yamlld_with_context(
+                &bytes,
+                &input_context,
+                &output_context,
+                &options,
+                &policy,
+                &expansion,
+                &limits,
+            )
+            .unwrap();
+            assert_eq!(from_json, from_yaml, "{id}: shared JSON/YAML body");
+            from_yaml
+        };
+        assert_eq!(actual, expected, "{id}: complete compacted document");
+    }
+}
 
 #[test]
 fn context_free_flattening_preserves_nodes_and_native_terms() {

@@ -557,6 +557,17 @@ impl Number {
         Self::from_shortest(value.is_finite(), value, -5..=15)
     }
 
+    /// Construct the same shortest representation with every temporary and retained
+    /// string admitted before allocation through the caller's account.
+    /// # Errors
+    /// Returns the original layout, admission or physical allocation refusal.
+    pub fn from_f64_with_memory<S: Admission + ?Sized>(
+        value: f64,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Option<Self>, StorageError> {
+        Self::from_shortest_with_memory(value.is_finite(), value, -5..=15, memory)
+    }
+
     /// [`Number::from_f64`] for a binary32: the shortest digits that round-trip
     /// through binary32, positional when the decimal exponent is in `-6..=12`.
     pub fn from_f32(value: f32) -> Option<Self> {
@@ -572,14 +583,36 @@ impl Number {
         value: impl fmt::LowerExp,
         positional: RangeInclusive<i32>,
     ) -> Option<Self> {
-        finite.then(|| Self(layout(&format!("{value:e}"), positional)))
+        Self::from_shortest_with_memory(finite, value, positional, &mut Memory::new(&mut Resident))
+            .expect("resident JSON number formatting allocation")
+    }
+
+    fn from_shortest_with_memory<S: Admission + ?Sized>(
+        finite: bool,
+        value: impl fmt::LowerExp,
+        positional: RangeInclusive<i32>,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Option<Self>, StorageError> {
+        if !finite {
+            return Ok(None);
+        }
+        memory.scope(|memory| {
+            let scientific = memory.format(&format_args!("{value:e}"))?;
+            let result = layout(&scientific, positional, memory)?;
+            memory.release_string(scientific)?;
+            Ok(Some(Self(result)))
+        })
     }
 }
 
 /// Lay out the shortest round-trip digits in `scientific` (Rust's `{:e}`
 /// spelling: `[-]d[.ddd]e[-]x`), positionally when the decimal exponent is in
 /// `positional`.
-fn layout(scientific: &str, positional: RangeInclusive<i32>) -> String {
+fn layout<S: Admission + ?Sized>(
+    scientific: &str,
+    positional: RangeInclusive<i32>,
+    memory: &mut Memory<'_, S>,
+) -> Result<String, StorageError> {
     let (negative, body) = match scientific.strip_prefix('-') {
         Some(body) => (true, body),
         None => (false, scientific),
@@ -590,49 +623,56 @@ fn layout(scientific: &str, positional: RangeInclusive<i32>) -> String {
     let exponent: i32 = exponent
         .parse()
         .expect("the scientific spelling writes a decimal exponent");
-    let digits: String = mantissa.chars().filter(|&c| c != '.').collect();
-    let mut out = String::with_capacity(digits.len() + 8);
+    let mut digits = String::new();
+    for ch in mantissa.chars().filter(|&ch| ch != '.') {
+        memory.push_char(&mut digits, ch)?;
+    }
+    let mut out = String::new();
     if negative {
-        out.push('-');
+        memory.push_char(&mut out, '-')?;
     }
     if digits == "0" {
-        out.push_str("0.0");
-        return out;
+        memory.push_str(&mut out, "0.0")?;
+        memory.release_string(digits)?;
+        return Ok(out);
     }
     let length = digits.len() as i32;
     if positional.contains(&exponent) {
         if length - 1 <= exponent {
             // 1234e7 -> 12340000000.0
-            out.push_str(&digits);
+            memory.push_str(&mut out, &digits)?;
             for _ in length..=exponent {
-                out.push('0');
+                memory.push_char(&mut out, '0')?;
             }
-            out.push_str(".0");
+            memory.push_str(&mut out, ".0")?;
         } else if exponent >= 0 {
             // 1234e-2 -> 12.34
             let point = (exponent + 1) as usize;
-            out.push_str(&digits[..point]);
-            out.push('.');
-            out.push_str(&digits[point..]);
+            memory.push_str(&mut out, &digits[..point])?;
+            memory.push_char(&mut out, '.')?;
+            memory.push_str(&mut out, &digits[point..])?;
         } else {
             // 1234e-6 -> 0.001234
-            out.push_str("0.");
+            memory.push_str(&mut out, "0.")?;
             for _ in 0..(-exponent - 1) {
-                out.push('0');
+                memory.push_char(&mut out, '0')?;
             }
-            out.push_str(&digits);
+            memory.push_str(&mut out, &digits)?;
         }
     } else {
-        out.push_str(&digits[..1]);
+        memory.push_str(&mut out, &digits[..1])?;
         if length > 1 {
-            out.push('.');
-            out.push_str(&digits[1..]);
+            memory.push_char(&mut out, '.')?;
+            memory.push_str(&mut out, &digits[1..])?;
         }
-        out.push('e');
-        out.push(if exponent < 0 { '-' } else { '+' });
-        out.push_str(&exponent.unsigned_abs().to_string());
+        memory.push_char(&mut out, 'e')?;
+        memory.push_char(&mut out, if exponent < 0 { '-' } else { '+' })?;
+        let exponent = memory.format(&exponent.unsigned_abs())?;
+        memory.push_str(&mut out, &exponent)?;
+        memory.release_string(exponent)?;
     }
-    out
+    memory.release_string(digits)?;
+    Ok(out)
 }
 
 impl PartialEq for Number {
