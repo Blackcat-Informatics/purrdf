@@ -104,7 +104,17 @@ change, rule or expression document is acquired. Shapes controls require
 `shacl pack --yamlld-input-options PATH` configures its root `--shapes` document.
 Pack retains its Turtle default, so YAML-LD requires `--shapes-from yamlld`.
 The native shapes parse retains its final declared base and prefix metadata for
-import resolution. Imports keep their default input controls.
+import resolution.
+The five shapes-document commands accept repeatable
+`--import-yamlld-input-options IRI=PATH` for individual RDF imports. Each absolute
+IRI must name one actual `--import` pair. Duplicate or unknown control IRIs,
+empty halves and controls targeting non-YAML-LD imports are usage errors. Other
+imports may retain any supported format. Every mapping and target is checked
+before opening an options file; every requested options file is decoded before
+any RDF source is acquired. Each import receives only its own controls; an
+unmapped import keeps native defaults. A valid imported-input limit applies when
+that document is parsed. Product validation and SRL/check-only rules refuse the
+flag. Premise, SRL and ShEx schema imports keep their existing policy.
 Every selected input must be YAML-LD; pack, GTS and other native formats are
 refused before data acquisition. The bounded named options file is validated
 before primary data, premise imports or rule documents are read; it does not

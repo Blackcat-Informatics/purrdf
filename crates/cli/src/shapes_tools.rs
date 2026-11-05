@@ -45,7 +45,7 @@ use crate::argv_documents::{
 use crate::cli::{CliRdfFormat, LedgerTarget, ReportTarget, refuse_document_flags};
 use crate::error::CliError;
 use crate::shapes_source::{
-    read_shapes_document, resolve_shapes_graph, shapes_error, shapes_imports,
+    ShapesImportPlan, read_shapes_document, resolve_shapes_graph, shapes_error, shapes_imports,
 };
 use crate::{format, ledger, report, sink, source};
 
@@ -69,6 +69,8 @@ pub(crate) struct RulesOptions<'a> {
     pub(crate) srl_base: Option<&'a str>,
     /// `--import IRI=FILE`, repeatable: the rule source's imports.
     pub(crate) imports: &'a [String],
+    /// Per-IRI YAML-LD controls for declared RDF imports.
+    pub(crate) import_yamlld_input_options: &'a [String],
     /// `--check[=LEVEL]`: check the `--srl` rule set to this level and evaluate nothing.
     pub(crate) check: Option<srl::CheckLevel>,
     /// `--explain`: where the proof goes, if anywhere.
@@ -129,6 +131,14 @@ pub(crate) fn run_rules(
                 .to_owned(),
         ));
     }
+    if !options.import_yamlld_input_options.is_empty()
+        && (options.shapes.is_none() || options.srl.is_some() || options.check.is_some())
+    {
+        return Err(CliError::Usage(
+            "--import-yamlld-input-options requires --shapes and conflicts with --srl and --check"
+                .to_owned(),
+        ));
+    }
     let coordinates =
         purrdf_validate::query::CoordinateInputs::from_parts(options.now, options.entropy_seed)
             .map_err(|error| {
@@ -174,6 +184,14 @@ pub(crate) fn run_rules(
     ]));
     readers.extend(import_readers(&srl_pairs));
     refuse_shared_stdin(&readers)?;
+    let import_plan = ShapesImportPlan::prepare(
+        if options.shapes.is_some() {
+            options.imports
+        } else {
+            &[]
+        },
+        options.import_yamlld_input_options,
+    )?;
     let data_format = format::resolve(options.from, options.input)?;
     let input_options = options
         .yamlld_input_options
@@ -257,7 +275,7 @@ pub(crate) fn run_rules(
                 shapes_input_options.as_deref(),
                 canonical,
             )?;
-            let table = shapes_imports(&root, options.imports, canonical)?;
+            let table = shapes_imports(&root, &import_plan, canonical)?;
             let shapes = purrdf::shapes::shapes::from_dataset_with_base(
                 &root.dataset,
                 None,
@@ -498,6 +516,8 @@ pub(crate) struct NodeExprOptions<'a> {
     pub(crate) shapes_base: Option<&'a str>,
     /// `--import IRI=FILE`, repeatable.
     pub(crate) imports: &'a [String],
+    /// Per-IRI YAML-LD controls for declared RDF imports.
+    pub(crate) import_yamlld_input_options: &'a [String],
     /// The expression selector: `--expr`, `--expr-at`/`--expr-via`, `--expr-turtle` or
     /// `--expr-turtle-file`.
     pub(crate) expr: ExprFlags<'a>,
@@ -570,6 +590,8 @@ pub(crate) fn run_node_expr(
         ("--shapes".to_owned(), options.shapes),
     ])?;
     let data_format = format::resolve(options.from, options.input)?;
+    let import_plan =
+        ShapesImportPlan::prepare(options.imports, options.import_yamlld_input_options)?;
     let input_options = options
         .yamlld_input_options
         .map(|path| source::read_yamlld_input_options(path, &[data_format]))
@@ -632,7 +654,7 @@ pub(crate) fn run_node_expr(
         shapes_input_options.as_deref(),
         canonical,
     )?;
-    let table = shapes_imports(&root_document, options.imports, canonical)?;
+    let table = shapes_imports(&root_document, &import_plan, canonical)?;
     let data = source::load_dataset(
         options.input,
         data_format,
@@ -714,6 +736,8 @@ pub(crate) struct LintOptions<'a> {
     pub(crate) base: Option<&'a str>,
     /// `--import IRI=FILE`, repeatable.
     pub(crate) imports: &'a [String],
+    /// Per-IRI YAML-LD controls for declared RDF imports.
+    pub(crate) import_yamlld_input_options: &'a [String],
     /// `--box-role-vocab`.
     pub(crate) box_role_vocab: Option<&'a str>,
     /// `--shapes-graph`.
@@ -733,6 +757,8 @@ pub(crate) fn run_lint(
 ) -> Result<(), CliError> {
     refuse_text_report_flags("shapes lint", ledger_target, jsonld_options)?;
     let format = format::resolve(options.from, options.input)?;
+    let import_plan =
+        ShapesImportPlan::prepare(options.imports, options.import_yamlld_input_options)?;
     let input_options = options
         .yamlld_input_options
         .map(|path| source::read_yamlld_input_options(path, &[format]))
@@ -762,7 +788,7 @@ pub(crate) fn run_lint(
         input_options.as_deref(),
         canonical,
     )?;
-    let table = shapes_imports(&root, options.imports, canonical)?;
+    let table = shapes_imports(&root, &import_plan, canonical)?;
     let report = lint::lint(
         &root.dataset,
         &root.prefixes,

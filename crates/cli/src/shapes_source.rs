@@ -166,10 +166,10 @@ pub(crate) fn read_shapes_document(
 
 /// Build the shapes graph's `owl:imports` table from the `--import IRI=FILE` pairs.
 ///
-/// `imports` is the raw `--import IRI=FILE` table exactly as the operator wrote it — this
+/// `imports` is the prepared import plan, with each configuration already decoded — this
 /// function is agnostic to which command line it came from, which is what lets
 /// `validate --shapes`, `shacl pack`, `shacl rules`, `shacl node-expr` and `shapes lint`
-/// share it. Every pair is decided before any file is opened, then each document is read
+/// share it. Every pair was decided before RDF acquisition, then each document is read
 /// under its ontology IRI as its base (the per-document base an `owl:imports` names), with
 /// its own prefix map. The IRIs the shapes document itself was read under (`root.loaded`)
 /// and those an imported document's `@base` declares are declared loaded.
@@ -180,21 +180,20 @@ pub(crate) fn read_shapes_document(
 /// [`shapes_error`] renders its refusal in command-line terms.
 pub(crate) fn shapes_imports(
     root: &ShapesDocument,
-    imports: &[String],
+    imports: &ShapesImportPlan<'_>,
     canonical: &mut crate::canonical::Request,
 ) -> Result<ShapesImports, CliError> {
-    let pairs = resolve_shapes_import_pairs(imports)?;
     let mut table = ShapesImports::new();
     for iri in &root.loaded {
         table.declare_loaded(iri.clone());
     }
-    for pair in &pairs {
+    for pair in &imports.pairs {
         let document = read_shapes_document(
             pair.path,
             pair.format,
             Some(pair.iri),
             &format!("--import {}", pair.iri),
-            None,
+            pair.input_options.as_deref(),
             canonical,
         )?;
         for loaded in &document.loaded {
@@ -369,6 +368,49 @@ pub(crate) fn shapes_error(
     }
 }
 
+/// Resolved SHACL import pairs and their independently admitted input controls.
+/// No RDF source is acquired while preparing this plan.
+pub(crate) struct ShapesImportPlan<'a> {
+    pairs: Vec<ShapesImportPair<'a>>,
+}
+
+impl<'a> ShapesImportPlan<'a> {
+    /// Validate every mapping and target before opening any options file, then decode all.
+    pub(crate) fn prepare(imports: &'a [String], controls: &[String]) -> Result<Self, CliError> {
+        let mut pairs = resolve_shapes_import_pairs(imports)?;
+        let controls = parse_import_pairs(controls, ImportRole::SHAPES_INPUT_OPTIONS)?;
+        let targets = controls
+            .iter()
+            .map(|control| {
+                let index = pairs
+                    .iter()
+                    .position(|pair| pair.iri == control.iri)
+                    .ok_or_else(|| {
+                        CliError::Usage(format!(
+                            "--import-yamlld-input-options {}: no --import pair names this IRI",
+                            control.spec
+                        ))
+                    })?;
+                let pair = &pairs[index];
+                if pair.format != SourceFormat::Native(NativeRdfFormat::YamlLd) {
+                    return Err(CliError::Usage(format!(
+                        "--import-yamlld-input-options {}: --import {} must be YAML-LD",
+                        control.spec, pair.spec
+                    )));
+                }
+                Ok(index)
+            })
+            .collect::<Result<Vec<_>, CliError>>()?;
+        for (control, index) in controls.iter().zip(targets) {
+            pairs[index].input_options = Some(source::read_yamlld_input_options(
+                std::path::Path::new(control.path),
+                &[pairs[index].format],
+            )?);
+        }
+        Ok(Self { pairs })
+    }
+}
+
 /// One `--import IRI=FILE` argument for the SHACL lane, fully DECIDED but not yet read.
 struct ShapesImportPair<'a> {
     /// The pair exactly as the operator wrote it, so a diagnostic can quote it back.
@@ -379,6 +421,8 @@ struct ShapesImportPair<'a> {
     path: &'a str,
     /// The syntax that path's own extension classifies it as.
     format: SourceFormat,
+    /// This import's own admitted controls; absent means native defaults.
+    input_options: Option<Vec<u8>>,
 }
 
 /// Decide every `--import IRI=FILE` ARGUMENT, with no I/O at all: the shared
@@ -393,6 +437,7 @@ fn resolve_shapes_import_pairs(specs: &[String]) -> Result<Vec<ShapesImportPair<
                 iri: pair.iri,
                 path: pair.path,
                 format: format::resolve(None, pair.path)?,
+                input_options: None,
             })
         })
         .collect()

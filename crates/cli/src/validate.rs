@@ -241,6 +241,8 @@ pub(crate) struct ValidateOptions<'a> {
     /// `owl:imports`. Empty means the operator named none, and an import nothing else
     /// resolves is then refused — see [`crate::shapes_source::shapes_imports`].
     pub(crate) imports: &'a [String],
+    /// Per-IRI YAML-LD controls for declared RDF imports.
+    pub(crate) import_yamlld_input_options: &'a [String],
     /// `--box-role-vocab`: the caller-supplied graph-box role vocabulary NAMESPACE, or
     /// `None` to leave the box-role annotation feature inactive. Threaded to
     /// `purrdf_shapes::shapes::from_dataset_with_config` through
@@ -456,6 +458,11 @@ pub(crate) fn run(
     refuse_a_rebuild_with_no_product(options)?;
 
     let data_format = format::resolve(options.from, options.input)?;
+    // Every DECISION about the shapes side is made here, before a byte of either document
+    // is read: a `--shapes-graph` that names no graph is a malformed request and should
+    // fail against the command line rather than after the data has been parsed and
+    // validated.
+    let plan = ShapesPlan::decide(options)?;
     let input_options = options
         .yamlld_input_options
         .map(|path| source::read_yamlld_input_options(path, &[data_format]))
@@ -476,11 +483,6 @@ pub(crate) fn run(
         &change_plan.base_legs(format::BaseUse::parse(data_format, "the --from data graph")),
     )?;
 
-    // Every DECISION about the shapes side is made here, before a byte of either document
-    // is read: a `--shapes-graph` that names no graph is a malformed request and should
-    // fail against the command line rather than after the data has been parsed and
-    // validated.
-    let plan = ShapesPlan::decide(options)?;
     // Decided off the command line too: an IRI that is not one is a malformed request.
     let validation = validation_options(options)?;
 
@@ -960,6 +962,7 @@ fn load_shapes<D: DatasetView<ReadError = std::convert::Infallible>>(
     format: SourceFormat,
     base: Option<&str>,
     input_options: Option<&[u8]>,
+    import_plan: &crate::shapes_source::ShapesImportPlan<'_>,
     data: &D,
     data_iris: &[&str],
     canonical: &mut crate::canonical::Request,
@@ -972,7 +975,7 @@ fn load_shapes<D: DatasetView<ReadError = std::convert::Infallible>>(
         input_options,
         canonical,
     )?;
-    let mut table = crate::shapes_source::shapes_imports(&root, options.imports, canonical)?;
+    let mut table = crate::shapes_source::shapes_imports(&root, import_plan, canonical)?;
     table.link_data_graph(data, data_iris).map_err(|error| {
         crate::shapes_source::shapes_error(
             ShapesError::Imports(error),
@@ -1035,6 +1038,8 @@ enum ShapesPlan<'a> {
         format: SourceFormat,
         /// Admitted YAML-LD Basic controls, decoded before any RDF acquisition.
         input_options: Option<Vec<u8>>,
+        /// Imports and their options admitted before RDF acquisition.
+        imports: crate::shapes_source::ShapesImportPlan<'a>,
         /// The base it parses under, and that `--shapes-graph` resolved against.
         base: Option<String>,
         /// `--shapes-graph`, resolved to an absolute IRI.
@@ -1055,7 +1060,7 @@ enum ShapesPlan<'a> {
 }
 
 impl<'a> ShapesPlan<'a> {
-    /// Decide the shapes side from the command line, reading no document.
+    /// Decide the shapes side before RDF acquisition, admitting its input configuration.
     ///
     /// # Errors
     ///
@@ -1065,6 +1070,11 @@ impl<'a> ShapesPlan<'a> {
             && (options.shapes.is_none() || options.shapes_product.is_some())
         {
             return Err(CliError::Usage("--shapes-yamlld-input-options requires --shapes and conflicts with --shapes-product".to_owned()));
+        }
+        if !options.import_yamlld_input_options.is_empty()
+            && (options.shapes.is_none() || options.shapes_product.is_some())
+        {
+            return Err(CliError::Usage("--import-yamlld-input-options requires --shapes and conflicts with --shapes-product".to_owned()));
         }
         if let Some(path) = options.shapes_product {
             // Decoded HERE, before a byte of the product is read: a mis-typed selector is
@@ -1093,6 +1103,10 @@ impl<'a> ShapesPlan<'a> {
             ));
         };
         let format = format::resolve(options.shapes_from, path)?;
+        let imports = crate::shapes_source::ShapesImportPlan::prepare(
+            options.imports,
+            options.import_yamlld_input_options,
+        )?;
         let input_options = options
             .shapes_yamlld_input_options
             .map(|path| source::read_yamlld_input_options(path, &[format]))
@@ -1107,6 +1121,7 @@ impl<'a> ShapesPlan<'a> {
             path,
             format,
             input_options,
+            imports,
             base,
             shapes_graph,
         })
@@ -1177,6 +1192,7 @@ impl<'a> ShapesPlan<'a> {
                 format,
                 ref base,
                 ref input_options,
+                ref imports,
                 ..
             } => load_shapes(
                 options,
@@ -1185,6 +1201,7 @@ impl<'a> ShapesPlan<'a> {
                 format,
                 base.as_deref(),
                 input_options.as_deref(),
+                imports,
                 data,
                 data_iris,
                 canonical,
