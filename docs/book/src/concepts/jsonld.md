@@ -133,6 +133,75 @@ than earlier carrier output. Frozen no-base, no-options expanded bytes are retai
 and RDF JSON literals keep typed lexical forms whenever raw JSON coercion would
 change their spelling, collection shape or annotation identity.
 
+## Native document framing
+
+`native_codecs::jsonld::frame_value_with_context` frames a lexical JSON document;
+`frame_jsonld_with_context` and `frame_yamlld_with_context` decode input and frame
+bytes before calling the same operation. YAML uses the existing first/all-document
+selection in `YamlLdOptions`. The algorithm targets [JSON-LD 1.1 Framing,
+Recommendation of 16 July 2020, sections 4–5.3](https://www.w3.org/TR/2020/REC-json-ld11-framing-20200716/).
+It expands through the structural walker, retains the original graph-local node
+map, frames iteratively, and uses the shared compactor. It does not lower through
+RDF or reconstruct the map from flattened output.
+
+The context arguments have separate roles. `input_context` interprets the input.
+`frame_context` supplies initial pattern terms and the offline registry;
+`frame_retrieval_base` resolves frame references and local/registered contexts.
+The frame's own `@context` is compiled independently for output using that retrieval
+base. A missing frame context emits an empty context; explicit null emits null.
+Initial pattern terms are not implicitly emitted. Registry lookup remains offline.
+`JsonLdFramingBase::Input`, `None` and `Iri` select the initial output compaction
+base: the expanded input document base, no base, or an
+explicit absolute IRI. The frame's own output context is then processed over
+that initial base, with its separate retrieval URL for context lookup. Its
+explicit `@base`, including null, takes effect. Output selection does not change
+the emitted context document or the initial pattern context's active meaning.
+
+`JsonLdFramingPolicy` defaults to `JsonLdEmbed::Once`, with `explicit`,
+`require_all`, `omit_default` and `frame_default` false, and `omit_graph` true.
+Frame-local `@embed`, `@explicit`, `@requireAll` and `@omitDefault` override
+the operation defaults for that frame. Implicit child frames inherit the effective
+local flags; explicit child frames begin with operation defaults before applying
+their own controls. Embedding admits exactly `@once`, `@always` and `@never`;
+true aliases `@once`, false aliases `@never`. Ancestor cycles retain references
+under every policy. Traversal follows lexical subject and property order.
+The nested `JsonLdCompactionPolicy` retains both defaults, `compact_arrays: true`
+and `compact_to_relative: true`, and keyword aliases select output spellings.
+Root finishing follows section 5.1's concrete sequence: ordinary compaction first,
+then a forced graph envelope only when `omit_graph` is false. Consequently,
+`compact_arrays: false` retains a root array and its ordinary graph envelope even
+for one result with `omit_graph: true`. The REC's general omitGraph prose describes
+multiple-node envelopes but does not supply an additional true-case unwrapping
+step after compaction.
+
+Framing uses the merged graph by default. `frame_default: true`, or a top-level
+frame property expanding to `@graph`, selects the default graph; a graph subframe
+enters the corresponding named graph. The REC API initializes its graph name to
+false and immediately tests for `@merged`. This implementation reads that internal
+inconsistency using sections 4.1 and 5.3, which specify the merged/default choice.
+
+`JsonLdFramingLimits` preserves separate `expansion`, `node_map` and `compaction`
+construction accounts. Its new framing allowance defaults to 32 GiB and admits
+new graph views, output, work frames, typed default markers and scratch before
+allocation. Inputs and compiled contexts are borrowed. Context compilation,
+scope state and resolver scratch retain their separate authority; there is no
+aggregate operation-memory claim. `max_work` defaults to 2^30 deterministic
+units, charging subject/property scans, matching, inherited subframes, recursive
+matching and embedding. Frame expansion and context compilation precede that
+counter. `max_emitted_nodes` defaults to 2^24 subject occurrences, including
+identifier-only references. Limits refuse before governed work and return no
+partial document. Native storage diagnostics retain their original cause.
+
+Native RDF 1.2 triple terms and attached/detached annotations are atomic framing
+values. Ordinary property wildcards and exclusions can retain or exclude them;
+patterns inspecting `@triple`, its component controls, or `@annotation` internals
+are explicitly refused. Identifier references inside native terms count when
+pruning singly occurring blank-node identifiers, but cleanup never changes the
+atomic values. Opaque `@json` payloads are copied and compared as whole values,
+never interpreted or rewritten as JSON-LD. Private preservation markers occupy
+separate typed state; ordinary user strings, including `@null`, and real JSON
+null cannot become cleanup instructions.
+
 ## CLI
 
 Write the versioned document to a file, then pass it to any RDF-producing CLI

@@ -94,6 +94,8 @@ enum Task<'a> {
         graph: bool,
     },
     Inject(Injection<'a>),
+    OrdinaryDefault(Request<'a>, Context),
+    RestoreFrame,
 }
 
 pub(super) fn expand(
@@ -101,19 +103,48 @@ pub(super) fn expand(
     context: &CompiledJsonLdContext,
     limits: JsonLdExpansionLimits,
 ) -> Result<Expanded, RdfDiagnostic> {
+    run(input, context, limits, Purpose::Document)
+}
+
+pub(super) fn expand_frame(
+    input: &Value,
+    context: &CompiledJsonLdContext,
+    limits: JsonLdExpansionLimits,
+    retrieval_base: Option<&str>,
+) -> Result<Expanded, RdfDiagnostic> {
+    run(input, context, limits, Purpose::Frame(retrieval_base))
+}
+
+#[derive(Clone, Copy)]
+enum Purpose<'a> {
+    Document,
+    Frame(Option<&'a str>),
+}
+
+fn run(
+    input: &Value,
+    context: &CompiledJsonLdContext,
+    limits: JsonLdExpansionLimits,
+    purpose: Purpose<'_>,
+) -> Result<Expanded, RdfDiagnostic> {
+    let frame = matches!(purpose, Purpose::Frame(_));
     let mut ceiling = Ceiling(usize::try_from(limits.max_allocation_bytes).unwrap_or(usize::MAX));
     let mut memory = Memory::new(&mut ceiling);
     memory.try_scope(|memory| {
         let mut walk = Walk {
+            frame,
             tasks: WorkList::new(),
             results: Vec::new(),
             // The retrieval URL stays fixed when a local context changes @base.
             // Native contexts without an original URL use their entry base once.
-            document_url: context
-                .original_document_iri()
-                .or_else(|| context.base_iri())
-                .map(|url| memory.string(url))
-                .transpose()?,
+            document_url: match purpose {
+                Purpose::Document => context
+                    .original_document_iri()
+                    .or_else(|| context.base_iri()),
+                Purpose::Frame(retrieval_base) => retrieval_base,
+            }
+            .map(|url| memory.string(url))
+            .transpose()?,
             document_base: context
                 .base_iri()
                 .map(|base| memory.string(base))
@@ -145,7 +176,8 @@ pub(super) fn expand(
         let mut value = value;
         // API expand normalization applies to a map before array normalization;
         // an input array containing one graph object retains that graph object.
-        if let Value::Object(object) = &mut value
+        if !frame
+            && let Value::Object(object) = &mut value
             && object.len() == 1
             && object.contains_key("@graph")
         {
@@ -163,6 +195,7 @@ pub(super) fn expand(
 }
 
 struct Walk<'a, 'm, 's> {
+    frame: bool,
     tasks: WorkList<Task<'a>, 8>,
     results: Vec<Value>,
     document_url: Option<String>,
@@ -250,8 +283,8 @@ impl<'a> Walk<'a, '_, '_> {
         // The resolver/compiler owns its native scratch. The new output copy is
         // admitted BEFORE copying; no resident result is adopted into this account.
         match context.expand_iri(text, vocab, relative)? {
-            Some(text) => self.string(&text),
-            None => Ok(Value::Null),
+            Some(text) if self.frame || !super::framing::control(&text) => self.string(&text),
+            _ => Ok(Value::Null),
         }
     }
     fn field(&mut self, key: &str, value: Value) -> Result<Value, RdfDiagnostic> {
@@ -261,6 +294,17 @@ impl<'a> Walk<'a, '_, '_> {
     }
     fn step(&mut self, task: Task<'a>) -> Result<(), RdfDiagnostic> {
         match task {
+            Task::OrdinaryDefault(request, context) => {
+                // This continuation brackets the complete depth-first subtree;
+                // its children share this walk and the same construction account.
+                self.frame = false;
+                self.push(Task::RestoreFrame)?;
+                self.push(Task::Expand(request, context, None))
+            }
+            Task::RestoreFrame => {
+                self.frame = true;
+                Ok(())
+            }
             Task::Expand(request, context, nest_type) => self.element(request, context, nest_type),
             Task::Elements {
                 mut remaining,
@@ -397,7 +441,14 @@ impl<'a> Walk<'a, '_, '_> {
             .and_then(|key| context.term(key))
             .filter(|definition| definition.scoped_context().is_some());
         let mut active = Rc::clone(context);
-        if !request.nest {
+        let mut default_object = false;
+        if self.frame {
+            for key in object.keys() {
+                default_object |=
+                    context.expand_iri(key, true, false)?.as_deref() == Some("@default");
+            }
+        }
+        if !request.nest && !default_object {
             if !request.from_map && context.has_previous_context() {
                 let mut value = false;
                 let mut id_only = object.len() == 1;
@@ -433,6 +484,9 @@ impl<'a> Walk<'a, '_, '_> {
         let mut input_json = false;
         let mut first_type_key: Option<&str> = None;
         for (key, raw) in object.iter() {
+            if default_object {
+                break;
+            }
             if active.expand_iri(key, true, false)?.as_deref() == Some("@type") {
                 let values = raw
                     .as_array()
@@ -475,6 +529,14 @@ impl<'a> Walk<'a, '_, '_> {
             let Some(name) = active.expand_iri(key, true, false)? else {
                 continue;
             };
+            if !self.frame && super::framing::control(&name) {
+                // Framing-only keywords were ignored reserved forms by ordinary
+                // expansion before the frame-purpose grammar was introduced.
+                continue;
+            }
+            if default_object && name != "@default" {
+                continue;
+            }
             if !is_control(&name) && !name.contains(':') {
                 continue;
             }
@@ -487,19 +549,21 @@ impl<'a> Walk<'a, '_, '_> {
             if name == "@reverse" && raw.as_object().is_none() {
                 return Err(decode("@reverse must be an object"));
             }
-            let child = matches!(
-                name.as_str(),
-                "@graph"
-                    | "@included"
-                    | "@reverse"
-                    | "@list"
-                    | "@set"
-                    | "@nest"
-                    | "@annotation"
-                    | "@triple"
-                    | "@subject"
-                    | "@object"
-            ) || !is_control(&name);
+            let child = self.frame && name == "@default"
+                || matches!(
+                    name.as_str(),
+                    "@graph"
+                        | "@included"
+                        | "@reverse"
+                        | "@list"
+                        | "@set"
+                        | "@nest"
+                        | "@annotation"
+                        | "@triple"
+                        | "@subject"
+                        | "@object"
+                )
+                || !is_control(&name);
             let reverse = active
                 .term(key)
                 .is_some_and(JsonLdTermDefinition::is_reverse_property);
@@ -520,6 +584,35 @@ impl<'a> Walk<'a, '_, '_> {
         let start = self.results.len();
         for member in members.iter().rev().filter(|member| member.child) {
             let key = member.original;
+            if member.name == "@default" && self.frame {
+                if singleton_null(member.raw) {
+                    // The framing token @null is grammar, not a user string in
+                    // an ordinary document. Its typed marker is created later.
+                    self.push(Task::Expand(
+                        Request {
+                            raw: member.raw,
+                            property: Some("@default"),
+                            from_map: false,
+                            root: false,
+                            nest: false,
+                        },
+                        Rc::clone(&active),
+                        None,
+                    ))?;
+                } else {
+                    self.push(Task::OrdinaryDefault(
+                        Request {
+                            raw: member.raw,
+                            property: Some("@default"),
+                            from_map: false,
+                            root: false,
+                            nest: false,
+                        },
+                        Rc::clone(&active),
+                    ))?;
+                }
+                continue;
+            }
             if !is_control(&member.name) {
                 self.push(Task::Property(member.raw, key, Rc::clone(&active)))?;
             } else {
@@ -890,6 +983,79 @@ impl<'a> Walk<'a, '_, '_> {
                 Value::Null
             };
             let keyword = member.name.as_str();
+            if self.frame
+                && matches!(
+                    keyword,
+                    "@embed" | "@explicit" | "@requireAll" | "@omitDefault" | "@default"
+                )
+            {
+                if keyword != "@default" || singleton_null(member.raw) {
+                    value.release_with_memory(self.memory)?;
+                    value = member.raw.clone_with_memory(self.memory)?;
+                }
+                self.put(&mut output, keyword, value, false)?;
+                self.memory.release_string(member.name)?;
+                continue;
+            }
+            if self.frame
+                && matches!(
+                    keyword,
+                    "@id" | "@type" | "@value" | "@language" | "@direction"
+                )
+            {
+                if keyword == "@value" && plan.input_json {
+                    value = member.raw.clone_with_memory(self.memory)?;
+                    self.put(&mut output, keyword, value, false)?;
+                    self.memory.release_string(member.name)?;
+                    continue;
+                }
+                let mut values = Vec::new();
+                for raw in member
+                    .raw
+                    .as_array()
+                    .map_or_else(|| std::slice::from_ref(member.raw), Vec::as_slice)
+                {
+                    let value = match keyword {
+                        "@id" | "@type" if raw.as_str().is_some() => self.iri(
+                            if keyword == "@id" {
+                                &plan.context
+                            } else {
+                                &plan.type_context
+                            },
+                            raw.as_str().expect("string guard"),
+                            keyword == "@type",
+                            true,
+                        )?,
+                        "@language" if raw.as_str().is_some() => {
+                            self.string(&purrdf_iri::langtag::identity_fold(
+                                raw.as_str().expect("string guard"),
+                            ))?
+                        }
+                        "@type" if raw.get("@default").is_some() => {
+                            let mut defaults = Vec::new();
+                            // The guard established @default; all unrelated
+                            // default-object members are ignored by the REC.
+                            let default = raw.get("@default").expect("default presence");
+                            for raw in default
+                                .as_array()
+                                .map_or_else(|| std::slice::from_ref(default), Vec::as_slice)
+                            {
+                                let iri = raw.as_str().ok_or_else(|| {
+                                    decode("a type default must contain IRI strings")
+                                })?;
+                                let iri = self.iri(&plan.type_context, iri, true, true)?;
+                                self.memory.push(&mut defaults, iri)?;
+                            }
+                            self.field("@default", Value::Array(defaults))?
+                        }
+                        _ => raw.clone_with_memory(self.memory)?,
+                    };
+                    self.memory.push(&mut values, value)?;
+                }
+                self.put(&mut output, keyword, Value::Array(values), false)?;
+                self.memory.release_string(member.name)?;
+                continue;
+            }
             match keyword {
                 "@id" => {
                     value = self.iri(
@@ -1080,6 +1246,9 @@ impl<'a> Walk<'a, '_, '_> {
         }
         self.memory.release_vec(nests)?;
         let mut value = self.object(output);
+        if self.frame {
+            return self.result(value);
+        }
         if plan.property == Some("@triple") {
             // object() constructed this result from admitted unique members.
             let object = value.as_object().unwrap();
@@ -1192,4 +1361,11 @@ impl<'a> Walk<'a, '_, '_> {
         *reverse = Object::from(members);
         Ok(())
     }
+}
+
+fn singleton_null(value: &Value) -> bool {
+    value.as_str() == Some("@null")
+        || value
+            .as_array()
+            .is_some_and(|values| values.len() == 1 && values[0].as_str() == Some("@null"))
 }

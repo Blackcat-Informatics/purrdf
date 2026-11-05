@@ -23,6 +23,11 @@ pub use compaction::{
 pub mod context;
 mod derived;
 mod expand;
+mod framing;
+pub use framing::{
+    JsonLdEmbed, JsonLdFramingBase, JsonLdFramingLimits, JsonLdFramingPolicy,
+    frame_value_with_context,
+};
 mod node_map;
 pub use node_map::JsonLdFlattenLimits;
 mod structural;
@@ -1995,6 +2000,68 @@ pub fn compact_yamlld_with_context(
 ) -> Result<Value, RdfDiagnostic> {
     let expanded = expand_yamlld_with_context(bytes, input_context, options, expansion_limits)?;
     compact_expanded_with_context(&expanded, output_context, policy, compaction_limits)
+}
+
+/// Frame JSON-LD input and frame bytes through the shared native value operation.
+/// Context roles, offline lookup, output base and phase authorities are identical
+/// to [`frame_value_with_context`].
+/// # Errors
+/// Preserves original lexical, context, framing and storage diagnostics.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Explicit independent document and context roles match the native framing operation."
+)]
+pub fn frame_jsonld_with_context(
+    input: &[u8],
+    frame: &[u8],
+    input_context: &CompiledJsonLdContext,
+    frame_context: &CompiledJsonLdContext,
+    frame_retrieval_base: Option<&str>,
+    output_base: JsonLdFramingBase<'_>,
+    policy: &JsonLdFramingPolicy,
+    limits: &JsonLdFramingLimits,
+) -> Result<Value, RdfDiagnostic> {
+    frame_value_with_context(
+        &context::parse_document(input)?,
+        &context::parse_document(frame)?,
+        input_context,
+        frame_context,
+        frame_retrieval_base,
+        output_base,
+        policy,
+        limits,
+    )
+}
+
+/// Frame selected YAML-LD input and frame documents using the same lexical
+/// projection and native framing operation as the JSON adapter.
+/// # Errors
+/// Preserves original YAML selection, context, framing and storage diagnostics.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "YAML selection adds one explicit authority to the independent framing context roles."
+)]
+pub fn frame_yamlld_with_context(
+    input: &[u8],
+    frame: &[u8],
+    input_context: &CompiledJsonLdContext,
+    frame_context: &CompiledJsonLdContext,
+    frame_retrieval_base: Option<&str>,
+    output_base: JsonLdFramingBase<'_>,
+    options: &YamlLdOptions,
+    policy: &JsonLdFramingPolicy,
+    limits: &JsonLdFramingLimits,
+) -> Result<Value, RdfDiagnostic> {
+    frame_value_with_context(
+        &yaml::basic_value(input, options)?,
+        &yaml::basic_value(frame, options)?,
+        input_context,
+        frame_context,
+        frame_retrieval_base,
+        output_base,
+        policy,
+        limits,
+    )
 }
 
 /// Flatten native JSON-LD without choosing an output context or compacting.
