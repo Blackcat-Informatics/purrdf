@@ -263,7 +263,47 @@ family. The pinned scalar context document is a bare vocabulary mapping without
 the required remote `@context` wrapper; its corpus-policy question remains
 unqualified. No wrapper is synthesized and registry/import invariants remain.
 This native capability does not establish full JSON-LD or YAML-LD conformance,
-HTML document loading, framing, compaction or flattening algorithm coverage.
+HTML document loading, framing or compaction algorithm coverage.
+
+Native `flatten_jsonld_with_context` and `flatten_yamlld_with_context` implement
+context-free flattening under sections 7.1 and 7.2 of the same Recommendation.
+They accept a compiled input context and explicit expansion and flatten limits;
+YAML also retains its existing Basic selection options. The result is an owned
+JSON array, with graph and node records ordered lexically. No output context is
+selected and no output compaction occurs. The shared expanded-JSON node map also
+feeds actual RDF parsing, before typed RDF term conversion and materialization.
+It merges identifiers per graph, extracts nested nodes, handles reverse/included
+nodes, retains indexes with conflicting-index refusal, preserves empty named
+graphs and list duplicates, and suppresses equivalent ordinary property values.
+Node and value indexes remain in flattened output; list indexes are omitted as
+section 7.2 requires. The shared map separately records semantic index presence
+for RDF's explicit losslessness refusal, without inspecting opaque JSON payloads.
+RDF numeric conversion follows section 8.2 by value, independently of equivalent
+JSON number spellings. Integral magnitudes below `10^21` retain exact integer
+lexicals unless explicitly typed as doubles; actual doubles use the native conversion.
+Compaction permits raw JSON coercion only for a single unannotated payload under
+an alias that does not force an outer array. Other property groups and annotated
+values use existing typed lexical routes, while RDF lists retain their list form.
+Original literal and opaque JSON values remain intact. Native triple wrappers
+remain atomic terms, with annotations attached to their original occurrences;
+annotation roots stay detached while their nested ordinary nodes retain graph scope.
+Normative flattening remaps explicit and anonymous blank identifiers. The RDF
+issuer preserves encoded label/scope identity and reserves original blank-label
+strings, using the same deterministic traversal and fresh-label prefix. Incidental
+anonymous numbering can change with the shared traversal order.
+
+`JsonLdFlattenLimits::max_allocation_bytes` defaults explicitly to 32 GiB for
+new node-map, issuer, comparison, work and output storage. Native allocations
+are admitted before construction and scratch is destroyed before its refund.
+Expanded input is retained under its separate account and is never refunded
+against this allowance. Decoded input, compiler/resolver storage and later RDF
+materialization remain separate; this is no combined operation-memory cap.
+Dataset parsing uses the default flatten allowance. The native
+`context_free_flattening_preserves_nodes_and_native_terms` case uses exact JSON
+structures, JSON/YAML agreement and refusal/valid neighbors. Existing native RDF
+lens and pinned ToRDF coverage exercise the shared production consumer. This
+does not qualify the pinned Flatten fixture, which also needs output-context
+compaction with `compactArrays: false`, or establish complete suite conformance.
 
 The upstream YAML-LD corpus is pinned at repository revision
 `fafcf7ae69d5e5cb7402e71dfd5cd2c03c18f29f`, the publication-day cutoff, under

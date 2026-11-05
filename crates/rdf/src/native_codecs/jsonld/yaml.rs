@@ -110,6 +110,25 @@ pub fn expand_yamlld_with_context(
     super::structural::expand(&value, context, *limits).map(|expanded| expanded.value)
 }
 
+/// Flatten selected YAML-LD Basic input without an output context or compaction.
+/// # Errors
+/// Preserves original YAML, expansion, conflicting-index and construction refusals.
+pub fn flatten_yamlld_with_context(
+    bytes: &[u8],
+    context: &CompiledJsonLdContext,
+    options: &YamlLdOptions,
+    expansion_limits: &super::JsonLdExpansionLimits,
+    flatten_limits: &super::JsonLdFlattenLimits,
+) -> Result<Value, RdfDiagnostic> {
+    let expanded = expand_yamlld_with_context(bytes, context, options, expansion_limits)?;
+    super::node_map::flatten(
+        &expanded,
+        *flatten_limits,
+        super::node_map::Issuance::Normative,
+    )
+    .map(|mapped| mapped.value)
+}
+
 pub(in crate::native_codecs) fn parse_into_scope(
     bytes: &[u8],
     base: &mut purrdf_iri::BaseScope,

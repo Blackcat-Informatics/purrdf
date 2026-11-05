@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Context-free node-map construction and RDF lowering of expanded documents.
+//! RDF term conversion and materialization after the shared expanded node map.
 
 use super::carrier::{Document, Literal, NamedGraph, Node, Part, Term, Triple, Value};
 use super::{
@@ -11,10 +11,9 @@ use super::{
 use crate::native_codecs::syntax::check_language_tag;
 use crate::{RdfLiteral, RdfTextDirection, RdfTriple};
 use purrdf_core::collections::{ListVocab, build_rdf_list};
-use purrdf_lex::json::{self, Number, Value as JsonValue};
-use purrdf_lex::walk::WorkList;
+use purrdf_lex::json::{self, Exponent, Number, Value as JsonValue};
 use purrdf_xsd::datatype::{XSD_BOOLEAN, XSD_DOUBLE, XSD_INTEGER};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 pub(super) fn expanded_to_dataset(document: JsonValue) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
@@ -22,11 +21,43 @@ pub(super) fn expanded_to_dataset(document: JsonValue) -> Result<Arc<RdfDataset>
 }
 
 pub(super) fn expanded_to_carrier(document: JsonValue) -> Result<Document, RdfDiagnostic> {
-    let mut builder = Builder::new(&document);
-    for entry in into_values(document) {
-        builder.graph_entry(entry, None, None)?;
+    let flattened = super::node_map::flatten(
+        &document,
+        super::JsonLdFlattenLimits::DEFAULT,
+        super::node_map::Issuance::Rdf,
+    )?;
+    if flattened.semantic_index {
+        return Err(decode(
+            "data-bearing @index metadata has no RDF dataset representation",
+        ));
     }
-    Ok(builder.finish())
+    drop(document);
+    let mut document = Document {
+        default_nodes: Vec::new(),
+        named_graphs: Vec::new(),
+    };
+    for mut entry in into_values(flattened.value) {
+        let object = entry
+            .as_object_mut()
+            .ok_or_else(|| decode("flattened graph entry must be an object"))?;
+        if let Some(contents) = object.remove("@graph") {
+            let id = object
+                .get("@id")
+                .and_then(JsonValue::as_str)
+                .ok_or_else(|| decode("flattened graph requires an identifier"))?
+                .to_owned();
+            let nodes = into_values(contents)
+                .into_iter()
+                .map(node)
+                .collect::<Result<_, _>>()?;
+            document.named_graphs.push(NamedGraph { id, nodes });
+        }
+        let node = node(entry)?;
+        if !node.types.is_empty() || !node.properties.is_empty() {
+            document.default_nodes.push(node);
+        }
+    }
+    Ok(document)
 }
 
 fn carrier_to_dataset(mut document: Document) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
@@ -45,276 +76,121 @@ fn carrier_to_dataset(mut document: Document) -> Result<Arc<RdfDataset>, RdfDiag
     crate::native_quads::dataset_from_quads_declaring(&lowerer.quads, &declared_graphs)
 }
 
-struct Builder {
-    graphs: BTreeMap<Option<String>, BTreeMap<String, Node>>,
-    reserved_blank_nodes: BTreeSet<String>,
-    next_blank_node: u64,
-}
-impl Builder {
-    fn new(document: &JsonValue) -> Self {
-        let mut reserved_blank_nodes = BTreeSet::new();
-        collect_blank_node_ids(document, &mut reserved_blank_nodes);
-        Self {
-            graphs: BTreeMap::new(),
-            reserved_blank_nodes,
-            next_blank_node: 0,
-        }
-    }
-    fn fresh_blank_node(&mut self) -> String {
-        loop {
-            let id = format!("_:jsonld{}", self.next_blank_node);
-            self.next_blank_node += 1;
-            if self.reserved_blank_nodes.insert(id.clone()) {
-                return id;
-            }
-        }
-    }
-    fn finish(mut self) -> Document {
-        for nodes in self.graphs.values_mut() {
-            for node in nodes.values_mut() {
-                node.sort_values();
-            }
-        }
-        let default_nodes = self
-            .graphs
-            .remove(&None)
-            .unwrap_or_default()
-            .into_values()
-            .collect();
-        let named_graphs = self
-            .graphs
-            .into_iter()
-            .filter_map(|(graph, nodes)| {
-                graph.map(|id| NamedGraph {
-                    id,
-                    nodes: nodes.into_values().collect(),
-                })
-            })
-            .collect();
-        Document {
-            default_nodes,
-            named_graphs,
-        }
-    }
-    fn merge_node(&mut self, graph: Option<&str>, mut fragment: Node) {
-        let nodes = self.graphs.entry(graph.map(str::to_owned)).or_default();
-        let target = nodes
-            .entry(fragment.id.clone())
-            .or_insert_with(|| Node::new(fragment.id.clone()));
-        target.types.append(&mut fragment.types);
-        target.types.sort();
-        target.types.dedup();
-        for (property, mut values) in fragment.properties {
-            target
-                .properties
-                .entry(property)
-                .or_default()
-                .append(&mut values);
-        }
-        target.sort_values();
-    }
-    fn graph_entry(
-        &mut self,
-        mut entry: JsonValue,
-        graph: Option<&str>,
-        assigned: Option<String>,
-    ) -> Result<(), RdfDiagnostic> {
-        let object = entry
-            .as_object_mut()
-            .ok_or_else(|| decode("expanded graph entry must be an object"))?;
-        if object.contains_key("@index") {
-            return Err(decode(
-                "data-bearing @index metadata has no RDF dataset representation",
-            ));
-        }
-        if let Some(contents) = object.remove("@graph") {
-            let node_members = object
-                .keys()
-                .any(|key| !matches!(key.as_str(), "@id" | "@included"));
-            let id = assigned
-                .or_else(|| {
-                    object
-                        .get("@id")
-                        .and_then(JsonValue::as_str)
-                        .map(str::to_owned)
-                })
-                .unwrap_or_else(|| self.fresh_blank_node());
-            self.graphs.entry(Some(id.clone())).or_default();
-            for child in into_values(contents) {
-                self.graph_entry(child, Some(&id), None)?;
-            }
-            if node_members {
-                self.node(entry, graph, Some(id), true)?;
-            } else if let Some(included) = object.remove("@included") {
-                for child in into_values(included) {
-                    self.graph_entry(child, graph, None)?;
-                }
-            }
-        } else {
-            self.node(entry, graph, assigned, true)?;
-        }
-        Ok(())
-    }
-    fn node(
-        &mut self,
-        mut raw: JsonValue,
-        graph: Option<&str>,
-        id: Option<String>,
-        merge: bool,
-    ) -> Result<Node, RdfDiagnostic> {
-        let object = raw
-            .as_object_mut()
-            .ok_or_else(|| decode("expanded node must be an object"))?;
-        if object.contains_key("@index") {
-            return Err(decode(
-                "data-bearing @index metadata has no RDF dataset representation",
-            ));
-        }
-        let id = id
-            .or_else(|| {
-                object
-                    .get("@id")
-                    .and_then(JsonValue::as_str)
-                    .map(str::to_owned)
-            })
-            .unwrap_or_else(|| self.fresh_blank_node());
-        let mut node = Node::new(id);
-        for (key, raw) in std::mem::take(object).into_members() {
-            match key.as_str() {
-                "@id" => {}
-                "@type" => {
-                    for rdf_type in into_values(raw) {
-                        node.types.push(
-                            rdf_type
-                                .as_str()
-                                .ok_or_else(|| decode("expanded @type must contain IRIs"))?
-                                .to_owned(),
-                        );
-                    }
-                }
-                "@included" => {
-                    for child in into_values(raw) {
-                        self.graph_entry(child, graph, None)?;
-                    }
-                }
-                "@reverse" => {
-                    let mut raw = raw;
-                    for (property, raw) in std::mem::take(
-                        raw.as_object_mut()
-                            .ok_or_else(|| decode("expanded @reverse must be an object"))?,
-                    )
-                    .into_members()
-                    {
-                        for raw in into_values(raw) {
-                            let mut value = self.value(raw, graph)?;
-                            let Term::Id(target) =
-                                std::mem::replace(&mut value.term, Term::Id(node.id.clone()))
-                            else {
-                                return Err(decode("reverse property requires node values"));
-                            };
-                            let mut reverse = Node::new(target);
-                            reverse
-                                .properties
-                                .entry(property.clone())
-                                .or_default()
-                                .push(value);
-                            self.merge_node(graph, reverse);
-                        }
-                    }
-                }
-                keyword if super::context::is_control(keyword) => {
-                    return Err(decode(format!(
-                        "unsupported expanded node keyword `{keyword}`"
-                    )));
-                }
-                _ => {
-                    for raw in into_values(raw) {
-                        let value = self.value(raw, graph)?;
-                        node.properties.entry(key.clone()).or_default().push(value);
-                    }
-                }
-            }
-        }
-        node.sort_values();
-        if merge {
-            self.merge_node(graph, node.clone());
-        }
-        Ok(node)
-    }
-    fn value(&mut self, mut raw: JsonValue, graph: Option<&str>) -> Result<Value, RdfDiagnostic> {
-        let object = raw
-            .as_object_mut()
-            .ok_or_else(|| decode("expanded property value must be an object"))?;
-        if object.contains_key("@index") {
-            return Err(decode(
-                "data-bearing @index metadata has no RDF dataset representation",
-            ));
-        }
-        let annotations = object.remove("@annotation");
-        let term = if let Some(list) = object.remove("@list") {
-            Term::List(
-                into_values(list)
-                    .into_iter()
-                    .map(|raw| self.value(raw, graph))
-                    .collect::<Result<_, _>>()?,
-            )
-        } else if object.contains_key("@value") {
-            Term::Literal(literal(object)?)
-        } else if let Some(mut triple) = object.remove("@triple") {
-            let triple = triple
-                .as_object_mut()
-                .ok_or_else(|| decode("expanded @triple must be an object"))?;
-            let subject = self.value(
-                triple
-                    .remove("@subject")
-                    .ok_or_else(|| decode("triple missing subject"))?,
-                graph,
-            )?;
-            let object = self.value(
-                triple
-                    .remove("@object")
-                    .ok_or_else(|| decode("triple missing object"))?,
-                graph,
-            )?;
-            if !subject.annotations.is_empty() || !object.annotations.is_empty() {
-                return Err(decode("triple components cannot carry annotations"));
-            }
-            if matches!(subject.term, Term::Literal(_) | Term::List(_)) {
+fn node(mut raw: JsonValue) -> Result<Node, RdfDiagnostic> {
+    let object = raw
+        .as_object_mut()
+        .ok_or_else(|| decode("flattened node must be an object"))?;
+    let id = object
+        .get("@id")
+        .and_then(JsonValue::as_str)
+        .ok_or_else(|| decode("flattened node requires an identifier"))?
+        .to_owned();
+    let mut node = Node::new(id);
+    for (key, raw) in std::mem::take(object).into_members() {
+        match key.as_str() {
+            "@id" => {}
+            "@index" => {
                 return Err(decode(
-                    "RDF triple-term subject must be an identifier or triple",
+                    "data-bearing @index metadata has no RDF dataset representation",
                 ));
             }
-            let predicate = triple
-                .get("@predicate")
-                .and_then(JsonValue::as_str)
-                .ok_or_else(|| decode("expanded triple predicate must be an IRI"))?
-                .to_owned();
-            Term::Triple(Box::new(Triple {
-                subject: Box::new(subject.into_term()),
-                predicate,
-                object: Box::new(object.into_term()),
-            }))
-        } else if object.contains_key("@graph") {
-            let id = object
-                .get("@id")
-                .and_then(JsonValue::as_str)
-                .map_or_else(|| self.fresh_blank_node(), str::to_owned);
-            self.graph_entry(raw, graph, Some(id.clone()))?;
-            Term::Id(id)
-        } else {
-            Term::Id(self.node(raw, graph, None, true)?.id)
-        };
-        let mut value = Value::plain(term);
-        if let Some(annotations) = annotations {
-            for annotation in into_values(annotations) {
-                value
-                    .annotations
-                    .push(self.node(annotation, graph, None, false)?);
+            "@type" => {
+                for rdf_type in into_values(raw) {
+                    node.types.push(
+                        rdf_type
+                            .as_str()
+                            .ok_or_else(|| decode("expanded @type must contain IRIs"))?
+                            .to_owned(),
+                    );
+                }
+            }
+            keyword if super::context::is_control(keyword) => {
+                return Err(decode(format!(
+                    "unsupported flattened node keyword `{keyword}`"
+                )));
+            }
+            _ => {
+                let values = into_values(raw)
+                    .into_iter()
+                    .map(value)
+                    .collect::<Result<_, _>>()?;
+                node.properties.insert(key, values);
             }
         }
-        Ok(value)
     }
+    node.sort_values();
+    Ok(node)
 }
+
+fn value(mut raw: JsonValue) -> Result<Value, RdfDiagnostic> {
+    let object = raw
+        .as_object_mut()
+        .ok_or_else(|| decode("flattened property value must be an object"))?;
+    if object.contains_key("@index") {
+        return Err(decode(
+            "data-bearing @index metadata has no RDF dataset representation",
+        ));
+    }
+    let annotations = object.remove("@annotation");
+    let term = if let Some(list) = object.remove("@list") {
+        Term::List(
+            into_values(list)
+                .into_iter()
+                .map(value)
+                .collect::<Result<_, _>>()?,
+        )
+    } else if object.contains_key("@value") {
+        Term::Literal(literal(object)?)
+    } else if let Some(mut triple) = object.remove("@triple") {
+        let triple = triple
+            .as_object_mut()
+            .ok_or_else(|| decode("expanded @triple must be an object"))?;
+        let subject = value(
+            triple
+                .remove("@subject")
+                .ok_or_else(|| decode("triple missing subject"))?,
+        )?;
+        let object = value(
+            triple
+                .remove("@object")
+                .ok_or_else(|| decode("triple missing object"))?,
+        )?;
+        if !subject.annotations.is_empty() || !object.annotations.is_empty() {
+            return Err(decode("triple components cannot carry annotations"));
+        }
+        if matches!(subject.term, Term::Literal(_) | Term::List(_)) {
+            return Err(decode(
+                "RDF triple-term subject must be an identifier or triple",
+            ));
+        }
+        let predicate = triple
+            .get("@predicate")
+            .and_then(JsonValue::as_str)
+            .ok_or_else(|| decode("expanded triple predicate must be an IRI"))?
+            .to_owned();
+        Term::Triple(Box::new(Triple {
+            subject: Box::new(subject.into_term()),
+            predicate,
+            object: Box::new(object.into_term()),
+        }))
+    } else {
+        Term::Id(
+            object
+                .get("@id")
+                .and_then(JsonValue::as_str)
+                .ok_or_else(|| decode("flattened reference requires an identifier"))?
+                .to_owned(),
+        )
+    };
+    let mut value = Value::plain(term);
+    if let Some(annotations) = annotations {
+        for annotation in into_values(annotations) {
+            value.annotations.push(node(annotation)?);
+        }
+    }
+    Ok(value)
+}
+
 fn into_values(mut value: JsonValue) -> Vec<JsonValue> {
     match &mut value {
         JsonValue::Array(values) => std::mem::take(values),
@@ -322,28 +198,56 @@ fn into_values(mut value: JsonValue) -> Vec<JsonValue> {
         _ => vec![value],
     }
 }
-
 fn literal(object: &json::Object) -> Result<Literal, RdfDiagnostic> {
     // The sole caller selected this branch with contains_key on the same map.
     let value = object.get("@value").expect("expanded value object");
     let explicit = object.get("@type").and_then(JsonValue::as_str);
+    let (lexical, inferred) = match (value, explicit) {
+        (_, Some("@json")) => (rdf_json_lexical(value)?, None),
+        (JsonValue::String(value), _) => (value.clone(), None),
+        (JsonValue::Bool(value), _) => (value.to_string(), Some(XSD_BOOLEAN)),
+        (JsonValue::Number(number), _) => {
+            // API §8.2 steps 4–5 classify the VALUE, independent of its
+            // spelling. Reuse the one exact decimal reading; integral values
+            // below 10^21 never round through binary floating point.
+            let decimal = number.decimal();
+            let zeros = match decimal.exponent() {
+                Exponent::Small(exponent) if *exponent >= 0 => {
+                    usize::try_from(*exponent).ok().filter(|zeros| {
+                        decimal
+                            .coefficient()
+                            .len()
+                            .checked_add(*zeros)
+                            .is_some_and(|digits| digits <= 21)
+                    })
+                }
+                _ => None,
+            };
+            if let Some(zeros) = zeros.filter(|_| explicit != Some(XSD_DOUBLE)) {
+                let mut lexical = String::new();
+                if decimal.is_negative() {
+                    lexical.push('-');
+                }
+                lexical.push_str(decimal.coefficient());
+                // The branch established a nonnegative exponent and at most
+                // 21 output digits, so this extends by at most 20 zeros.
+                lexical.extend(std::iter::repeat_n('0', zeros));
+                (lexical, Some(XSD_INTEGER))
+            } else {
+                (canonical_json_double(number)?, Some(XSD_DOUBLE))
+            }
+        }
+        _ => {
+            return Err(decode(
+                "literal @value must be a scalar unless @type is @json",
+            ));
+        }
+    };
     let datatype = match explicit {
         Some("@json") => Some(RDF_JSON.to_owned()),
         Some(datatype) if datatype != XSD_STRING => Some(datatype.to_owned()),
         Some(_) => None,
-        None => match value {
-            JsonValue::Bool(_) => Some(XSD_BOOLEAN.to_owned()),
-            JsonValue::Number(number) if number.as_i64().is_some() || number.as_u64().is_some() => {
-                Some(XSD_INTEGER.to_owned())
-            }
-            JsonValue::Number(_) => Some(XSD_DOUBLE.to_owned()),
-            _ => None,
-        },
-    };
-    let lexical = if explicit == Some("@json") {
-        rdf_json_lexical(value)?
-    } else {
-        scalar_lexical_for_datatype(value, datatype.as_deref())?
+        None => inferred.map(str::to_owned),
     };
     Ok(Literal {
         lexical,
@@ -359,29 +263,8 @@ fn literal(object: &json::Object) -> Result<Literal, RdfDiagnostic> {
     })
 }
 
-fn scalar_lexical_for_datatype(
-    value: &JsonValue,
-    datatype: Option<&str>,
-) -> Result<String, RdfDiagnostic> {
-    match value {
-        JsonValue::String(value) => Ok(value.clone()),
-        JsonValue::Bool(value) => Ok(value.to_string()),
-        JsonValue::Number(value) if datatype == Some(XSD_DOUBLE) => canonical_json_double(value),
-        JsonValue::Number(value) if value.as_i64().is_some() || value.as_u64().is_some() => {
-            Ok(value.to_string())
-        }
-        // JSON-LD's RDF conversion uses the canonical xsd:double lexical for
-        // every non-integral JSON number even when a context coerces the final
-        // datatype to another IRI.
-        JsonValue::Number(value) => canonical_json_double(value),
-        _ => Err(decode(
-            "literal @value must be a scalar unless @type is @json",
-        )),
-    }
-}
-
 /// The `rdf:JSON` lexical form of `value`: compact JSON, members ordered by name, every
-/// number in its binary64 spelling.
+/// number in its IEEE 754 double precision spelling.
 fn rdf_json_lexical(value: &JsonValue) -> Result<String, RdfDiagnostic> {
     let mut value = crate::json_number::binary64(value)
         .map_err(|source| decode(format!("encode rdf:JSON value: {source}")))?;
@@ -398,28 +281,6 @@ fn canonical_json_double(value: &Number) -> Result<String, RdfDiagnostic> {
                 "JSON number `{value}` is outside the xsd:double value space"
             ))
         })
-}
-
-fn collect_blank_node_ids(value: &JsonValue, output: &mut BTreeSet<String>) {
-    let mut pending: WorkList<_, 8> = WorkList::with(value);
-    while let Some(value) = pending.pop() {
-        match value {
-            JsonValue::String(value) if value.starts_with("_:") => {
-                output.insert(value.clone());
-            }
-            JsonValue::Array(values) => {
-                for value in values {
-                    pending.push(value);
-                }
-            }
-            JsonValue::Object(object) => {
-                for value in object.values() {
-                    pending.push(value);
-                }
-            }
-            _ => {}
-        }
-    }
 }
 
 struct Lowerer {
@@ -774,18 +635,4 @@ fn lower_literal(literal: &Literal) -> Result<RdfTerm, RdfDiagnostic> {
         (None, None, None) => RdfLiteral::simple(literal.lexical.clone()),
     };
     Ok(RdfTerm::literal(value))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn generated_blank_node_sequence_is_not_pointer_width_limited() {
-        let mut builder = Builder::new(&JsonValue::Null);
-        builder.next_blank_node = u64::from(u32::MAX);
-
-        assert_eq!(builder.fresh_blank_node(), "_:jsonld4294967295");
-        assert_eq!(builder.next_blank_node, u64::from(u32::MAX) + 1);
-    }
 }

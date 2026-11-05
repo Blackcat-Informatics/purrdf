@@ -759,22 +759,31 @@ impl Clone for Value {
 
 /// An object's members ordered by name, repeats in document order: the order
 /// [`Value`] equality pairs members in and hashing feeds them in.
-fn by_name(object: &Object) -> Vec<&(String, Value)> {
-    let mut members: Vec<_> = object.members.iter().collect();
-    members.sort_by(|(left, _), (right, _)| left.cmp(right));
-    members
+type OrderedMembers<'a> = Vec<(usize, &'a (String, Value))>;
+
+fn by_name_with_memory<'v, S: crate::allocation::Admission + ?Sized>(
+    object: &'v Object,
+    memory: &mut crate::allocation::Memory<'_, S>,
+) -> Result<OrderedMembers<'v>, crate::allocation::StorageError> {
+    let mut members = Vec::new();
+    memory.reserve(&mut members, object.len())?;
+    members.extend(object.members.iter().enumerate());
+    // Original index breaks equal-name ties without allocating stable-sort scratch.
+    members.sort_unstable_by(|(i, (a, _)), (j, (b, _))| a.cmp(b).then(i.cmp(j)));
+    Ok(members)
 }
 
 /// Queue the member pairs of two objects for comparison, or say they differ in
 /// their names. Members pair by name, so the order they were written in never
 /// matters; a repeated name pairs its occurrences in document order.
-fn pair_members<'v>(
+fn pair_members<'v, S: crate::allocation::Admission + ?Sized>(
     left: &'v Object,
     right: &'v Object,
     work: &mut Vec<(&'v Value, &'v Value)>,
-) -> bool {
+    memory: &mut crate::allocation::Memory<'_, S>,
+) -> Result<bool, crate::allocation::StorageError> {
     if left.len() != right.len() {
-        return false;
+        return Ok(false);
     }
     let in_order = left
         .members
@@ -783,43 +792,73 @@ fn pair_members<'v>(
         .all(|((name, _), (other, _))| name == other);
     if in_order {
         // The common case, and the same pairing the sorted walk finds.
-        work.extend(
+        memory.extend(
+            work,
             left.members
                 .iter()
                 .zip(&right.members)
                 .map(|((_, value), (_, other))| (value, other)),
-        );
-        return true;
+        )?;
+        return Ok(true);
     }
-    for ((name, value), (other_name, other)) in by_name(left).into_iter().zip(by_name(right)) {
+    let left = by_name_with_memory(left, memory)?;
+    let right = by_name_with_memory(right, memory)?;
+    let mut equal = true;
+    for ((_, (name, value)), (_, (other_name, other))) in left.iter().zip(&right) {
         if name != other_name {
-            return false;
+            equal = false;
+            break;
         }
-        work.push((value, other));
+        memory.push(work, (value, other))?;
     }
-    true
+    memory.release_vec(left)?;
+    memory.release_vec(right)?;
+    Ok(equal)
 }
 
 /// Compare the queued pairs, and every pair they queue, to the end.
-fn equal_pairs<'v>(mut work: Vec<(&'v Value, &'v Value)>) -> bool {
+fn equal_pairs<'v, S: crate::allocation::Admission + ?Sized>(
+    work: &mut Vec<(&'v Value, &'v Value)>,
+    memory: &mut crate::allocation::Memory<'_, S>,
+) -> Result<bool, crate::allocation::StorageError> {
     while let Some(pair) = work.pop() {
         match pair {
             (Value::Null, Value::Null) => {}
             (Value::Bool(a), Value::Bool(b)) if a == b => {}
-            (Value::Number(a), Value::Number(b)) if a == b => {}
+            (Value::Number(a), Value::Number(b)) if a.eq_with_memory(b, memory)? => {}
             (Value::String(a), Value::String(b)) if a == b => {}
             (Value::Array(a), Value::Array(b)) if a.len() == b.len() => {
-                work.extend(a.iter().zip(b));
+                memory.extend(work, a.iter().zip(b))?;
             }
             (Value::Object(a), Value::Object(b)) => {
-                if !pair_members(a, b, &mut work) {
-                    return false;
+                if !pair_members(a, b, work, memory)? {
+                    return Ok(false);
                 }
             }
-            _ => return false,
+            _ => return Ok(false),
         }
     }
-    true
+    Ok(true)
+}
+
+impl Value {
+    /// Compare JSON values through the same exact equality walk as `PartialEq`,
+    /// admitting and releasing comparison work and member ordering scratch.
+    /// # Errors
+    /// Returns native allocation, admission or refund refusal.
+    pub fn eq_with_memory<S: crate::allocation::Admission + ?Sized>(
+        &self,
+        other: &Self,
+        memory: &mut crate::allocation::Memory<'_, S>,
+    ) -> Result<bool, crate::allocation::StorageError> {
+        memory.scope(|memory| {
+            let mut work = Vec::new();
+            memory.push(&mut work, (self, other))?;
+            let equal = equal_pairs(&mut work, memory)?;
+            memory.release_vec(work)?;
+            Ok(equal)
+        })
+    }
 }
 
 /// Value equality: the same kind and the same value, where numbers compare by
@@ -830,7 +869,11 @@ fn equal_pairs<'v>(mut work: Vec<(&'v Value, &'v Value)>) -> bool {
 /// spelling-and-order identity.
 impl PartialEq for Value {
     fn eq(&self, other: &Self) -> bool {
-        equal_pairs(vec![(self, other)])
+        self.eq_with_memory(
+            other,
+            &mut crate::allocation::Memory::new(&mut crate::allocation::Resident),
+        )
+        .expect("resident JSON equality allocation")
     }
 }
 
@@ -839,8 +882,16 @@ impl Eq for Value {}
 impl PartialEq for Object {
     /// Object equality as [`Value`]'s: names and values, members unordered.
     fn eq(&self, other: &Self) -> bool {
-        let mut work = Vec::new();
-        pair_members(self, other, &mut work) && equal_pairs(work)
+        let mut resident = crate::allocation::Resident;
+        crate::allocation::Memory::new(&mut resident)
+            .scope(|memory| {
+                let mut work = Vec::new();
+                let equal = pair_members(self, other, &mut work, memory)?
+                    && equal_pairs(&mut work, memory)?;
+                memory.release_vec(work)?;
+                Ok(equal)
+            })
+            .expect("resident JSON object equality allocation")
     }
 }
 
@@ -854,16 +905,27 @@ enum Hashing<'v> {
 }
 
 /// Queue an object's members, by name, behind its header.
-fn hash_object<'v, H: Hasher>(object: &'v Object, pending: &mut Vec<Hashing<'v>>, state: &mut H) {
+fn hash_object<'v, H: Hasher, S: crate::allocation::Admission + ?Sized>(
+    object: &'v Object,
+    pending: &mut Vec<Hashing<'v>>,
+    state: &mut H,
+    memory: &mut crate::allocation::Memory<'_, S>,
+) -> Result<(), crate::allocation::StorageError> {
     state.write_u8(5);
     state.write_usize(object.len());
-    for (name, member) in by_name(object).into_iter().rev().map(|m| (&m.0, &m.1)) {
-        pending.push(Hashing::Value(member));
-        pending.push(Hashing::Name(name));
+    let members = by_name_with_memory(object, memory)?;
+    for (_, (name, member)) in members.iter().rev() {
+        memory.push(pending, Hashing::Value(member))?;
+        memory.push(pending, Hashing::Name(name))?;
     }
+    memory.release_vec(members)
 }
 
-fn hash_pending<H: Hasher>(mut pending: Vec<Hashing<'_>>, state: &mut H) {
+fn hash_pending<H: Hasher, S: crate::allocation::Admission + ?Sized>(
+    pending: &mut Vec<Hashing<'_>>,
+    state: &mut H,
+    memory: &mut crate::allocation::Memory<'_, S>,
+) -> Result<(), crate::allocation::StorageError> {
     while let Some(step) = pending.pop() {
         let value = match step {
             Hashing::Name(name) => {
@@ -880,7 +942,7 @@ fn hash_pending<H: Hasher>(mut pending: Vec<Hashing<'_>>, state: &mut H) {
             }
             Value::Number(number) => {
                 state.write_u8(2);
-                number.hash(state);
+                number.hash_with_memory(state, memory)?;
             }
             Value::String(text) => {
                 state.write_u8(3);
@@ -890,10 +952,31 @@ fn hash_pending<H: Hasher>(mut pending: Vec<Hashing<'_>>, state: &mut H) {
                 state.write_u8(4);
                 state.write_usize(items.len());
                 // Reversed onto the stack, so the items hash first to last.
-                pending.extend(items.iter().rev().map(Hashing::Value));
+                memory.extend(pending, items.iter().rev().map(Hashing::Value))?;
             }
-            Value::Object(object) => hash_object(object, &mut pending, state),
+            Value::Object(object) => hash_object(object, pending, state, memory)?,
         }
+    }
+    Ok(())
+}
+
+impl Value {
+    /// Hash exact JSON values through the same walk as `Hash`, admitting and
+    /// releasing traversal, member-ordering and exact-number scratch.
+    /// # Errors
+    /// Returns native allocation, admission or refund refusal. The hasher may
+    /// contain a prefix on error; discard failed hashing state.
+    pub fn hash_with_memory<H: Hasher, S: crate::allocation::Admission + ?Sized>(
+        &self,
+        state: &mut H,
+        memory: &mut crate::allocation::Memory<'_, S>,
+    ) -> Result<(), crate::allocation::StorageError> {
+        memory.scope(|memory| {
+            let mut pending = Vec::new();
+            memory.push(&mut pending, Hashing::Value(self))?;
+            hash_pending(&mut pending, state, memory)?;
+            memory.release_vec(pending)
+        })
     }
 }
 
@@ -902,15 +985,24 @@ impl Hash for Value {
     /// members hash in name order whatever order they were written in. A heap
     /// work list, so any nesting depth hashes.
     fn hash<H: Hasher>(&self, state: &mut H) {
-        hash_pending(vec![Hashing::Value(self)], state);
+        self.hash_with_memory(
+            state,
+            &mut crate::allocation::Memory::new(&mut crate::allocation::Resident),
+        )
+        .expect("resident JSON value hashing allocation");
     }
 }
 
 impl Hash for Object {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        let mut pending = Vec::new();
-        hash_object(self, &mut pending, state);
-        hash_pending(pending, state);
+        crate::allocation::Memory::new(&mut crate::allocation::Resident)
+            .scope(|memory| {
+                let mut pending = Vec::new();
+                hash_object(self, &mut pending, state, memory)?;
+                hash_pending(&mut pending, state, memory)?;
+                memory.release_vec(pending)
+            })
+            .expect("resident JSON object hashing allocation");
     }
 }
 
