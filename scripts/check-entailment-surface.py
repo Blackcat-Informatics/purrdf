@@ -294,11 +294,11 @@ _HOST_PLUMBING: dict[str, tuple[str, ...]] = {
 # The `purrdf entails` flags that answer to no boundary parameter and to no service, and
 # are therefore the subcommand's own plumbing. `--report` is the certificate target every
 # reasoning subcommand carries; `--from` is the CLI's own format resolution, which runs in
-# FRONT of a boundary that parses one media type; `OUT` is positional and so is not a flag
-# at all. (`--base` is not plumbing: it is how the CLI spells `premise_iris`.) A flag
+# FRONT of a boundary that parses one media type; YAML-LD controls configure those role
+# readers too. `OUT` is positional; `--base` spells `premise_iris`. A flag
 # outside this list and outside the two tables above is a capability with no boundary
 # behind it, and fails the gate.
-_CLI_PLUMBING: frozenset[str] = frozenset({"--report", "--from"})
+_CLI_PLUMBING: frozenset[str] = frozenset({"--report", "--from", "--yamlld-input-options", "--conclusion-yamlld-input-options"})
 
 # Where the CLI's three needles live.
 _CLI_COMMAND_TREE = Path("crates/cli/src/cli.rs")

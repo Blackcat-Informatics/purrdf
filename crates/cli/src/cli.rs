@@ -957,6 +957,17 @@ pub(crate) enum Command {
         /// The premise document `FILE`, or `-` for stdin (which requires `--from`).
         #[arg(long, value_name = "FILE")]
         premise: String,
+        /// Bounded YAML-LD Basic input options for the premise only.
+        #[arg(long, value_name = "PATH")]
+        yamlld_input_options: Option<PathBuf>,
+        /// Independent YAML-LD Basic input options for the conclusion only.
+        #[arg(
+            long,
+            value_name = "PATH",
+            requires = "conclusion",
+            conflicts_with = "pattern"
+        )]
+        conclusion_yamlld_input_options: Option<PathBuf>,
         /// The conclusion graph `FILE`, or `-` for stdin. The answer is a verdict:
         /// `entailed`, `not-entailed` (a proof), or `undecided`.
         #[arg(
@@ -1543,6 +1554,9 @@ pub(crate) enum Command {
         /// Data-graph path, or `-` for stdin (which requires `--from`).
         #[arg(long)]
         data: String,
+        /// Bounded YAML-LD Basic input options for the data graph only.
+        #[arg(long, value_name = "PATH")]
+        yamlld_input_options: Option<PathBuf>,
         /// Data-graph format override; inferred from `--data`'s extension when omitted.
         #[arg(long, value_enum)]
         from: Option<CliRdfFormat>,
@@ -2974,8 +2988,12 @@ impl Cli {
                 imports,
                 report,
                 output,
+                yamlld_input_options,
+                conclusion_yamlld_input_options,
                 ..
             } => {
+                paths.extend(yamlld_input_options.iter().cloned());
+                paths.extend(conclusion_yamlld_input_options.iter().cloned());
                 paths.push(PathBuf::from(premise));
                 if let Some(path) = conclusion {
                     paths.push(PathBuf::from(path));
@@ -3074,8 +3092,10 @@ impl Cli {
                 imports,
                 data,
                 output,
+                yamlld_input_options,
                 ..
             } => {
+                paths.extend(yamlld_input_options.iter().cloned());
                 paths.push(PathBuf::from(schema));
                 for pair in imports {
                     if let Some((_, path)) = pair.split_once('=') {

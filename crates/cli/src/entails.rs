@@ -178,6 +178,10 @@ pub(crate) struct EntailsOptions<'a> {
     pub(crate) regime: CliRegime,
     /// `--premise`: the premise document, or `-`.
     pub(crate) premise: &'a str,
+    /// YAML-LD Basic options for the premise only.
+    pub(crate) yamlld_input_options: Option<&'a std::path::Path>,
+    /// Independent YAML-LD Basic options for the conclusion only.
+    pub(crate) conclusion_yamlld_input_options: Option<&'a std::path::Path>,
     /// `--conclusion`: the conclusion graph, when the question is a verdict.
     pub(crate) conclusion: Option<&'a str>,
     /// `--pattern`: the basic graph pattern, when the question is a relation.
@@ -226,6 +230,14 @@ pub(crate) fn run(
         "--jsonld-options configures a JSON-LD/YAML-LD serializer, and `entails` runs \
              none: its answer is a line-oriented verdict, not RDF",
     )?;
+    if options.conclusion_yamlld_input_options.is_some()
+        && (options.conclusion.is_none() || options.pattern.is_some())
+    {
+        return Err(CliError::Usage(
+            "--conclusion-yamlld-input-options requires --conclusion and conflicts with --pattern"
+                .to_owned(),
+        ));
+    }
     let question = question(options)?;
     refuse_unconsumable_base(options, question)?;
     // The `--import` ARGUMENTS are decided before a single document is opened: a malformed
@@ -242,15 +254,36 @@ pub(crate) fn run(
     readers.extend(import_readers(&import_pairs));
     refuse_shared_stdin(&readers)?;
 
+    let premise_format = format::resolve(options.from, options.premise)?;
+    let conclusion_format = match question {
+        Question::Conclusion { path, .. } => Some(format::resolve(options.from, path)?),
+        Question::Pattern { .. } => None,
+    };
+    let premise_input_options = options
+        .yamlld_input_options
+        .map(|path| source::read_yamlld_input_options(path, &[premise_format]))
+        .transpose()?;
+    let conclusion_input_options = options
+        .conclusion_yamlld_input_options
+        .map(|path| source::read_yamlld_input_options(path, conclusion_format.as_slice()))
+        .transpose()?;
+
     // Everything is read and transcoded BEFORE the boundary is called, so an unreadable
     // import fails against the file the operator named rather than as a refusal attributed
     // to the premise's `owl:imports`.
-    let premise = read_as_nquads(options.premise, "--premise", options, canonical)?;
+    let premise = read_as_nquads(
+        options.premise,
+        "--premise",
+        premise_format,
+        premise_input_options.as_deref(),
+        options,
+        canonical,
+    )?;
     // The IRI the premise document was read FROM — the base it parsed under, which is its
     // `file://` retrieval IRI or `--base`. An `owl:imports` of that IRI names the premise
     // itself, so the boundary resolves it in place rather than refusing it as missing. A
     // container (pack, GTS) stores resolved IRIs and has no document base.
-    let premise_base = match format::resolve(options.from, options.premise)? {
+    let premise_base = match premise_format {
         SourceFormat::Native(native) => {
             source::effective_base(options.premise, native, options.base)?
         }
@@ -267,7 +300,14 @@ pub(crate) fn run(
 
     let answer: ReasoningAnswer<String> = match question {
         Question::Conclusion { path, verify } => {
-            let conclusion = read_as_nquads(path, "--conclusion", options, canonical)?;
+            let conclusion = read_as_nquads(
+                path,
+                "--conclusion",
+                format::resolve(options.from, path)?,
+                conclusion_input_options.as_deref(),
+                options,
+                canonical,
+            )?;
             let decide = if verify {
                 verify_entailment_to_string
             } else {
@@ -387,7 +427,14 @@ fn read_imports(
         let what = format!("--import {}", pair.iri);
         resolved.push((
             pair.iri.to_owned(),
-            read_as_nquads(pair.path, &what, options, canonical)?,
+            read_as_nquads(
+                pair.path,
+                &what,
+                format::resolve(options.from, pair.path)?,
+                None,
+                options,
+                canonical,
+            )?,
         ));
     }
     Ok(resolved)
@@ -451,13 +498,15 @@ fn refuse_unconsumable_base(
 fn read_as_nquads(
     path: &str,
     what: &str,
+    format: SourceFormat,
+    input_options: Option<&[u8]>,
     options: &EntailsOptions<'_>,
     canonical: &mut crate::canonical::Request,
 ) -> Result<String, CliError> {
-    let format = format::resolve(options.from, path)?;
     // A pack crosses the N-Quads boundary as a zero-copy `PackView`, not a rebuilt
     // owned dataset; a text source parses to an `RdfDataset`.
-    let outcome = source::serialize_input_to_nquads(path, format, options.base, None, canonical)?;
+    let outcome =
+        source::serialize_input_to_nquads(path, format, options.base, input_options, canonical)?;
     if outcome.statement_rows_dropped > 0 || outcome.directional_literals_dropped > 0 {
         return Err(CliError::Runtime(format!(
             "{what} {path}: reading this document into the entailment boundary's N-Quads \
