@@ -1228,6 +1228,9 @@ pub(crate) enum Command {
     /// stdout — and stdout stays a well-formed RDF or SARIF document, which it could not if
     /// the verdict were interleaved into it.
     Validate {
+        /// Independent YAML-LD Basic options for one declared RDF import; repeatable.
+        #[arg(long, value_name = "IRI=PATH", requires_all = ["import", "shapes"], conflicts_with = "shapes_product")]
+        import_yamlld_input_options: Vec<String>,
         /// Closed version-one YAML-LD Basic input-options JSON file, for primary IN only.
         /// Shapes, products, imports and change documents keep their existing policy.
         #[arg(long, value_name = "PATH")]
@@ -1703,6 +1706,9 @@ pub(crate) enum Command {
     /// (naming the stage), and **2** for a usage error or an `--import` pair the closure
     /// never reaches, exactly as a run would.
     Rules {
+        /// Independent YAML-LD Basic options for one declared RDF import; repeatable.
+        #[arg(long, value_name = "IRI=PATH", requires_all = ["import", "shapes"], conflicts_with_all = ["srl", "check"])]
+        import_yamlld_input_options: Vec<String>,
         /// Exact caller-supplied `xsd:dateTime` for every rule query's `NOW()`.
         /// Omitted, the native host-clock behavior is unchanged.
         #[arg(
@@ -1920,6 +1926,9 @@ pub(crate) enum Command {
             .args(["expr", "expr_at", "expr_turtle", "expr_turtle_file"])
     ))]
     NodeExpr {
+        /// Independent YAML-LD Basic options for one declared RDF import; repeatable.
+        #[arg(long, value_name = "IRI=PATH", requires = "import")]
+        import_yamlld_input_options: Vec<String>,
         /// The shapes graph `FILE` carrying the expression, or `-` for stdin (which
         /// requires `--shapes-from`).
         #[arg(long, value_name = "FILE")]
@@ -2052,6 +2061,9 @@ pub(crate) enum ShapesCommand {
     /// **2** for a usage error. `shapes lint clean true|false` and `shapes lint findings N`
     /// are always written to stderr.
     Lint {
+        /// Independent YAML-LD Basic options for one declared RDF import; repeatable.
+        #[arg(long, value_name = "IRI=PATH", requires = "import")]
+        import_yamlld_input_options: Vec<String>,
         /// Bounded YAML-LD Basic input options for the root shapes document only.
         #[arg(long, value_name = "PATH")]
         yamlld_input_options: Option<PathBuf>,
@@ -2218,6 +2230,9 @@ pub(crate) enum ShaclCommand {
     /// identical bytes — no hash-iteration order, no wall clock and no randomness reach the
     /// writer.
     Pack {
+        /// Independent YAML-LD Basic options for one declared RDF import; repeatable.
+        #[arg(long, value_name = "IRI=PATH", requires = "import")]
+        import_yamlld_input_options: Vec<String>,
         /// Bounded YAML-LD Basic input options for the root shapes document only.
         #[arg(long, value_name = "PATH")]
         yamlld_input_options: Option<PathBuf>,
@@ -3091,8 +3106,14 @@ impl Cli {
                 changes_removed,
                 input,
                 output,
+                import_yamlld_input_options,
                 ..
             } => {
+                for mapping in import_yamlld_input_options {
+                    if let Some((_, path)) = mapping.split_once('=') {
+                        paths.push(PathBuf::from(path));
+                    }
+                }
                 paths.extend(yamlld_input_options.iter().cloned());
                 paths.extend(shapes_yamlld_input_options.iter().cloned());
                 if let Some(path) = shapes {
@@ -3152,8 +3173,14 @@ impl Cli {
                 output,
                 yamlld_input_options,
                 shapes_yamlld_input_options,
+                import_yamlld_input_options,
                 ..
             } => {
+                for mapping in import_yamlld_input_options {
+                    if let Some((_, path)) = mapping.split_once('=') {
+                        paths.push(PathBuf::from(path));
+                    }
+                }
                 paths.extend(yamlld_input_options.iter().cloned());
                 paths.extend(shapes_yamlld_input_options.iter().cloned());
                 if let Some(path) = shapes {
@@ -3181,8 +3208,14 @@ impl Cli {
                 output,
                 yamlld_input_options,
                 shapes_yamlld_input_options,
+                import_yamlld_input_options,
                 ..
             } => {
+                for mapping in import_yamlld_input_options {
+                    if let Some((_, path)) = mapping.split_once('=') {
+                        paths.push(PathBuf::from(path));
+                    }
+                }
                 paths.extend(yamlld_input_options.iter().cloned());
                 paths.extend(shapes_yamlld_input_options.iter().cloned());
                 paths.push(PathBuf::from(shapes));
@@ -3208,8 +3241,14 @@ impl Cli {
                     import,
                     out,
                     yamlld_input_options,
+                    import_yamlld_input_options,
                     ..
                 } => {
+                    for mapping in import_yamlld_input_options {
+                        if let Some((_, path)) = mapping.split_once('=') {
+                            paths.push(PathBuf::from(path));
+                        }
+                    }
                     paths.extend(yamlld_input_options.iter().cloned());
                     paths.push(PathBuf::from(shapes));
                     for pair in import {
@@ -3236,8 +3275,14 @@ impl Cli {
                     input,
                     output,
                     yamlld_input_options,
+                    import_yamlld_input_options,
                     ..
                 } => {
+                    for mapping in import_yamlld_input_options {
+                        if let Some((_, path)) = mapping.split_once('=') {
+                            paths.push(PathBuf::from(path));
+                        }
+                    }
                     paths.extend(yamlld_input_options.iter().cloned());
                     for pair in import {
                         if let Some((_, path)) = pair.split_once('=') {

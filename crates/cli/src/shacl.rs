@@ -149,11 +149,14 @@ pub(crate) fn pack(
     yamlld_input_options: Option<&std::path::Path>,
     base: Option<&str>,
     imports: &[String],
+    import_yamlld_input_options: &[String],
     shapes_graph: Option<&str>,
     box_role_vocab: Option<&str>,
     out: &str,
     canonical: &mut crate::canonical::Request,
 ) -> Result<(), CliError> {
+    let import_plan =
+        crate::shapes_source::ShapesImportPlan::prepare(imports, import_yamlld_input_options)?;
     let input_options = yamlld_input_options
         .map(|path| source::read_yamlld_input_options(path, &[shapes_format]))
         .transpose()?;
@@ -185,7 +188,7 @@ pub(crate) fn pack(
         input_options.as_deref(),
         canonical,
     )?;
-    let table = crate::shapes_source::shapes_imports(&root, imports, canonical)?;
+    let table = crate::shapes_source::shapes_imports(&root, &import_plan, canonical)?;
 
     let product = purrdf_validate::pack_shapes_product_from_dataset(
         &root.dataset,
