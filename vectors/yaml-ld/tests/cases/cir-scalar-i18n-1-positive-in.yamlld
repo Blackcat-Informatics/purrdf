@@ -1,0 +1,11 @@
+%TAG !i18n! https://www.w3.org/ns/i18n%23
+# language-tagged string with i18n
+---
+"@context":
+  "@vocab": http://example.com/
+"@id": http://example.org/test#example
+values:
+  - Plain String
+  - !i18n!en-US String in US English
+  - !i18n!en-US_ltr String in US English and Left to Right
+  - !i18n!_rtl Plain String Right to Left

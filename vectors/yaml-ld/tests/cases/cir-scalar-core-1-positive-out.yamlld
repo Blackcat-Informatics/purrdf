@@ -1,0 +1,10 @@
+- "@id": http://example.org/test#example
+  http://example.com/values:
+  - "@list":
+    - "@value": true
+    - "@value": false
+    - "@value": -42
+    - "@value": 63
+    - "@value": 4277009102
+    - "@value": 1.234e+57
+    - "@value": string

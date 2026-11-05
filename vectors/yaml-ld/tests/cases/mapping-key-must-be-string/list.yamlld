@@ -1,0 +1,14 @@
+# A mapping key MUST be a string.
+"@context":
+  "@vocab": https://example.com/
+  "@base": https://example.com/
+
+"@id": https://example.com/film-genre
+
+# Explanation for this syntax:
+#   https://yaml.org/spec/1.2.2/#example-mapping-between-sequences
+? [the-matrix, the-terminator]
+: cyberpunk
+
+? [star-trek, star-wars, interstellar]
+: space-fiction

@@ -1,0 +1,7 @@
+# A node alias with no corresponding anchor
+"@context":
+  "@vocab": "http://schema.org/"
+  "countries": "http://publication.europa.eu/resource/authority/country/"
+"@id": http://people.example/Homer
+name: Homer Simpson
+nationality: *ITA

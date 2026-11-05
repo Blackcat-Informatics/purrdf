@@ -206,6 +206,20 @@ Native cases live in `crates/lex/tests/yaml_syntax.rs`,
 combined admission, native routing, JSON-LD entry arrays, explicit blank-label
 sharing and anonymous alias copies. Their scope is the native Basic input path.
 
+The upstream YAML-LD corpus is pinned at repository revision
+`fafcf7ae69d5e5cb7402e71dfd5cd2c03c18f29f`, the publication-day cutoff, under
+[`vectors/yaml-ld`](../vectors/yaml-ld/PROVENANCE.md). Its unchanged manifest has
+97 entries. The native `yaml_mapping_keys::pinned_w3c_normative_rdf_construction`
+case selects all eleven normative positive `jld:ToRDFTest` entries, decoding the
+actual `extractAllScripts` option and comparing native RDF construction with
+pinned N-Quads by dataset isomorphism. It covers anchor-name independence,
+shared explicit blank nodes across documents, mixed empty/nonempty streams,
+standalone and zero-document streams, and leading/trailing empty documents.
+The two informative Extended YAML ToRDF entries are explicitly excluded. The
+other 81 normative cases and other required upstream suites remain unqualified
+by this family; the full corpus inventory is preserved for those remaining
+contracts. This is not a complete YAML-LD Basic conformance claim.
+
 Source-cover RDF export and strict reconstruction are implemented through the
 `purrdf::yaml` facade and shared host boundary. Native
 `crates/yaml/tests/roundtrip.rs` exercises lexical retention, cover integrity,

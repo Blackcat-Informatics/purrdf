@@ -1,0 +1,6 @@
+"@context":
+  term: http://example/term
+"@graph":
+- "@id": http://example/foo
+  term:
+  - value
