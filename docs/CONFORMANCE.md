@@ -177,6 +177,21 @@ selection remain controlled by the supplied options. The native
 checks this boundary. It does not qualify foreign context-input controls or the
 pinned W3C expansion family.
 
+Native offline registries accept mixed document formats through
+`JsonLdContextRegistry::new_with_formats` and explicit
+`JsonLdContextFormat::Json` or `JsonLdContextFormat::Yaml(YamlLdOptions)` tags.
+The existing `new` constructor and foreign options schema retain strict JSON
+decoding. Original document bytes retain the fixed registry and loaded-byte
+ceilings; YAML admission controls and shared context compilation budgets also
+apply. Relative context references, imports and scoped contexts resolve through
+the same immutable registry. Context documents still require an `@context`
+wrapper, and imports require its object form. All-document YAML selection
+produces an array and therefore fails that wrapper requirement. Formats are
+never inferred, and no network or filesystem documents are acquired. The native
+`mixed_context_registry_reuses_yaml_admission_and_shared_resolution` case checks
+mixed resolution and YAML input admission; it does not qualify the remaining
+pinned context fixtures or foreign context-input controls.
+
 The implementation applies the draft's document-loading and mapping-key
 requirements in two phases. The complete stream must have valid YAML syntax,
 acyclic document-local aliases, mapping/sequence/null roots and string mapping
