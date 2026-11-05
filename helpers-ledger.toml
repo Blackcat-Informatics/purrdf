@@ -1809,16 +1809,6 @@ names = ["^(rule|infer)_options$", "^run_rules_(dispatch|for_host)$"]
 
 [[distinct]]
 members = [
-    "purrdf_native::py_jsonld::register",
-    "purrdf_native::py_yaml_source::register",
-]
-kind = "body"
-criterion = "b"
-anchor = "purrdf_native::py_jsonld::register"
-reason = "The JSON-LD registrar exports the compiled context, dataset serializer and document expander; the YAML source registrar exports its result class, source export and reconstruction. Their class-plus-two-functions shape registers different public products."
-
-[[distinct]]
-members = [
     "purrdf_geo_kernel::geojson::parse",
     "purrdf_geo_kernel::wkt::parse",
 ]

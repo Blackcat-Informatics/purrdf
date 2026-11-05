@@ -1007,6 +1007,23 @@ export interface YamlSourceFailure extends NativeDiagnosticFailure {}
 export function expandDocument(source: Uint8Array, requestJson: Uint8Array): string;
 
 /**
+ * Compact source bytes under the required output_context expression in the
+ * version-one request. Null is an explicit context reset. Input buffers and
+ * native error/cause ownership follow expandDocument. Output-context compilation
+ * follows expansion so output_base input uses the effective document base.
+ * @throws {NativeDiagnosticFailure | TypeError} Original native and host refusals.
+ */
+export function compactDocument(source: Uint8Array, requestJson: Uint8Array): string;
+
+/**
+ * Flatten source bytes, returning an expanded array when output_context is absent
+ * or null; a non-null expression applies ordinary compaction exactly once.
+ * Input buffers and native error/cause ownership follow expandDocument.
+ * @throws {NativeDiagnosticFailure | TypeError} Original native and host refusals.
+ */
+export function flattenDocument(source: Uint8Array, requestJson: Uint8Array): string;
+
+/**
  * Export original YAML bytes under an explicit absolute source IRI and a closed
  * version-one native profile encoded as UTF-8 JSON bytes. The profile requires
  * version, name, profile_version and vocabulary; bounds are optional.

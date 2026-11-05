@@ -181,6 +181,101 @@ interfaces return JSON text and retain existing diagnostic/cause error fields.
 The JavaScript native cause retains its existing `YamlSourceCause` owner and
 `free()` lifetime.
 
+## Document compaction and flattening across hosts
+
+Compaction and flattening accept the same original source bytes and common
+version-one request fields as expansion. They use the native structural engine
+without constructing an RDF dataset. Each operation has a closed request grammar:
+expansion refuses the additional fields below, and compaction refuses `flattening`.
+
+```json
+{
+  "version": 1,
+  "format": "jsonld",
+  "base": "https://example.org/source/document",
+  "output_context": {"label": "https://example.org/label"},
+  "output_context_base": "https://example.org/contexts/",
+  "output_base": {"mode": "input"},
+  "compaction": {
+    "compact_arrays": true,
+    "compact_to_relative": true,
+    "max_allocation_bytes": 34359738368
+  }
+}
+```
+
+| Additional field | Compaction and flattening meaning |
+| --- | --- |
+| `output_context` | Compaction requires an explicit bare expression, including a valid null reset. Flattening accepts omission or null to return the flattened expanded array; every non-null expression, including `{}`, selects ordinary compaction. |
+| `output_context_base` | Optional absolute retrieval IRI string or null. Omission selects the original request `base`; explicit null selects no retrieval URL. |
+| `output_base` | Optional closed record whose required `mode` is `input`, `none` or `iri`. Default `input` uses the effective document base retained by expansion. `none` supplies no initial semantic output base. `iri` requires an absolute `iri` string; other modes refuse that field. A null record is invalid. |
+| `compaction` | Optional closed object accepting only boolean `compact_arrays` and `compact_to_relative`, both defaulting to true, and `max_allocation_bytes`, defaulting to 32 GiB. |
+| `flattening` | Flattening only: an optional closed object accepting `max_allocation_bytes`, defaulting to 32 GiB, for native node-map construction. |
+
+Both new allocation limits accept the full `u64` range and refuse before governed
+construction. Expansion, flattening, compaction and serialized output keep
+independent allowances. Context compilation and scoped state retain their existing
+native limits. Moving an expanded or flattened value into another phase does not
+refund it into that phase's account or establish an aggregate operation-memory cap.
+
+The base roles are separate. Request `context` and `base` interpret source bytes.
+The output context supplies emitted terms and obeys the same bare-expression
+boundary: an expression object containing `@context` refuses, while term-scoped
+contexts and offline registry documents retain their existing semantics.
+Boolean and numeric output expressions refuse during request decoding, including
+inside expression arrays.
+
+`output_context_base` resolves relative offline output-context references. Its
+default uses the original input document URL, before an in-document `@base`
+changes or clears the semantic base. `output_base` selects the initial semantic
+base for output-context compilation. Its `input` default uses the actual effective
+document base, including root in-document base or null changes. The output
+context's own base or null is then processed over that initial base.
+`compact_to_relative: false` disables document-relative output selection;
+vocabulary and prefix selection retain their native meaning.
+
+When flattening has no non-null output context, there is no compaction phase.
+Its compaction controls and output-base records still require the closed grammar,
+valid types and ranges, and absolute IRI strings. A zero compaction allocation
+limit therefore does not prevent context-free flattening. Empty `{}` is non-null
+and does run compaction. Compaction applies its root finishing exactly once,
+including the native context and graph envelope; a null compaction context resets
+the context and emits no `@context` member.
+
+Decidable request checks and input-context compilation precede source acquisition.
+Output-context compilation follows expansion because it depends on the actual
+effective base. No provisional base is substituted for that metadata.
+
+| Operation | Rust operation | CLI command | C function | Python function | JavaScript function |
+| --- | --- | --- | --- | --- | --- |
+| Compact | `document::Operation::Compact` | `document-compact` | `purrdf_document_compact` | `compact_document` | `compactDocument` |
+| Flatten | `document::Operation::Flatten` | `document-flatten` | `purrdf_document_flatten` | `flatten_document` | `flattenDocument` |
+
+Rust callers use `purrdf_validate::document::execute(source, request_json, operation)`.
+`document::request(request_json, operation)` returns a reusable request for
+`document::execute_decoded(source, &request)`. Existing expansion functions and
+their reusable request API remain available.
+
+```sh
+purrdf document-compact --request compact.json input.jsonld compacted.jsonld
+purrdf document-flatten --request flatten.json input.yamlld flattened.jsonld
+```
+
+CLI stdin/path protection and output publication follow document expansion.
+The new C functions use the same source/request pointer-length pairs and
+buffer/error slots as `purrdf_document_expand`, with the same one-buffer ownership
+and free functions. Python functions accept `source: bytes` and keyword-only
+`request_json: bytes`, returning `str` while retaining the borrowed-input lifetime.
+JavaScript functions accept two `Uint8Array` arguments and return JSON text;
+admitted capture, retained native causes and their `free()` lifetime are unchanged.
+
+Native orchestration can use `expand_jsonld_document_with_context` or
+`expand_yamlld_document_with_context` to retain `JsonLdExpandedDocument::document_base`
+alongside the expanded `value`. `CompiledJsonLdContext::compile_with_bases` reuses
+the existing compiler with independent retrieval and initial semantic bases.
+`flatten_expanded` exposes the existing normative node-map construction; the
+existing value-only expansion and flattening entry points retain their behavior.
+
 ## Native document compaction
 
 `compact_expanded_with_context` compacts lexical JSON values before RDF lowering.

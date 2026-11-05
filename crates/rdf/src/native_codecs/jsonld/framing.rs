@@ -152,7 +152,7 @@ pub fn frame_value_with_context(
         JsonLdFramingBase::Input | JsonLdFramingBase::None => None,
         JsonLdFramingBase::Iri(base) => Some(base),
     };
-    let output = CompiledJsonLdContext::compile_frame_output(
+    let output = CompiledJsonLdContext::compile_with_bases(
         own_context,
         frame_retrieval_base,
         base,

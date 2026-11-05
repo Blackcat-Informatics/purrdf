@@ -24,11 +24,57 @@ fn expand_document(
     source: &Bound<'_, PyBytes>,
     request_json: &Bound<'_, PyBytes>,
 ) -> PyResult<String> {
+    document(
+        py,
+        source,
+        request_json,
+        purrdf_validate::document::Operation::Expand,
+    )
+}
+
+/// Compact immutable source bytes under the request's explicit output context.
+#[pyfunction]
+#[pyo3(signature = (source, *, request_json))]
+fn compact_document(
+    py: Python<'_>,
+    source: &Bound<'_, PyBytes>,
+    request_json: &Bound<'_, PyBytes>,
+) -> PyResult<String> {
+    document(
+        py,
+        source,
+        request_json,
+        purrdf_validate::document::Operation::Compact,
+    )
+}
+
+/// Flatten immutable source bytes, optionally compacting under an output context.
+#[pyfunction]
+#[pyo3(signature = (source, *, request_json))]
+fn flatten_document(
+    py: Python<'_>,
+    source: &Bound<'_, PyBytes>,
+    request_json: &Bound<'_, PyBytes>,
+) -> PyResult<String> {
+    document(
+        py,
+        source,
+        request_json,
+        purrdf_validate::document::Operation::Flatten,
+    )
+}
+
+fn document(
+    py: Python<'_>,
+    source: &Bound<'_, PyBytes>,
+    request_json: &Bound<'_, PyBytes>,
+    operation: purrdf_validate::document::Operation,
+) -> PyResult<String> {
     // Both immutable Python owners remain borrowed throughout detach. The shared
     // request decoder runs before native source parsing, without a bridge copy.
     let source = source.as_bytes();
     let request = request_json.as_bytes();
-    py.detach(|| purrdf_validate::document_expansion::expand(source, request))
+    py.detach(|| purrdf_validate::document::execute(source, request, operation))
         .map_err(|diagnostic| crate::py_store::presentation::native_error(py, &diagnostic))
 }
 
@@ -142,11 +188,13 @@ pub(crate) fn serialize_frozen(
     })
 }
 
-/// Register the compiled context, dataset serializer and document expander exports.
+/// Register the compiled context, dataset serializer and structural document exports.
 /// YAML source export and reconstruction have their own public registrar.
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyCompiledJsonLdContext>()?;
     module.add_function(wrap_pyfunction!(serialize_jsonld, module)?)?;
     module.add_function(wrap_pyfunction!(expand_document, module)?)?;
+    module.add_function(wrap_pyfunction!(compact_document, module)?)?;
+    module.add_function(wrap_pyfunction!(flatten_document, module)?)?;
     Ok(())
 }

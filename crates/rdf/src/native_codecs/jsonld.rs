@@ -31,11 +31,12 @@ pub use framing::{
 mod node_map;
 pub use node_map::JsonLdFlattenLimits;
 mod structural;
-pub use structural::JsonLdExpansionLimits;
+pub use structural::{JsonLdExpandedDocument, JsonLdExpansionLimits};
 pub(super) mod yaml;
 pub use yaml::{
-    YamlLdOptions, expand_yamlld_with_context, flatten_yamlld_with_context,
-    parse_yamlld_with_context, parse_yamlld_with_options, yamlld_to_jsonld_with_options,
+    YamlLdOptions, expand_yamlld_document_with_context, expand_yamlld_with_context,
+    flatten_yamlld_with_context, parse_yamlld_with_context, parse_yamlld_with_options,
+    yamlld_to_jsonld_with_options,
 };
 
 pub use context::{
@@ -1971,8 +1972,20 @@ pub fn expand_jsonld_with_context(
     context: &CompiledJsonLdContext,
     limits: &JsonLdExpansionLimits,
 ) -> Result<Value, RdfDiagnostic> {
+    expand_jsonld_document_with_context(bytes, context, limits).map(|expanded| expanded.value)
+}
+
+/// Expand JSON-LD while retaining the effective base from the original native walk.
+/// Input decoding and expansion retain their existing separate authorities.
+/// # Errors
+/// Preserves original input, context, structural and construction refusals.
+pub fn expand_jsonld_document_with_context(
+    bytes: &[u8],
+    context: &CompiledJsonLdContext,
+    limits: &JsonLdExpansionLimits,
+) -> Result<JsonLdExpandedDocument, RdfDiagnostic> {
     let value = context::parse_document(bytes)?;
-    structural::expand(&value, context, *limits).map(|expanded| expanded.value)
+    structural::expand(&value, context, *limits)
 }
 
 /// Expand JSON-LD bytes under the input context, then compact under a distinct
@@ -2081,7 +2094,18 @@ pub fn flatten_jsonld_with_context(
     flatten_limits: &JsonLdFlattenLimits,
 ) -> Result<Value, RdfDiagnostic> {
     let expanded = expand_jsonld_with_context(bytes, context, expansion_limits)?;
-    node_map::flatten(&expanded, *flatten_limits, node_map::Issuance::Normative)
+    flatten_expanded(&expanded, flatten_limits)
+}
+
+/// Flatten expanded document structure through the native normative node-map body.
+/// Its construction allowance is independent of expansion and later compaction.
+/// # Errors
+/// Preserves original malformed-shape, conflicting-index and construction refusals.
+pub fn flatten_expanded(
+    expanded: &Value,
+    flatten_limits: &JsonLdFlattenLimits,
+) -> Result<Value, RdfDiagnostic> {
+    node_map::flatten(expanded, *flatten_limits, node_map::Issuance::Normative)
         .map(|mapped| mapped.value)
 }
 

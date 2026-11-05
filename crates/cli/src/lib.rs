@@ -200,6 +200,8 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             &cli.cmd,
             Command::GlobRdf(_)
                 | Command::DocumentExpand { .. }
+                | Command::DocumentCompact { .. }
+                | Command::DocumentFlatten { .. }
                 | Command::YamlSource { .. }
                 | Command::WordId { .. }
                 | Command::Glob { .. }
@@ -267,14 +269,39 @@ fn dispatch_with_request(
             request,
             input,
             output,
+        }
+        | Command::DocumentCompact {
+            request,
+            input,
+            output,
+        }
+        | Command::DocumentFlatten {
+            request,
+            input,
+            output,
         } => {
+            let (operation, command) = match &cli.cmd {
+                Command::DocumentExpand { .. } => (
+                    purrdf_validate::document::Operation::Expand,
+                    "document-expand",
+                ),
+                Command::DocumentCompact { .. } => (
+                    purrdf_validate::document::Operation::Compact,
+                    "document-compact",
+                ),
+                Command::DocumentFlatten { .. } => (
+                    purrdf_validate::document::Operation::Flatten,
+                    "document-flatten",
+                ),
+                _ => unreachable!("the enclosing match selects document operations"),
+            };
             cli::refuse_document_flags(
                 &ledger_target,
                 jsonld_options.as_ref(),
-                "document-expand accepts no loss ledger",
-                "document-expand accepts no JSON-LD serialization options",
+                &format!("{command} accepts no loss ledger"),
+                &format!("{command} accepts no JSON-LD serialization options"),
             )?;
-            document_expansion::run(request, input, output, canonical)
+            document_expansion::run(operation, request, input, output, canonical)
         }
         Command::YamlSource { command } => {
             cli::refuse_document_flags(

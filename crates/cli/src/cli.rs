@@ -398,6 +398,26 @@ pub(crate) enum Command {
         /// Expanded JSON destination, or - for standard output.
         output: String,
     },
+    /// Compact JSON-LD/YAML-LD document structure under an explicit output context.
+    DocumentCompact {
+        /// Closed version-one request JSON path, or - for standard input.
+        #[arg(long)]
+        request: String,
+        /// Original source path, or - for standard input.
+        input: String,
+        /// Compacted JSON destination, or - for standard output.
+        output: String,
+    },
+    /// Flatten JSON-LD/YAML-LD, optionally compacting under an output context.
+    DocumentFlatten {
+        /// Closed version-one request JSON path, or - for standard input.
+        #[arg(long)]
+        request: String,
+        /// Original source path, or - for standard input.
+        input: String,
+        /// Flattened JSON destination, or - for standard output.
+        output: String,
+    },
     /// Export and reconstruct exact YAML presentation through RDF metadata.
     YamlSource {
         #[command(subcommand)]
@@ -2956,6 +2976,16 @@ impl Cli {
         }
         match &self.cmd {
             Command::DocumentExpand {
+                request,
+                input,
+                output,
+            }
+            | Command::DocumentCompact {
+                request,
+                input,
+                output,
+            }
+            | Command::DocumentFlatten {
                 request,
                 input,
                 output,
