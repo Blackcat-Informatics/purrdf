@@ -1855,6 +1855,9 @@ pub(crate) enum Command {
         /// Data-graph format override; inferred from the input extension when omitted.
         #[arg(long, value_enum)]
         from: Option<CliRdfFormat>,
+        /// Bounded YAML-LD Basic input options for the primary data graph only.
+        #[arg(long, value_name = "PATH", conflicts_with = "check")]
+        yamlld_input_options: Option<PathBuf>,
         /// Output format override; inferred from the output extension when omitted.
         #[arg(long, value_enum)]
         to: Option<CliRdfFormat>,
@@ -1970,6 +1973,9 @@ pub(crate) enum Command {
         /// Data-graph format override; inferred from the input extension when omitted.
         #[arg(long, value_enum)]
         from: Option<CliRdfFormat>,
+        /// Bounded YAML-LD Basic input options for the primary data graph only.
+        #[arg(long, value_name = "PATH")]
+        yamlld_input_options: Option<PathBuf>,
         /// Base IRI for resolving relative IRIs while parsing the DATA graph.
         #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
         base: Option<String>,
@@ -3122,8 +3128,10 @@ impl Cli {
                 explain,
                 input,
                 output,
+                yamlld_input_options,
                 ..
             } => {
+                paths.extend(yamlld_input_options.iter().cloned());
                 if let Some(path) = shapes {
                     paths.push(PathBuf::from(path));
                 }
@@ -3147,8 +3155,10 @@ impl Cli {
                 expr_turtle_file,
                 input,
                 output,
+                yamlld_input_options,
                 ..
             } => {
+                paths.extend(yamlld_input_options.iter().cloned());
                 paths.push(PathBuf::from(shapes));
                 for pair in import {
                     if let Some((_, path)) = pair.split_once('=') {

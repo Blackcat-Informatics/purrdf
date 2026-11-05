@@ -86,6 +86,8 @@ pub(crate) struct RulesOptions<'a> {
     pub(crate) xpath_regex: Option<Profile>,
     /// `--from`: the data-graph format override.
     pub(crate) from: Option<CliRdfFormat>,
+    /// YAML-LD Basic options for the primary data graph only.
+    pub(crate) yamlld_input_options: Option<&'a std::path::Path>,
     /// `--to`: the output format override.
     pub(crate) to: Option<CliRdfFormat>,
     /// `--base`: the data graph's parse base and the output's base.
@@ -138,6 +140,11 @@ pub(crate) fn run_rules(
         ));
     }
     if let Some(level) = options.check {
+        if options.yamlld_input_options.is_some() {
+            return Err(CliError::Usage(
+                "--check reads no data and cannot consume --yamlld-input-options".to_owned(),
+            ));
+        }
         if options.now.is_some() || options.entropy_seed.is_some() {
             return Err(CliError::Usage(
                 "--check executes no rules and cannot consume --now or --entropy-seed".to_owned(),
@@ -158,6 +165,10 @@ pub(crate) fn run_rules(
     readers.extend(import_readers(&srl_pairs));
     refuse_shared_stdin(&readers)?;
     let data_format = format::resolve(options.from, options.input)?;
+    let input_options = options
+        .yamlld_input_options
+        .map(|path| source::read_yamlld_input_options(path, &[data_format]))
+        .transpose()?;
     let target_format = format::resolve_target(options.to, options.output, "the --to target")?;
     format::refuse_unconsumable_base(
         options.base,
@@ -194,7 +205,13 @@ pub(crate) fn run_rules(
         }
     };
 
-    let data = source::load_dataset(options.input, data_format, options.base, None, canonical)?;
+    let data = source::load_dataset(
+        options.input,
+        data_format,
+        options.base,
+        input_options.as_deref(),
+        canonical,
+    )?;
     let mut diagnostics: Vec<lint::MandatoryDiagnostic> = Vec::new();
     let limits = purrdf::shapes::RuleLimits {
         max_term_generating_rounds: options.max_term_generating_rounds,
@@ -464,6 +481,8 @@ pub(crate) struct NodeExprOptions<'a> {
     pub(crate) xpath_regex: Option<Profile>,
     /// `--from`.
     pub(crate) from: Option<CliRdfFormat>,
+    /// YAML-LD Basic options for the primary data graph only.
+    pub(crate) yamlld_input_options: Option<&'a std::path::Path>,
     /// `--base`.
     pub(crate) base: Option<&'a str>,
     /// The data-graph path `IN`, or `-`.
@@ -520,6 +539,10 @@ pub(crate) fn run_node_expr(
         ("--shapes".to_owned(), options.shapes),
     ])?;
     let data_format = format::resolve(options.from, options.input)?;
+    let input_options = options
+        .yamlld_input_options
+        .map(|path| source::read_yamlld_input_options(path, &[data_format]))
+        .transpose()?;
     format::refuse_unconsumable_base(
         options.base,
         &[format::BaseUse::parse(data_format, "the --from data graph")],
@@ -574,7 +597,13 @@ pub(crate) fn run_node_expr(
         canonical,
     )?;
     let table = shapes_imports(&root_document, options.imports, canonical)?;
-    let data = source::load_dataset(options.input, data_format, options.base, None, canonical)?;
+    let data = source::load_dataset(
+        options.input,
+        data_format,
+        options.base,
+        input_options.as_deref(),
+        canonical,
+    )?;
     let selector = match (argv_selector, options.expr.expr_turtle_file) {
         (Some(selector), _) => selector,
         (None, Some(path)) => {

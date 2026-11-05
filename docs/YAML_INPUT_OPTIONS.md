@@ -88,6 +88,12 @@ existing input policy and global `--from` scoping.
 `shex --yamlld-input-options PATH` configures only `--data`, with configuration
 decoding before data, schema or schema-import acquisition. Schema syntax, imports,
 shape-map selectors and base policy retain their existing behavior.
+`rules` and `node-expr` accept the flag for primary `IN` only. Configuration
+admission precedes data, rule, shapes, import and expression document acquisition.
+Both SHACL and SRL rules use the same configured data loader. `rules --check`
+reads no data and refuses the flag. Shapes, SRL, expression and import documents
+retain their existing input policy; coordinates, selectors, bases, governors,
+serialization and reports retain their existing behavior.
 Every selected input must be YAML-LD; pack, GTS and other native formats are
 refused before data acquisition. The bounded named options file is validated
 before primary data, premise imports or rule documents are read; it does not
