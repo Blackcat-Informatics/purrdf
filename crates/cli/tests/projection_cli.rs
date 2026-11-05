@@ -43,6 +43,86 @@ fn lpg_config() -> &'static [u8] {
 }"#
 }
 
+/// The archive receives the selected documents; input preflight precedes auxiliaries.
+#[test]
+fn configured_yamlld_input_reaches_project_archive() {
+    use support::{code, stderr, stdout};
+    let dir = purrdf_testkit::temp_dir!().expect("temporary inputs");
+    let input = write(
+        &dir.path().join("input.yamlld"),
+        b"'@id': https://example.org/first\nhttps://example.org/p:\n  '@id': https://example.org/o\n---\n'@id': https://example.org/second\nhttps://example.org/p:\n  '@id': https://example.org/o\n",
+    );
+    let config = write(&dir.path().join("projection.json"), lpg_config());
+    let options = write(
+        &dir.path().join("all.json"),
+        br#"{"version":1,"yaml_ld":{"extract_all_scripts":true}}"#,
+    );
+    for (controls, second) in [(None, false), (Some(options.as_str()), true)] {
+        let archive = dir
+            .path()
+            .join(if second { "all.tar" } else { "first.tar" });
+        let archive = archive.to_str().expect("UTF-8 archive path");
+        let mut args = vec!["project", "--profile", "lpg-csv", "--config", &config];
+        if let Some(controls) = controls {
+            args.extend(["--yamlld-input-options", controls]);
+        }
+        args.extend([input.as_str(), archive]);
+        let projected = run(&args);
+        assert_eq!(code(&projected), 0, "{}", stderr(&projected));
+        let lifted = run(&[
+            "lift",
+            "--profile",
+            "lpg-csv",
+            "--config",
+            &config,
+            "--to",
+            "nquads",
+            archive,
+            "-",
+        ]);
+        assert_eq!(code(&lifted), 0, "{}", stderr(&lifted));
+        assert!(stdout(&lifted).contains("<https://example.org/first>"));
+        assert_eq!(
+            stdout(&lifted).contains("<https://example.org/second>"),
+            second
+        );
+    }
+
+    let malformed = write(&dir.path().join("malformed.json"), b"{");
+    let missing_config = dir.path().join("missing-projection.json");
+    let missing_assets = dir.path().join("missing-assets.tar");
+    let yaml = dir.path().join("missing.yamlld");
+    let turtle = dir.path().join("missing.ttl");
+    let output = write(&dir.path().join("output.tar"), b"unchanged destination");
+    for (input, controls, status, diagnostic) in [
+        (&yaml, malformed.as_str(), 1, "rdf-input-options"),
+        (
+            &turtle,
+            options.as_str(),
+            2,
+            "requires every input to be YAML-LD",
+        ),
+    ] {
+        let refused = run(&[
+            "project",
+            "--profile",
+            "lpg-csv",
+            "--config",
+            missing_config.to_str().expect("UTF-8 config path"),
+            "--assets",
+            missing_assets.to_str().expect("UTF-8 assets path"),
+            "--yamlld-input-options",
+            controls,
+            input.to_str().expect("UTF-8 input path"),
+            &output,
+        ]);
+        assert_eq!(code(&refused), status, "{}", stderr(&refused));
+        assert!(stderr(&refused).contains(diagnostic));
+        assert_eq!(stdout(&refused), "");
+        assert_eq!(std::fs::read(&output).unwrap(), b"unchanged destination");
+    }
+}
+
 const TURTLE: &[u8] = b"@prefix ex: <https://example.org/> .\nex:s ex:p ex:o .\n";
 const RESEARCH_SOURCE: &[u8] =
     include_bytes!("../../rdf/tests/fixtures/research-objects/carrier/shared.ttl");

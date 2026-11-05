@@ -886,6 +886,7 @@ wasm-pkg: ## Build the purrdf npm/ESM package (release wasm + wasm-bindgen web b
 	@# The module ships next to the glue; a glue that does not import it would leave
 	@# the raw import unresolved at instantiation, so its absence is a build failure.
 	cp crates/rdf-wasm/js/src/purrdf_jspi.mjs crates/rdf-wasm/js/pkg/purrdf_jspi.mjs
+	cp crates/rdf-wasm/js/src/purrdf_bytes.mjs crates/rdf-wasm/js/pkg/purrdf_bytes.mjs
 	@grep -qE '^import \* as [A-Za-z_$$][A-Za-z0-9_$$]* from "\./purrdf_jspi\.mjs"$$' crates/rdf-wasm/js/pkg/purrdf_wasm.js || { \
 		echo "ERROR: the wasm-bindgen glue does not import ./purrdf_jspi.mjs (expected: import * as <name> from \"./purrdf_jspi.mjs\")"; exit 1; }
 	@# wasm-opt -Oz is a REQUIRED build step (roughly halves the artifact).

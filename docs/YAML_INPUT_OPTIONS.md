@@ -62,9 +62,49 @@ Python exposes `code` and `diagnostic_json`; JavaScript exposes `code` and
 `diagnostic` on the thrown `Error`.
 
 The CLI accepts `convert --yamlld-input-options PATH`. The flag applies to every
-conversion input, including canonicalization and entailment. Every input must be
-YAML-LD; pack, GTS and other native formats are refused before dispatch. Other
-commands reject the flag. Existing output options are independent.
+conversion input, including canonicalization and entailment. `update` and `query`
+accept the same flag for their sole `--data` document. Query applies it in ordinary,
+governed, explain and entailment execution, using its existing filename-based
+input selection. Query premise imports retain their default input policy.
+`validate` accepts the flag for primary `IN`, on both whole-graph and incremental
+validation. Shapes documents, prepared products, imports and added/removed change
+documents retain their existing input policy. The flag is also valid with
+`--shapes-product`, because the primary data is still parsed.
+`describe` and `project` accept the flag for primary `IN`. Description selectors
+retain their existing base resolution. Projection configuration and assets keep
+their existing input policy; YAML controls are admitted before either is read.
+`lift` reads a carrier archive and does not accept YAML input controls.
+`reason` and `consistency` accept the flag for primary `IN` only. Imports retain
+their existing controls and `--from` scoping. Reason admits the options before RIF
+rule acquisition; consistency retains its lossless N-Quads crossing and existing
+proof/check-proof behavior.
+`entails --yamlld-input-options PATH` configures only `--premise`;
+`--conclusion-yamlld-input-options PATH` independently configures only
+`--conclusion` and requires that graph question, conflicting with `--pattern`.
+Premise controls also apply in pattern mode. Both requested configurations are
+decoded before any RDF source is read. Each configured role must resolve to
+YAML-LD; the other role may use a different inferred format. Imports retain their
+existing input policy and global `--from` scoping.
+`shex --yamlld-input-options PATH` configures only `--data`, with configuration
+decoding before data, schema or schema-import acquisition. Schema syntax, imports,
+shape-map selectors and base policy retain their existing behavior.
+Every selected input must be YAML-LD; pack, GTS and other native formats are
+refused before data acquisition. The bounded named options file is validated
+before primary data, premise imports or rule documents are read; it does not
+consume standard input. Other commands reject the flag. Existing output options
+are independent.
+For validation, configuration decoding also precedes change documents and shapes
+document/product/import acquisition.
+
+```sh
+purrdf update --data input.yamlld --yamlld-input-options options.json --to nquads \
+  'INSERT { ?s <urn:seen> true } WHERE { ?s <urn:value> ?o }'
+```
+
+Without the flag, the existing first-document behavior is preserved. A configured
+input refusal writes no updated dataset and leaves an existing output intact.
+Query input refusals emit no answers or explanation.
+Validation input refusals publish no report and preserve an existing output.
 
 The C ABI takes nullable `input_options` bytes and `input_options_len` after
 `source_name` in `purrdf_parse`. Null with length zero keeps default parsing;

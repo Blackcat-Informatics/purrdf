@@ -9,6 +9,110 @@ use support::run;
 const INSERT: &str =
     "INSERT DATA { <http://example.org/new> <http://example.org/p> <http://example.org/value> }";
 
+/// Primary YAML selection and admission happen before UPDATE or output acquisition.
+#[test]
+fn configured_yamlld_update_selects_documents_and_refuses_before_output() {
+    use support::{code, path, stderr, stdout, write_file};
+    let dir = purrdf_testkit::temp_dir!().expect("temporary inputs");
+    let input = write_file(
+        dir.path(),
+        "input.yamlld",
+        "'@id': first\nurn:value: one\n---\n'@id': second\nurn:value: two\n",
+    );
+    let all = write_file(
+        dir.path(),
+        "all.json",
+        r#"{"version":1,"yaml_ld":{"extract_all_scripts":true}}"#,
+    );
+    let update = "INSERT { ?s <urn:seen> true } WHERE { ?s <urn:value> ?o }";
+    let mut args = vec![
+        "update",
+        "--data",
+        &input,
+        "--base",
+        "https://example.org/",
+        "--to",
+        "nquads",
+    ];
+    let mut first_args = args.clone();
+    first_args.push(update);
+    let first = run(&first_args);
+    assert_eq!(code(&first), 0, "{}", stderr(&first));
+    assert!(stdout(&first).contains("<https://example.org/first> <urn:seen>"));
+    assert!(!stdout(&first).contains("https://example.org/second"));
+    args.extend(["--yamlld-input-options", &all, update]);
+    let selected = run(&args);
+    assert_eq!(code(&selected), 0, "{}", stderr(&selected));
+    for subject in ["first", "second"] {
+        assert!(stdout(&selected).contains(&format!("<https://example.org/{subject}> <urn:seen>")));
+    }
+
+    let output = write_file(dir.path(), "output.nq", "unchanged destination");
+    let limited = write_file(
+        dir.path(),
+        "limited.json",
+        r#"{"version":1,"yaml_ld":{"syntax":{"max_input_bytes":0}}}"#,
+    );
+    let refused = run(&[
+        "update",
+        "--data",
+        &input,
+        "--yamlld-input-options",
+        &limited,
+        "--output",
+        &output,
+        update,
+    ]);
+    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+    assert!(stderr(&refused).contains("native-yaml-input-limit"));
+    assert_eq!(stdout(&refused), "");
+    assert_eq!(
+        std::fs::read_to_string(&output).unwrap(),
+        "unchanged destination"
+    );
+
+    let missing = path(dir.path(), "missing");
+    for format in ["turtle", "jsonld", "pack", "gts"] {
+        let refused = run(&[
+            "update",
+            "--data",
+            &missing,
+            "--from",
+            format,
+            "--yamlld-input-options",
+            &all,
+            "--output",
+            &output,
+            update,
+        ]);
+        assert_eq!(code(&refused), 2, "{}", stderr(&refused));
+        assert!(stderr(&refused).contains("requires every input to be YAML-LD"));
+        assert_eq!(
+            std::fs::read_to_string(&output).unwrap(),
+            "unchanged destination"
+        );
+    }
+    let malformed = write_file(dir.path(), "malformed.json", "{");
+    let refused = run(&[
+        "update",
+        "--data",
+        &missing,
+        "--from",
+        "yamlld",
+        "--yamlld-input-options",
+        &malformed,
+        "--output",
+        &output,
+        update,
+    ]);
+    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+    assert!(stderr(&refused).contains("rdf-input-options"));
+    assert_eq!(
+        std::fs::read_to_string(&output).unwrap(),
+        "unchanged destination"
+    );
+}
+
 /// Exact inputs reach every CLI execution/source route and one random stream
 /// advances across the request's operations instead of restarting each WHERE.
 #[test]

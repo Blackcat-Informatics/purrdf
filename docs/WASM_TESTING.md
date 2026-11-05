@@ -3,6 +3,17 @@
 
 # Native ownership and WASM execution
 
+The exact packaged case `YAML source pair preserves owned bytes and rejects before bridge copy`
+in `yaml-source.test.mjs` exercises captured JavaScript typed-array intrinsics,
+admission before the host-to-native copy, the result/Dataset ownership transfer,
+independent Uint8Array output and native-cause fields on caught host errors.
+Shadowed length properties must never run; zero source admission and oversized
+profile admission refuse before copying, and the same instance remains usable.
+The native cause stays inspectable after the Dataset is freed. Source inspection
+establishes copy ordering; this case checks the actual host imports and transport.
+Run only this named case with `node --test --test-name-pattern` against the shipped
+package. Native Rust owns YAML grammar, reconstruction and resource semantics.
+
 The exact package case `configured YAML input crosses wasm-bindgen with native error records`
 in `jsonld-configured.test.mjs` checks the appended text-options argument, the
 preserved `rememberEmptyGraphs` slot, and native code/location records on real

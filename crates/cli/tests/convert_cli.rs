@@ -342,7 +342,7 @@ fn configured_yamlld_input_reaches_convert_and_refuses_other_routes() {
             stderr(&refused)
         );
     }
-    let other = run(&["query", "--yamlld-input-options", &config]);
+    let other = run(&["lift", "--yamlld-input-options", &config]);
     assert!(!other.status.success());
     assert!(stderr(&other).contains("unexpected argument"));
     let limit = write_file(

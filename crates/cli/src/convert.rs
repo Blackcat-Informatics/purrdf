@@ -154,27 +154,10 @@ pub(crate) fn run(
     // fails before the first two are read. `--base` is decided later, once the target is
     // resolved too: whether it can be spent depends on both legs.
     let formats = sources.resolve_formats()?;
-    let input_options = if let Some(path) = options.yamlld_input_options {
-        if formats
-            .iter()
-            .any(|format| *format != SourceFormat::Native(purrdf_rdf::NativeRdfFormat::YamlLd))
-        {
-            return Err(CliError::Usage(
-                "--yamlld-input-options requires every input to be YAML-LD".into(),
-            ));
-        }
-        use std::io::Read;
-        let file = std::fs::File::open(path)
-            .map_err(|error| CliError::Runtime(format!("{}: {error}", path.display())))?;
-        let mut bytes = Vec::new();
-        file.take((purrdf_validate::rdf_input::MAX_OPTIONS_BYTES + 1) as u64)
-            .read_to_end(&mut bytes)
-            .map_err(|error| CliError::Runtime(format!("{}: {error}", path.display())))?;
-        purrdf_validate::rdf_input::options(&bytes).map_err(CliError::native)?;
-        Some(bytes)
-    } else {
-        None
-    };
+    let input_options = options
+        .yamlld_input_options
+        .map(|path| source::read_yamlld_input_options(path, &formats))
+        .transpose()?;
     sources.input_options = input_options.as_deref();
 
     refuse_inapplicable_combinations(options, report_target)?;
@@ -266,6 +249,7 @@ fn convert_one_view(
         source_format,
         options.base,
         options.transport,
+        None,
         ConvertOp {
             out: output,
             target: target_format,
@@ -434,6 +418,7 @@ fn run_with_transforms(
                         *source_format,
                         options.base,
                         options.transport,
+                        None,
                         plan.materialization(),
                         &premise_imports,
                         &options.limits,

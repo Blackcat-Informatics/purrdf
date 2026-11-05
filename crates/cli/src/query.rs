@@ -822,6 +822,8 @@ impl ViewOp for EntailedQueryOp<'_> {
 /// dispatcher hands over one borrow rather than a dozen positional arguments whose order
 /// is the only thing keeping them apart.
 pub(crate) struct QueryOptions<'a> {
+    /// Explicit Basic controls for the primary data document only.
+    pub(crate) yamlld_input_options: Option<&'a std::path::Path>,
     /// The immutable geographic profile selected by `--geo-profile`.
     pub(crate) geo: &'a purrdf_validate::geo::GeoProfile,
     /// `--data`: the data-source path.
@@ -903,6 +905,10 @@ pub(crate) fn run(
             CliError::Usage(format!("{flag}: {error}"))
         })?;
     let data_format = format::resolve(None, options.data)?;
+    let input_options = options
+        .yamlld_input_options
+        .map(|path| source::read_yamlld_input_options(path, &[data_format]))
+        .transpose()?;
     // A report of a run that will not happen is a request the flag cannot honor, and
     // honoring it with silence is what this pipeline refuses.
     if report_target.is_requested() && options.entailment.is_none() {
@@ -963,6 +969,7 @@ pub(crate) fn run(
             options.data,
             data_format,
             options.base,
+            input_options.as_deref(),
             ExplainOp {
                 engine: &engine,
                 query: options.query,
@@ -1020,6 +1027,7 @@ pub(crate) fn run(
             options.data,
             data_format,
             options.base,
+            input_options.as_deref(),
             EntailedQueryOp {
                 engine: &engine,
                 query: options.query,
@@ -1050,6 +1058,7 @@ pub(crate) fn run(
             options.data,
             data_format,
             options.base,
+            input_options.as_deref(),
             GovernedQueryOp {
                 engine: &engine,
                 prepared: &prepared,
@@ -1076,6 +1085,7 @@ pub(crate) fn run(
         options.data,
         data_format,
         options.base,
+        input_options.as_deref(),
         QueryOp {
             engine: &engine,
             // `prepared` is an `Arc<PreparedQuery>`; reborrow it as `&PreparedQuery`.

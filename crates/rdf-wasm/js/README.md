@@ -48,6 +48,33 @@ WebAssembly JavaScript Promise Integration (JSPI): Chrome/Edge 137+, Firefox
 the synchronous API is unchanged, and the asynchronous methods refuse with one
 clear error before touching wasm.
 
+## YAML source carrier
+
+`yamlSourceExport(source, sourceIri, profileJson)` accepts original `Uint8Array`
+source bytes, an explicit absolute source IRI and UTF-8 JSON profile bytes. The
+closed profile requires `version: 1`, `name`, nonzero `profile_version` and an
+explicit `vocabulary`; optional `bounds` select the native phase ceilings.
+It returns `YamlSourceExport`: read `root`, call `takeDataset()` once, then free
+the result. The returned mutable Dataset owns its native carrier independently.
+`yamlSourceReconstruct(dataset, root, profileJson)` takes the current native
+snapshot and returns independently owned original `Uint8Array` bytes after
+native identity, reparse and complete reprojection verification.
+
+Profile input is capped at 16 KiB before its bridge copy. Rust decodes the profile
+before capturing source input and checks the selected source-byte ceiling before
+copying source bytes. Captured inputs must use non-shared `ArrayBuffer` storage;
+shared, detached or invalidated views throw. Native bridge copies allocate
+fallibly and remain alive through the operation. Host buffers/string glue,
+bridge copies, Dataset snapshots and native phase accounts are separate, rather
+than a combined process-memory ceiling.
+
+Native refusals are JavaScript `Error` objects carrying `code`, `diagnostic`,
+typed `nativeCauseJson` and an owned `nativeCause`. Its `json` getter reads the
+original native cause, including exact byte and line/column positions where
+present; call `nativeCause.free()` when done. Host buffer exceptions are caught
+without poisoning the instance. These functions do not change `Dataset.parse`
+or interpret the source as YAML-LD.
+
 ## Quickstart
 
 ```js

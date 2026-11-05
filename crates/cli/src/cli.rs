@@ -556,6 +556,10 @@ pub(crate) enum Command {
     },
     /// Evaluate a SPARQL query over an RDF or pack data source.
     Query {
+        /// Closed version-one YAML-LD Basic input-options JSON file, for --data only.
+        /// Premise imports keep their default input policy.
+        #[arg(long, value_name = "PATH")]
+        yamlld_input_options: Option<PathBuf>,
         /// Data-source path (format inferred from its extension). A pack file is
         /// queried zero-copy (unless `--entailment` forces materialization).
         #[arg(long)]
@@ -786,6 +790,9 @@ pub(crate) enum Command {
     },
     /// Apply a SPARQL UPDATE and serialize the resulting RDF dataset.
     Update {
+        /// Closed version-one YAML-LD Basic input-options JSON file, for --data only.
+        #[arg(long, value_name = "PATH")]
+        yamlld_input_options: Option<PathBuf>,
         /// Exact supplied `xsd:dateTime` for every WHERE operation's `NOW()`.
         /// Omitted, native host-clock behavior is unchanged.
         #[arg(long, value_name = "XSD_DATE_TIME", allow_hyphen_values = true)]
@@ -872,6 +879,10 @@ pub(crate) enum Command {
     },
     /// Materialize an entailment regime's closure over a source graph.
     Reason {
+        /// Closed version-one YAML-LD Basic input-options JSON file, for primary IN only.
+        /// Imports keep their current input controls and existing --from policy.
+        #[arg(long, value_name = "PATH")]
+        yamlld_input_options: Option<PathBuf>,
         /// The entailment regime to close under.
         #[arg(long, value_enum)]
         regime: CliRegime,
@@ -946,6 +957,17 @@ pub(crate) enum Command {
         /// The premise document `FILE`, or `-` for stdin (which requires `--from`).
         #[arg(long, value_name = "FILE")]
         premise: String,
+        /// Bounded YAML-LD Basic input options for the premise only.
+        #[arg(long, value_name = "PATH")]
+        yamlld_input_options: Option<PathBuf>,
+        /// Independent YAML-LD Basic input options for the conclusion only.
+        #[arg(
+            long,
+            value_name = "PATH",
+            requires = "conclusion",
+            conflicts_with = "pattern"
+        )]
+        conclusion_yamlld_input_options: Option<PathBuf>,
         /// The conclusion graph `FILE`, or `-` for stdin. The answer is a verdict:
         /// `entailed`, `not-entailed` (a proof), or `undecided`.
         #[arg(
@@ -1045,6 +1067,10 @@ pub(crate) enum Command {
     /// shell the same way it does for a tripped query. Which cap it was is read off the
     /// certificate: an exhausted run has `steps` at `budget` or `work` at `work-budget`.
     Consistency {
+        /// Closed version-one YAML-LD Basic input-options JSON file, for primary IN only.
+        /// Imports keep their current input controls and existing --from policy.
+        #[arg(long, value_name = "PATH")]
+        yamlld_input_options: Option<PathBuf>,
         /// Also record the run's PROOF TERM and print it after the certificate.
         ///
         /// Opt-in, and it costs what it records: the completion graph of every tableau run
@@ -1121,6 +1147,10 @@ pub(crate) enum Command {
     },
     /// Project RDF into a deterministic graph, tabular, or research-object USTAR carrier.
     Project {
+        /// Closed version-one YAML-LD Basic input-options JSON file, for primary IN only.
+        /// Projection configuration and assets keep their existing input policy.
+        #[arg(long, value_name = "PATH")]
+        yamlld_input_options: Option<PathBuf>,
         /// Closed projection carrier profile.
         #[arg(long, value_enum)]
         profile: CliProjectionProfile,
@@ -1198,6 +1228,10 @@ pub(crate) enum Command {
     /// stdout — and stdout stays a well-formed RDF or SARIF document, which it could not if
     /// the verdict were interleaved into it.
     Validate {
+        /// Closed version-one YAML-LD Basic input-options JSON file, for primary IN only.
+        /// Shapes, products, imports and change documents keep their existing policy.
+        #[arg(long, value_name = "PATH")]
+        yamlld_input_options: Option<PathBuf>,
         /// The SHACL shapes graph `FILE`, or `-` for stdin (which requires `--shapes-from`).
         /// Exactly one of this and `--shapes-product` is required: they are two spellings of
         /// the same input, a document to parse or a preparation to restore.
@@ -1520,6 +1554,9 @@ pub(crate) enum Command {
         /// Data-graph path, or `-` for stdin (which requires `--from`).
         #[arg(long)]
         data: String,
+        /// Bounded YAML-LD Basic input options for the data graph only.
+        #[arg(long, value_name = "PATH")]
+        yamlld_input_options: Option<PathBuf>,
         /// Data-graph format override; inferred from `--data`'s extension when omitted.
         #[arg(long, value_enum)]
         from: Option<CliRdfFormat>,
@@ -1575,6 +1612,9 @@ pub(crate) enum Command {
     /// `convert` — a description whose statement layer cannot survive the target syntax
     /// records the drop instead of losing it silently.
     Describe {
+        /// Closed version-one YAML-LD Basic input-options JSON file, for primary IN only.
+        #[arg(long, value_name = "PATH")]
+        yamlld_input_options: Option<PathBuf>,
         /// A resource to describe: repeatable, and at least one is required. Several are
         /// described as ONE union subgraph (the same union `DESCRIBE <a> <b>` returns), not
         /// as several documents. A RELATIVE reference resolves against the base in force —
@@ -2879,6 +2919,7 @@ impl Cli {
             }
             Command::Query {
                 data,
+                yamlld_input_options,
                 rules,
                 report,
                 imports,
@@ -2886,6 +2927,7 @@ impl Cli {
                 ..
             } => {
                 paths.push(PathBuf::from(data));
+                paths.extend(yamlld_input_options.iter().cloned());
                 if let Some(path) = rules {
                     paths.push(path.clone());
                 }
@@ -2905,15 +2947,18 @@ impl Cli {
                 data,
                 output,
                 update,
+                yamlld_input_options,
                 ..
             } => {
                 paths.push(PathBuf::from(data));
                 paths.push(PathBuf::from(output));
+                paths.extend(yamlld_input_options.iter().cloned());
                 if let Some(path) = update.strip_prefix('@') {
                     paths.push(PathBuf::from(path));
                 }
             }
             Command::Reason {
+                yamlld_input_options,
                 rules,
                 report,
                 imports,
@@ -2921,6 +2966,7 @@ impl Cli {
                 output,
                 ..
             } => {
+                paths.extend(yamlld_input_options.iter().cloned());
                 if let Some(path) = rules {
                     paths.push(path.clone());
                 }
@@ -2942,8 +2988,12 @@ impl Cli {
                 imports,
                 report,
                 output,
+                yamlld_input_options,
+                conclusion_yamlld_input_options,
                 ..
             } => {
+                paths.extend(yamlld_input_options.iter().cloned());
+                paths.extend(conclusion_yamlld_input_options.iter().cloned());
                 paths.push(PathBuf::from(premise));
                 if let Some(path) = conclusion {
                     paths.push(PathBuf::from(path));
@@ -2962,11 +3012,13 @@ impl Cli {
                 paths.push(PathBuf::from(output));
             }
             Command::Consistency {
+                yamlld_input_options,
                 check_proof,
                 imports,
                 input,
                 ..
             } => {
+                paths.extend(yamlld_input_options.iter().cloned());
                 if let Some(path) = check_proof {
                     paths.push(path.clone());
                 }
@@ -2978,12 +3030,14 @@ impl Cli {
                 paths.push(PathBuf::from(input));
             }
             Command::Project {
+                yamlld_input_options,
                 config,
                 assets,
                 input,
                 output,
                 ..
             } => {
+                paths.extend(yamlld_input_options.iter().cloned());
                 paths.push(PathBuf::from(config));
                 if let Some(path) = assets {
                     paths.push(PathBuf::from(path));
@@ -3002,6 +3056,7 @@ impl Cli {
                 paths.push(PathBuf::from(output));
             }
             Command::Validate {
+                yamlld_input_options,
                 shapes,
                 shapes_product,
                 import,
@@ -3011,6 +3066,7 @@ impl Cli {
                 output,
                 ..
             } => {
+                paths.extend(yamlld_input_options.iter().cloned());
                 if let Some(path) = shapes {
                     paths.push(PathBuf::from(path));
                 }
@@ -3036,8 +3092,10 @@ impl Cli {
                 imports,
                 data,
                 output,
+                yamlld_input_options,
                 ..
             } => {
+                paths.extend(yamlld_input_options.iter().cloned());
                 paths.push(PathBuf::from(schema));
                 for pair in imports {
                     if let Some((_, path)) = pair.split_once('=') {
@@ -3047,7 +3105,13 @@ impl Cli {
                 paths.push(PathBuf::from(data));
                 paths.push(PathBuf::from(output));
             }
-            Command::Describe { input, output, .. } => {
+            Command::Describe {
+                input,
+                output,
+                yamlld_input_options,
+                ..
+            } => {
+                paths.extend(yamlld_input_options.iter().cloned());
                 paths.push(PathBuf::from(input));
                 paths.push(PathBuf::from(output));
             }

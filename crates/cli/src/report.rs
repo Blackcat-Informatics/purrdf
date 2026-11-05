@@ -244,6 +244,7 @@ pub(crate) fn materialize_reported_over_input(
     format: SourceFormat,
     base: Option<&str>,
     policy: TransportPolicy,
+    input_options: Option<&[u8]>,
     plan: Materialization<'_>,
     imports: &crate::premise_imports::PremiseImports,
     limits: &MaterializeLimits,
@@ -275,6 +276,7 @@ pub(crate) fn materialize_reported_over_input(
         format,
         base,
         policy,
+        input_options,
         Op {
             plan,
             imports,

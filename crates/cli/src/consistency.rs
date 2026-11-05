@@ -75,6 +75,8 @@ use crate::source;
 /// Grouped for the reason [`crate::convert::ConvertOptions`] is: it keeps [`run`]'s
 /// signature small enough to read.
 pub(crate) struct ConsistencyOptions<'a> {
+    /// Explicit Basic controls for the primary ontology document only.
+    pub(crate) yamlld_input_options: Option<&'a Path>,
     /// The input path `IN`, or `-` for stdin (which requires `--from`).
     pub(crate) input: &'a str,
     /// `--import IRI=FILE`: the ontology's `owl:imports` table, in the order the operator
@@ -137,7 +139,11 @@ pub(crate) fn run(
     readers.extend(import_readers(&import_pairs));
     refuse_shared_stdin(&readers)?;
     let format = format::resolve(options.from, options.input)?;
-    let document = read_as_nquads(options, format, canonical)?;
+    let input_options = options
+        .yamlld_input_options
+        .map(|path| source::read_yamlld_input_options(path, &[format]))
+        .transpose()?;
+    let document = read_as_nquads(options, format, input_options.as_deref(), canonical)?;
     // The IRI the input document was read FROM: an `owl:imports` of it names the ontology
     // itself, so it resolves in place rather than being refused as missing.
     let premise_base = premise_imports::premise_iri(options.input, format, options.base)?;
@@ -252,6 +258,7 @@ fn check_supplied_proof<A: AsRef<str>>(
 fn read_as_nquads(
     options: &ConsistencyOptions<'_>,
     format: SourceFormat,
+    input_options: Option<&[u8]>,
     canonical: &mut crate::canonical::Request,
 ) -> Result<String, CliError> {
     // The parses are the only legs `--base` has: this command answers with a verdict and a
@@ -270,6 +277,7 @@ fn read_as_nquads(
         options.input,
         format,
         options.base,
+        input_options,
         options.input,
         canonical,
     )
@@ -288,6 +296,7 @@ fn read_path_as_nquads(
         path,
         format,
         options.base,
+        None,
         &format!("{what} {path}"),
         canonical,
     )
@@ -299,12 +308,13 @@ fn transcode(
     path: &str,
     format: SourceFormat,
     base: Option<&str>,
+    input_options: Option<&[u8]>,
     named: &str,
     canonical: &mut crate::canonical::Request,
 ) -> Result<String, CliError> {
     // A pack crosses the N-Quads boundary as a zero-copy `PackView`, not a rebuilt
     // owned dataset; a text source parses to an `RdfDataset`.
-    let outcome = source::serialize_input_to_nquads(path, format, base, canonical)?;
+    let outcome = source::serialize_input_to_nquads(path, format, base, input_options, canonical)?;
     if outcome.statement_rows_dropped > 0 || outcome.directional_literals_dropped > 0 {
         return Err(CliError::Runtime(format!(
             "{named}: reading this document into the consistency boundary's N-Quads dropped {} \

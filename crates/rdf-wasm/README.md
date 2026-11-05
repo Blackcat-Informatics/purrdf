@@ -51,6 +51,13 @@ const reparsed = Dataset.parse(nq, "nquads");
 
 ## API
 
+`yamlSourceExport(source, sourceIri, profileJson)` accepts original Uint8Array
+bytes and explicit UTF-8 profile JSON bytes, returning a computed `root` and
+`takeDataset()` result. `yamlSourceReconstruct(dataset, root, profileJson)` freezes
+the current native Dataset and returns independent original Uint8Array bytes.
+See the [package source-carrier API](js/README.md#yaml-source-carrier) for admission,
+ownership and native error handling.
+
 - **`ready(bytesOrUrl?)`** — await once before anything else (instantiates the wasm
   from bytes, a URL, or a compiled `WebAssembly.Module`).
 - **`DataFactory`** — `namedNode`, `blankNode`, `literal(value, languageOrDatatype?)`,

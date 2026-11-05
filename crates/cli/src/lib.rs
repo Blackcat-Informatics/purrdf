@@ -409,6 +409,7 @@ fn dispatch_with_request(
         )
         .map(|()| CliOutcome::Complete),
         Command::Query {
+            yamlld_input_options,
             data,
             base,
             entailment,
@@ -439,6 +440,7 @@ fn dispatch_with_request(
             query,
         } => query::run(
             &query::QueryOptions {
+                yamlld_input_options: yamlld_input_options.as_deref(),
                 geo: selected_geo,
                 data,
                 base: base.as_deref(),
@@ -480,6 +482,7 @@ fn dispatch_with_request(
             canonical,
         ),
         Command::Update {
+            yamlld_input_options,
             now,
             entropy_seed,
             data,
@@ -503,6 +506,7 @@ fn dispatch_with_request(
             graph_existence,
         } => update::run(
             &update::UpdateOptions {
+                yamlld_input_options: yamlld_input_options.as_deref(),
                 now: now.as_deref(),
                 entropy_seed: entropy_seed.as_deref(),
                 geo: selected_geo,
@@ -534,6 +538,7 @@ fn dispatch_with_request(
             canonical,
         ),
         Command::Reason {
+            yamlld_input_options,
             regime,
             rules,
             report,
@@ -548,6 +553,7 @@ fn dispatch_with_request(
             output,
         } => reason::run(
             *regime,
+            yamlld_input_options.as_deref(),
             rules.as_deref(),
             &cli_materialize_limits(*max_stored_facts, *max_join_steps, *max_term_arena_bytes),
             imports,
@@ -573,6 +579,8 @@ fn dispatch_with_request(
             max_join_steps,
             max_term_arena_bytes,
             report,
+            yamlld_input_options,
+            conclusion_yamlld_input_options,
             from,
             base,
             output,
@@ -589,6 +597,8 @@ fn dispatch_with_request(
                     *max_join_steps,
                     *max_term_arena_bytes,
                 ),
+                yamlld_input_options: yamlld_input_options.as_deref(),
+                conclusion_yamlld_input_options: conclusion_yamlld_input_options.as_deref(),
                 from: *from,
                 base: base.as_deref(),
                 jsonld_options: jsonld_options.as_ref(),
@@ -600,6 +610,7 @@ fn dispatch_with_request(
         )
         .map(|()| CliOutcome::Complete),
         Command::Consistency {
+            yamlld_input_options,
             proof,
             check_proof,
             step_cap,
@@ -610,6 +621,7 @@ fn dispatch_with_request(
             input,
         } => consistency::run(
             &consistency::ConsistencyOptions {
+                yamlld_input_options: yamlld_input_options.as_deref(),
                 input,
                 imports,
                 from: *from,
@@ -624,6 +636,7 @@ fn dispatch_with_request(
             canonical,
         ),
         Command::Validate {
+            yamlld_input_options,
             shapes,
             shapes_product,
             expect_identity,
@@ -655,6 +668,7 @@ fn dispatch_with_request(
             output,
         } => validate::run(
             &validate::ValidateOptions {
+                yamlld_input_options: yamlld_input_options.as_deref(),
                 shacl_profile: shacl_profile.as_deref(),
                 input,
                 output,
@@ -700,6 +714,7 @@ fn dispatch_with_request(
             schema_from,
             imports,
             data,
+            yamlld_input_options,
             from,
             base,
             xpath_regex,
@@ -711,6 +726,7 @@ fn dispatch_with_request(
                 schema_from: *schema_from,
                 imports,
                 data,
+                yamlld_input_options: yamlld_input_options.as_deref(),
                 from: *from,
                 base: base.as_deref(),
                 xpath_regex: *xpath_regex,
@@ -723,6 +739,7 @@ fn dispatch_with_request(
         )
         .map(|()| CliOutcome::Complete),
         Command::Describe {
+            yamlld_input_options,
             iris,
             from,
             to,
@@ -731,6 +748,7 @@ fn dispatch_with_request(
             output,
         } => describe::run(
             &describe::DescribeOptions {
+                yamlld_input_options: yamlld_input_options.as_deref(),
                 iris,
                 from: *from,
                 to: *to,
@@ -744,6 +762,7 @@ fn dispatch_with_request(
         )
         .map(|()| CliOutcome::Complete),
         Command::Project {
+            yamlld_input_options,
             profile,
             config,
             assets,
@@ -753,6 +772,7 @@ fn dispatch_with_request(
             output,
         } => projection::run_project(
             *profile,
+            yamlld_input_options.as_deref(),
             config,
             assets.as_deref(),
             *from,

@@ -169,6 +169,7 @@ fn read_rule_set(path: &Path) -> Result<RuleSet, CliError> {
 )]
 pub(crate) fn run(
     regime: CliRegime,
+    yamlld_input_options: Option<&Path>,
     rules: Option<&Path>,
     limits: &MaterializeLimits,
     imports: &[String],
@@ -182,13 +183,15 @@ pub(crate) fn run(
     report_target: &ReportTarget,
     canonical: &mut crate::canonical::Request,
 ) -> Result<(), CliError> {
-    let plan = EntailmentPlan::resolve(regime, rules)?;
-
     // Resolve BOTH formats up front (before touching the source) so an
     // unresolvable OUT fails fast rather than after the (potentially
     // expensive) load + materialize work has already run.
     let source_format = format::resolve(from, input)?;
     let target_format = format::resolve_target(to, output, "the --to target")?;
+    let input_options = yamlld_input_options
+        .map(|path| crate::source::read_yamlld_input_options(path, &[source_format]))
+        .transpose()?;
+    let plan = EntailmentPlan::resolve(regime, rules)?;
     // `--base` has two legs here — the source parse and the closure's serialization — and
     // is refused only when NEITHER can spend it.
     // `--import` documents parse under `--base` too, so each is a parse leg.
@@ -219,6 +222,7 @@ pub(crate) fn run(
         source_format,
         base,
         crate::source::TransportPolicy::Detect,
+        input_options.as_deref(),
         plan.materialization(),
         &premise_imports,
         limits,

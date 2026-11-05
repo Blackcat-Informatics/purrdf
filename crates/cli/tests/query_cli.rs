@@ -44,6 +44,116 @@ const DATA_TTL: &str = concat!(
     "ex:alice ex:name \"Alice\" .\n",
 );
 
+/// The four primary-input routes share selection and reject configuration before I/O.
+#[test]
+fn configured_yamlld_query_primary_reaches_every_execution_route() {
+    use support::{code, path};
+    let dir = purrdf_testkit::temp_dir!().expect("temporary inputs");
+    let input = write_file(
+        dir.path(),
+        "input.yamlld",
+        "'@id': first\nhttps://example.org/value: one\n---\n'@id': second\nhttps://example.org/value: two\n",
+    );
+    let all = write_file(
+        dir.path(),
+        "all.json",
+        r#"{"version":1,"yaml_ld":{"extract_all_scripts":true}}"#,
+    );
+    let limited = write_file(
+        dir.path(),
+        "limited.json",
+        r#"{"version":1,"yaml_ld":{"syntax":{"max_input_bytes":0}}}"#,
+    );
+    let query = "SELECT ?s WHERE { ?s <https://example.org/value> ?o }";
+    let first = run(&[
+        "query",
+        "--data",
+        &input,
+        "--base",
+        "https://example.org/",
+        query,
+    ]);
+    assert_eq!(code(&first), 0, "{}", stderr(&first));
+    assert!(stdout(&first).contains("https://example.org/first"));
+    assert!(!stdout(&first).contains("https://example.org/second"));
+
+    for lane in [
+        &[][..],
+        &["--fuel", "1000000"][..],
+        &["--entailment", "rdf"][..],
+        &["--explain"][..],
+    ] {
+        let mut args = vec![
+            "query",
+            "--data",
+            &input,
+            "--base",
+            "https://example.org/",
+            "--yamlld-input-options",
+            &all,
+        ];
+        args.extend_from_slice(lane);
+        args.push(query);
+        let selected = run(&args);
+        assert_eq!(code(&selected), 0, "{lane:?}: {}", stderr(&selected));
+        if lane.contains(&"--explain") {
+            assert!(stdout(&selected).starts_with("profile "));
+            assert!(stdout(&selected).contains("rows=2"));
+        } else {
+            for subject in ["first", "second"] {
+                assert!(stdout(&selected).contains(&format!("https://example.org/{subject}")));
+            }
+        }
+        let mut args = vec![
+            "query",
+            "--data",
+            &input,
+            "--yamlld-input-options",
+            &limited,
+        ];
+        args.extend_from_slice(lane);
+        args.push(query);
+        let refused = run(&args);
+        assert_eq!(code(&refused), 1, "{lane:?}: {}", stderr(&refused));
+        assert!(stderr(&refused).contains("native-yaml-input-limit"));
+        assert_eq!(stdout(&refused), "");
+    }
+
+    let missing = path(dir.path(), "missing.yamlld");
+    let rules = path(dir.path(), "missing.xml");
+    let imports = format!("https://example.org/import={missing}");
+    let malformed = write_file(dir.path(), "malformed.json", "{");
+    let refused = run(&[
+        "query",
+        "--data",
+        &missing,
+        "--yamlld-input-options",
+        &malformed,
+        "--entailment",
+        "rif",
+        "--rules",
+        &rules,
+        "--import",
+        &imports,
+        query,
+    ]);
+    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+    assert!(stderr(&refused).contains("rdf-input-options"));
+    assert_eq!(stdout(&refused), "");
+
+    let pack = path(dir.path(), "missing.purrpck");
+    let refused = run(&[
+        "query",
+        "--data",
+        &pack,
+        "--yamlld-input-options",
+        &all,
+        query,
+    ]);
+    assert_eq!(code(&refused), 2, "{}", stderr(&refused));
+    assert!(stderr(&refused).contains("requires every input to be YAML-LD"));
+}
+
 /// The SAME SELECT over (a) a Turtle file and (b) an mmap'd `.purrpck` pack built from
 /// identical data yields byte-identical, non-vacuous results — file/pack query parity.
 #[test]

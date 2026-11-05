@@ -2080,3 +2080,105 @@ fn entails_and_query_take_the_evaluation_limits() {
     ]);
     assert_eq!(bare.status.code(), Some(2), "{}", stderr(&bare));
 }
+
+/// Role-specific YAML controls change only the selected graph and preflight before RDF I/O.
+#[test]
+fn configured_yamlld_controls_reach_entailment_roles() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let yaml = write_file(
+        dir.path(),
+        "input.yamlld",
+        "'@id': https://example.org/first\nhttps://example.org/p: one\n---\n'@id': https://example.org/second\nhttps://example.org/p: two\n",
+    );
+    let first = write_file(
+        dir.path(),
+        "first.nq",
+        "<https://example.org/first> <https://example.org/p> \"one\" .\n",
+    );
+    let second = write_file(
+        dir.path(),
+        "second.nq",
+        "<https://example.org/second> <https://example.org/p> \"two\" .\n",
+    );
+    let all = write_file(
+        dir.path(),
+        "all.json",
+        r#"{"version":1,"yaml_ld":{"extract_all_scripts":true}}"#,
+    );
+    for (premise, conclusion, flag, configured_verdict) in [
+        (&yaml, &second, "--yamlld-input-options", "entailed"),
+        (
+            &first,
+            &yaml,
+            "--conclusion-yamlld-input-options",
+            "not-entailed",
+        ),
+    ] {
+        for configured in [false, true] {
+            let mut args = vec![
+                "entails",
+                "--regime",
+                "simple",
+                "--premise",
+                premise,
+                "--conclusion",
+                conclusion,
+            ];
+            if configured {
+                args.extend([flag, &all]);
+            }
+            let out = run(&args);
+            assert!(out.status.success(), "{}", stderr(&out));
+            let verdict = if configured {
+                configured_verdict
+            } else if configured_verdict == "entailed" {
+                "not-entailed"
+            } else {
+                "entailed"
+            };
+            assert!(
+                stdout(&out).contains(&format!("entailment {verdict}\n")),
+                "{}",
+                stdout(&out)
+            );
+        }
+    }
+    let missing = path(dir.path(), "missing.yamlld");
+    let refused = run(&[
+        "entails",
+        "--regime",
+        "simple",
+        "--premise",
+        &missing,
+        "--pattern",
+        &missing,
+        "--conclusion-yamlld-input-options",
+        &all,
+    ]);
+    assert_eq!(refused.status.code(), Some(2), "{}", stderr(&refused));
+    let malformed = write_file(dir.path(), "malformed.json", "{");
+    let output = write_file(dir.path(), "answer.txt", "unchanged answer");
+    let report = write_file(dir.path(), "report.txt", "unchanged report");
+    let report_arg = format!("--report={report}");
+    let import = format!("https://example.org/import={missing}");
+    let refused = run(&[
+        "entails",
+        "--regime",
+        "simple",
+        "--premise",
+        &missing,
+        "--conclusion",
+        &missing,
+        "--import",
+        &import,
+        "--conclusion-yamlld-input-options",
+        &malformed,
+        &report_arg,
+        &output,
+    ]);
+    assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
+    assert!(stderr(&refused).contains("rdf-input-options"));
+    assert_eq!(stdout(&refused), "");
+    assert_eq!(std::fs::read_to_string(output).unwrap(), "unchanged answer");
+    assert_eq!(std::fs::read_to_string(report).unwrap(), "unchanged report");
+}

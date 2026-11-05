@@ -122,7 +122,7 @@ pub(crate) fn read_shapes_document(
         SourceFormat::Native(native) => native,
         SourceFormat::Pack | SourceFormat::Gts => {
             return Ok(ShapesDocument {
-                dataset: source::load_dataset(path, format, base, canonical)?,
+                dataset: source::load_dataset(path, format, base, None, canonical)?,
                 prefixes: Vec::new(),
                 loaded: base.into_iter().map(str::to_owned).collect(),
             });

@@ -1852,3 +1852,85 @@ fn imported_numeric_facets_keep_their_exact_bounds() {
         stderr(&out)
     );
 }
+
+/// Data controls reach ShEx without configuring schema acquisition or publishing refusals.
+#[test]
+fn configured_yamlld_input_reaches_shex_data() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let schema = write_file(dir.path(), "schema.shex", SCHEMA);
+    let data = write_file(
+        dir.path(),
+        "input.yamlld",
+        "'@id': http://example.org/bob\nhttp://example.org/age:\n  '@value': '42'\n  '@type': http://www.w3.org/2001/XMLSchema#integer\n---\n'@id': http://example.org/bob\nhttp://example.org/age: nope\n",
+    );
+    let all = write_file(
+        dir.path(),
+        "all.json",
+        r#"{"version":1,"yaml_ld":{"extract_all_scripts":true}}"#,
+    );
+    for (controls, status) in [(None, "conformant"), (Some(all.as_str()), "nonconformant")] {
+        let mut args = vec!["shex", "--schema", &schema, "--data", &data];
+        if let Some(controls) = controls {
+            args.extend(["--yamlld-input-options", controls]);
+        }
+        args.push(BOB);
+        let out = run(&args);
+        assert_eq!(code(&out), 0, "{}", stderr(&out));
+        assert!(
+            stdout(&out).contains(&format!("\"status\":\"{status}\"")),
+            "{}",
+            stdout(&out)
+        );
+    }
+    let limited = write_file(
+        dir.path(),
+        "limited.json",
+        r#"{"version":1,"yaml_ld":{"syntax":{"max_input_bytes":0}}}"#,
+    );
+    let malformed = write_file(dir.path(), "malformed.json", "{");
+    let missing = dir.path().join("missing.yamlld");
+    let missing = missing.to_str().unwrap();
+    let missing_schema = dir.path().join("missing.shex");
+    let missing_schema = missing_schema.to_str().unwrap();
+    let import = format!("https://example.org/schema={missing_schema}");
+    let output = write_file(dir.path(), "map.json", "unchanged map");
+    for (controls, data, schema, imports, diagnostic) in [
+        (
+            limited.as_str(),
+            data.as_str(),
+            schema.as_str(),
+            false,
+            "native-yaml-input-limit",
+        ),
+        (
+            malformed.as_str(),
+            missing,
+            missing_schema,
+            true,
+            "rdf-input-options",
+        ),
+    ] {
+        let mut args = vec![
+            "shex",
+            "--schema",
+            schema,
+            "--data",
+            data,
+            "--yamlld-input-options",
+            controls,
+        ];
+        if imports {
+            args.extend(["--import", &import]);
+        }
+        args.extend([BOB, &output]);
+        let refused = run(&args);
+        assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+        assert!(
+            stderr(&refused).contains(diagnostic),
+            "{}",
+            stderr(&refused)
+        );
+        assert_eq!(stdout(&refused), "");
+        assert_eq!(std::fs::read_to_string(&output).unwrap(), "unchanged map");
+    }
+}

@@ -113,6 +113,8 @@ use crate::{format, ledger, sink, source};
 
 /// The resolved `describe` flags.
 pub(crate) struct DescribeOptions<'a> {
+    /// Explicit Basic controls for the primary data document only.
+    pub(crate) yamlld_input_options: Option<&'a std::path::Path>,
     /// `--iri`, in the order the operator wrote them; at least one (clap enforces it).
     pub(crate) iris: &'a [String],
     /// `--from`: the input-format override.
@@ -216,6 +218,10 @@ pub(crate) fn run(
     // unresolvable OUT fails fast rather than after the description has been extracted.
     let source_format = format::resolve(options.from, options.input)?;
     let target_format = format::resolve_target(options.to, options.output, "the --to target")?;
+    let input_options = options
+        .yamlld_input_options
+        .map(|path| source::read_yamlld_input_options(path, &[source_format]))
+        .transpose()?;
     // No `--base` refusal here, unlike `convert`/`reason`. This command has a leg no format
     // row can describe: `--iri` is command-line text and resolves against the base, exactly
     // as a ShEx shape map does. So a base handed to `describe` always has a live consumer —
@@ -234,6 +240,7 @@ pub(crate) fn run(
         options.input,
         source_format,
         options.base,
+        input_options.as_deref(),
         DescribeOp { iris: &iris },
         canonical,
     )?;
