@@ -142,6 +142,8 @@ pub(crate) fn serialize_frozen(
     })
 }
 
+/// Register the compiled context, dataset serializer and document expander exports.
+/// YAML source export and reconstruction have their own public registrar.
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyCompiledJsonLdContext>()?;
     module.add_function(wrap_pyfunction!(serialize_jsonld, module)?)?;

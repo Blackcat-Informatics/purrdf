@@ -164,34 +164,47 @@ fn decode(
         })
         .transpose()
         .map_err(|error| error.within_native("yaml_ld", Some(allocation)))?;
-    let mut expansion = JsonLdExpansionLimits::DEFAULT;
-    if let Some(value) = fields.raw("expansion")? {
-        let mut fields = Record::new_native(value, "expansion limits object", Some(allocation))?;
-        expansion.max_allocation_bytes = json_config::field(
-            &mut fields,
-            "max_allocation_bytes",
-            expansion.max_allocation_bytes,
-            allocation,
-        )?;
-        fields.deny_unknown()?;
-    }
-    let mut output = OutputLimits::DEFAULT;
-    if let Some(value) = fields.raw("output")? {
-        let mut fields = Record::new_native(
-            value,
-            "expanded JSON output limits object",
-            Some(allocation),
-        )?;
-        output.max_bytes =
-            json_config::field(&mut fields, "max_bytes", output.max_bytes, allocation)?;
-        output.max_allocation_bytes = json_config::field(
-            &mut fields,
-            "max_allocation_bytes",
-            output.max_allocation_bytes,
-            allocation,
-        )?;
-        fields.deny_unknown()?;
-    }
+    let expansion = fields
+        .raw("expansion")?
+        .map(|value| {
+            let mut expansion = JsonLdExpansionLimits::DEFAULT;
+            let mut fields =
+                Record::new_native(value, "expansion limits object", Some(allocation))?;
+            expansion.max_allocation_bytes = json_config::field(
+                &mut fields,
+                "max_allocation_bytes",
+                expansion.max_allocation_bytes,
+                allocation,
+            )?;
+            fields.deny_unknown()?;
+            Ok::<_, DecodeError>(expansion)
+        })
+        .transpose()
+        .map_err(|error| error.within_native("expansion", Some(allocation)))?
+        .unwrap_or(JsonLdExpansionLimits::DEFAULT);
+    let output = fields
+        .raw("output")?
+        .map(|value| {
+            let mut output = OutputLimits::DEFAULT;
+            let mut fields = Record::new_native(
+                value,
+                "expanded JSON output limits object",
+                Some(allocation),
+            )?;
+            output.max_bytes =
+                json_config::field(&mut fields, "max_bytes", output.max_bytes, allocation)?;
+            output.max_allocation_bytes = json_config::field(
+                &mut fields,
+                "max_allocation_bytes",
+                output.max_allocation_bytes,
+                allocation,
+            )?;
+            fields.deny_unknown()?;
+            Ok::<_, DecodeError>(output)
+        })
+        .transpose()
+        .map_err(|error| error.within_native("output", Some(allocation)))?
+        .unwrap_or(OutputLimits::DEFAULT);
     fields.deny_unknown()?;
     Ok(Decoded {
         format,

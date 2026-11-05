@@ -5,7 +5,7 @@
 
 use purrdf_lex::{
     allocation::StorageError,
-    json::{self, Value},
+    json::{self, Value, record::DecodeError},
     yaml,
 };
 use purrdf_validate::document_expansion::{expand, expand_decoded, request};
@@ -95,6 +95,35 @@ fn version_one_expansion_preserves_documents_and_enforces_phase_limits() {
             expand(&[0xff], invalid.as_bytes()).unwrap_err().code,
             expected_code,
             "{invalid}"
+        );
+    }
+    for (invalid, pointer) in [
+        (
+            r#"{"version":1,"format":"jsonld","expansion":{"max_allocation_bytes":-1}}"#,
+            "/expansion/max_allocation_bytes",
+        ),
+        (
+            r#"{"version":1,"format":"jsonld","output":{"max_bytes":"one"}}"#,
+            "/output/max_bytes",
+        ),
+        (
+            r#"{"version":1,"format":"jsonld","output":null}"#,
+            "/output",
+        ),
+        (
+            r#"{"version":1,"format":"jsonld","expansion":{"unknown":0}}"#,
+            "/expansion",
+        ),
+    ] {
+        let error = request(invalid.as_bytes()).unwrap_err();
+        assert_eq!(error.code, "document-expansion-request");
+        assert_eq!(
+            std::error::Error::source(&error)
+                .unwrap()
+                .downcast_ref::<DecodeError>()
+                .unwrap()
+                .pointer(),
+            pointer
         );
     }
     let minimal = br#"{"urn:p":"x"}"#;
