@@ -115,15 +115,12 @@ ALLOWLIST: dict[tuple[str, str], str] = {
     ("crates/rdf/src/native_codecs/jsonld/structural.rs", "walk.results"): "The structural expander takes its final owned JSON value from an internal result stack before returning; no serialization occurs.",
     ("crates/rdf/src/native_codecs/jsonld/structural.rs", "self.results"): "Continuation tasks consume admitted child JSON values from an internal result stack, before any RDF lowering or serialization.",
     ("crates/rdf/src/native_codecs/jsonld/structural.rs", "values"): "The value-object constructor takes a sole datatype from an unpublished JSON array; it never changes emitted bytes.",
-    ("crates/rdf/src/native_codecs/jsonld/expand.rs", "pending"): "The blank-label prepass visits references to parsed JSON input values; removing pending visits never rewinds serialized output.",
-    ("crates/rdf/src/native_codecs/jsonld/carrier.rs", "stack"): "The JSON-LD carrier's list-fold frames: `fold_lists` walks nested `@list` "
-    "values over a heap stack of open lists and pops a frame once every item is "
-    "folded. It holds in-memory values under construction, not output.",
-    (
-        "crates/rdf/src/native_codecs/jsonld/carrier.rs",
-        "work",
-    ): "The carrier value's `Drop` work list: nested `@list` values are freed over "
-    "a heap list so depth costs no stack. Nothing here is emitted.",
+    ("crates/rdf/src/native_codecs/jsonld/node_map.rs", "walk.tasks"): "The node-map interpreter consumes pending expansion tasks; no task is an emitted byte buffer.",
+    ("crates/rdf/src/native_codecs/jsonld/node_map.rs", "walk.results"): "The node-map root result is a temporary set of references to unpublished JSON node records; consuming it does not rewind serialized output.",
+    ("crates/rdf/src/native_codecs/jsonld/node_map.rs", "self.results"): "Node-map continuations consume normalized child JSON values from a private result stack before any serialization or RDF conversion.",
+    ("crates/rdf/src/native_codecs/jsonld/node_map.rs", "pending"): "Blank-label reservation and graph-root validation visit borrowed JSON input and result values; these work lists never contain emitted bytes.",
+    ("crates/rdf/src/native_codecs/jsonld/carrier.rs", "stack"): "The JSON-LD carrier's list-fold frames: `fold_lists` walks nested `@list` values over a heap stack of open lists and pops a frame once every item is folded. It holds in-memory values under construction, not output.",
+    ("crates/rdf/src/native_codecs/jsonld/carrier.rs", "work"): "The carrier value's `Drop` work list: nested `@list` values are freed over a heap list so depth costs no stack. Nothing here is emitted.",
     (
         "crates/rdf/src/native_codecs/jsonld/carrier.rs",
         "self.work",

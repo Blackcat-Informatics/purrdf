@@ -18,12 +18,197 @@
 
 use purrdf_rdf::native_codecs::jsonld::{
     CompiledJsonLdContext, JsonLdContextFormat, JsonLdContextRegistry, JsonLdExpansionLimits,
-    YamlLdOptions, expand_jsonld_with_context, expand_yamlld_with_context,
-    parse_jsonld_with_context, parse_yamlld_with_context, parse_yamlld_with_options,
-    yamlld_to_jsonld, yamlld_to_jsonld_with_options,
+    JsonLdFlattenLimits, YamlLdOptions, expand_jsonld_with_context, expand_yamlld_with_context,
+    flatten_jsonld_with_context, flatten_yamlld_with_context, parse_jsonld_with_context,
+    parse_yamlld_with_context, parse_yamlld_with_options, yamlld_to_jsonld,
+    yamlld_to_jsonld_with_options,
 };
 use purrdf_rdf::native_codecs::parse_dataset;
 use purrdf_rdf::{DatasetSink, OkfBundle, OkfConfig, lift_okf_bundle};
+
+#[test]
+fn context_free_flattening_preserves_nodes_and_native_terms() {
+    let context =
+        CompiledJsonLdContext::compile(&purrdf_lex::json::read("{}").unwrap(), None).unwrap();
+    let expansion = JsonLdExpansionLimits::DEFAULT;
+    let limits = JsonLdFlattenLimits::DEFAULT;
+    for (source, expected) in [
+        (
+            r#"[
+          {"@id":"_:S","@type":["_:T"],"@index":"same",
+           "@reverse":{"https://example.org/rev":[{"@id":"_:R","https://example.org/label":"reverse"}]},
+           "@graph":[{"@id":"https://example.org/inside","https://example.org/label":"graph"}],
+           "@included":[{"@id":"_:I","https://example.org/label":"included"}],
+           "_:P":{"https://example.org/label":"anonymous"},
+           "https://example.org/empty":[],
+           "https://example.org/indexed":{"@value":"value","@index":"slot"},
+           "https://example.org/list":[{"@list":["duplicate","duplicate"]},{"@list":["duplicate","duplicate"]}],
+           "https://example.org/p":["same","same",{"@id":"_:I","https://example.org/label":"more"}],
+           "https://example.org/raw":[{"@value":{"b":2,"a":1,"huge":1e9999999999999999999999},"@type":"@json"},{"@value":{"huge":0.1e10000000000000000000000,"a":1.0,"b":2e0},"@type":"@json"}],
+           "https://example.org/text":"_:S"},
+          {"@id":"_:S","@index":"same","https://example.org/p":["same","other"]},
+          {"@id":"https://example.org/empty-graph","@graph":[]},
+          {"@id":"_:only"}
+        ]"#,
+            r#"[
+          {"@id":"_:b1","@type":["_:b0"],"@index":"same",
+           "@graph":[{"@id":"https://example.org/inside","https://example.org/label":[{"@value":"graph"}]}],
+           "_:b4":[{"@id":"_:b5"}],"https://example.org/empty":[],
+           "https://example.org/indexed":[{"@value":"value","@index":"slot"}],
+           "https://example.org/list":[{"@list":[{"@value":"duplicate"},{"@value":"duplicate"}]},{"@list":[{"@value":"duplicate"},{"@value":"duplicate"}]}],
+           "https://example.org/p":[{"@value":"same"},{"@id":"_:b3"},{"@value":"other"}],
+           "https://example.org/raw":[{"@value":{"b":2,"a":1,"huge":1e9999999999999999999999},"@type":"@json"}],
+           "https://example.org/text":[{"@value":"_:S"}]},
+          {"@id":"_:b2","https://example.org/label":[{"@value":"reverse"}],"https://example.org/rev":[{"@id":"_:b1"}]},
+          {"@id":"_:b3","https://example.org/label":[{"@value":"included"},{"@value":"more"}]},
+          {"@id":"_:b5","https://example.org/label":[{"@value":"anonymous"}]},
+          {"@id":"https://example.org/empty-graph","@graph":[]}
+        ]"#,
+        ),
+        (
+            r#"{"@id":"https://example.org/s","https://example.org/p":[
+          {"@triple":{"@subject":{"@id":"_:term","https://example.org/label":"term"},"@predicate":"https://example.org/q","@object":{"@triple":{"@subject":{"@id":"_:term"},"@predicate":"https://example.org/r","@object":{"@value":"_:term"}}}},
+           "@annotation":[{"@id":"_:ann","https://example.org/note":{"@id":"_:child","https://example.org/label":"child"}}]},
+          {"@id":"_:node","https://example.org/label":"nested","@annotation":[{"@id":"_:ann","https://example.org/note":"second"}]},
+          {"@list":[{"@id":"_:term"},{"@value":"_:ann"}],"@annotation":[{"@id":"_:ann","https://example.org/note":"list"}]}
+        ]}"#,
+            r#"[
+          {"@id":"_:b1","https://example.org/label":[{"@value":"child"}]},
+          {"@id":"_:b2","https://example.org/label":[{"@value":"term"}]},
+          {"@id":"_:b3","https://example.org/label":[{"@value":"nested"}]},
+          {"@id":"https://example.org/s","https://example.org/p":[
+            {"@triple":{"@subject":{"@id":"_:b2"},"@predicate":"https://example.org/q","@object":{"@triple":{"@subject":{"@id":"_:b2"},"@predicate":"https://example.org/r","@object":{"@value":"_:term"}}}},
+             "@annotation":[{"@id":"_:b0","https://example.org/note":[{"@id":"_:b1"}]}]},
+            {"@id":"_:b3","@annotation":[{"@id":"_:b0","https://example.org/note":[{"@value":"second"}]}]},
+            {"@list":[{"@id":"_:b2"},{"@value":"_:ann"}],"@annotation":[{"@id":"_:b0","https://example.org/note":[{"@value":"list"}]}]}
+          ]}
+        ]"#,
+        ),
+        (
+            r#"{"@id":"urn:a","urn:p":[{"@id":"urn:b","urn:q":[{"@id":"urn:c","@reverse":{"urn:p":[{"@id":"urn:a"}]}}]}]}"#,
+            r#"[{"@id":"urn:a","urn:p":[{"@id":"urn:b"},{"@id":"urn:c"}]},{"@id":"urn:b","urn:q":[{"@id":"urn:c"}]}]"#,
+        ),
+    ] {
+        let expected = purrdf_lex::json::read(expected).unwrap();
+        let actual =
+            flatten_jsonld_with_context(source.as_bytes(), &context, &expansion, &limits).unwrap();
+        assert_eq!(actual, expected);
+        if let Some(payload) = actual
+            .as_array()
+            .unwrap()
+            .iter()
+            .find_map(|node| node.get("https://example.org/raw"))
+        {
+            let payload = payload.as_array().unwrap()[0].get("@value").unwrap();
+            // The existing strict decoder orders members before expansion;
+            // node-map construction must retain its original number spellings.
+            assert!(
+                payload.same_text(
+                    &purrdf_lex::json::read(r#"{"a":1,"b":2,"huge":1e9999999999999999999999}"#)
+                        .unwrap()
+                )
+            );
+        }
+        let yaml = purrdf_lex::yaml::write(&purrdf_lex::json::read(source).unwrap());
+        assert_eq!(
+            flatten_yamlld_with_context(
+                yaml.as_bytes(),
+                &context,
+                &YamlLdOptions::DEFAULT,
+                &expansion,
+                &limits
+            )
+            .unwrap(),
+            expected
+        );
+        assert!(
+            flatten_jsonld_with_context(
+                source.as_bytes(),
+                &context,
+                &expansion,
+                &JsonLdFlattenLimits {
+                    max_allocation_bytes: 0
+                }
+            )
+            .unwrap_err()
+            .storage_error()
+            .is_some()
+        );
+    }
+    for source in [
+        r#"{"@id":"https://example.org/root","https://example.org/p":"value","@annotation":[{"https://example.org/note":"unsupported-root"}]}"#,
+        r#"{"@triple":{"@subject":{"@id":"https://example.org/s"},"@predicate":"https://example.org/p","@object":{"@value":"value"}}}"#,
+    ] {
+        assert!(
+            flatten_jsonld_with_context(source.as_bytes(), &context, &expansion, &limits)
+                .unwrap_err()
+                .message
+                .contains("graph roots")
+        );
+    }
+    for indexed in [false, true] {
+        let index = if indexed {
+            r#", "@index":"semantic""#
+        } else {
+            ""
+        };
+        let source = format!(
+            r#"{{"@id":"https://example.org/list-owner","https://example.org/list":{{"@list":[{{"@value":"value"}}]{index}}},"https://example.org/raw":{{"@value":{{"@index":"opaque"}},"@type":"@json"}}}}"#
+        );
+        let expected = purrdf_lex::json::read(r#"[{"@id":"https://example.org/list-owner","https://example.org/list":[{"@list":[{"@value":"value"}]}],"https://example.org/raw":[{"@value":{"@index":"opaque"},"@type":"@json"}]}]"#).unwrap();
+        assert_eq!(
+            flatten_jsonld_with_context(source.as_bytes(), &context, &expansion, &limits).unwrap(),
+            expected
+        );
+        let rdf = parse_jsonld_with_context(source.as_bytes(), &context);
+        if indexed {
+            assert!(rdf.unwrap_err().message.contains("@index metadata"));
+        } else {
+            assert!(rdf.is_ok());
+        }
+    }
+    for (numbers, lexical, datatype) in [
+        ("1,1.0,1e0", "1", "integer"),
+        ("1.0,1e0,1", "1", "integer"),
+        ("1e0,1,1.0", "1", "integer"),
+        (
+            "999999999999999999999,999999999999999999999.0",
+            "999999999999999999999",
+            "integer",
+        ),
+        ("1e21,1000000000000000000000", "1.0E21", "double"),
+        ("1000000000000000000000,1e21", "1.0E21", "double"),
+    ] {
+        let source = format!(
+            r#"{{"@id":"https://example.org/numeric","https://example.org/p":[{numbers}]}}"#
+        );
+        let dataset = parse_jsonld_with_context(source.as_bytes(), &context).unwrap();
+        let actual = purrdf_rdf::serialize_dataset(
+            &dataset,
+            "application/n-quads",
+            purrdf_rdf::SerializeGraph::Dataset,
+        )
+        .unwrap();
+        assert_eq!(actual, format!("<https://example.org/numeric> <https://example.org/p> \"{lexical}\"^^<http://www.w3.org/2001/XMLSchema#{datatype}> .\n").into_bytes());
+    }
+    for (second, succeeds) in [("same", true), ("different", false)] {
+        let source = format!(
+            r#"[{{"@id":"https://example.org/indexed","@index":"same"}},{{"@id":"https://example.org/indexed","@index":"{second}"}}]"#
+        );
+        let result = flatten_jsonld_with_context(source.as_bytes(), &context, &expansion, &limits);
+        if succeeds {
+            assert_eq!(
+                result.unwrap(),
+                purrdf_lex::json::read(
+                    r#"[{"@id":"https://example.org/indexed","@index":"same"}]"#
+                )
+                .unwrap()
+            );
+        } else {
+            assert!(result.unwrap_err().message.contains("conflicting indexes"));
+        }
+    }
+}
 
 #[test]
 fn mixed_context_registry_reuses_yaml_admission_and_shared_resolution() {

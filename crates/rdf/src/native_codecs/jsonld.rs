@@ -19,12 +19,14 @@ mod carrier;
 pub mod context;
 mod derived;
 mod expand;
+mod node_map;
+pub use node_map::JsonLdFlattenLimits;
 mod structural;
 pub use structural::JsonLdExpansionLimits;
 pub(super) mod yaml;
 pub use yaml::{
-    YamlLdOptions, expand_yamlld_with_context, parse_yamlld_with_context,
-    parse_yamlld_with_options, yamlld_to_jsonld_with_options,
+    YamlLdOptions, expand_yamlld_with_context, flatten_yamlld_with_context,
+    parse_yamlld_with_context, parse_yamlld_with_options, yamlld_to_jsonld_with_options,
 };
 
 pub use context::{
@@ -1919,6 +1921,21 @@ pub fn expand_jsonld_with_context(
 ) -> Result<Value, RdfDiagnostic> {
     let value = context::parse_document(bytes)?;
     structural::expand(&value, context, *limits).map(|expanded| expanded.value)
+}
+
+/// Flatten native JSON-LD without choosing an output context or compacting.
+/// Input expansion and node-map construction use separate explicit limits.
+/// # Errors
+/// Returns original decoding, context, expansion, conflicting-index or construction refusals.
+pub fn flatten_jsonld_with_context(
+    bytes: &[u8],
+    context: &CompiledJsonLdContext,
+    expansion_limits: &JsonLdExpansionLimits,
+    flatten_limits: &JsonLdFlattenLimits,
+) -> Result<Value, RdfDiagnostic> {
+    let expanded = expand_jsonld_with_context(bytes, context, expansion_limits)?;
+    node_map::flatten(&expanded, *flatten_limits, node_map::Issuance::Normative)
+        .map(|mapped| mapped.value)
 }
 
 /// Validate `iri` as an absolute IRI and return the native term.

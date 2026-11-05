@@ -377,6 +377,107 @@ fn rdf_json_collapses_only_when_its_lexical_form_is_canonical() {
         "json": {"@id": "ex:json", "@type": "@json"},
         "rdf": {"@id": "http://www.w3.org/1999/02/22-rdf-syntax-ns#", "@prefix": true}
     });
+    for lexicals in [["1", "1.0"], [r#"{"a":1}"#, r#"{"a":1.0}"#], ["1", "2"]] {
+        let source = lexicals.map(|lexical| {
+            let quoted = lex_json::write_compact(&Value::String(lexical.to_owned()));
+            format!("<https://example.org/s> <https://example.org/json> {quoted}^^<http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON> .\n")
+        }).concat();
+        let (dataset, compacted) = serialize_with_context(&source, &context);
+        let value = read_output(&compacted);
+        assert_eq!(
+            value["@graph"][0]["ex:json"]
+                .as_array()
+                .expect("explicit typed lexical values")
+                .len(),
+            2
+        );
+        let reparsed =
+            parse_jsonld(compacted.as_bytes(), None).expect("retain distinct RDF JSON lexicals");
+        assert!(
+            datasets_isomorphic(
+                &dataset,
+                &reparsed,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+        );
+    }
+    let set_context = json!({
+        "ex": {"@id":"https://example.org/","@prefix":true},
+        "rdf": {"@id":"http://www.w3.org/1999/02/22-rdf-syntax-ns#","@prefix":true},
+        "json": {"@id":"ex:json","@type":"@json","@container":"@set"},
+        "typed": {"@id":"ex:json","@type":"rdf:JSON","@container":"@set"}
+    });
+    for lexical in ["1", "[1,2]"] {
+        let quoted = lex_json::write_compact(&Value::String(lexical.to_owned()));
+        let source = format!(
+            "<https://example.org/s> <https://example.org/json> {quoted}^^<http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON> .\n"
+        );
+        let (dataset, compacted) = serialize_with_context(&source, &set_context);
+        assert!(read_output(&compacted)["@graph"][0].get("typed").is_some());
+        let reparsed = parse_jsonld(compacted.as_bytes(), None).unwrap();
+        assert!(
+            datasets_isomorphic(
+                &dataset,
+                &reparsed,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+        );
+    }
+    let list_context = json!({
+        "ex": {"@id":"https://example.org/","@prefix":true},
+        "rdf": {"@id":"http://www.w3.org/1999/02/22-rdf-syntax-ns#","@prefix":true},
+        "json": {"@id":"ex:json","@type":"@json","@container":"@list"}
+    });
+    let list_source = concat!(
+        "<https://example.org/s> <https://example.org/json> _:head .\n",
+        "_:head <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> \"1\"^^<http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON> .\n",
+        "_:head <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> _:tail .\n",
+        "_:tail <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> \"2\"^^<http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON> .\n",
+        "_:tail <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> <http://www.w3.org/1999/02/22-rdf-syntax-ns#nil> .\n",
+    );
+    let annotated = concat!(
+        "<https://example.org/s> <https://example.org/json> \"1\"^^<http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON> .\n",
+        "<https://example.org/reifier> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <https://example.org/s> <https://example.org/json> \"1\"^^<http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON> )>> .\n",
+        "<https://example.org/reifier> <https://example.org/note> \"annotation\" .\n",
+    );
+    for (source, input_context) in [(list_source, &list_context), (annotated, &context)] {
+        let (dataset, compacted) = serialize_with_context(source, input_context);
+        let reparsed = parse_jsonld(compacted.as_bytes(), None).unwrap();
+        assert!(
+            datasets_isomorphic(
+                &dataset,
+                &reparsed,
+                &mut purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    None
+                )
+            )
+            .unwrap()
+        );
+    }
+    let opaque_array = "<https://example.org/s> <https://example.org/json> \"[1,2]\"^^<http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON> .\n";
+    let (dataset, compacted) = serialize_with_context(opaque_array, &context);
+    assert_eq!(read_output(&compacted)["@graph"][0]["json"], json!([1, 2]));
+    let reparsed = parse_jsonld(compacted.as_bytes(), None).unwrap();
+    assert!(
+        datasets_isomorphic(
+            &dataset,
+            &reparsed,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None
+            )
+        )
+        .unwrap()
+    );
     let canonical = concat!(
         "<https://example.org/s> <https://example.org/json> ",
         "\"{\\\"a\\\":1}\"^^<http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON> .\n",

@@ -840,8 +840,9 @@ fn remove_regular_property(
         .as_object_mut()
         .expect("a compacted carrier node is an object");
     let mut terms = BTreeSet::new();
+    let json_eligible = scalar_json_eligible(values);
     for value in values {
-        terms.insert(context.compact_iri_with_selection(iri, true, Some(&value.selection()))?);
+        terms.insert(select_property_term(context, iri, value, json_eligible)?);
     }
     for term in terms {
         if let Some(nest) = context.term(&term).and_then(JsonLdTermDefinition::nest) {
@@ -1012,9 +1013,9 @@ impl Node {
         let mut nested: BTreeMap<String, BTreeMap<String, JsonValue>> = BTreeMap::new();
         for (iri, values) in &self.properties {
             let mut by_term: BTreeMap<String, Vec<&Value>> = BTreeMap::new();
+            let json_eligible = scalar_json_eligible(values);
             for value in values {
-                let selection = value.selection();
-                let term = context.compact_iri_with_selection(iri, true, Some(&selection))?;
+                let term = select_property_term(context, iri, value, json_eligible)?;
                 by_term.entry(term).or_default().push(value);
             }
             for (term, values) in by_term {
@@ -1324,7 +1325,7 @@ impl Value {
         }
     }
 
-    fn selection(&self) -> JsonLdTermSelection {
+    fn selection(&self, json_eligible: bool) -> JsonLdTermSelection {
         let containers = match &self.term {
             Term::List(_) => vec![
                 vec![JsonLdContainer::List, JsonLdContainer::Set],
@@ -1348,10 +1349,16 @@ impl Value {
             }
             _ => vec![vec![JsonLdContainer::Set], Vec::new()],
         };
-        let (kind, preferred) = match &self.term {
+        let (kind, mut preferred) = match &self.term {
             Term::List(values) => common_list_preferences(values),
             _ => self.shape_preferences(),
         };
+        if !json_eligible {
+            // A JSON-coercing property captures its entire raw value before
+            // expansion processes arrays or annotations. Only a lone ordinary
+            // JSON literal can use that route; RDF lists remain lists.
+            preferred.retain(|value| value != "@json");
+        }
         JsonLdTermSelection::new(containers, kind, preferred)
     }
 
@@ -1404,6 +1411,51 @@ fn common_list_preferences(values: &[Value]) -> (JsonLdTermSelectionKind, Vec<St
             vec!["@none".to_owned(), "@any".to_owned()],
         )
     }
+}
+
+fn scalar_json_eligible(values: &[Value]) -> bool {
+    let [value] = values else {
+        return false;
+    };
+    // Canonical lexical eligibility remains in literal_preferences. This gate
+    // supplies only the property cardinality and annotation constraints.
+    value.annotations.is_empty()
+        && matches!(&value.term, Term::Literal(literal) if literal.datatype.as_deref() == Some(super::RDF_JSON))
+}
+
+fn select_property_term(
+    context: &CompiledJsonLdContext,
+    iri: &str,
+    value: &Value,
+    json_eligible: bool,
+) -> Result<String, RdfDiagnostic> {
+    let selection = value.selection(json_eligible);
+    let term = context.compact_iri_with_selection(iri, true, Some(&selection))?;
+    let json = context
+        .term(&term)
+        .filter(|definition| definition.type_mapping() == Some(&JsonLdTypeMapping::Json));
+    if json.is_none_or(|definition| {
+        json_eligible && !definition.containers().contains(&JsonLdContainer::Set)
+    }) {
+        return Ok(term);
+    }
+    if json_eligible {
+        let scalar = JsonLdTermSelection::new(
+            [Vec::<JsonLdContainer>::new()],
+            selection.kind(),
+            selection.preferred_values().iter().cloned(),
+        );
+        let alternative = context.compact_iri_with_selection(iri, true, Some(&scalar))?;
+        if context.term(&alternative).is_some_and(|definition| {
+            definition.type_mapping() == Some(&JsonLdTypeMapping::Json)
+                && !definition.containers().contains(&JsonLdContainer::Set)
+        }) {
+            return Ok(alternative);
+        }
+    }
+    // Retry the original container preferences without JSON coercion, so
+    // existing ordinary datatype/set aliases remain usable before IRI fallback.
+    context.compact_iri_with_selection(iri, true, Some(&value.selection(false)))
 }
 
 fn literal_preferences(literal: &Literal) -> (JsonLdTermSelectionKind, Vec<String>) {
