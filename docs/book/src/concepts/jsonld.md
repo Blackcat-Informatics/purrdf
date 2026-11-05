@@ -77,6 +77,63 @@ purrdf --jsonld-options context.json convert --from turtle --to jsonld input.ttl
 The option is rejected for non-JSON-LD/YAML-LD output, canonical output,
 non-graph SPARQL results, and carrier projections rather than being ignored.
 
+## YAML-LD semantic translation
+
+Select `yamlld` on the CLI or `application/ld+yaml` in the native format API.
+The reader targets the [YAML-LD 1.0 Working Draft of 24 October
+2026](https://www.w3.org/TR/2026/WD-yaml-ld-10-20261024/). It constructs the first
+document by default; explicit whole-stream selection and admission bounds are
+described in [YAML-LD input options](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/YAML_INPUT_OPTIONS.md).
+Input controls are independent of the serialization context described here.
+
+Using the `context.json` above, translate an ordinary RDF dataset with an
+explicit output base:
+
+```sh
+purrdf --jsonld-options context.json convert --from nquads --to yamlld \
+  --base https://example.org/ input.nq output.yamlld
+```
+
+The shared JSON-LD carrier supplies expanded, caller-context and derived-context
+YAML output. The generic serializer carries the caller's base into that context;
+it does not recover a prefix map from the input dataset. For fixed dataset,
+mode, context, base and options, the output is deterministic. The optional
+`yaml_schema_url` selects the YAML language-server header, independently of RDF
+meaning.
+
+This conversion preserves RDF semantics rather than authored YAML presentation.
+Comments, quoting, anchors and original layout require the separate
+[exact YAML source workflow](codecs.md#exact-yaml-source-reconstruction).
+
+## RDF 1.2 carrier additions
+
+The shared JSON-LD/YAML-LD carrier represents [RDF 1.2](rdf12.md) triple terms
+with `@triple`. Its value has three members: `@subject` and `@object` are typed
+carrier terms, and `@predicate` is an IRI string. For example:
+
+```yaml
+'@id': https://example.org/alice
+https://example.org/reports:
+  '@triple':
+    '@subject':
+      '@id': https://example.org/cat
+    '@predicate': https://example.org/says
+    '@object':
+      '@value': meow
+  '@annotation':
+    '@id': https://example.org/assertion
+    https://example.org/confidence:
+      '@value': high
+```
+
+`@annotation` carries one annotation node or an array of nodes on a value.
+Together these additions retain recursive triple terms and statement annotation
+relationships through RDF 1.2 round trips. They are carrier extensions, not terms
+defined by the pinned YAML-LD Basic specification, and are separate from its
+informative Extended YAML profile. Standard JSON-LD context, language and
+`@direction` constructs retain their ordinary meanings; the
+[context modes](#json-ld-contexts--compaction) above apply to both carriers.
+
 ## Python
 
 ```python

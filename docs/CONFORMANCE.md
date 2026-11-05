@@ -204,9 +204,29 @@ Native cases live in `crates/lex/tests/yaml_syntax.rs`,
 `crates/rdf/tests/yaml_mapping_keys.rs` and
 `crates/rdf/tests/relative_iri_base.rs`. They cover selection and phase refusals,
 combined admission, native routing, JSON-LD entry arrays, explicit blank-label
-sharing and anonymous alias copies. Source-cover RDF export/reconstruction,
-configured foreign-binding controls and the complete pinned YAML-LD conformance
-matrix are separate commitments; these native cases do not establish them.
+sharing and anonymous alias copies. Their scope is the native Basic input path.
+
+Source-cover RDF export and strict reconstruction are implemented through the
+`purrdf::yaml` facade and shared host boundary. Native
+`crates/yaml/tests/roundtrip.rs` exercises lexical retention, cover integrity,
+identity and reprojection. The existing `convert_cli` case
+`yaml_source_exports_and_reconstructs_exact_bytes_with_explicit_bounds` drives
+export/root-output/reconstruct through the executable, including explicit bounds
+and exact original bytes. This lexical source workflow is independent of Basic
+semantic construction; see [the codec documentation](book/src/concepts/codecs.md#exact-yaml-source-reconstruction).
+
+Configured semantic input controls are delivered through the shared boundary,
+foreign bindings and CLI reader roles documented in
+[YAML input options](YAML_INPUT_OPTIONS.md). Focused native host cases cover the
+CLI role forwarding and pre-acquisition refusals. The existing `convert_cli`
+cases `expanded_jsonld_and_yamlld_cli_bytes_are_frozen` and
+`configured_jsonld_cli_modes_registry_yaml_and_errors_share_one_schema` pin
+expanded output bytes and compare configured JSON-LD/YAML-LD canonical datasets.
+These are scoped implementation checks, not a complete conformance verdict.
+The complete upstream matrix for the pinned Basic draft and remaining
+deterministic semantic-output acceptance remain open.
+[Context and carrier documentation](book/src/concepts/jsonld.md#yaml-ld-semantic-translation)
+distinguishes standard Basic processing from the RDF 1.2 carrier additions.
 
 ## Where the suites live
 
