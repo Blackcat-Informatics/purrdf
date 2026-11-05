@@ -161,10 +161,9 @@ async function main() {
     modules: [
       esModule("workerd-entry.mjs", readFileSync(join(JS_ROOT, "tests/workerd/worker.mjs"), "utf8")),
       esModule("workerd-recipe.mjs", workerRecipe()),
-      esModule("index.mjs"),
-      esModule("cloudflare.mjs"),
-      esModule("pkg/purrdf_wasm.js"),
-      esModule("pkg/purrdf_jspi.mjs"),
+      ...[
+        "index.mjs", "cloudflare.mjs", "pkg/purrdf_wasm.js", "pkg/purrdf_jspi.mjs", "pkg/purrdf_bytes.mjs",
+      ].map((name) => esModule(name)),
       {
         type: "CompiledWasm",
         path: join(JS_ROOT, "pkg/purrdf_wasm_bg.wasm"),
