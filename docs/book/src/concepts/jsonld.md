@@ -72,6 +72,115 @@ same application context is used for many datasets. `JsonLdContextRegistry`
 resolves context IRIs and `@import` only from caller-supplied immutable local
 documents; PurRDF never performs network context loading.
 
+## Document expansion across hosts
+
+Document expansion returns compact JSON text containing expanded document
+structure. It preserves repeated and nested descriptions, unminted identifiers,
+native RDF 1.2 terms and opaque JSON through the existing structural engine.
+It constructs no RDF dataset. Supply original source bytes separately from a
+closed version-one JSON request:
+
+```json
+{
+  "version": 1,
+  "format": "yamlld",
+  "base": "https://example.org/document",
+  "context": {"label": "https://example.org/label"},
+  "yaml_ld": {"extract_all_scripts": false},
+  "expansion": {"max_allocation_bytes": 34359738368},
+  "output": {"max_bytes": 4294967296, "max_allocation_bytes": 34359738368}
+}
+```
+
+| Field | Accepted value and default |
+| --- | --- |
+| `version` | Required integer `1`. |
+| `format` | Required string resolved by the native format classifier; only JSON-LD and YAML-LD are accepted, including their existing aliases and media types. |
+| `base` | Optional absolute input/document IRI string; omitted means no supplied base. |
+| `context` | Optional bare JSON-LD context expression: object, context IRI string, array or null. Omission keeps default initialization; null is an explicit reset. |
+| `registry` | Optional array of offline context records; default empty. |
+| `yaml_ld` | Optional Basic YAML controls below; explicit presence requires YAML-LD source input. |
+| `expansion` | Optional object accepting only `max_allocation_bytes`, default 32 GiB. |
+| `output` | Optional object accepting only `max_bytes` (4 GiB) and `max_allocation_bytes` (32 GiB). |
+
+Every record is closed. Unknown or duplicate fields, unsupported versions/formats,
+incorrect types and non-applicable controls refuse before source parsing. Numeric
+limits require nonnegative integer lexemes; fractions and exponent notation are
+refused. Expansion and both output limits accept the full `u64` range, including
+zero. Logical byte ceilings remain distinct from checked physical address/layout
+conversions.
+
+The request's `context` is the effective expression, not a context document.
+An expression object containing `@context`, including an object in a context
+array, is refused. A legitimate term definition may still contain its own scoped
+`@context`. Registry documents retain the existing document-wrapper semantics.
+Each registry record requires absolute `iri`, `format` (`json` or `yaml`) and
+original `document` text. YAML records additionally require their own `yaml_ld`
+object; JSON records refuse that field. Registry YAML controls remain independent
+of the source format, so JSON-LD source may use a YAML context document. Contexts
+and imports resolve only through that immutable offline registry.
+
+Both source and registry `yaml_ld` objects accept only `extract_all_scripts`,
+`syntax` and `projection`. Context and registry fields belong at the request's
+top level. Omitted YAML controls use these native defaults:
+
+| Control | Default |
+| --- | --- |
+| `extract_all_scripts` | `false` (construct the first document); true constructs all documents. |
+| `syntax.max_input_bytes` | 16 MiB |
+| `syntax.max_allocation_bytes` | 128 MiB |
+| `syntax.max_occurrences` | 1,048,576 |
+| `syntax.max_depth` | 128 |
+| `syntax.aliases` | `true` |
+| `syntax.max_documents` | 1,048,576 |
+| `projection.max_allocation_bytes` | 128 MiB |
+| `projection.max_nodes` | 1,048,576 |
+| `projection.max_depth` | 128 |
+| `projection.max_numeric_work` | 67,108,864 |
+| `projection.max_numeric_bytes` | 32 MiB |
+
+`max_occurrences`, `max_nodes` and `max_numeric_work` accept full-width `u64`;
+other YAML numeric fields use the portable `0..=4294967295` range. Syntax covers
+the complete YAML stream, including unselected documents; projection covers
+retained syntax and selected construction. `max_serialization_bytes`, profiles
+and extension controls are not request fields.
+
+Request JSON uses the existing 10 MiB options ceiling and separate 128 MiB
+record-construction account. Registry/context compilation, source decoding,
+structural expansion, output/writer construction, host input/ABI transfer and
+result-handle storage retain their separate authorities. The output byte ceiling
+is enforced before each governed append, including escaping and UTF-8; the output
+allocation ceiling covers newly owned text and traversal storage. No unbounded
+intermediate JSON string is constructed. These limits do not claim total
+operation-memory accounting. Native diagnostics and storage causes are retained.
+
+Rust callers use `purrdf_validate::document_expansion::expand(source, request_json)`.
+`request(request_json)` compiles a reusable request, and
+`expand_decoded(source, &request)` avoids decoding it again. The CLI decodes and
+compiles the request before acquiring source bytes; `-` selects stdin/stdout,
+and request and source cannot share stdin:
+
+```sh
+purrdf document-expand --request expand.json input.yamlld expanded.jsonld
+```
+
+C callers use
+`purrdf_document_expand(source, source_len, request_json, request_len, out_buffer, out_error)`.
+Both pointer/length inputs are required. Valid output slots are cleared before
+work, aliased output/error slots are refused, and failures publish no buffer.
+Read successful bytes with `purrdf_buffer_data`, then call `purrdf_buffer_free`;
+the output lives independently of source/request storage. Errors use the existing
+diagnostic and native-cause accessors and `purrdf_error_free` lifetime.
+
+Python exposes `purrdf.expand_document(source: bytes, *, request_json: bytes) -> str`.
+Immutable input owners remain borrowed while native work runs outside the GIL.
+JavaScript exposes `expandDocument(source: Uint8Array, requestJson: Uint8Array): string`.
+Its captured non-shared buffers receive admitted native copies; request admission
+and compilation precede source capture. Detached/shared buffers refuse. Both
+interfaces return JSON text and retain existing diagnostic/cause error fields.
+The JavaScript native cause retains its existing `YamlSourceCause` owner and
+`free()` lifetime.
+
 ## Native document compaction
 
 `compact_expanded_with_context` compacts lexical JSON values before RDF lowering.

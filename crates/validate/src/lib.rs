@@ -76,6 +76,7 @@
 pub mod build;
 pub mod canonical;
 pub mod complete;
+pub mod document_expansion;
 pub mod entail;
 pub mod expr_selector;
 pub mod geo;

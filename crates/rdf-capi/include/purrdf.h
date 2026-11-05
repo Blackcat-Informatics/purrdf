@@ -1525,6 +1525,24 @@ int32_t purrdf_cursor_next(PurrdfCursor *cursor,
 void purrdf_cursor_free(PurrdfCursor *cursor);
 
 /**
+ * Expand original JSON-LD/YAML-LD source bytes into owned expanded JSON bytes.
+ * Source/request pointers are borrowed only during this synchronous call.
+ * Success publishes one buffer, without an added newline or NUL. Release it
+ * with `purrdf_buffer_free`; diagnostic ownership ends at `purrdf_error_free`.
+ * Request/native phases and the final host buffer control are separate accounts.
+ * # Safety
+ * Both input pointers must be non-null and readable for their addressable lengths.
+ * Output/error slots must be writable, initially empty, and independent of input
+ * storage. Aliased output/error slots are refused without writing through either.
+ */
+int32_t purrdf_document_expand(const uint8_t *source,
+                               size_t source_len,
+                               const uint8_t *request_json,
+                               size_t request_len,
+                               PurrdfBuffer **out_buffer,
+                               PurrdfError **out_error);
+
+/**
  * Materialize an RDF document under a SPARQL entailment regime.
  *
  * `document` is parsed as N-Quads, which accepts an N-Triples document

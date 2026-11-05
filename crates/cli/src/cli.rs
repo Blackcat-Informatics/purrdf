@@ -388,6 +388,16 @@ pub(crate) struct GlobRdfArgs {
 /// The pipeline subcommands.
 #[derive(Subcommand, Debug)]
 pub(crate) enum Command {
+    /// Expand JSON-LD/YAML-LD document structure without creating an RDF dataset.
+    DocumentExpand {
+        /// Closed version-one request JSON path, or - for standard input.
+        #[arg(long)]
+        request: String,
+        /// Original source path, or - for standard input.
+        input: String,
+        /// Expanded JSON destination, or - for standard output.
+        output: String,
+    },
     /// Export and reconstruct exact YAML presentation through RDF metadata.
     YamlSource {
         #[command(subcommand)]
@@ -2945,6 +2955,13 @@ impl Cli {
             paths.push(path.clone());
         }
         match &self.cmd {
+            Command::DocumentExpand {
+                request,
+                input,
+                output,
+            } => {
+                paths.extend([request, input, output].into_iter().map(PathBuf::from));
+            }
             Command::YamlSource { command } => paths.extend(command.paths()),
             Command::Glob { pattern, .. } => {
                 paths.push(PathBuf::from(pattern));

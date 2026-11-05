@@ -1379,6 +1379,10 @@ def to_json_ld(
     context: CompiledJsonLdContext | None = ...,
     base: str | None = ...,
 ) -> str: ...
+def expand_document(source: bytes, *, request_json: bytes) -> str:
+    """Expand original document bytes under a closed version-one request."""
+    ...
+
 def serialize_jsonld(
     data: bytes,
     *,

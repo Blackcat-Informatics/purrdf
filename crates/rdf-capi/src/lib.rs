@@ -110,6 +110,7 @@ macro_rules! ffi_canonical_try {
 pub mod buffer;
 mod canonical;
 pub mod cursor;
+pub mod document_expansion;
 pub mod entail;
 pub mod error;
 pub mod geo;

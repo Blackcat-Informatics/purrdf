@@ -143,6 +143,7 @@ import init, {
   yamlSourceReconstruct,
   YamlSourceCause,
   YamlSourceExport,
+  expandDocument,
 } from "./pkg/purrdf_wasm.js";
 import {
   assertAsyncQueries,
@@ -1782,4 +1783,5 @@ export {
   yamlSourceReconstruct,
   YamlSourceCause,
   YamlSourceExport,
+  expandDocument,
 };

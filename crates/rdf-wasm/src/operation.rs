@@ -34,6 +34,7 @@ use purrdf::{
 };
 use purrdf_core::xsd_regex::xpath::Profile;
 use purrdf_core::{DiagnosticPresentation, RdfDiagnostic, SparqlResult};
+use purrdf_lex::allocation::{Memory, Resident};
 use purrdf_sparql_eval::protocol::{FailureCode, negotiate};
 use purrdf_sparql_eval::{
     GovernedOutcome, GovernedUpdateOutcome, GraphResolver, NativeSparqlEngine, QueryGovernors,
@@ -51,6 +52,55 @@ use crate::query::{
 use crate::shacl::{
     ShaclChangeValidation, ShaclEntailment, ShaclNodeExprOutcome, ShaclRefusal, ShaclRulesInference,
 };
+
+/// Original diagnostic-backed native cause under its retained admission.
+/// The existing shipped JavaScript name remains unchanged.
+#[wasm_bindgen]
+#[derive(Debug)]
+pub struct YamlSourceCause {
+    diagnostic: RdfDiagnostic,
+}
+#[wasm_bindgen]
+impl YamlSourceCause {
+    /// Typed fields from the original cause, without a host error enum.
+    #[wasm_bindgen(getter)]
+    pub fn json(&self) -> Result<String, JsError> {
+        let cause = self
+            .diagnostic
+            .native_cause()
+            .ok_or_else(|| JsError::new("YAML source diagnostic has no native cause"))?;
+        purrdf_validate::native_error::to_json(cause)
+            .map(|value| value.to_string())
+            .map_err(|error| JsError::new(&error.to_string()))
+    }
+}
+
+/// Preserve the existing diagnostic and original typed native-cause interface.
+pub(crate) fn native_diagnostic_to_js(diagnostic: RdfDiagnostic) -> JsValue {
+    let attach = || -> Result<JsValue, JsValue> {
+        let copy = diagnostic
+            .clone_with_memory(&mut Memory::new(&mut Resident))
+            .map_err(|error| diagnostic_to_js(error.into()))?;
+        let refused = diagnostic_to_js(copy);
+        if let Some(cause) = diagnostic.native_cause() {
+            let fields = purrdf_validate::native_error::to_json(cause)
+                .map_err(|error| JsError::new(&error.to_string()))?;
+            if !crate::host::reflect_set(
+                &refused,
+                &JsValue::from_str("nativeCauseJson"),
+                &JsValue::from_str(&fields.to_string()),
+            )? {
+                return Err(JsError::new("cannot attach native YAML source cause fields").into());
+            }
+            let original: JsValue = YamlSourceCause { diagnostic }.into();
+            if !crate::host::reflect_set(&refused, &JsValue::from_str("nativeCause"), &original)? {
+                return Err(JsError::new("cannot retain original native YAML source cause").into());
+            }
+        }
+        Ok(refused)
+    };
+    attach().unwrap_or_else(core::convert::identity)
+}
 
 // ---------------------------------------------------------------------------
 // Codes of the failures that are not an engine diagnostic

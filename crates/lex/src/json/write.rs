@@ -5,7 +5,72 @@
 
 use super::Value;
 use crate::allocation::{Admission, Memory, Resident, StorageError};
-use crate::json_escape::{JsonEscapes, push_string_with_memory};
+use crate::json_escape::{JsonEscapes, try_escape_body};
+
+/// Original storage refusal or an independent serialized-byte ceiling.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WriteError {
+    /// The next append would exceed this logical UTF-8 byte ceiling.
+    Bytes {
+        /// Maximum total bytes in the destination.
+        limit: u64,
+    },
+    /// Original checked-layout, allocator or admission refusal.
+    Storage(StorageError),
+}
+impl core::fmt::Display for WriteError {
+    fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Bytes { limit } => write!(out, "JSON output exceeds {limit} bytes"),
+            Self::Storage(cause) => cause.fmt(out),
+        }
+    }
+}
+purrdf_hash::error_sources!(WriteError, Storage);
+impl purrdf_hash::error::StructuredError for WriteError {
+    purrdf_hash::error_visit! {
+        Bytes { limit } => "json-output-bytes" { "limit" => ByteCount(u128::from(*limit)) },
+        Storage(cause) => "json-output-storage" { "cause" => Cause(cause) },
+    }
+}
+crate::variant_from!(WriteError { Storage(StorageError) });
+
+fn append<S: Admission + ?Sized>(
+    out: &mut String,
+    piece: &str,
+    maximum: Option<u64>,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), WriteError> {
+    if let Some(limit) = maximum {
+        let length = out
+            .len()
+            .checked_add(piece.len())
+            .ok_or(StorageError::SizeOverflow)?;
+        if u64::try_from(length).map_or(true, |length| length > limit) {
+            return Err(WriteError::Bytes { limit });
+        }
+    }
+    memory.push_str(out, piece).map_err(Into::into)
+}
+fn character<S: Admission + ?Sized>(
+    out: &mut String,
+    ch: char,
+    maximum: Option<u64>,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), WriteError> {
+    append(out, ch.encode_utf8(&mut [0; 4]), maximum, memory)
+}
+fn string<S: Admission + ?Sized>(
+    out: &mut String,
+    text: &str,
+    escapes: JsonEscapes,
+    maximum: Option<u64>,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), WriteError> {
+    append(out, "\"", maximum, memory)?;
+    try_escape_body(text, escapes, |piece| append(out, piece, maximum, memory))?;
+    append(out, "\"", maximum, memory)
+}
 
 /// How the writer lays a value out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,11 +115,12 @@ fn line_break<S: Admission + ?Sized>(
     out: &mut String,
     unit: &str,
     depth: usize,
+    maximum: Option<u64>,
     memory: &mut Memory<'_, S>,
-) -> Result<(), StorageError> {
-    memory.push_char(out, '\n')?;
+) -> Result<(), WriteError> {
+    append(out, "\n", maximum, memory)?;
     for _ in 0..depth {
-        memory.push_str(out, unit)?;
+        append(out, unit, maximum, memory)?;
     }
     Ok(())
 }
@@ -65,24 +131,29 @@ fn write_value<'v, S: Admission + ?Sized>(
     out: &mut String,
     value: &'v Value,
     escapes: JsonEscapes,
+    maximum: Option<u64>,
     frames: &mut Vec<Frame<'v>>,
     memory: &mut Memory<'_, S>,
-) -> Result<(), StorageError> {
+) -> Result<(), WriteError> {
     match value {
-        Value::Null => memory.push_str(out, "null"),
-        Value::Bool(true) => memory.push_str(out, "true"),
-        Value::Bool(false) => memory.push_str(out, "false"),
-        Value::Number(number) => memory.push_str(out, number.lexeme()),
-        Value::String(text) => push_string_with_memory(out, text, escapes, memory),
-        Value::Array(items) if items.is_empty() => memory.push_str(out, "[]"),
-        Value::Object(object) if object.is_empty() => memory.push_str(out, "{}"),
+        Value::Null => append(out, "null", maximum, memory),
+        Value::Bool(true) => append(out, "true", maximum, memory),
+        Value::Bool(false) => append(out, "false", maximum, memory),
+        Value::Number(number) => append(out, number.lexeme(), maximum, memory),
+        Value::String(text) => string(out, text, escapes, maximum, memory),
+        Value::Array(items) if items.is_empty() => append(out, "[]", maximum, memory),
+        Value::Object(object) if object.is_empty() => append(out, "{}", maximum, memory),
         Value::Array(items) => {
-            memory.push_char(out, '[')?;
-            memory.push(frames, Frame::Array(items.iter(), false))
+            append(out, "[", maximum, memory)?;
+            memory
+                .push(frames, Frame::Array(items.iter(), false))
+                .map_err(Into::into)
         }
         Value::Object(object) => {
-            memory.push_char(out, '{')?;
-            memory.push(frames, Frame::Object(object.members().iter(), false))
+            append(out, "{", maximum, memory)?;
+            memory
+                .push(frames, Frame::Object(object.members().iter(), false))
+                .map_err(Into::into)
         }
     }
 }
@@ -110,13 +181,41 @@ pub fn write_into_with_memory<S: Admission + ?Sized>(
     format: Format<'_>,
     memory: &mut Memory<'_, S>,
 ) -> Result<(), StorageError> {
+    write_body(out, value, format, None, memory).map_err(|error| match error {
+        WriteError::Storage(cause) => cause,
+        // No byte ceiling is installed, so append cannot construct this arm.
+        WriteError::Bytes { .. } => unreachable!("unbounded writer has no byte refusal"),
+    })
+}
+
+/// Append with a separate logical ceiling on the destination's total UTF-8 bytes.
+/// Each append is refused before growth; partial output keeps its original grant.
+/// # Errors
+/// Returns the byte refusal or original native storage failure.
+pub fn write_into_bounded_with_memory<S: Admission + ?Sized>(
+    out: &mut String,
+    value: &Value,
+    format: Format<'_>,
+    max_bytes: u64,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), WriteError> {
+    write_body(out, value, format, Some(max_bytes), memory)
+}
+
+fn write_body<S: Admission + ?Sized>(
+    out: &mut String,
+    value: &Value,
+    format: Format<'_>,
+    maximum: Option<u64>,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), WriteError> {
     let baseline = memory.admitted_bytes();
     let output_capacity = out.capacity();
     let result = (|| {
         let separator = if format.indent.is_some() { ": " } else { ":" };
         let escapes = format.escapes;
         let mut frames: Vec<Frame<'_>> = Vec::new();
-        write_value(out, value, escapes, &mut frames, memory)?;
+        write_value(out, value, escapes, maximum, &mut frames, memory)?;
         loop {
             let depth = frames.len();
             let Some(top) = frames.last_mut() else { break };
@@ -135,24 +234,24 @@ pub fn write_into_with_memory<S: Admission + ?Sized>(
             let Some((name, item)) = next else {
                 frames.pop();
                 if let Some(unit) = format.indent {
-                    line_break(out, unit, depth - 1, memory)?;
+                    line_break(out, unit, depth - 1, maximum, memory)?;
                 }
-                memory.push_char(out, close)?;
+                character(out, close, maximum, memory)?;
                 continue;
             };
             if comma {
-                memory.push_char(out, ',')?;
+                append(out, ",", maximum, memory)?;
             }
             if let Some(unit) = format.indent {
-                line_break(out, unit, depth, memory)?;
+                line_break(out, unit, depth, maximum, memory)?;
             }
             if let Some(name) = name {
-                push_string_with_memory(out, name, escapes, memory)?;
-                memory.push_str(out, separator)?;
+                string(out, name, escapes, maximum, memory)?;
+                append(out, separator, maximum, memory)?;
             }
-            write_value(out, item, escapes, &mut frames, memory)?;
+            write_value(out, item, escapes, maximum, &mut frames, memory)?;
         }
-        memory.release_vec(frames)
+        memory.release_vec(frames).map_err(WriteError::from)
     })();
     if result.is_err() {
         // The closure's original frame array is already destroyed; out survives.
@@ -179,6 +278,23 @@ pub fn write_with_memory<S: Admission + ?Sized>(
     memory.scope(|memory| {
         let mut out = String::new();
         write_into_with_memory(&mut out, value, format, memory)?;
+        Ok(out)
+    })
+}
+
+/// Construct JSON under independent serialized-byte and original storage authority.
+/// Failed output is destroyed before its original grant is refunded.
+/// # Errors
+/// Returns the byte refusal or original native storage failure.
+pub fn write_bounded_with_memory<S: Admission + ?Sized>(
+    value: &Value,
+    format: Format<'_>,
+    max_bytes: u64,
+    memory: &mut Memory<'_, S>,
+) -> Result<String, WriteError> {
+    memory.try_scope(|memory| {
+        let mut out = String::new();
+        write_into_bounded_with_memory(&mut out, value, format, max_bytes, memory)?;
         Ok(out)
     })
 }

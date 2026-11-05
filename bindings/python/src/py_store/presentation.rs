@@ -90,6 +90,28 @@ pub(crate) fn value_error(message: String, diagnostic: &RdfDiagnostic) -> PyErr 
     })
 }
 
+/// Preserve the existing diagnostic presentation and original native cause fields.
+pub(crate) fn native_error(py: Python<'_>, diagnostic: &RdfDiagnostic) -> PyErr {
+    let refused = value_error(diagnostic.to_string(), diagnostic);
+    let attach = || -> PyResult<()> {
+        if let Some(cause) = diagnostic.native_cause() {
+            let fields = crate::py_native_fields::inspect(py, cause)?;
+            let json = purrdf_validate::native_error::to_json(cause).map_err(|failure| {
+                pyo3::exceptions::PyRuntimeError::new_err(failure.to_string())
+            })?;
+            refused.value(py).setattr("native_cause", fields)?;
+            refused
+                .value(py)
+                .setattr("native_cause_json", json.to_string())?;
+        }
+        Ok(())
+    };
+    match attach() {
+        Ok(()) => refused,
+        Err(failure) => failure,
+    }
+}
+
 /// The `ValueError` reading `message` for a native XPath resource refusal, identified by
 /// its resource's stable `code` (`xpath-pattern-bytes`, `xpath-match-steps`, ...): that
 /// code is its `message_id`, and its `presentation` is `{"message_id": code,

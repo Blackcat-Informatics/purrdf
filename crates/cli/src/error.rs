@@ -116,6 +116,13 @@ impl CliOutcome {
 /// A CLI-level failure, carrying its rendered message and its exit classification.
 #[derive(Debug)]
 pub enum CliError {
+    /// Original request/source acquisition refusal before document parsing.
+    DocumentInput {
+        /// File path or - for standard input.
+        path: String,
+        /// Original I/O, byte limit or physical storage refusal.
+        cause: crate::source::RawReadError,
+    },
     /// Original source-carrier boundary, acquisition or RDF refusal.
     YamlSource(Box<crate::YamlSourceFailure>),
     /// Original RDF parse or serialization diagnostic and native cause.
@@ -201,7 +208,7 @@ impl CliError {
             | Self::GlobSetMatch(_)
             | Self::GlobRdf(_)
             | Self::GlobRdfStorage(_) => 1,
-            Self::YamlSource(_) | Self::Diagnostic(_) => 1,
+            Self::YamlSource(_) | Self::Diagnostic(_) | Self::DocumentInput { .. } => 1,
             Self::Fingerprint(_) => 1,
             Self::DownstreamClosed => 0,
         }
@@ -213,6 +220,7 @@ purrdf_lex::variant_from!(CliError { WordId(crate::WordIdFailure) via Box::new }
 impl fmt::Display for CliError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::DocumentInput { path, cause } => write!(f, "{path}: {cause}"),
             Self::YamlSource(error) => error.fmt(f),
             Self::Diagnostic(error) => error.fmt(f),
             Self::OutputIo(error) => error.fmt(f),
@@ -260,6 +268,7 @@ impl fmt::Display for CliError {
 impl std::error::Error for CliError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::DocumentInput { cause, .. } => Some(cause),
             Self::YamlSource(error) => Some(&**error),
             Self::Diagnostic(error) => Some(error),
             Self::OutputIo(error) => Some(error),
