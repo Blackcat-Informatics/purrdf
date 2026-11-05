@@ -2,10 +2,111 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Scalar and physical-line authoring retain their distinct interpretations.
+use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
 use purrdf_markdown::syntax::AuthoringLinkForm;
 use purrdf_markdown::{
     CodeSpanLimits, SyntaxError, SyntaxLimits, authoring, replace_code_spans, syntax,
 };
+
+#[global_allocator]
+static ALLOCATOR: CountingAllocator = CountingAllocator;
+
+#[test]
+fn long_headings_do_not_amplify_authoring_peak_storage() {
+    use purrdf_markdown::syntax::{
+        AuthoringComment, AuthoringHeading, AuthoringLine, AuthoringLink, Block, ContentLine,
+        Inline, Link,
+    };
+    use std::mem::size_of;
+
+    const DOCUMENT_BYTES: usize = 1024 * 1024;
+    const LONG_HEADING: usize = 60 * 1024;
+    const ALLOWANCE: usize = 64 * 1024;
+
+    fn document(heading_bytes: usize, unit: &str) -> String {
+        let mut text = String::with_capacity(DOCUMENT_BYTES);
+        text.push_str("## ");
+        text.push_str(&"h".repeat(heading_bytes));
+        text.push('\n');
+        let units = (DOCUMENT_BYTES - LONG_HEADING - 8) / unit.len();
+        for _ in 0..units {
+            text.push_str(unit);
+        }
+        text
+    }
+
+    fn allocation_limits(n: usize) -> SyntaxLimits {
+        // Finite diagnostic grants derived from the native vector/input families;
+        // they admit storage without preallocating the declared ceiling.
+        let m = n + 2;
+        let depth = 64usize;
+        let word = size_of::<usize>();
+        let models = size_of::<ContentLine>()
+            + size_of::<Block>()
+            + size_of::<Inline>()
+            + size_of::<AuthoringLine<'_>>()
+            + size_of::<AuthoringHeading<'_>>()
+            + size_of::<AuthoringComment>()
+            + 4 * size_of::<AuthoringLink<'_>>()
+            + size_of::<Link<'_>>()
+            + size_of::<bool>();
+        let auxiliary_bytes = 3 * (m + 4) * models
+            + 15 * ((m + 8) + 2 * word * (m + 4))
+            + 3 * (m + 4) * (2 * word)
+            + 3 * (depth + 4) * (10 * word)
+            + 234 * m;
+        let work = 16 * (m as u64) * (m as u64)
+            + (((depth + 1) * (depth + 1) + depth + 1 + 512 + 3 * usize::BITS as usize) * m) as u64;
+        SyntaxLimits {
+            source_bytes: DOCUMENT_BYTES,
+            auxiliary_bytes,
+            work,
+            containers: depth,
+            nesting: m,
+            link_part_bytes: 4096,
+        }
+    }
+
+    fn peak(source: &str, heading_bytes: usize, physical_lines: usize) -> usize {
+        let limits = allocation_limits(source.len());
+        let window = CurrentThreadWindow::open();
+        let model = authoring(source, limits).expect("native admitted authoring model");
+        let measured = window.close();
+        std::hint::black_box(&model);
+        assert_eq!(model.lines().len(), physical_lines);
+        assert_eq!(model.headings().len(), 1);
+        let heading = &model.headings()[0];
+        assert_eq!(heading.level, 2);
+        assert_eq!(heading.text.len(), heading_bytes);
+        assert_eq!(model.spelling(heading.title), &source[3..3 + heading_bytes]);
+        assert_eq!(model.spelling(model.lines()[0].newline), "\n");
+        drop(model);
+        usize::try_from(measured.peak_working_bytes).expect("nonnegative peak fits usize")
+    }
+
+    let mut admitted = true;
+    for unit in ["some prose text\n", "> [!PROPOSED change:x]\n> t\n"] {
+        let long = document(LONG_HEADING, unit);
+        let short = document(1, unit);
+        assert_eq!(long.len(), 1_048_564);
+        assert_eq!(short.len(), 987_125);
+        let units = (DOCUMENT_BYTES - LONG_HEADING - 8) / unit.len();
+        let physical_lines = 1 + units * unit.bytes().filter(|&byte| byte == b'\n').count();
+        let short_peak = peak(&short, 1, physical_lines);
+        let long_peak = peak(&long, LONG_HEADING, physical_lines);
+        let allowed = short_peak + 4 * LONG_HEADING + ALLOWANCE;
+        println!(
+            "unit={unit:?} long_bytes={} short_bytes={} peak_long={long_peak} peak_short={short_peak} allowed={allowed}",
+            long.len(),
+            short.len(),
+        );
+        admitted &= short_peak > 0 && long_peak > 0 && long_peak <= allowed;
+    }
+    assert!(
+        admitted,
+        "long heading exceeds the unchanged peak allowance"
+    );
+}
 
 fn limits() -> SyntaxLimits {
     SyntaxLimits {

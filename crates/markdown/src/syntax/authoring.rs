@@ -501,18 +501,29 @@ pub fn authoring(source: &str, limits: SyntaxLimits) -> Result<AuthoringDocument
         if blank {
             flush_html(&result.syntax, &mut html, &mut result.links, &mut budget)?;
         } else {
-            append(
-                &mut html,
-                &view.text,
-                (0..view.text.len()).map(|i| (view.map[i], view.ends[i])),
-                &mut budget,
-            )?;
-            append(
-                &mut html,
-                "\n",
-                [(line.newline.start as usize, line.newline.end as usize)],
-                &mut budget,
-            )?;
+            // The HTML reader has no tag state before a literal '<'. Retain the
+            // whole first candidate line and every continuation until its usual
+            // blank/fence boundary, preserving multiline values and source maps.
+            let retain_html = if html.text.is_empty() {
+                budget.tick(line.source.start as usize, view.text.len())?;
+                purrdf_lex::scan::find_byte(view.text.as_bytes(), b'<').is_some()
+            } else {
+                true
+            };
+            if retain_html {
+                append(
+                    &mut html,
+                    &view.text,
+                    (0..view.text.len()).map(|i| (view.map[i], view.ends[i])),
+                    &mut budget,
+                )?;
+                append(
+                    &mut html,
+                    "\n",
+                    [(line.newline.start as usize, line.newline.end as usize)],
+                    &mut budget,
+                )?;
+            }
             inline::authoring_definition(&result.syntax, view, &mut result.links, &mut budget)?;
             let mut from = 0;
             loop {

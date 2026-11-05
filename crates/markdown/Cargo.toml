@@ -37,6 +37,7 @@ purrdf-hash.workspace = true
 purrdf-lex.workspace = true
 
 [dev-dependencies]
+purrdf-alloc-probe.workspace = true
 # The Turtle parser: every emitted claim must parse and canonicalize.
 purrdf-rdf.workspace = true
 purrdf-testkit.workspace = true
