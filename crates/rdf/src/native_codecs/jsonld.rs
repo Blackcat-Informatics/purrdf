@@ -20,7 +20,10 @@ pub mod context;
 mod derived;
 mod expand;
 pub(super) mod yaml;
-pub use yaml::{YamlLdOptions, parse_yamlld_with_options, yamlld_to_jsonld_with_options};
+pub use yaml::{
+    YamlLdOptions, parse_yamlld_with_context, parse_yamlld_with_options,
+    yamlld_to_jsonld_with_options,
+};
 
 pub use context::{
     CompiledJsonLdContext, JSON_LD_SERIALIZE_OPTIONS_VERSION, JsonLdContainer, JsonLdContextLimits,
@@ -1874,7 +1877,7 @@ pub fn parse_jsonld_with_context(
 
 /// Expand a parsed JSON-LD value under `context` and lower it into the frozen IR.
 ///
-/// The single expansion body both public parse entry points and the codec seam share, so
+/// The single expansion body the public parse entry points and codec seam share, so
 /// the base-reporting path cannot expand a document differently from the base-less one.
 fn expand_to_dataset(
     value: Value,

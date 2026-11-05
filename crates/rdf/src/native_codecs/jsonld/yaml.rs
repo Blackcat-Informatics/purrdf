@@ -3,7 +3,7 @@
 
 //! The bytes-to-Basic-value adapter shared by every native YAML-LD parse path.
 
-use super::{RdfDataset, RdfDiagnostic};
+use super::{CompiledJsonLdContext, RdfDataset, RdfDiagnostic};
 use purrdf_lex::{
     json::Value,
     yaml::{
@@ -80,6 +80,21 @@ pub fn parse_yamlld_with_options(
 ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     let mut scope = crate::native_codecs::parse::base_scope_for(base)?;
     parse_into_scope(bytes, &mut scope, options)
+}
+
+/// Parse YAML-LD Basic with a caller-owned compiled active context.
+///
+/// The context supplies initial terms, the document base and immutable offline
+/// context-IRI/import lookup. No network or filesystem lookup is attempted.
+/// Options retain the same native admission bounds and first/all selection.
+/// # Errors
+/// Returns the original YAML profile, admission or JSON-LD diagnostic.
+pub fn parse_yamlld_with_context(
+    bytes: &[u8],
+    context: &CompiledJsonLdContext,
+    options: &YamlLdOptions,
+) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+    super::expand_to_dataset(basic_value(bytes, options)?, context)
 }
 
 pub(in crate::native_codecs) fn parse_into_scope(
