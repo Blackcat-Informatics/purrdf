@@ -1682,3 +1682,207 @@ WHERE {{ $this ex:n ?n . {bound} BIND (?n + 1 AS ?m)
     assert_eq!(code(&completes), 0, "{}", stderr(&completes));
     assert_eq!(stdout(&completes).lines().count(), 3 * 999);
 }
+
+/// Both rule frontends consume the selected primary YAML documents and preflight controls.
+#[test]
+fn configured_yamlld_input_reaches_rule_data() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let data = write_file(
+        dir.path(),
+        "input.yamlld",
+        "'@id': http://example.org/ns#first\nhttp://example.org/ns#p: one\n---\n'@id': http://example.org/ns#second\nhttp://example.org/ns#p: two\n",
+    );
+    let shapes = shapes_file(
+        dir.path(),
+        "ex:S a sh:NodeShape ; sh:targetSubjectsOf ex:p ; sh:rule [ a sh:TripleRule ; sh:subject sh:this ; sh:predicate ex:derived ; sh:object ex:seen ] .\n",
+    );
+    let srl = write_file(
+        dir.path(),
+        "rules.srl",
+        "PREFIX ex: <http://example.org/ns#>\nRULE { ?s ex:derived ex:seen } WHERE { ?s ex:p ?o }\n",
+    );
+    let all = write_file(
+        dir.path(),
+        "all.json",
+        r#"{"version":1,"yaml_ld":{"extract_all_scripts":true}}"#,
+    );
+    for (flag, source) in [("--shapes", &shapes), ("--srl", &srl)] {
+        for (controls, count) in [(None, 1), (Some(all.as_str()), 2)] {
+            let mut args = vec!["rules", flag, source, "--to", "ntriples"];
+            if let Some(controls) = controls {
+                args.extend(["--yamlld-input-options", controls]);
+            }
+            args.push(&data);
+            let out = run(&args);
+            assert_eq!(code(&out), 0, "{}", stderr(&out));
+            let body = stdout(&out);
+            assert_eq!(body.lines().count(), count, "{body}");
+            assert!(body.contains("<http://example.org/ns#first> <http://example.org/ns#derived> <http://example.org/ns#seen> ."), "{body}");
+            assert_eq!(body.contains("<http://example.org/ns#second>"), count == 2);
+        }
+    }
+    let missing = dir.path().join("missing.yamlld");
+    let missing = missing.to_str().unwrap();
+    let missing_srl = dir.path().join("missing.srl");
+    let missing_srl = missing_srl.to_str().unwrap();
+    let check = run(&[
+        "rules",
+        "--srl",
+        missing_srl,
+        "--check",
+        "--yamlld-input-options",
+        &all,
+    ]);
+    assert_eq!(code(&check), 2, "{}", stderr(&check));
+    assert!(stderr(&check).contains("--yamlld-input-options"));
+    let output = write_file(dir.path(), "inference.nt", "unchanged inference");
+    let report = write_file(dir.path(), "proof.txt", "unchanged proof");
+    let explain = format!("--explain={report}");
+    let limited = write_file(
+        dir.path(),
+        "limited.json",
+        r#"{"version":1,"yaml_ld":{"syntax":{"max_input_bytes":0}}}"#,
+    );
+    let malformed = write_file(dir.path(), "malformed.json", "{");
+    let import = format!("https://example.org/import={missing_srl}");
+    for (controls, data, source, imports, diagnostic) in [
+        (
+            limited.as_str(),
+            data.as_str(),
+            srl.as_str(),
+            false,
+            "native-yaml-input-limit",
+        ),
+        (
+            malformed.as_str(),
+            missing,
+            missing_srl,
+            true,
+            "rdf-input-options",
+        ),
+    ] {
+        let mut args = vec![
+            "rules",
+            "--srl",
+            source,
+            "--to",
+            "ntriples",
+            "--yamlld-input-options",
+            controls,
+            &explain,
+        ];
+        if imports {
+            args.extend(["--import", &import]);
+        }
+        args.extend([data, &output]);
+        let refused = run(&args);
+        assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+        assert!(
+            stderr(&refused).contains(diagnostic),
+            "{}",
+            stderr(&refused)
+        );
+        assert_eq!(stdout(&refused), "");
+        assert_eq!(
+            std::fs::read_to_string(&output).unwrap(),
+            "unchanged inference"
+        );
+        assert_eq!(std::fs::read_to_string(&report).unwrap(), "unchanged proof");
+    }
+}
+
+/// A path expression observes both selected values for one focus, before auxiliary reads.
+#[test]
+fn configured_yamlld_input_reaches_node_expression_data() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let data = write_file(
+        dir.path(),
+        "input.yamlld",
+        "'@id': http://example.org/ns#focus\nhttp://example.org/ns#p: one\n---\n'@id': http://example.org/ns#focus\nhttp://example.org/ns#p: two\n",
+    );
+    let shapes = shapes_file(dir.path(), "ex:Path sh:path ex:p .\n");
+    let all = write_file(
+        dir.path(),
+        "all.json",
+        r#"{"version":1,"yaml_ld":{"extract_all_scripts":true}}"#,
+    );
+    for (controls, count) in [(None, 1), (Some(all.as_str()), 2)] {
+        let mut args = vec![
+            "node-expr",
+            "--shapes",
+            &shapes,
+            "--expr",
+            "http://example.org/ns#Path",
+            "--focus",
+            "http://example.org/ns#focus",
+        ];
+        if let Some(controls) = controls {
+            args.extend(["--yamlld-input-options", controls]);
+        }
+        args.push(&data);
+        let out = run(&args);
+        assert_eq!(code(&out), 0, "{}", stderr(&out));
+        let body = stdout(&out);
+        assert_eq!(body.lines().count(), count, "{body}");
+        assert!(body.lines().any(|line| line == "\"one\""), "{body}");
+        assert_eq!(body.lines().any(|line| line == "\"two\""), count == 2);
+    }
+    let output = write_file(dir.path(), "values.txt", "unchanged values");
+    let limited = write_file(
+        dir.path(),
+        "limited.json",
+        r#"{"version":1,"yaml_ld":{"syntax":{"max_input_bytes":0}}}"#,
+    );
+    let malformed = write_file(dir.path(), "malformed.json", "{");
+    let missing_data = dir.path().join("missing.yamlld");
+    let missing_data = missing_data.to_str().unwrap();
+    let missing_shapes = dir.path().join("missing.ttl");
+    let missing_shapes = missing_shapes.to_str().unwrap();
+    let missing_expr = dir.path().join("expression.ttl");
+    let missing_expr = missing_expr.to_str().unwrap();
+    let import = format!("https://example.org/import={missing_shapes}");
+    for (controls, data, shapes, expression_file, diagnostic) in [
+        (
+            limited.as_str(),
+            data.as_str(),
+            shapes.as_str(),
+            false,
+            "native-yaml-input-limit",
+        ),
+        (
+            malformed.as_str(),
+            missing_data,
+            missing_shapes,
+            true,
+            "rdf-input-options",
+        ),
+    ] {
+        let mut args = vec![
+            "node-expr",
+            "--shapes",
+            shapes,
+            "--focus",
+            "http://example.org/ns#focus",
+            "--yamlld-input-options",
+            controls,
+        ];
+        if expression_file {
+            args.extend(["--expr-turtle-file", missing_expr, "--import", &import]);
+        } else {
+            args.extend(["--expr", "http://example.org/ns#Path"]);
+        }
+        args.extend([data, &output]);
+        let refused = run(&args);
+        assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+        assert!(
+            stderr(&refused).contains(diagnostic),
+            "{}",
+            stderr(&refused)
+        );
+        assert_eq!(stdout(&refused), "");
+        assert_eq!(
+            std::fs::read_to_string(&output).unwrap(),
+            "unchanged values"
+        );
+    }
+}
