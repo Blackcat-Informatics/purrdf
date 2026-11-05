@@ -355,6 +355,21 @@ struct InverseSelection {
 
 type InverseContext = BTreeMap<String, BTreeMap<String, InverseSelection>>;
 
+/// Explicit syntax and admission controls for an offline context document.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JsonLdContextFormat {
+    /// Strict JSON with the fixed context decoding limits.
+    Json,
+    /// YAML-LD Basic with caller-supplied native selection and admission controls.
+    Yaml(super::YamlLdOptions),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ContextDocument {
+    bytes: Arc<[u8]>,
+    format: JsonLdContextFormat,
+}
+
 /// Immutable collection of caller-supplied context documents keyed by absolute IRI.
 ///
 /// Construction validates identifiers and fixed resource ceilings. Compilation can
@@ -362,7 +377,7 @@ type InverseContext = BTreeMap<String, BTreeMap<String, InverseSelection>>;
 /// exists.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct JsonLdContextRegistry {
-    documents: Arc<BTreeMap<String, Arc<[u8]>>>,
+    documents: Arc<BTreeMap<String, ContextDocument>>,
     total_bytes: usize,
 }
 
@@ -377,6 +392,19 @@ impl JsonLdContextRegistry {
         Self::new_with_limits(documents, JsonLdContextLimits::default())
     }
 
+    /// Construct a mixed immutable registry with an explicit format per document.
+    ///
+    /// Original bytes count against the same fixed registry ceilings as JSON.
+    /// Documents are decoded when used; no format inference or external lookup occurs.
+    pub fn new_with_formats<I, K, B>(documents: I) -> Result<Self, RdfDiagnostic>
+    where
+        I: IntoIterator<Item = (K, B, JsonLdContextFormat)>,
+        K: Into<String>,
+        B: Into<Vec<u8>>,
+    {
+        Self::retain_documents(documents, JsonLdContextLimits::default())
+    }
+
     fn new_with_limits<I, K, B>(
         documents: I,
         limits: JsonLdContextLimits,
@@ -386,9 +414,26 @@ impl JsonLdContextRegistry {
         K: Into<String>,
         B: Into<Vec<u8>>,
     {
+        Self::retain_documents(
+            documents
+                .into_iter()
+                .map(|(iri, bytes)| (iri, bytes, JsonLdContextFormat::Json)),
+            limits,
+        )
+    }
+
+    fn retain_documents<I, K, B>(
+        documents: I,
+        limits: JsonLdContextLimits,
+    ) -> Result<Self, RdfDiagnostic>
+    where
+        I: IntoIterator<Item = (K, B, JsonLdContextFormat)>,
+        K: Into<String>,
+        B: Into<Vec<u8>>,
+    {
         let mut retained = BTreeMap::new();
         let mut total_bytes = 0usize;
-        for (iri, bytes) in documents {
+        for (iri, bytes, format) in documents {
             if retained.len() == limits.max_registry_documents() {
                 return Err(context_limit(format!(
                     "offline context registry exceeds {} documents",
@@ -414,7 +459,11 @@ impl JsonLdContextRegistry {
                     limits.max_registry_bytes()
                 )));
             }
-            if retained.insert(iri.clone(), Arc::from(bytes)).is_some() {
+            let document = ContextDocument {
+                bytes: Arc::from(bytes),
+                format,
+            };
+            if retained.insert(iri.clone(), document).is_some() {
                 return Err(context_error(format!(
                     "duplicate offline context document IRI `{iri}`"
                 )));
@@ -436,13 +485,13 @@ impl JsonLdContextRegistry {
         self.documents.is_empty()
     }
 
-    /// Aggregate number of retained JSON bytes.
+    /// Aggregate number of retained original document bytes, in either format.
     pub const fn total_bytes(&self) -> usize {
         self.total_bytes
     }
 
-    fn get(&self, iri: &str) -> Option<&[u8]> {
-        self.documents.get(iri).map(AsRef::as_ref)
+    fn get(&self, iri: &str) -> Option<&ContextDocument> {
+        self.documents.get(iri)
     }
 }
 

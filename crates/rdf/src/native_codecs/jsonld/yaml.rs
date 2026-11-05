@@ -105,7 +105,7 @@ pub(in crate::native_codecs) fn parse_into_scope(
     super::value_into_scope(basic_value(bytes, options)?, base)
 }
 
-fn basic_value(bytes: &[u8], options: &YamlLdOptions) -> Result<Value, RdfDiagnostic> {
+pub(super) fn basic_value(bytes: &[u8], options: &YamlLdOptions) -> Result<Value, RdfDiagnostic> {
     let limit = options.syntax.syntax.max_input_bytes;
     if bytes.len() > limit {
         let mut diagnostic =

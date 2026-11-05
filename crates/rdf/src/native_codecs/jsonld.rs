@@ -26,10 +26,10 @@ pub use yaml::{
 };
 
 pub use context::{
-    CompiledJsonLdContext, JSON_LD_SERIALIZE_OPTIONS_VERSION, JsonLdContainer, JsonLdContextLimits,
-    JsonLdContextRegistry, JsonLdDirection, JsonLdNullable, JsonLdSerializeMode,
-    JsonLdSerializeOptions, JsonLdTermDefinition, JsonLdTermSelection, JsonLdTermSelectionKind,
-    JsonLdTypeMapping,
+    CompiledJsonLdContext, JSON_LD_SERIALIZE_OPTIONS_VERSION, JsonLdContainer, JsonLdContextFormat,
+    JsonLdContextLimits, JsonLdContextRegistry, JsonLdDirection, JsonLdNullable,
+    JsonLdSerializeMode, JsonLdSerializeOptions, JsonLdTermDefinition, JsonLdTermSelection,
+    JsonLdTermSelectionKind, JsonLdTypeMapping,
 };
 
 use purrdf_core::sink::TextSink;

@@ -478,11 +478,12 @@ impl Compiler<'_> {
         if let Some(document) = self.remote_cache.get(iri) {
             return Ok(Arc::clone(document));
         }
-        let bytes = self.registry.get(iri).ok_or_else(|| {
+        let registered = self.registry.get(iri).ok_or_else(|| {
             context_error(format!(
                 "offline context registry has no document for `{iri}` ({purpose})"
             ))
         })?;
+        let bytes = registered.bytes.as_ref();
         self.budget.loaded_bytes = self
             .budget
             .loaded_bytes
@@ -494,11 +495,16 @@ impl Compiler<'_> {
                 self.limits.max_registry_bytes()
             )));
         }
-        let document = super::parse_strict_json(
-            bytes,
-            self.limits.strict_json(),
-            &format!("offline {purpose} document `{iri}`"),
-        )?;
+        let document = match registered.format {
+            super::JsonLdContextFormat::Json => super::parse_strict_json(
+                bytes,
+                self.limits.strict_json(),
+                &format!("offline {purpose} document `{iri}`"),
+            )?,
+            super::JsonLdContextFormat::Yaml(options) => {
+                super::super::yaml::basic_value(bytes, &options)?
+            }
+        };
         self.charge_value(&document, depth)?;
         let document = Arc::new(document);
         self.remote_cache

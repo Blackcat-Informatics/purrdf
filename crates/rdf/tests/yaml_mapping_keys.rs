@@ -17,11 +17,87 @@
 //!   on the text (`1: a` with `"1": b` repeats a key).
 
 use purrdf_rdf::native_codecs::jsonld::{
-    CompiledJsonLdContext, JsonLdContextRegistry, YamlLdOptions, parse_yamlld_with_context,
-    parse_yamlld_with_options, yamlld_to_jsonld, yamlld_to_jsonld_with_options,
+    CompiledJsonLdContext, JsonLdContextFormat, JsonLdContextRegistry, YamlLdOptions,
+    parse_yamlld_with_context, parse_yamlld_with_options, yamlld_to_jsonld,
+    yamlld_to_jsonld_with_options,
 };
 use purrdf_rdf::native_codecs::parse_dataset;
 use purrdf_rdf::{DatasetSink, OkfBundle, OkfConfig, lift_okf_bundle};
+
+#[test]
+fn mixed_context_registry_reuses_yaml_admission_and_shared_resolution() {
+    let main = concat!(
+        "'@context':\n",
+        "  '@import': shared.jsonld\n",
+        "  child:\n",
+        "    '@id': https://example.org/child\n",
+        "    '@context': scoped.yamlld\n",
+    );
+    let imported = br#"{"@context":{"p":{"@id":"https://example.org/p","@type":"@id"}}}"#;
+    let scoped = b"'@context': {q: 'https://example.org/q'}\n";
+    let source = concat!(
+        "'@context': contexts/main.yamlld\n",
+        "'@id': subject\n",
+        "p: object\n",
+        "child: {'@id': child, q: inside}\n",
+    );
+    let expected = parse_dataset(
+        concat!(
+            "<https://example.org/docs/subject> <https://example.org/p> <https://example.org/docs/object> .\n",
+            "<https://example.org/docs/subject> <https://example.org/child> <https://example.org/docs/child> .\n",
+            "<https://example.org/docs/child> <https://example.org/q> \"inside\" .\n",
+        )
+        .as_bytes(),
+        "application/n-quads",
+        None,
+    )
+    .unwrap();
+    for max_input_bytes in [main.len(), 0] {
+        let mut options = YamlLdOptions::DEFAULT;
+        options.syntax.syntax.max_input_bytes = max_input_bytes;
+        let registry = JsonLdContextRegistry::new_with_formats([
+            (
+                "https://example.org/docs/contexts/main.yamlld",
+                main.as_bytes(),
+                JsonLdContextFormat::Yaml(options),
+            ),
+            (
+                "https://example.org/docs/contexts/shared.jsonld",
+                imported.as_slice(),
+                JsonLdContextFormat::Json,
+            ),
+            (
+                "https://example.org/docs/contexts/scoped.yamlld",
+                scoped.as_slice(),
+                JsonLdContextFormat::Yaml(YamlLdOptions::DEFAULT),
+            ),
+        ])
+        .expect("mixed offline registry");
+        let context = CompiledJsonLdContext::compile_with_registry(
+            &purrdf_lex::json::Value::Null,
+            Some("https://example.org/docs/source.yamlld"),
+            &registry,
+        )
+        .unwrap();
+        let actual =
+            parse_yamlld_with_context(source.as_bytes(), &context, &YamlLdOptions::DEFAULT);
+        if max_input_bytes == 0 {
+            assert_eq!(actual.unwrap_err().code, "native-yaml-input-limit");
+        } else {
+            assert!(
+                purrdf_rdf::datasets_isomorphic(
+                    &actual.expect("relative YAML context, JSON import and YAML scoped context"),
+                    &expected,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        None
+                    )
+                )
+                .unwrap()
+            );
+        }
+    }
+}
 
 #[test]
 fn configured_yamlld_context_reaches_shared_expansion() {
