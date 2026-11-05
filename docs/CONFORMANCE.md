@@ -258,7 +258,13 @@ semantic construction; see [the codec documentation](book/src/concepts/codecs.md
 Configured semantic input controls are delivered through the shared boundary,
 foreign bindings and CLI reader roles documented in
 [YAML input options](YAML_INPUT_OPTIONS.md). Focused native host cases cover the
-CLI role forwarding and pre-acquisition refusals. The existing `convert_cli`
+CLI role forwarding and pre-acquisition refusals. Initial contexts and mixed
+offline registry documents compile at the shared boundary with the effective
+caller base. The native `configured_yamlld_input_context_preserves_rdf_base_and_admission`
+case checks configured RDF, base metadata, registry admission and native base
+compatibility. The `convert_cli::configured_yamlld_context_options_reach_retrieval_and_caller_bases`
+case checks the existing options-file route and refusal output atomicity.
+The existing `convert_cli`
 cases `expanded_jsonld_and_yamlld_cli_bytes_are_frozen` and
 `configured_jsonld_cli_modes_registry_yaml_and_errors_share_one_schema` pin
 expanded output bytes and compare configured JSON-LD/YAML-LD canonical datasets.

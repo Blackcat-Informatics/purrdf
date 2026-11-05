@@ -57,6 +57,17 @@ pub struct JsonLdContextLimits {
 }
 
 impl JsonLdContextLimits {
+    /// The fixed resource envelope shared by all public context compilation.
+    pub const DEFAULT: Self = Self {
+        context_bytes: DEFAULT_MAX_CONTEXT_BYTES,
+        registry_documents: DEFAULT_MAX_REGISTRY_DOCUMENTS,
+        registry_bytes: DEFAULT_MAX_REGISTRY_BYTES,
+        terms: DEFAULT_MAX_TERMS,
+        nesting: DEFAULT_MAX_NESTING,
+        expansion_work: DEFAULT_MAX_EXPANSION_WORK,
+        definition_complexity: DEFAULT_MAX_DEFINITION_COMPLEXITY,
+    };
+
     /// Maximum UTF-8 bytes in one supplied context or registry document.
     pub const fn max_context_bytes(self) -> usize {
         self.context_bytes
@@ -72,7 +83,7 @@ impl JsonLdContextLimits {
         self.registry_bytes
     }
 
-    /// Maximum UTF-8 bytes accepted by the shared serialization-options document.
+    /// Maximum UTF-8 bytes accepted by shared context-bearing options documents.
     ///
     /// The envelope may contain one local context, the full aggregate offline
     /// registry, and bounded registry keys/JSON structure.
@@ -121,15 +132,7 @@ impl JsonLdContextLimits {
 
 impl Default for JsonLdContextLimits {
     fn default() -> Self {
-        Self {
-            context_bytes: DEFAULT_MAX_CONTEXT_BYTES,
-            registry_documents: DEFAULT_MAX_REGISTRY_DOCUMENTS,
-            registry_bytes: DEFAULT_MAX_REGISTRY_BYTES,
-            terms: DEFAULT_MAX_TERMS,
-            nesting: DEFAULT_MAX_NESTING,
-            expansion_work: DEFAULT_MAX_EXPANSION_WORK,
-            definition_complexity: DEFAULT_MAX_DEFINITION_COMPLEXITY,
-        }
+        Self::DEFAULT
     }
 }
 
@@ -602,6 +605,10 @@ impl CompiledJsonLdContext {
     /// Active base IRI, when configured.
     pub fn base_iri(&self) -> Option<&str> {
         self.active.base_iri.as_deref()
+    }
+
+    pub(in crate::native_codecs) fn original_document_iri(&self) -> Option<&str> {
+        self.active.original_base_iri.as_deref()
     }
 
     /// Active vocabulary mapping, when configured.

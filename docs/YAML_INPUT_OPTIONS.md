@@ -1,7 +1,7 @@
 <!-- SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca> -->
 <!-- SPDX-License-Identifier: CC-BY-4.0 -->
 
-# YAML-LD Basic input options
+# YAML-LD input options
 
 The shared `purrdf_validate::rdf_input` boundary accepts original RDF bytes and
 optional JSON configuration. Without configuration, YAML-LD constructs the first
@@ -33,24 +33,79 @@ serialization controls are refused.
 }
 ```
 
-`version` and the `yaml_ld` object are required. Every nested field is optional;
-the example states all native defaults. `extract_all_scripts: true` constructs
+`version` and the `yaml_ld` object are required. Every Basic control is optional;
+the example states all native Basic defaults. `extract_all_scripts: true` constructs
 all documents through the same JSON-LD engine. Syntax limits cover the complete
 stream; projection limits cover retained syntax and selected construction.
 The YAML phase accounts remain those described in [conformance](CONFORMANCE.md).
 
 Limits use exact unsigned integer JSON lexemes. Fractional or exponent notation,
-negative numbers, null records, duplicate fields and unsupported versions fail
+negative numbers, null control records, duplicate fields and unsupported versions fail
 before RDF parsing. `max_occurrences`, `max_nodes` and `max_numeric_work` accept
 `0..=18446744073709551615`. All other numeric limits accept `0..=4294967295` on
 every host. Zero is an actual limit.
 
-Options decoding has separate bounds: 16,384 UTF-8 bytes, four simultaneously open
-JSON containers, 64 value occurrences, and 131,072 admitted native bytes for the
-JSON tree, parser buffers and strict-record metadata. Diagnostic transport and
+Options decoding has separate bounds derived from the native context envelope:
+10 MiB of UTF-8, 64 simultaneously open JSON containers and 262,144 value
+occurrences. A separate 128 MiB construction account covers JSON/record decoding,
+the retained initial value, pending registry text and its vector. Native registry
+construction of shared byte storage and the lookup map is outside that account,
+under its separate fixed native ceilings.
+This replaces the earlier flat-control envelope of 16 KiB, four containers,
+64 values and 128 KiB of construction storage. Diagnostic transport and
 the subsequent YAML syntax and projection accounts are separate. These controls
 do not claim a combined process-memory or end-to-end allocation ceiling.
 `max_serialization_bytes` is refused because direct RDF input does not serialize.
+
+The `yaml_ld` object also accepts independently optional `context` and `registry`:
+
+```json
+{
+  "version": 1,
+  "yaml_ld": {
+    "context": {"label": "https://example.org/label"},
+    "registry": [
+      {
+        "iri": "https://example.org/context.jsonld",
+        "format": "json",
+        "document": "{\"@context\":{\"p\":\"https://example.org/p\"}}"
+      },
+      {
+        "iri": "https://example.org/context.yamlld",
+        "format": "yaml",
+        "document": "'@context': {q: 'https://example.org/q'}\n",
+        "yaml_ld": {}
+      }
+    ]
+  }
+}
+```
+
+An absent initial context preserves default initialization; an explicit
+`context: null` supplies a JSON-LD context reset. A registry without an initial
+context supports references in the input document. Each registry record requires
+an absolute `iri`, explicit `json` or `yaml` format and original document text.
+YAML records require their own `yaml_ld` object, with the same Basic controls;
+JSON records refuse that field. Duplicate IRIs, null registries, unsupported
+formats and unknown fields are errors. Document text is decoded directly with
+the selected native decoder, without format inference or serialization.
+
+Compilation uses the effective caller base, including the CLI's retrieval IRI
+when no explicit base is supplied. There is no separate options document-IRI
+override. Registered IRIs supply the bases for relative context, import and
+scoped-context references; no network or filesystem context loading occurs.
+Native context limits still apply: 1 MiB per context document, 8 MiB aggregate
+registered bytes and 128 registered documents, plus compiler work and term
+ceilings. Context wrapper and import restrictions remain unchanged.
+
+Native `ParseOptions::yaml_ld_context` borrows a compiled context and uses default
+Basic controls when `yaml_ld` is absent. The context's original compilation
+document IRI must match the caller parse base; its active base may differ through
+an explicit `@base`. The shared parse outcome preserves Caller base provenance
+when unchanged, Enclosing provenance when a context changes it, and no base when
+explicitly cleared. Foreign input signatures and serialization context handles
+retain their existing form. These controls do not establish full upstream
+conformance.
 
 Python module `parse`, `Store.load`, `Store.bulk_load` and `MutableDataset.load`
 accept keyword-only `input_options` JSON text. Store loads retain their existing

@@ -284,6 +284,76 @@ fn yaml_source_exports_and_reconstructs_exact_bytes_with_explicit_bounds() {
 }
 
 #[test]
+fn configured_yamlld_context_options_reach_retrieval_and_caller_bases() {
+    let dir = purrdf_testkit::temp_dir!().unwrap();
+    let yaml = write_file(
+        dir.path(),
+        "input.yamlld",
+        "'@context': contexts/main.yamlld\n'@id': subject\np: object\n",
+    );
+    let retrieval = retrieval_iri(&yaml);
+    let context_iri = retrieval.replace("/input.yamlld", "/contexts/main.yamlld");
+    let config_text = format!(
+        r#"{{"version":1,"yaml_ld":{{"registry":[
+          {{"iri":"{context_iri}","format":"yaml","document":"'@context': {{p: {{'@id': 'https://example.org/p', '@type': '@id'}}}}","yaml_ld":{{}}}},
+          {{"iri":"https://caller.example/docs/contexts/main.yamlld","format":"yaml","document":"'@context': {{p: {{'@id': 'https://example.org/p', '@type': '@id'}}}}","yaml_ld":{{}}}}
+        ]}}}}"#
+    );
+    let config = write_file(dir.path(), "context-options.json", &config_text);
+    let output = path(dir.path(), "configured.nq");
+    for (base, subject, object) in [
+        (
+            None,
+            retrieval.replace("/input.yamlld", "/subject"),
+            retrieval.replace("/input.yamlld", "/object"),
+        ),
+        (
+            Some("https://caller.example/docs/source.yamlld"),
+            "https://caller.example/docs/subject".to_owned(),
+            "https://caller.example/docs/object".to_owned(),
+        ),
+    ] {
+        let mut args = vec!["convert", "--yamlld-input-options", config.as_str()];
+        if let Some(base) = base {
+            args.extend(["--base", base]);
+        }
+        args.extend([yaml.as_str(), output.as_str()]);
+        let converted = run(&args);
+        assert!(converted.status.success(), "{}", stderr(&converted));
+        assert_eq!(
+            std::fs::read_to_string(&output).unwrap(),
+            format!("<{subject}> <https://example.org/p> <{object}> .\n")
+        );
+    }
+    let refused_config = write_file(
+        dir.path(),
+        "context-refused.json",
+        &config_text.replace(
+            "\"yaml_ld\":{}",
+            "\"yaml_ld\":{\"syntax\":{\"max_input_bytes\":0}}",
+        ),
+    );
+    std::fs::write(&output, "preserve existing output\n").unwrap();
+    let refused = run(&[
+        "convert",
+        "--yamlld-input-options",
+        &refused_config,
+        &yaml,
+        &output,
+    ]);
+    assert!(!refused.status.success());
+    assert!(
+        stderr(&refused).contains("native-yaml-input-limit"),
+        "{}",
+        stderr(&refused)
+    );
+    assert_eq!(
+        std::fs::read_to_string(&output).unwrap(),
+        "preserve existing output\n"
+    );
+}
+
+#[test]
 fn configured_yamlld_input_reaches_convert_and_refuses_other_routes() {
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let yaml = write_file(

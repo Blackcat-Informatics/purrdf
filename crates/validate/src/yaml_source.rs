@@ -182,8 +182,14 @@ pub fn profile(bytes: &[u8]) -> Result<Profile, Error> {
         "yaml-source-profile",
         MAX_PROFILE_BYTES,
         MAX_PROFILE_ALLOCATION_BYTES,
+        purrdf_lex::json::Limits {
+            max_depth: 4,
+            max_values: 64,
+            max_string_bytes: MAX_PROFILE_BYTES,
+            unique_members: true,
+        },
         "YAML source profile document exceeds 16384 bytes",
-        |value, allocation| {
+        |value, allocation, _memory| {
             let mut fields =
                 Record::new_native(value, "YAML source profile object", Some(allocation))?;
             let version: u32 = fields.required_native("version")?;

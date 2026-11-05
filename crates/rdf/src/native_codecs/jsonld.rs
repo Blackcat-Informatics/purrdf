@@ -295,7 +295,7 @@ impl RdfCodec for YamlLdCodec {
         base: &mut purrdf_iri::BaseScope,
         _mode: LineParseMode,
     ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
-        yaml::parse_into_scope(text.as_bytes(), base, &YamlLdOptions::DEFAULT)
+        yaml::parse_into_scope(text.as_bytes(), base, &YamlLdOptions::DEFAULT, None)
     }
 
     fn serialize_into(
@@ -1828,18 +1828,31 @@ pub(super) fn parse_jsonld_into_scope(
     base: &mut purrdf_iri::BaseScope,
 ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     let value = context::parse_document(json_bytes)?;
-    value_into_scope(value, base)
+    value_into_scope(value, base, None)
 }
 
 fn value_into_scope(
     value: Value,
     base: &mut purrdf_iri::BaseScope,
+    configured: Option<&CompiledJsonLdContext>,
 ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
-    let context = CompiledJsonLdContext::compile(&Value::Object(Object::new()), scope_base(base))?;
-    let in_force = expand::document_base(&value, &context)?;
+    let default;
+    let context = if let Some(context) = configured {
+        if context.original_document_iri() != scope_base(base) {
+            return Err(RdfDiagnostic::error(
+                "yamlld-input-context-base",
+                "compiled YAML-LD context document IRI must match the caller parse base",
+            ));
+        }
+        context
+    } else {
+        default = CompiledJsonLdContext::compile(&Value::Object(Object::new()), scope_base(base))?;
+        &default
+    };
+    let in_force = expand::document_base(&value, context)?;
     // `value` is MOVED here: the base question is already answered, so the parsed
     // document need not outlive the expansion that consumes it.
-    let dataset = expand_to_dataset(value, &context)?;
+    let dataset = expand_to_dataset(value, context)?;
     // Only a document that MOVED the base rewrites the scope. When the two agree, the
     // base in force is still the caller's and its `BaseOrigin::Caller` provenance is the
     // truthful one; overwriting it would claim the document said something it did not.

@@ -1210,6 +1210,7 @@ mod tests {
             &ParseOptions {
                 track_source_spans: true,
                 yaml_ld: None,
+                yaml_ld_context: None,
             },
         )
         .expect("parse")
@@ -1254,6 +1255,7 @@ mod tests {
             &ParseOptions {
                 track_source_spans: true,
                 yaml_ld: None,
+                yaml_ld_context: None,
             },
         )
         .expect("parse")
@@ -1446,6 +1448,7 @@ mod tests {
             &ParseOptions {
                 track_source_spans: true,
                 yaml_ld: None,
+                yaml_ld_context: None,
             },
         )
         .expect("parse")
@@ -1505,6 +1508,7 @@ mod tests {
             &ParseOptions {
                 track_source_spans: true,
                 yaml_ld: None,
+                yaml_ld_context: None,
             },
         )
         .expect("parse")

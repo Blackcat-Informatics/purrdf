@@ -66,8 +66,13 @@ pub(crate) fn decode<T>(
     code: &str,
     maximum_bytes: usize,
     maximum_allocation: usize,
+    limits: json::Limits,
     oversized: &'static str,
-    decode: impl FnOnce(&Value, &dyn RecordAllocation) -> Result<T, DecodeError>,
+    decode: impl FnOnce(
+        &Value,
+        &dyn RecordAllocation,
+        &RefCell<Memory<'_, Ceiling>>,
+    ) -> Result<T, DecodeError>,
 ) -> Result<T, RdfDiagnostic> {
     if bytes.len() > maximum_bytes {
         return Err(failure(code, DecodeError::custom(oversized), None));
@@ -81,23 +86,14 @@ pub(crate) fn decode<T>(
     };
     let mut admission = Ceiling(maximum_allocation);
     let memory = RefCell::new(Memory::new(&mut admission));
-    let mut reader = json::Reader::from_slice(
-        bytes,
-        json::Limits {
-            max_depth: 4,
-            max_values: 64,
-            max_string_bytes: maximum_bytes,
-            unique_members: true,
-        },
-    )
-    .map_err(json_failure)?;
+    let mut reader = json::Reader::from_slice(bytes, limits).map_err(json_failure)?;
     let value = reader
         .read_value_with_memory(&mut memory.borrow_mut())
         .map_err(json_failure)?;
     reader
         .finish_with_memory(&mut memory.borrow_mut())
         .map_err(json_failure)?;
-    decode(&value, &RecordMemory::new(&memory)).map_err(|error| {
+    decode(&value, &RecordMemory::new(&memory), &memory).map_err(|error| {
         let storage = error.storage_error();
         failure(code, error, storage)
     })

@@ -211,11 +211,15 @@ impl SpanTable {
 
 /// Runtime options for [`parse_dataset_with`](crate::parse_dataset_with).
 #[derive(Debug, Default, Clone, Copy)]
-pub struct ParseOptions {
+pub struct ParseOptions<'a> {
     /// When true, `parse_dataset_with` returns a populated [`SpanTable`]. Opt-in
     /// because it costs memory and pins the sequential line pipeline; off by default
     /// so the hot path is untouched.
     pub track_source_spans: bool,
     /// Explicit YAML-LD Basic controls. Refused for every other input format.
     pub yaml_ld: Option<super::jsonld::YamlLdOptions>,
+    /// Initial YAML-LD context and offline registry. Its original compilation
+    /// document IRI must match the caller base; explicit context `@base` may differ.
+    /// Refused for other formats. Without Basic controls, native defaults apply.
+    pub yaml_ld_context: Option<&'a super::jsonld::CompiledJsonLdContext>,
 }

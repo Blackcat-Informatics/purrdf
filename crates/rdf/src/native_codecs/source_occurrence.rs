@@ -274,7 +274,7 @@ impl SourceOccurrence {
 /// ```
 /// use purrdf_rdf::{ParseOptions, SourceRole, parse_dataset_with};
 /// let parsed = parse_dataset_with(b"<urn:s> <urn:p> <urn:o> .", "text/turtle", None,
-///     &ParseOptions { track_source_spans: true, yaml_ld: None, })?;
+///     &ParseOptions { track_source_spans: true, yaml_ld: None, yaml_ld_context: None, })?;
 /// let source = parsed.spans.as_ref().expect("requested spans").source_occurrences();
 /// assert_eq!(source.iter().next().expect("subject").role(), SourceRole::Subject);
 /// # Ok::<(), purrdf_rdf::RdfDiagnostic>(())
