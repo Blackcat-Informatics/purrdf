@@ -196,6 +196,7 @@ fn bench_parse_nquads_span_tracking(c: &mut Bench) {
             let options = ParseOptions {
                 track_source_spans: false,
                 yaml_ld: None,
+                yaml_ld_context: None,
             };
             let outcome = parse_dataset_with(
                 black_box(text.as_bytes()),
@@ -212,6 +213,7 @@ fn bench_parse_nquads_span_tracking(c: &mut Bench) {
             let options = ParseOptions {
                 track_source_spans: true,
                 yaml_ld: None,
+                yaml_ld_context: None,
             };
             let outcome = parse_dataset_with(
                 black_box(text.as_bytes()),

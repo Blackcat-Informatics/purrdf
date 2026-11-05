@@ -422,7 +422,7 @@ pub fn parse_dataset_with(
     bytes: &[u8],
     media_type: &str,
     base_iri: Option<&str>,
-    options: &ParseOptions,
+    options: &ParseOptions<'_>,
 ) -> Result<ParseOutcome, RdfDiagnostic> {
     parse_dataset_reporting_failure(bytes, media_type, base_iri, options)
         .map_err(|failure| failure.diagnostic)
@@ -439,11 +439,11 @@ pub fn parse_dataset_reporting_failure(
     bytes: &[u8],
     media_type: &str,
     base_iri: Option<&str>,
-    options: &ParseOptions,
+    options: &ParseOptions<'_>,
 ) -> Result<ParseOutcome, Box<ParseFailure>> {
     let format = classify(media_type).map_err(|e| ParseFailure::before_parsing(e, base_iri))?;
 
-    if let Some(yaml) = options.yaml_ld {
+    if options.yaml_ld.is_some() || options.yaml_ld_context.is_some() {
         if format != NativeRdfFormat::YamlLd {
             return Err(ParseFailure::before_parsing(
                 RdfDiagnostic::error(
@@ -455,8 +455,10 @@ pub fn parse_dataset_reporting_failure(
         }
         let mut base =
             base_scope_for(base_iri).map_err(|error| ParseFailure::before_parsing(error, None))?;
-        let dataset = super::jsonld::yaml::parse_into_scope(bytes, &mut base, &yaml)
-            .map_err(|error| ParseFailure::before_parsing(error, base_iri))?;
+        let yaml = options.yaml_ld.unwrap_or_default();
+        let dataset =
+            super::jsonld::yaml::parse_into_scope(bytes, &mut base, &yaml, options.yaml_ld_context)
+                .map_err(|error| ParseFailure::before_parsing(error, base_iri))?;
         return Ok(ParseOutcome {
             dataset,
             spans: options.track_source_spans.then(SpanTable::default),
@@ -533,7 +535,7 @@ fn parse_text_retained<'a>(
     bytes: &'a [u8],
     format: NativeRdfFormat,
     base_iri: Option<&str>,
-    options: ParseOptions,
+    options: ParseOptions<'_>,
 ) -> Result<RetainedParse<'a, Resident, Unmetered>, SourceFailure<'a, Resident, Unmetered>> {
     if matches!(format, NativeRdfFormat::Turtle | NativeRdfFormat::TriG) {
         return parse_turtle_retained(
@@ -645,6 +647,7 @@ pub fn parse_dataset_controlled<'a, A: Admission, C: Progress>(
         ParseOptions {
             track_source_spans: true,
             yaml_ld: None,
+            yaml_ld_context: None,
         },
         RunContext::new(admission, progress),
     )
@@ -657,7 +660,7 @@ fn parse_turtle_retained<'a, A: Admission, C: Progress>(
     bytes: &'a [u8],
     format: NativeRdfFormat,
     base_iri: Option<&str>,
-    options: ParseOptions,
+    options: ParseOptions<'_>,
     context: RunContext<A, C>,
 ) -> Result<RetainedParse<'a, A, C>, SourceFailure<'a, A, C>> {
     if !matches!(format, NativeRdfFormat::Turtle | NativeRdfFormat::TriG) {
@@ -800,6 +803,7 @@ fn parse_dataset_mode(
                 bytes,
                 &mut base,
                 &super::jsonld::YamlLdOptions::DEFAULT,
+                None,
             )
         })?;
         return Ok((dataset, base));
@@ -1908,6 +1912,7 @@ mod tests {
         let options = ParseOptions {
             track_source_spans: true,
             yaml_ld: None,
+            yaml_ld_context: None,
         };
         let table = parse_dataset_with(nt.as_bytes(), "application/n-triples", None, &options)
             .expect("parse")
@@ -1949,6 +1954,7 @@ mod tests {
         let options = ParseOptions {
             track_source_spans: true,
             yaml_ld: None,
+            yaml_ld_context: None,
         };
         let table = parse_dataset_with(nt.as_bytes(), "application/n-triples", None, &options)
             .expect("parse")
@@ -1992,6 +1998,7 @@ mod tests {
         let options = ParseOptions {
             track_source_spans: true,
             yaml_ld: None,
+            yaml_ld_context: None,
         };
         let table = parse_dataset_with(ttl.as_bytes(), "text/turtle", None, &options)
             .expect("parse")
@@ -2031,6 +2038,7 @@ mod tests {
                 ParseOptions {
                     track_source_spans: true,
                     yaml_ld: None,
+                    yaml_ld_context: None,
                 },
             )
             .unwrap_or_else(|_| panic!("tracked source acquisition"));
@@ -2244,6 +2252,7 @@ mod tests {
                 &ParseOptions {
                     track_source_spans,
                     yaml_ld: None,
+                    yaml_ld_context: None,
                 },
             )
             .expect("parse");

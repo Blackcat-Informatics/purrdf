@@ -79,7 +79,7 @@ pub fn parse_yamlld_with_options(
     options: &YamlLdOptions,
 ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     let mut scope = crate::native_codecs::parse::base_scope_for(base)?;
-    parse_into_scope(bytes, &mut scope, options)
+    parse_into_scope(bytes, &mut scope, options, None)
 }
 
 /// Parse YAML-LD Basic with a caller-owned compiled active context.
@@ -101,8 +101,9 @@ pub(in crate::native_codecs) fn parse_into_scope(
     bytes: &[u8],
     base: &mut purrdf_iri::BaseScope,
     options: &YamlLdOptions,
+    context: Option<&CompiledJsonLdContext>,
 ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
-    super::value_into_scope(basic_value(bytes, options)?, base)
+    super::value_into_scope(basic_value(bytes, options)?, base, context)
 }
 
 pub(super) fn basic_value(bytes: &[u8], options: &YamlLdOptions) -> Result<Value, RdfDiagnostic> {
