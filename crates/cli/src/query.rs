@@ -837,6 +837,8 @@ pub(crate) struct QueryOptions<'a> {
     /// `--import IRI=FILE`: the data's `owl:imports` table for the `--entailment` closure,
     /// in the order the operator wrote them.
     pub(crate) imports: &'a [String],
+    /// Per-IRI YAML-LD controls for premise RDF imports.
+    pub(crate) import_yamlld_input_options: &'a [String],
     /// `--max-stored-facts` / `--max-join-steps`: the `--entailment` closure's evaluation
     /// limits, spelled for the command line.
     pub(crate) limits: MaterializeLimits,
@@ -904,17 +906,28 @@ pub(crate) fn run(
             };
             CliError::Usage(format!("{flag}: {error}"))
         })?;
-    let data_format = format::resolve(None, options.data)?;
-    let input_options = options
-        .yamlld_input_options
-        .map(|path| source::read_yamlld_input_options(path, &[data_format]))
-        .transpose()?;
     // A report of a run that will not happen is a request the flag cannot honor, and
     // honoring it with silence is what this pipeline refuses.
     if report_target.is_requested() && options.entailment.is_none() {
         return Err(report::requires_entailment("query"));
     }
     refuse_unenforceable_combinations(options, ledger_target)?;
+    let data_format = format::resolve(None, options.data)?;
+    let import_plan = crate::rdf_imports::RdfImportPlan::prepare(
+        if options.entailment.is_some() {
+            options.imports
+        } else {
+            &[]
+        },
+        options.import_yamlld_input_options,
+        crate::argv_documents::ImportRole::PREMISE,
+        None,
+    )?;
+    let input_options = options
+        .yamlld_input_options
+        .map(|path| source::read_yamlld_input_options(path, &[data_format]))
+        .transpose()?;
+
     // Resolved ONCE, here: `None` (the flag not named) defaults to `json`, exactly as
     // clap's own `default_value_t` used to before `--results-format` became an
     // `Option` — the only thing that changed is that "not named" and "named `json`"
@@ -1011,8 +1024,7 @@ pub(crate) fn run(
         // `reason` does — so the query runs over the imports closure the regime is defined
         // over, never over the data alone.
         let premise_imports = crate::premise_imports::PremiseImports::read(
-            options.imports,
-            None,
+            &import_plan,
             options.base,
             &[(options.data, data_format)],
             canonical,
@@ -1177,6 +1189,11 @@ fn refuse_unenforceable_combinations(
     ledger_target: &LedgerTarget,
 ) -> Result<(), CliError> {
     let named = options.governors.named();
+    if !options.import_yamlld_input_options.is_empty() && options.entailment.is_none() {
+        return Err(CliError::Usage(
+            "--import-yamlld-input-options requires --entailment".to_owned(),
+        ));
+    }
     if !named.is_empty() && options.explain {
         let named = named.join(", ");
         return Err(CliError::Usage(format!(

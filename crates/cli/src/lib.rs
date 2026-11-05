@@ -111,6 +111,7 @@ mod path_relation;
 mod premise_imports;
 mod projection;
 mod query;
+mod rdf_imports;
 mod reason;
 mod report;
 mod shacl;
@@ -379,6 +380,7 @@ fn dispatch_with_request(
             max_join_steps,
             max_term_arena_bytes,
             imports,
+            import_yamlld_input_options,
             canonical: canonical_output,
             input,
             output,
@@ -398,6 +400,7 @@ fn dispatch_with_request(
                     *max_term_arena_bytes,
                 ),
                 imports,
+                import_yamlld_input_options,
                 canonical: *canonical_output,
                 jsonld_options: jsonld_options.as_ref(),
             },
@@ -416,6 +419,7 @@ fn dispatch_with_request(
             rules,
             report,
             imports,
+            import_yamlld_input_options,
             max_stored_facts,
             max_join_steps,
             max_term_arena_bytes,
@@ -447,6 +451,7 @@ fn dispatch_with_request(
                 entailment: *entailment,
                 rules: rules.as_deref(),
                 imports,
+                import_yamlld_input_options,
                 limits: cli_materialize_limits(
                     *max_stored_facts,
                     *max_join_steps,
@@ -546,6 +551,7 @@ fn dispatch_with_request(
             max_join_steps,
             max_term_arena_bytes,
             imports,
+            import_yamlld_input_options,
             from,
             to,
             base,
@@ -557,6 +563,7 @@ fn dispatch_with_request(
             rules.as_deref(),
             &cli_materialize_limits(*max_stored_facts, *max_join_steps, *max_term_arena_bytes),
             imports,
+            import_yamlld_input_options,
             *from,
             *to,
             base.as_deref(),
@@ -575,6 +582,7 @@ fn dispatch_with_request(
             pattern,
             verify,
             imports,
+            import_yamlld_input_options,
             max_stored_facts,
             max_join_steps,
             max_term_arena_bytes,
@@ -592,6 +600,7 @@ fn dispatch_with_request(
                 pattern: pattern.as_deref(),
                 verify: *verify,
                 imports,
+                import_yamlld_input_options,
                 limits: cli_materialize_limits(
                     *max_stored_facts,
                     *max_join_steps,
@@ -616,6 +625,7 @@ fn dispatch_with_request(
             step_cap,
             work_cap,
             imports,
+            import_yamlld_input_options,
             from,
             base,
             input,
@@ -624,6 +634,7 @@ fn dispatch_with_request(
                 yamlld_input_options: yamlld_input_options.as_deref(),
                 input,
                 imports,
+                import_yamlld_input_options,
                 from: *from,
                 base: base.as_deref(),
                 step_cap: *step_cap,

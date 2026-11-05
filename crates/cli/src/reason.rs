@@ -173,6 +173,7 @@ pub(crate) fn run(
     rules: Option<&Path>,
     limits: &MaterializeLimits,
     imports: &[String],
+    import_yamlld_input_options: &[String],
     from: Option<CliRdfFormat>,
     to: Option<CliRdfFormat>,
     base: Option<&str>,
@@ -188,6 +189,12 @@ pub(crate) fn run(
     // expensive) load + materialize work has already run.
     let source_format = format::resolve(from, input)?;
     let target_format = format::resolve_target(to, output, "the --to target")?;
+    let imports = crate::rdf_imports::RdfImportPlan::prepare(
+        imports,
+        import_yamlld_input_options,
+        crate::argv_documents::ImportRole::PREMISE,
+        from,
+    )?;
     let input_options = yamlld_input_options
         .map(|path| crate::source::read_yamlld_input_options(path, &[source_format]))
         .transpose()?;
@@ -195,7 +202,11 @@ pub(crate) fn run(
     // `--base` has two legs here — the source parse and the closure's serialization — and
     // is refused only when NEITHER can spend it.
     // `--import` documents parse under `--base` too, so each is a parse leg.
-    let import_legs = PremiseImports::base_legs(imports, from)?;
+    let import_legs: Vec<_> = imports
+        .pairs()
+        .iter()
+        .map(|pair| (pair.format, format!("the --import {} document", pair.iri)))
+        .collect();
     let mut legs = vec![
         format::BaseUse::parse(source_format, "the --from source"),
         format::BaseUse::serialize(target_format, "the --to target"),
@@ -210,7 +221,7 @@ pub(crate) fn run(
     // The premise's `owl:imports` closure: every pair decided and read before the reasoner
     // runs, so an unreadable or malformed pair fails against the command line.
     let premise_imports =
-        PremiseImports::read(imports, from, base, &[(input, source_format)], canonical)?;
+        PremiseImports::read(&imports, base, &[(input, source_format)], canonical)?;
 
     // The closure goes to the sink and the report goes to `--report`: `reason` writes RDF,
     // and the evidence of what produced it is a second output rather than a discarded one.

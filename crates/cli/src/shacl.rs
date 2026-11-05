@@ -155,8 +155,12 @@ pub(crate) fn pack(
     out: &str,
     canonical: &mut crate::canonical::Request,
 ) -> Result<(), CliError> {
-    let import_plan =
-        crate::shapes_source::ShapesImportPlan::prepare(imports, import_yamlld_input_options)?;
+    let import_plan = crate::rdf_imports::RdfImportPlan::prepare(
+        imports,
+        import_yamlld_input_options,
+        crate::argv_documents::ImportRole::SHAPES_GRAPH,
+        None,
+    )?;
     let input_options = yamlld_input_options
         .map(|path| source::read_yamlld_input_options(path, &[shapes_format]))
         .transpose()?;

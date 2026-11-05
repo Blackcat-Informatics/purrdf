@@ -69,9 +69,9 @@ use purrdf_core::imports::imported_iris;
 use purrdf_iri::{BaseIri, BaseOrigin, BaseScope};
 use purrdf_rdf::{NativeRdfFormat, SourceFormat};
 
-use crate::argv_documents::{ImportRole, parse_import_pairs};
 use crate::error::{CliError, argv_iri_refusal};
-use crate::{format, source};
+use crate::rdf_imports::RdfImportPlan;
+use crate::source;
 
 /// A shapes document READ but not yet parsed into `Shapes`: the frozen graph plus the
 /// prefix map its syntax declared.
@@ -180,14 +180,14 @@ pub(crate) fn read_shapes_document(
 /// [`shapes_error`] renders its refusal in command-line terms.
 pub(crate) fn shapes_imports(
     root: &ShapesDocument,
-    imports: &ShapesImportPlan<'_>,
+    imports: &RdfImportPlan<'_>,
     canonical: &mut crate::canonical::Request,
 ) -> Result<ShapesImports, CliError> {
     let mut table = ShapesImports::new();
     for iri in &root.loaded {
         table.declare_loaded(iri.clone());
     }
-    for pair in &imports.pairs {
+    for pair in imports.pairs() {
         let document = read_shapes_document(
             pair.path,
             pair.format,
@@ -366,81 +366,6 @@ pub(crate) fn shapes_error(
         | ShapesImportError::InvalidLink { .. }
         | ShapesImportError::IncompatibleVersions { .. }) => CliError::Runtime(error.to_string()),
     }
-}
-
-/// Resolved SHACL import pairs and their independently admitted input controls.
-/// No RDF source is acquired while preparing this plan.
-pub(crate) struct ShapesImportPlan<'a> {
-    pairs: Vec<ShapesImportPair<'a>>,
-}
-
-impl<'a> ShapesImportPlan<'a> {
-    /// Validate every mapping and target before opening any options file, then decode all.
-    pub(crate) fn prepare(imports: &'a [String], controls: &[String]) -> Result<Self, CliError> {
-        let mut pairs = resolve_shapes_import_pairs(imports)?;
-        let controls = parse_import_pairs(controls, ImportRole::SHAPES_INPUT_OPTIONS)?;
-        let targets = controls
-            .iter()
-            .map(|control| {
-                let index = pairs
-                    .iter()
-                    .position(|pair| pair.iri == control.iri)
-                    .ok_or_else(|| {
-                        CliError::Usage(format!(
-                            "--import-yamlld-input-options {}: no --import pair names this IRI",
-                            control.spec
-                        ))
-                    })?;
-                let pair = &pairs[index];
-                if pair.format != SourceFormat::Native(NativeRdfFormat::YamlLd) {
-                    return Err(CliError::Usage(format!(
-                        "--import-yamlld-input-options {}: --import {} must be YAML-LD",
-                        control.spec, pair.spec
-                    )));
-                }
-                Ok(index)
-            })
-            .collect::<Result<Vec<_>, CliError>>()?;
-        for (control, index) in controls.iter().zip(targets) {
-            pairs[index].input_options = Some(source::read_yamlld_input_options(
-                std::path::Path::new(control.path),
-                &[pairs[index].format],
-            )?);
-        }
-        Ok(Self { pairs })
-    }
-}
-
-/// One `--import IRI=FILE` argument for the SHACL lane, fully DECIDED but not yet read.
-struct ShapesImportPair<'a> {
-    /// The pair exactly as the operator wrote it, so a diagnostic can quote it back.
-    spec: &'a str,
-    /// The ontology-IRI half, checked absolute.
-    iri: &'a str,
-    /// The document-path half.
-    path: &'a str,
-    /// The syntax that path's own extension classifies it as.
-    format: SourceFormat,
-    /// This import's own admitted controls; absent means native defaults.
-    input_options: Option<Vec<u8>>,
-}
-
-/// Decide every `--import IRI=FILE` ARGUMENT, with no I/O at all: the shared
-/// [`parse_import_pairs`] rules, so the FIRST malformed pair is reported before the FIRST file
-/// is opened, then the syntax each path's own extension classifies it as.
-fn resolve_shapes_import_pairs(specs: &[String]) -> Result<Vec<ShapesImportPair<'_>>, CliError> {
-    parse_import_pairs(specs, ImportRole::SHAPES_GRAPH)?
-        .into_iter()
-        .map(|pair| {
-            Ok(ShapesImportPair {
-                spec: pair.spec,
-                iri: pair.iri,
-                path: pair.path,
-                format: format::resolve(None, pair.path)?,
-                input_options: None,
-            })
-        })
-        .collect()
 }
 
 /// Resolve a `--shapes-graph` value against the shapes document's base.

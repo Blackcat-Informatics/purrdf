@@ -114,7 +114,17 @@ before opening an options file; every requested options file is decoded before
 any RDF source is acquired. Each import receives only its own controls; an
 unmapped import keeps native defaults. A valid imported-input limit applies when
 that document is parsed. Product validation and SRL/check-only rules refuse the
-flag. Premise, SRL and ShEx schema imports keep their existing policy.
+flag. The same per-IRI flag is available for premise RDF imports on `reason`, `entails`,
+`consistency`, `convert --entailment` and `query --entailment`. Controls require
+entailment on convert/query and are refused on ordinary, canonical-only or
+explain paths. Each mapped import receives only its own controls, independently
+of primary, conclusion and root shapes configuration. Mapping admission and
+configuration decoding precede RDF and RIF acquisition. Reason, convert, entails
+and consistency retain global `--from` import selection; query infers each
+import's format from its filename. Premise imports keep the caller's `--base` and
+permit the sole imported stdin when an explicit format resolves it. SHACL imports
+keep ontology-IRI bases and native document metadata. SRL and ShEx schema imports
+keep their existing policy.
 Every selected input must be YAML-LD; pack, GTS and other native formats are
 refused before data acquisition. The bounded named options file is validated
 before primary data, premise imports or rule documents are read; it does not

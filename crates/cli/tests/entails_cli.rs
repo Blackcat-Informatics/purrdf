@@ -2182,3 +2182,387 @@ fn configured_yamlld_controls_reach_entailment_roles() {
     assert_eq!(std::fs::read_to_string(output).unwrap(), "unchanged answer");
     assert_eq!(std::fs::read_to_string(report).unwrap(), "unchanged report");
 }
+
+/// All premise readers receive per-import selection without changing mixed-format defaults.
+#[test]
+fn configured_yamlld_imports_reach_premise_readers() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let premise = write_file(
+        dir.path(),
+        "premise.ttl",
+        "@prefix ex: <http://example.org/> .\n@prefix owl: <http://www.w3.org/2002/07/owl#> .\nex:root a owl:Ontology ; owl:imports ex:main, ex:first, ex:default, ex:turtle .\nex:x a ex:A, ex:D .\n",
+    );
+    let entails_premise = write_file(
+        dir.path(),
+        "entails.ttl",
+        &std::fs::read_to_string(&premise)
+            .unwrap()
+            .replace("ex:x a ex:A, ex:D .", "ex:x a ex:A ."),
+    );
+    let conclusion = write_file(
+        dir.path(),
+        "conclusion.nq",
+        "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/B> .\n",
+    );
+    let imported = write_file(
+        dir.path(),
+        "main.yamlld",
+        "'@id': http://example.org/placeholder\nhttp://example.org/marker:\n  '@id': http://example.org/first\n---\n'@id': http://example.org/A\nhttp://www.w3.org/2000/01/rdf-schema#subClassOf:\n  '@id': http://example.org/B\nhttp://www.w3.org/2002/07/owl#disjointWith:\n  '@id': http://example.org/D\n",
+    );
+    let defaults = write_file(
+        dir.path(),
+        "default.yamlld",
+        "'@id': http://example.org/neighbor\nhttp://example.org/marker:\n  '@id': http://example.org/first\n---\n'@id': http://example.org/A\nhttp://www.w3.org/2000/01/rdf-schema#subClassOf:\n  '@id': http://example.org/Never\nhttp://www.w3.org/2002/07/owl#disjointWith:\n  '@id': http://example.org/A\n",
+    );
+    let turtle = write_file(
+        dir.path(),
+        "ordinary.ttl",
+        "@prefix ex: <http://example.org/> .\n@prefix owl: <http://www.w3.org/2002/07/owl#> .\nex:A a owl:Class ; <http://www.w3.org/2000/01/rdf-schema#subClassOf> ex:Always .\nex:B a owl:Class . ex:D a owl:Class .\n",
+    );
+    let imports = [
+        format!("http://example.org/main={imported}"),
+        format!("http://example.org/first={defaults}"),
+        format!("http://example.org/default={defaults}"),
+        format!("http://example.org/turtle={turtle}"),
+    ];
+    let all = write_file(
+        dir.path(),
+        "all.json",
+        r#"{"version":1,"yaml_ld":{"extract_all_scripts":true}}"#,
+    );
+    let first = write_file(dir.path(), "first.json", r#"{"version":1,"yaml_ld":{}}"#);
+    let first_control = format!("http://example.org/first={first}");
+    let receipt = path(dir.path(), "consistency-receipt.json");
+    for selected in [false, true] {
+        let selected_control = format!(
+            "http://example.org/main={}",
+            if selected { &all } else { &first }
+        );
+        for lane in ["reason", "convert", "query", "entails", "consistency"] {
+            let mut args = match lane {
+                "reason" => vec![lane, "--regime", "rdfs", "--to", "nquads"],
+                "convert" => vec![lane, "--entailment", "rdfs", "--to", "nquads"],
+                "query" => vec![lane, "--entailment", "rdfs", "--data", &premise],
+                "entails" => vec![
+                    lane,
+                    "--regime",
+                    "owl-rl",
+                    "--premise",
+                    &entails_premise,
+                    "--conclusion",
+                    &conclusion,
+                ],
+                _ => vec![
+                    lane,
+                    "--canonical-search",
+                    "unlimited",
+                    "--canonicalization-receipts",
+                    &receipt,
+                ],
+            };
+            for import in &imports {
+                args.extend(["--import", import]);
+            }
+            args.extend([
+                "--import-yamlld-input-options",
+                &selected_control,
+                "--import-yamlld-input-options",
+                &first_control,
+            ]);
+            match lane {
+                "query" => args.push("ASK { <http://example.org/x> a <http://example.org/B> }"),
+                "entails" => (),
+                _ => args.push(&premise),
+            }
+            let out = run(&args);
+            assert!(out.status.success(), "{lane}: {}", stderr(&out));
+            let body = stdout(&out);
+            match lane {
+                "reason" | "convert" => {
+                    assert_eq!(body.contains("<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/B> ."), selected, "{lane}: {body}");
+                    assert!(body.contains("<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Always> ."), "{body}");
+                    assert!(!body.contains("<http://example.org/Never>"), "{body}");
+                }
+                "query" => assert!(body.contains(&format!("\"boolean\":{selected}")), "{body}"),
+                "entails" => assert!(
+                    body.contains(&format!(
+                        "entailment {}\n",
+                        if selected { "entailed" } else { "not-entailed" }
+                    )),
+                    "{body}"
+                ),
+                _ => assert!(
+                    body.starts_with(&format!("consistency {}\n", !selected)),
+                    "{body}"
+                ),
+            }
+        }
+    }
+    // The global explicit format still reaches an imported stdin, which remains its sole reader.
+    let yaml_premise = write_file(
+        dir.path(),
+        "premise.yamlld",
+        "'@graph':\n  - '@id': http://example.org/root\n    '@type': http://www.w3.org/2002/07/owl#Ontology\n    http://www.w3.org/2002/07/owl#imports:\n      '@id': http://example.org/main\n  - '@id': http://example.org/x\n    '@type': http://example.org/A\n",
+    );
+    let yaml_conclusion = write_file(
+        dir.path(),
+        "conclusion.yamlld",
+        "'@id': http://example.org/x\n'@type': http://example.org/B\n",
+    );
+    let control = format!("http://example.org/main={all}");
+    let out = support::pipe(
+        &[
+            "entails",
+            "--regime",
+            "owl-rl",
+            "--from",
+            "yamlld",
+            "--premise",
+            &yaml_premise,
+            "--conclusion",
+            &yaml_conclusion,
+            "--import",
+            "http://example.org/main=-",
+            "--import-yamlld-input-options",
+            &control,
+        ],
+        &std::fs::read_to_string(imported).unwrap(),
+    );
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("entailment entailed\n"));
+}
+
+/// Every premise caller admits configurations before RDF or RIF, retaining refusal sinks.
+#[test]
+fn configured_premise_import_options_precede_source_acquisition() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let missing = path(dir.path(), "missing.ttl");
+    let missing_yaml = path(dir.path(), "missing.yamlld");
+    let missing_rif = path(dir.path(), "missing.xml");
+    let conclusion = path(dir.path(), "missing.nq");
+    let all = write_file(dir.path(), "valid.json", r#"{"version":1,"yaml_ld":{}}"#);
+    let malformed = write_file(dir.path(), "malformed.json", "{");
+    let oversized = write_file(dir.path(), "oversized.json", &" ".repeat(16_385));
+    let imports = [
+        format!("http://example.org/a={missing_yaml}"),
+        format!("http://example.org/b={missing_yaml}"),
+    ];
+    let valid_control = format!("http://example.org/a={all}");
+    let malformed_control = format!("http://example.org/b={malformed}");
+    let oversized_control = format!("http://example.org/b={oversized}");
+    let output = write_file(dir.path(), "output.txt", "unchanged output");
+    let report = write_file(dir.path(), "report.txt", "unchanged report");
+    let report_arg = format!("--report={report}");
+    for lane in ["reason", "convert", "query", "entails", "consistency"] {
+        let mut args = match lane {
+            "reason" => vec![
+                lane,
+                "--regime",
+                "rif",
+                "--rules",
+                &missing_rif,
+                "--to",
+                "nquads",
+                &report_arg,
+            ],
+            "convert" => vec![
+                lane,
+                "--entailment",
+                "rif",
+                "--rules",
+                &missing_rif,
+                "--to",
+                "nquads",
+                &report_arg,
+            ],
+            "query" => vec![
+                lane,
+                "--entailment",
+                "rif",
+                "--rules",
+                &missing_rif,
+                "--data",
+                &missing,
+                &report_arg,
+            ],
+            "entails" => vec![
+                lane,
+                "--regime",
+                "simple",
+                "--premise",
+                &missing,
+                "--conclusion",
+                &conclusion,
+                &report_arg,
+            ],
+            _ => vec![lane],
+        };
+        for import in &imports {
+            args.extend(["--import", import]);
+        }
+        args.extend([
+            "--import-yamlld-input-options",
+            &valid_control,
+            "--import-yamlld-input-options",
+            &malformed_control,
+        ]);
+        match lane {
+            "query" => args.push("ASK { ?s ?p ?o }"),
+            "entails" => args.push(&output),
+            "consistency" => args.push(&missing),
+            _ => args.extend([missing.as_str(), output.as_str()]),
+        }
+        let refused = run(&args);
+        assert_eq!(
+            refused.status.code(),
+            Some(1),
+            "{lane}: {}",
+            stderr(&refused)
+        );
+        assert!(
+            stderr(&refused).contains("rdf-input-options"),
+            "{lane}: {}",
+            stderr(&refused)
+        );
+        assert_eq!(stdout(&refused), "");
+        assert_eq!(
+            std::fs::read_to_string(&output).unwrap(),
+            "unchanged output"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&report).unwrap(),
+            "unchanged report"
+        );
+    }
+    let oversized_run = run(&[
+        "entails",
+        "--regime",
+        "simple",
+        "--premise",
+        &missing,
+        "--conclusion",
+        &conclusion,
+        "--import",
+        &imports[0],
+        "--import",
+        &imports[1],
+        "--import-yamlld-input-options",
+        &valid_control,
+        "--import-yamlld-input-options",
+        &oversized_control,
+        &report_arg,
+        &output,
+    ]);
+    assert_eq!(
+        oversized_run.status.code(),
+        Some(1),
+        "{}",
+        stderr(&oversized_run)
+    );
+    assert!(stderr(&oversized_run).contains("rdf-input-options"));
+    assert_eq!(
+        std::fs::read_to_string(&output).unwrap(),
+        "unchanged output"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&report).unwrap(),
+        "unchanged report"
+    );
+    let absent_control = format!("http://example.org/a={malformed}");
+    for mode in ["convert", "canonical", "query", "explain"] {
+        let mut args = match mode {
+            "convert" => vec!["convert", "--to", "nquads"],
+            "canonical" => vec!["convert", "--canonical"],
+            "query" => vec!["query", "--data", &missing],
+            _ => vec![
+                "query",
+                "--explain",
+                "--entailment",
+                "rdfs",
+                "--data",
+                &missing,
+            ],
+        };
+        args.extend([
+            "--import",
+            &imports[0],
+            "--import-yamlld-input-options",
+            &absent_control,
+        ]);
+        if mode == "convert" || mode == "canonical" {
+            args.extend([missing.as_str(), output.as_str()]);
+        } else {
+            args.push("ASK { ?s ?p ?o }");
+        }
+        let refused = run(&args);
+        assert_eq!(
+            refused.status.code(),
+            Some(2),
+            "{mode}: {}",
+            stderr(&refused)
+        );
+        assert!(
+            stderr(&refused).contains("--entailment"),
+            "{}",
+            stderr(&refused)
+        );
+        assert_eq!(stdout(&refused), "");
+        assert_eq!(
+            std::fs::read_to_string(&output).unwrap(),
+            "unchanged output"
+        );
+    }
+    let premise = write_file(
+        dir.path(),
+        "premise.ttl",
+        "<http://example.org/root> a <http://www.w3.org/2002/07/owl#Ontology> ; <http://www.w3.org/2002/07/owl#imports> <http://example.org/a> .\n",
+    );
+    let imported = write_file(
+        dir.path(),
+        "import.yamlld",
+        "'@id': http://example.org/s\nhttp://example.org/p: value\n",
+    );
+    let graph = write_file(dir.path(), "empty.nq", "");
+    let limited = write_file(
+        dir.path(),
+        "limited.json",
+        r#"{"version":1,"yaml_ld":{"syntax":{"max_input_bytes":0}}}"#,
+    );
+    let import = format!("http://example.org/a={imported}");
+    let control = format!("http://example.org/a={limited}");
+    let limited_run = run(&[
+        "entails",
+        "--regime",
+        "simple",
+        "--premise",
+        &premise,
+        "--conclusion",
+        &graph,
+        "--import",
+        &import,
+        "--import-yamlld-input-options",
+        &control,
+        &report_arg,
+        &output,
+    ]);
+    assert_eq!(
+        limited_run.status.code(),
+        Some(1),
+        "{}",
+        stderr(&limited_run)
+    );
+    assert!(
+        stderr(&limited_run).contains("native-yaml-input-limit"),
+        "{}",
+        stderr(&limited_run)
+    );
+    assert_eq!(stdout(&limited_run), "");
+    assert_eq!(
+        std::fs::read_to_string(&output).unwrap(),
+        "unchanged output"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&report).unwrap(),
+        "unchanged report"
+    );
+}

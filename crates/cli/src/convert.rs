@@ -128,6 +128,8 @@ pub(crate) struct ConvertOptions<'a> {
     pub(crate) limits: purrdf_validate::regime::MaterializeLimits,
     /// `--import IRI=FILE`: the premise's `owl:imports` closure `--entailment` closes over.
     pub(crate) imports: &'a [String],
+    /// Per-IRI YAML-LD controls for premise RDF imports.
+    pub(crate) import_yamlld_input_options: &'a [String],
     /// Whether `--canonical` was set (emit RDFC-1.0 canonical N-Quads).
     pub(crate) canonical: bool,
     /// Explicit JSON-LD/YAML-LD serialization configuration.
@@ -143,6 +145,7 @@ pub(crate) fn run(
     report_target: &ReportTarget,
     canonical: &mut crate::canonical::Request,
 ) -> Result<(), CliError> {
+    refuse_inapplicable_combinations(options, report_target)?;
     let mut sources = Sources::new(
         input,
         options.inputs,
@@ -154,13 +157,21 @@ pub(crate) fn run(
     // fails before the first two are read. `--base` is decided later, once the target is
     // resolved too: whether it can be spent depends on both legs.
     let formats = sources.resolve_formats()?;
+    let import_plan = crate::rdf_imports::RdfImportPlan::prepare(
+        if options.entailment.is_some() {
+            options.imports
+        } else {
+            &[]
+        },
+        options.import_yamlld_input_options,
+        crate::argv_documents::ImportRole::PREMISE,
+        options.from,
+    )?;
     let input_options = options
         .yamlld_input_options
         .map(|path| source::read_yamlld_input_options(path, &formats))
         .transpose()?;
     sources.input_options = input_options.as_deref();
-
-    refuse_inapplicable_combinations(options, report_target)?;
 
     // The transform lane: either `--entailment` or `--canonical` needs a concrete
     // owned dataset, so reconstruct one and apply the transforms in order.
@@ -168,6 +179,7 @@ pub(crate) fn run(
         return run_with_transforms(
             &sources,
             &formats,
+            &import_plan,
             options,
             output,
             ledger_target,
@@ -315,6 +327,11 @@ fn refuse_inapplicable_combinations(
     options: &ConvertOptions<'_>,
     report_target: &ReportTarget,
 ) -> Result<(), CliError> {
+    if !options.import_yamlld_input_options.is_empty() && options.entailment.is_none() {
+        return Err(CliError::Usage(
+            "--import-yamlld-input-options requires --entailment".to_owned(),
+        ));
+    }
     if options.canonical && options.jsonld_options.is_some() {
         return Err(CliError::Usage(
             "--jsonld-options cannot be combined with --canonical".to_owned(),
@@ -357,9 +374,14 @@ fn refuse_inapplicable_combinations(
 /// The `--entailment` / `--canonical` lane: reconstruct an owned dataset, optionally
 /// materialize its entailment closure, then either emit canonical N-Quads or
 /// serialize to the `--to` target.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the prepared imports and source/output controls are independent inputs"
+)]
 fn run_with_transforms(
     sources: &Sources<'_>,
     formats: &[SourceFormat],
+    import_plan: &crate::rdf_imports::RdfImportPlan<'_>,
     options: &ConvertOptions<'_>,
     output: &str,
     ledger_target: &LedgerTarget,
@@ -401,8 +423,7 @@ fn run_with_transforms(
                 .zip(formats.iter().copied())
                 .collect();
             let premise_imports = crate::premise_imports::PremiseImports::read(
-                options.imports,
-                options.from,
+                import_plan,
                 options.base,
                 &premises,
                 canonical,

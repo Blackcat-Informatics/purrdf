@@ -457,16 +457,39 @@ pub(crate) fn run(
     refuse_an_expectation_with_no_product(options)?;
     refuse_a_rebuild_with_no_product(options)?;
 
+    if options.shapes_yamlld_input_options.is_some()
+        && (options.shapes.is_none() || options.shapes_product.is_some())
+    {
+        return Err(CliError::Usage(
+            "--shapes-yamlld-input-options requires --shapes and conflicts with --shapes-product"
+                .to_owned(),
+        ));
+    }
+    if !options.import_yamlld_input_options.is_empty()
+        && (options.shapes.is_none() || options.shapes_product.is_some())
+    {
+        return Err(CliError::Usage(
+            "--import-yamlld-input-options requires --shapes and conflicts with --shapes-product"
+                .to_owned(),
+        ));
+    }
+
+    let imports = crate::rdf_imports::RdfImportPlan::prepare(
+        options.imports,
+        options.import_yamlld_input_options,
+        crate::argv_documents::ImportRole::SHAPES_GRAPH,
+        None,
+    )?;
     let data_format = format::resolve(options.from, options.input)?;
-    // Every DECISION about the shapes side is made here, before a byte of either document
-    // is read: a `--shapes-graph` that names no graph is a malformed request and should
-    // fail against the command line rather than after the data has been parsed and
-    // validated.
-    let plan = ShapesPlan::decide(options)?;
     let input_options = options
         .yamlld_input_options
         .map(|path| source::read_yamlld_input_options(path, &[data_format]))
         .transpose()?;
+    // Every DECISION about the shapes side is made here, before a byte of either document
+    // is read: a `--shapes-graph` that names no graph is a malformed request and should
+    // fail against the command line rather than after the data has been parsed and
+    // validated.
+    let plan = ShapesPlan::decide(options, imports)?;
     // Decided before data, change or shapes bytes are read, as `ShapesPlan::decide` is:
     // an unresolvable `--changes-from` is a malformed request about the command line.
     let change_plan = ChangePlan::decide(options)?;
@@ -962,7 +985,7 @@ fn load_shapes<D: DatasetView<ReadError = std::convert::Infallible>>(
     format: SourceFormat,
     base: Option<&str>,
     input_options: Option<&[u8]>,
-    import_plan: &crate::shapes_source::ShapesImportPlan<'_>,
+    import_plan: &crate::rdf_imports::RdfImportPlan<'_>,
     data: &D,
     data_iris: &[&str],
     canonical: &mut crate::canonical::Request,
@@ -1039,7 +1062,7 @@ enum ShapesPlan<'a> {
         /// Admitted YAML-LD Basic controls, decoded before any RDF acquisition.
         input_options: Option<Vec<u8>>,
         /// Imports and their options admitted before RDF acquisition.
-        imports: crate::shapes_source::ShapesImportPlan<'a>,
+        imports: crate::rdf_imports::RdfImportPlan<'a>,
         /// The base it parses under, and that `--shapes-graph` resolved against.
         base: Option<String>,
         /// `--shapes-graph`, resolved to an absolute IRI.
@@ -1065,17 +1088,10 @@ impl<'a> ShapesPlan<'a> {
     /// # Errors
     ///
     /// Any usage error in `--shapes-from`, `--shapes-graph` or the shapes path.
-    fn decide(options: &ValidateOptions<'a>) -> Result<Self, CliError> {
-        if options.shapes_yamlld_input_options.is_some()
-            && (options.shapes.is_none() || options.shapes_product.is_some())
-        {
-            return Err(CliError::Usage("--shapes-yamlld-input-options requires --shapes and conflicts with --shapes-product".to_owned()));
-        }
-        if !options.import_yamlld_input_options.is_empty()
-            && (options.shapes.is_none() || options.shapes_product.is_some())
-        {
-            return Err(CliError::Usage("--import-yamlld-input-options requires --shapes and conflicts with --shapes-product".to_owned()));
-        }
+    fn decide(
+        options: &ValidateOptions<'a>,
+        imports: crate::rdf_imports::RdfImportPlan<'a>,
+    ) -> Result<Self, CliError> {
         if let Some(path) = options.shapes_product {
             // Decoded HERE, before a byte of the product is read: a mis-typed selector is
             // the operator's command line, not the artifact's fault, so it exits as a
@@ -1103,10 +1119,6 @@ impl<'a> ShapesPlan<'a> {
             ));
         };
         let format = format::resolve(options.shapes_from, path)?;
-        let imports = crate::shapes_source::ShapesImportPlan::prepare(
-            options.imports,
-            options.import_yamlld_input_options,
-        )?;
         let input_options = options
             .shapes_yamlld_input_options
             .map(|path| source::read_yamlld_input_options(path, &[format]))
