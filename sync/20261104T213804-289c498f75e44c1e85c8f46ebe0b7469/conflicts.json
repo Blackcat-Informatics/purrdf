@@ -1,0 +1,22 @@
+{
+  "crates/validate/src/rdf_input.rs": [
+    {
+      "mode": "100644",
+      "oid": "ba810de5a980ef7c69d9ae620ff9988df1034149",
+      "stage": 1,
+      "content": "inputs/0-1.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "fe029ae3c3dd9c1d0add5c3650608c9568d1451d",
+      "stage": 2,
+      "content": "inputs/0-2.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "415eb172691dcf9f6aeb6c25b8122b5f99050c1b",
+      "stage": 3,
+      "content": "inputs/0-3.bin"
+    }
+  ]
+}

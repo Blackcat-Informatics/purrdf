@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1022-reuse-unknown-rdfc-subsearches-with",
+  "branch": "paudley/1022-reuse-unknown-rdfc-subsearches-with",
+  "base_ref": "refs/remotes/origin/main",
+  "head": "62ca47b609d8b6506d072147ea5b690a128462dd",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/1022-reuse-unknown-rdfc-subsearches-with/.stage/reuse-unknown-rdfc-subsearches-with/sync/20261105T003500-132f3df0bc2340df9abd18834313cd10",
+  "conflicts": [],
+  "status": "completed",
+  "base": "90f291d6729ff45030951880edfbaa0cc12bd6a6",
+  "merge_bases": [
+    "0a6d16ca0feb8450458dcde9cd55bef91731cd7a"
+  ],
+  "merge_index": "49e233294a10e9dda537c34b90cbdfa56aaa8cb4d587bc948ce910ba1091c8ea",
+  "candidate_tree": "7ebf21ea6bd96e7abb0bbd30f6bfb6854eca03e8",
+  "candidate_patch": "candidate-153d150080e34bd289f9c2fb08b48b1d.patch",
+  "validation_records": [],
+  "commit": "350189dae26f2b0c315a8e7342d16e3bfd0e9847",
+  "tree": "7ebf21ea6bd96e7abb0bbd30f6bfb6854eca03e8"
+}

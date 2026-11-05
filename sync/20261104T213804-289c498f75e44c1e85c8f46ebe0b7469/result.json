@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1022-reuse-unknown-rdfc-subsearches-with",
+  "branch": "paudley/1022-reuse-unknown-rdfc-subsearches-with",
+  "base_ref": "refs/remotes/origin/main",
+  "head": "198e5b91c26bd2b5308b893b330c8323c5f82be6",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/1022-reuse-unknown-rdfc-subsearches-with/.stage/reuse-unknown-rdfc-subsearches-with/sync/20261104T213804-289c498f75e44c1e85c8f46ebe0b7469",
+  "conflicts": [
+    "crates/validate/src/rdf_input.rs"
+  ],
+  "status": "completed",
+  "base": "0a6d16ca0feb8450458dcde9cd55bef91731cd7a",
+  "merge_bases": [
+    "3ab4f2338a4e18fcbd540d2ae874799607d8feba"
+  ],
+  "merge_index": "4c25e491da89f3a00e45d4d568e07d04322a4e703a5dbca24e1d4dac520e696f",
+  "reused_paths": [],
+  "rerere_output": "Recorded preimage for 'crates/validate/src/rdf_input.rs'\n",
+  "candidate_tree": "04dbb1d0b1973621cb739a7cec7ad6ff487f154a",
+  "candidate_patch": "candidate-2ac1033cf6bb4ba88845b811e8cbe90e.patch",
+  "validation_records": [],
+  "commit": "c17d160be418a5a6b37995bec6ac325e41dbcf10",
+  "tree": "04dbb1d0b1973621cb739a7cec7ad6ff487f154a"
+}

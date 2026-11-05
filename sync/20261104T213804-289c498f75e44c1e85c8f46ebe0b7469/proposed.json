@@ -1,0 +1,8 @@
+[
+  {
+    "path": "crates/validate/src/rdf_input.rs",
+    "kind": "file",
+    "executable": false,
+    "content": "proposed/0.bin"
+  }
+]

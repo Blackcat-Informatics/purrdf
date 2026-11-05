@@ -1,0 +1,2806 @@
+diff --git Makefile Makefile
+index b5fa4554d..dd7cf76ad 100644
+--- Makefile
++++ Makefile
+@@ -886,6 +886,7 @@ wasm-pkg: ## Build the purrdf npm/ESM package (release wasm + wasm-bindgen web b
+ 	@# The module ships next to the glue; a glue that does not import it would leave
+ 	@# the raw import unresolved at instantiation, so its absence is a build failure.
+ 	cp crates/rdf-wasm/js/src/purrdf_jspi.mjs crates/rdf-wasm/js/pkg/purrdf_jspi.mjs
++	cp crates/rdf-wasm/js/src/purrdf_bytes.mjs crates/rdf-wasm/js/pkg/purrdf_bytes.mjs
+ 	@grep -qE '^import \* as [A-Za-z_$$][A-Za-z0-9_$$]* from "\./purrdf_jspi\.mjs"$$' crates/rdf-wasm/js/pkg/purrdf_wasm.js || { \
+ 		echo "ERROR: the wasm-bindgen glue does not import ./purrdf_jspi.mjs (expected: import * as <name> from \"./purrdf_jspi.mjs\")"; exit 1; }
+ 	@# wasm-opt -Oz is a REQUIRED build step (roughly halves the artifact).
+diff --git crates/cli/src/cli.rs crates/cli/src/cli.rs
+index ae9a35534..0490326cf 100644
+--- crates/cli/src/cli.rs
++++ crates/cli/src/cli.rs
+@@ -556,6 +556,10 @@ pub(crate) enum Command {
+     },
+     /// Evaluate a SPARQL query over an RDF or pack data source.
+     Query {
++        /// Closed version-one YAML-LD Basic input-options JSON file, for --data only.
++        /// Premise imports keep their default input policy.
++        #[arg(long, value_name = "PATH")]
++        yamlld_input_options: Option<PathBuf>,
+         /// Data-source path (format inferred from its extension). A pack file is
+         /// queried zero-copy (unless `--entailment` forces materialization).
+         #[arg(long)]
+@@ -786,6 +790,9 @@ pub(crate) enum Command {
+     },
+     /// Apply a SPARQL UPDATE and serialize the resulting RDF dataset.
+     Update {
++        /// Closed version-one YAML-LD Basic input-options JSON file, for --data only.
++        #[arg(long, value_name = "PATH")]
++        yamlld_input_options: Option<PathBuf>,
+         /// Exact supplied `xsd:dateTime` for every WHERE operation's `NOW()`.
+         /// Omitted, native host-clock behavior is unchanged.
+         #[arg(long, value_name = "XSD_DATE_TIME", allow_hyphen_values = true)]
+@@ -872,6 +879,10 @@ pub(crate) enum Command {
+     },
+     /// Materialize an entailment regime's closure over a source graph.
+     Reason {
++        /// Closed version-one YAML-LD Basic input-options JSON file, for primary IN only.
++        /// Imports keep their current input controls and existing --from policy.
++        #[arg(long, value_name = "PATH")]
++        yamlld_input_options: Option<PathBuf>,
+         /// The entailment regime to close under.
+         #[arg(long, value_enum)]
+         regime: CliRegime,
+@@ -946,6 +957,17 @@ pub(crate) enum Command {
+         /// The premise document `FILE`, or `-` for stdin (which requires `--from`).
+         #[arg(long, value_name = "FILE")]
+         premise: String,
++        /// Bounded YAML-LD Basic input options for the premise only.
++        #[arg(long, value_name = "PATH")]
++        yamlld_input_options: Option<PathBuf>,
++        /// Independent YAML-LD Basic input options for the conclusion only.
++        #[arg(
++            long,
++            value_name = "PATH",
++            requires = "conclusion",
++            conflicts_with = "pattern"
++        )]
++        conclusion_yamlld_input_options: Option<PathBuf>,
+         /// The conclusion graph `FILE`, or `-` for stdin. The answer is a verdict:
+         /// `entailed`, `not-entailed` (a proof), or `undecided`.
+         #[arg(
+@@ -1045,6 +1067,10 @@ pub(crate) enum Command {
+     /// shell the same way it does for a tripped query. Which cap it was is read off the
+     /// certificate: an exhausted run has `steps` at `budget` or `work` at `work-budget`.
+     Consistency {
++        /// Closed version-one YAML-LD Basic input-options JSON file, for primary IN only.
++        /// Imports keep their current input controls and existing --from policy.
++        #[arg(long, value_name = "PATH")]
++        yamlld_input_options: Option<PathBuf>,
+         /// Also record the run's PROOF TERM and print it after the certificate.
+         ///
+         /// Opt-in, and it costs what it records: the completion graph of every tableau run
+@@ -1121,6 +1147,10 @@ pub(crate) enum Command {
+     },
+     /// Project RDF into a deterministic graph, tabular, or research-object USTAR carrier.
+     Project {
++        /// Closed version-one YAML-LD Basic input-options JSON file, for primary IN only.
++        /// Projection configuration and assets keep their existing input policy.
++        #[arg(long, value_name = "PATH")]
++        yamlld_input_options: Option<PathBuf>,
+         /// Closed projection carrier profile.
+         #[arg(long, value_enum)]
+         profile: CliProjectionProfile,
+@@ -1198,6 +1228,10 @@ pub(crate) enum Command {
+     /// stdout — and stdout stays a well-formed RDF or SARIF document, which it could not if
+     /// the verdict were interleaved into it.
+     Validate {
++        /// Closed version-one YAML-LD Basic input-options JSON file, for primary IN only.
++        /// Shapes, products, imports and change documents keep their existing policy.
++        #[arg(long, value_name = "PATH")]
++        yamlld_input_options: Option<PathBuf>,
+         /// The SHACL shapes graph `FILE`, or `-` for stdin (which requires `--shapes-from`).
+         /// Exactly one of this and `--shapes-product` is required: they are two spellings of
+         /// the same input, a document to parse or a preparation to restore.
+@@ -1520,6 +1554,9 @@ pub(crate) enum Command {
+         /// Data-graph path, or `-` for stdin (which requires `--from`).
+         #[arg(long)]
+         data: String,
++        /// Bounded YAML-LD Basic input options for the data graph only.
++        #[arg(long, value_name = "PATH")]
++        yamlld_input_options: Option<PathBuf>,
+         /// Data-graph format override; inferred from `--data`'s extension when omitted.
+         #[arg(long, value_enum)]
+         from: Option<CliRdfFormat>,
+@@ -1575,6 +1612,9 @@ pub(crate) enum Command {
+     /// `convert` — a description whose statement layer cannot survive the target syntax
+     /// records the drop instead of losing it silently.
+     Describe {
++        /// Closed version-one YAML-LD Basic input-options JSON file, for primary IN only.
++        #[arg(long, value_name = "PATH")]
++        yamlld_input_options: Option<PathBuf>,
+         /// A resource to describe: repeatable, and at least one is required. Several are
+         /// described as ONE union subgraph (the same union `DESCRIBE <a> <b>` returns), not
+         /// as several documents. A RELATIVE reference resolves against the base in force —
+@@ -2879,6 +2919,7 @@ impl Cli {
+             }
+             Command::Query {
+                 data,
++                yamlld_input_options,
+                 rules,
+                 report,
+                 imports,
+@@ -2886,6 +2927,7 @@ impl Cli {
+                 ..
+             } => {
+                 paths.push(PathBuf::from(data));
++                paths.extend(yamlld_input_options.iter().cloned());
+                 if let Some(path) = rules {
+                     paths.push(path.clone());
+                 }
+@@ -2905,15 +2947,18 @@ impl Cli {
+                 data,
+                 output,
+                 update,
++                yamlld_input_options,
+                 ..
+             } => {
+                 paths.push(PathBuf::from(data));
+                 paths.push(PathBuf::from(output));
++                paths.extend(yamlld_input_options.iter().cloned());
+                 if let Some(path) = update.strip_prefix('@') {
+                     paths.push(PathBuf::from(path));
+                 }
+             }
+             Command::Reason {
++                yamlld_input_options,
+                 rules,
+                 report,
+                 imports,
+@@ -2921,6 +2966,7 @@ impl Cli {
+                 output,
+                 ..
+             } => {
++                paths.extend(yamlld_input_options.iter().cloned());
+                 if let Some(path) = rules {
+                     paths.push(path.clone());
+                 }
+@@ -2942,8 +2988,12 @@ impl Cli {
+                 imports,
+                 report,
+                 output,
++                yamlld_input_options,
++                conclusion_yamlld_input_options,
+                 ..
+             } => {
++                paths.extend(yamlld_input_options.iter().cloned());
++                paths.extend(conclusion_yamlld_input_options.iter().cloned());
+                 paths.push(PathBuf::from(premise));
+                 if let Some(path) = conclusion {
+                     paths.push(PathBuf::from(path));
+@@ -2962,11 +3012,13 @@ impl Cli {
+                 paths.push(PathBuf::from(output));
+             }
+             Command::Consistency {
++                yamlld_input_options,
+                 check_proof,
+                 imports,
+                 input,
+                 ..
+             } => {
++                paths.extend(yamlld_input_options.iter().cloned());
+                 if let Some(path) = check_proof {
+                     paths.push(path.clone());
+                 }
+@@ -2978,12 +3030,14 @@ impl Cli {
+                 paths.push(PathBuf::from(input));
+             }
+             Command::Project {
++                yamlld_input_options,
+                 config,
+                 assets,
+                 input,
+                 output,
+                 ..
+             } => {
++                paths.extend(yamlld_input_options.iter().cloned());
+                 paths.push(PathBuf::from(config));
+                 if let Some(path) = assets {
+                     paths.push(PathBuf::from(path));
+@@ -3002,6 +3056,7 @@ impl Cli {
+                 paths.push(PathBuf::from(output));
+             }
+             Command::Validate {
++                yamlld_input_options,
+                 shapes,
+                 shapes_product,
+                 import,
+@@ -3011,6 +3066,7 @@ impl Cli {
+                 output,
+                 ..
+             } => {
++                paths.extend(yamlld_input_options.iter().cloned());
+                 if let Some(path) = shapes {
+                     paths.push(PathBuf::from(path));
+                 }
+@@ -3036,8 +3092,10 @@ impl Cli {
+                 imports,
+                 data,
+                 output,
++                yamlld_input_options,
+                 ..
+             } => {
++                paths.extend(yamlld_input_options.iter().cloned());
+                 paths.push(PathBuf::from(schema));
+                 for pair in imports {
+                     if let Some((_, path)) = pair.split_once('=') {
+@@ -3047,7 +3105,13 @@ impl Cli {
+                 paths.push(PathBuf::from(data));
+                 paths.push(PathBuf::from(output));
+             }
+-            Command::Describe { input, output, .. } => {
++            Command::Describe {
++                input,
++                output,
++                yamlld_input_options,
++                ..
++            } => {
++                paths.extend(yamlld_input_options.iter().cloned());
+                 paths.push(PathBuf::from(input));
+                 paths.push(PathBuf::from(output));
+             }
+diff --git crates/cli/src/consistency.rs crates/cli/src/consistency.rs
+index 821ca6040..6f2e5a53c 100644
+--- crates/cli/src/consistency.rs
++++ crates/cli/src/consistency.rs
+@@ -75,6 +75,8 @@ use crate::source;
+ /// Grouped for the reason [`crate::convert::ConvertOptions`] is: it keeps [`run`]'s
+ /// signature small enough to read.
+ pub(crate) struct ConsistencyOptions<'a> {
++    /// Explicit Basic controls for the primary ontology document only.
++    pub(crate) yamlld_input_options: Option<&'a Path>,
+     /// The input path `IN`, or `-` for stdin (which requires `--from`).
+     pub(crate) input: &'a str,
+     /// `--import IRI=FILE`: the ontology's `owl:imports` table, in the order the operator
+@@ -137,7 +139,11 @@ pub(crate) fn run(
+     readers.extend(import_readers(&import_pairs));
+     refuse_shared_stdin(&readers)?;
+     let format = format::resolve(options.from, options.input)?;
+-    let document = read_as_nquads(options, format, canonical)?;
++    let input_options = options
++        .yamlld_input_options
++        .map(|path| source::read_yamlld_input_options(path, &[format]))
++        .transpose()?;
++    let document = read_as_nquads(options, format, input_options.as_deref(), canonical)?;
+     // The IRI the input document was read FROM: an `owl:imports` of it names the ontology
+     // itself, so it resolves in place rather than being refused as missing.
+     let premise_base = premise_imports::premise_iri(options.input, format, options.base)?;
+@@ -252,6 +258,7 @@ fn check_supplied_proof<A: AsRef<str>>(
+ fn read_as_nquads(
+     options: &ConsistencyOptions<'_>,
+     format: SourceFormat,
++    input_options: Option<&[u8]>,
+     canonical: &mut crate::canonical::Request,
+ ) -> Result<String, CliError> {
+     // The parses are the only legs `--base` has: this command answers with a verdict and a
+@@ -270,6 +277,7 @@ fn read_as_nquads(
+         options.input,
+         format,
+         options.base,
++        input_options,
+         options.input,
+         canonical,
+     )
+@@ -288,6 +296,7 @@ fn read_path_as_nquads(
+         path,
+         format,
+         options.base,
++        None,
+         &format!("{what} {path}"),
+         canonical,
+     )
+@@ -299,12 +308,13 @@ fn transcode(
+     path: &str,
+     format: SourceFormat,
+     base: Option<&str>,
++    input_options: Option<&[u8]>,
+     named: &str,
+     canonical: &mut crate::canonical::Request,
+ ) -> Result<String, CliError> {
+     // A pack crosses the N-Quads boundary as a zero-copy `PackView`, not a rebuilt
+     // owned dataset; a text source parses to an `RdfDataset`.
+-    let outcome = source::serialize_input_to_nquads(path, format, base, canonical)?;
++    let outcome = source::serialize_input_to_nquads(path, format, base, input_options, canonical)?;
+     if outcome.statement_rows_dropped > 0 || outcome.directional_literals_dropped > 0 {
+         return Err(CliError::Runtime(format!(
+             "{named}: reading this document into the consistency boundary's N-Quads dropped {} \
+diff --git crates/cli/src/convert.rs crates/cli/src/convert.rs
+index 55ad11b87..051407127 100644
+--- crates/cli/src/convert.rs
++++ crates/cli/src/convert.rs
+@@ -154,27 +154,10 @@ pub(crate) fn run(
+     // fails before the first two are read. `--base` is decided later, once the target is
+     // resolved too: whether it can be spent depends on both legs.
+     let formats = sources.resolve_formats()?;
+-    let input_options = if let Some(path) = options.yamlld_input_options {
+-        if formats
+-            .iter()
+-            .any(|format| *format != SourceFormat::Native(purrdf_rdf::NativeRdfFormat::YamlLd))
+-        {
+-            return Err(CliError::Usage(
+-                "--yamlld-input-options requires every input to be YAML-LD".into(),
+-            ));
+-        }
+-        use std::io::Read;
+-        let file = std::fs::File::open(path)
+-            .map_err(|error| CliError::Runtime(format!("{}: {error}", path.display())))?;
+-        let mut bytes = Vec::new();
+-        file.take((purrdf_validate::rdf_input::MAX_OPTIONS_BYTES + 1) as u64)
+-            .read_to_end(&mut bytes)
+-            .map_err(|error| CliError::Runtime(format!("{}: {error}", path.display())))?;
+-        purrdf_validate::rdf_input::options(&bytes).map_err(CliError::native)?;
+-        Some(bytes)
+-    } else {
+-        None
+-    };
++    let input_options = options
++        .yamlld_input_options
++        .map(|path| source::read_yamlld_input_options(path, &formats))
++        .transpose()?;
+     sources.input_options = input_options.as_deref();
+ 
+     refuse_inapplicable_combinations(options, report_target)?;
+@@ -266,6 +249,7 @@ fn convert_one_view(
+         source_format,
+         options.base,
+         options.transport,
++        None,
+         ConvertOp {
+             out: output,
+             target: target_format,
+@@ -434,6 +418,7 @@ fn run_with_transforms(
+                         *source_format,
+                         options.base,
+                         options.transport,
++                        None,
+                         plan.materialization(),
+                         &premise_imports,
+                         &options.limits,
+diff --git crates/cli/src/describe.rs crates/cli/src/describe.rs
+index e3d0cde4d..61e897362 100644
+--- crates/cli/src/describe.rs
++++ crates/cli/src/describe.rs
+@@ -113,6 +113,8 @@ use crate::{format, ledger, sink, source};
+ 
+ /// The resolved `describe` flags.
+ pub(crate) struct DescribeOptions<'a> {
++    /// Explicit Basic controls for the primary data document only.
++    pub(crate) yamlld_input_options: Option<&'a std::path::Path>,
+     /// `--iri`, in the order the operator wrote them; at least one (clap enforces it).
+     pub(crate) iris: &'a [String],
+     /// `--from`: the input-format override.
+@@ -216,6 +218,10 @@ pub(crate) fn run(
+     // unresolvable OUT fails fast rather than after the description has been extracted.
+     let source_format = format::resolve(options.from, options.input)?;
+     let target_format = format::resolve_target(options.to, options.output, "the --to target")?;
++    let input_options = options
++        .yamlld_input_options
++        .map(|path| source::read_yamlld_input_options(path, &[source_format]))
++        .transpose()?;
+     // No `--base` refusal here, unlike `convert`/`reason`. This command has a leg no format
+     // row can describe: `--iri` is command-line text and resolves against the base, exactly
+     // as a ShEx shape map does. So a base handed to `describe` always has a live consumer —
+@@ -234,6 +240,7 @@ pub(crate) fn run(
+         options.input,
+         source_format,
+         options.base,
++        input_options.as_deref(),
+         DescribeOp { iris: &iris },
+         canonical,
+     )?;
+diff --git crates/cli/src/entails.rs crates/cli/src/entails.rs
+index 07bc8b5a1..3f80050ad 100644
+--- crates/cli/src/entails.rs
++++ crates/cli/src/entails.rs
+@@ -178,6 +178,10 @@ pub(crate) struct EntailsOptions<'a> {
+     pub(crate) regime: CliRegime,
+     /// `--premise`: the premise document, or `-`.
+     pub(crate) premise: &'a str,
++    /// YAML-LD Basic options for the premise only.
++    pub(crate) yamlld_input_options: Option<&'a std::path::Path>,
++    /// Independent YAML-LD Basic options for the conclusion only.
++    pub(crate) conclusion_yamlld_input_options: Option<&'a std::path::Path>,
+     /// `--conclusion`: the conclusion graph, when the question is a verdict.
+     pub(crate) conclusion: Option<&'a str>,
+     /// `--pattern`: the basic graph pattern, when the question is a relation.
+@@ -226,6 +230,14 @@ pub(crate) fn run(
+         "--jsonld-options configures a JSON-LD/YAML-LD serializer, and `entails` runs \
+              none: its answer is a line-oriented verdict, not RDF",
+     )?;
++    if options.conclusion_yamlld_input_options.is_some()
++        && (options.conclusion.is_none() || options.pattern.is_some())
++    {
++        return Err(CliError::Usage(
++            "--conclusion-yamlld-input-options requires --conclusion and conflicts with --pattern"
++                .to_owned(),
++        ));
++    }
+     let question = question(options)?;
+     refuse_unconsumable_base(options, question)?;
+     // The `--import` ARGUMENTS are decided before a single document is opened: a malformed
+@@ -242,15 +254,36 @@ pub(crate) fn run(
+     readers.extend(import_readers(&import_pairs));
+     refuse_shared_stdin(&readers)?;
+ 
++    let premise_format = format::resolve(options.from, options.premise)?;
++    let conclusion_format = match question {
++        Question::Conclusion { path, .. } => Some(format::resolve(options.from, path)?),
++        Question::Pattern { .. } => None,
++    };
++    let premise_input_options = options
++        .yamlld_input_options
++        .map(|path| source::read_yamlld_input_options(path, &[premise_format]))
++        .transpose()?;
++    let conclusion_input_options = options
++        .conclusion_yamlld_input_options
++        .map(|path| source::read_yamlld_input_options(path, conclusion_format.as_slice()))
++        .transpose()?;
++
+     // Everything is read and transcoded BEFORE the boundary is called, so an unreadable
+     // import fails against the file the operator named rather than as a refusal attributed
+     // to the premise's `owl:imports`.
+-    let premise = read_as_nquads(options.premise, "--premise", options, canonical)?;
++    let premise = read_as_nquads(
++        options.premise,
++        "--premise",
++        premise_format,
++        premise_input_options.as_deref(),
++        options,
++        canonical,
++    )?;
+     // The IRI the premise document was read FROM — the base it parsed under, which is its
+     // `file://` retrieval IRI or `--base`. An `owl:imports` of that IRI names the premise
+     // itself, so the boundary resolves it in place rather than refusing it as missing. A
+     // container (pack, GTS) stores resolved IRIs and has no document base.
+-    let premise_base = match format::resolve(options.from, options.premise)? {
++    let premise_base = match premise_format {
+         SourceFormat::Native(native) => {
+             source::effective_base(options.premise, native, options.base)?
+         }
+@@ -267,7 +300,14 @@ pub(crate) fn run(
+ 
+     let answer: ReasoningAnswer<String> = match question {
+         Question::Conclusion { path, verify } => {
+-            let conclusion = read_as_nquads(path, "--conclusion", options, canonical)?;
++            let conclusion = read_as_nquads(
++                path,
++                "--conclusion",
++                format::resolve(options.from, path)?,
++                conclusion_input_options.as_deref(),
++                options,
++                canonical,
++            )?;
+             let decide = if verify {
+                 verify_entailment_to_string
+             } else {
+@@ -387,7 +427,14 @@ fn read_imports(
+         let what = format!("--import {}", pair.iri);
+         resolved.push((
+             pair.iri.to_owned(),
+-            read_as_nquads(pair.path, &what, options, canonical)?,
++            read_as_nquads(
++                pair.path,
++                &what,
++                format::resolve(options.from, pair.path)?,
++                None,
++                options,
++                canonical,
++            )?,
+         ));
+     }
+     Ok(resolved)
+@@ -451,13 +498,15 @@ fn refuse_unconsumable_base(
+ fn read_as_nquads(
+     path: &str,
+     what: &str,
++    format: SourceFormat,
++    input_options: Option<&[u8]>,
+     options: &EntailsOptions<'_>,
+     canonical: &mut crate::canonical::Request,
+ ) -> Result<String, CliError> {
+-    let format = format::resolve(options.from, path)?;
+     // A pack crosses the N-Quads boundary as a zero-copy `PackView`, not a rebuilt
+     // owned dataset; a text source parses to an `RdfDataset`.
+-    let outcome = source::serialize_input_to_nquads(path, format, options.base, canonical)?;
++    let outcome =
++        source::serialize_input_to_nquads(path, format, options.base, input_options, canonical)?;
+     if outcome.statement_rows_dropped > 0 || outcome.directional_literals_dropped > 0 {
+         return Err(CliError::Runtime(format!(
+             "{what} {path}: reading this document into the entailment boundary's N-Quads \
+diff --git crates/cli/src/ingest.rs crates/cli/src/ingest.rs
+index 936b495e1..8a7f5eb76 100644
+--- crates/cli/src/ingest.rs
++++ crates/cli/src/ingest.rs
+@@ -67,7 +67,7 @@ use crate::source::{self, TransportPolicy};
+ /// The resolved input side of a command: the ordered source list plus the flags that
+ /// apply to every entry in it.
+ pub(crate) struct Sources<'a> {
+-    /// Explicit YAML-LD controls, set only by convert after format admission.
++    /// Explicit YAML-LD controls, set after format admission.
+     pub(crate) input_options: Option<&'a [u8]>,
+     /// The ordered source paths — the positional `IN` first, then each `--input`.
+     /// Never empty.
+@@ -170,25 +170,14 @@ pub(crate) fn ingest(
+     let mut datasets: Vec<Arc<RdfDataset>> = Vec::with_capacity(sources.paths.len());
+     let mut ledger = LossLedger::new();
+     for (path, format) in sources.paths.iter().zip(formats.iter().copied()) {
+-        let (dataset, source_ledger) = if let Some(options) = sources.input_options {
+-            let SourceFormat::Native(format) = format else {
+-                return Err(CliError::Usage(
+-                    "YAML-LD input options require YAML-LD input".into(),
+-                ));
+-            };
+-            (
+-                source::load_native(path, format, sources.base, sources.transport, Some(options))?,
+-                LossLedger::new(),
+-            )
+-        } else {
+-            source::load_dataset_reporting(
+-                path,
+-                format,
+-                sources.base,
+-                sources.transport,
+-                canonical,
+-            )?
+-        };
++        let (dataset, source_ledger) = source::load_dataset_reporting(
++            path,
++            format,
++            sources.base,
++            sources.transport,
++            sources.input_options,
++            canonical,
++        )?;
+         for entry in source_ledger.entries() {
+             ledger.record(entry.clone());
+         }
+diff --git crates/cli/src/lib.rs crates/cli/src/lib.rs
+index 3df06d22f..ae9ea44a6 100644
+--- crates/cli/src/lib.rs
++++ crates/cli/src/lib.rs
+@@ -409,6 +409,7 @@ fn dispatch_with_request(
+         )
+         .map(|()| CliOutcome::Complete),
+         Command::Query {
++            yamlld_input_options,
+             data,
+             base,
+             entailment,
+@@ -439,6 +440,7 @@ fn dispatch_with_request(
+             query,
+         } => query::run(
+             &query::QueryOptions {
++                yamlld_input_options: yamlld_input_options.as_deref(),
+                 geo: selected_geo,
+                 data,
+                 base: base.as_deref(),
+@@ -480,6 +482,7 @@ fn dispatch_with_request(
+             canonical,
+         ),
+         Command::Update {
++            yamlld_input_options,
+             now,
+             entropy_seed,
+             data,
+@@ -503,6 +506,7 @@ fn dispatch_with_request(
+             graph_existence,
+         } => update::run(
+             &update::UpdateOptions {
++                yamlld_input_options: yamlld_input_options.as_deref(),
+                 now: now.as_deref(),
+                 entropy_seed: entropy_seed.as_deref(),
+                 geo: selected_geo,
+@@ -534,6 +538,7 @@ fn dispatch_with_request(
+             canonical,
+         ),
+         Command::Reason {
++            yamlld_input_options,
+             regime,
+             rules,
+             report,
+@@ -548,6 +553,7 @@ fn dispatch_with_request(
+             output,
+         } => reason::run(
+             *regime,
++            yamlld_input_options.as_deref(),
+             rules.as_deref(),
+             &cli_materialize_limits(*max_stored_facts, *max_join_steps, *max_term_arena_bytes),
+             imports,
+@@ -573,6 +579,8 @@ fn dispatch_with_request(
+             max_join_steps,
+             max_term_arena_bytes,
+             report,
++            yamlld_input_options,
++            conclusion_yamlld_input_options,
+             from,
+             base,
+             output,
+@@ -589,6 +597,8 @@ fn dispatch_with_request(
+                     *max_join_steps,
+                     *max_term_arena_bytes,
+                 ),
++                yamlld_input_options: yamlld_input_options.as_deref(),
++                conclusion_yamlld_input_options: conclusion_yamlld_input_options.as_deref(),
+                 from: *from,
+                 base: base.as_deref(),
+                 jsonld_options: jsonld_options.as_ref(),
+@@ -600,6 +610,7 @@ fn dispatch_with_request(
+         )
+         .map(|()| CliOutcome::Complete),
+         Command::Consistency {
++            yamlld_input_options,
+             proof,
+             check_proof,
+             step_cap,
+@@ -610,6 +621,7 @@ fn dispatch_with_request(
+             input,
+         } => consistency::run(
+             &consistency::ConsistencyOptions {
++                yamlld_input_options: yamlld_input_options.as_deref(),
+                 input,
+                 imports,
+                 from: *from,
+@@ -624,6 +636,7 @@ fn dispatch_with_request(
+             canonical,
+         ),
+         Command::Validate {
++            yamlld_input_options,
+             shapes,
+             shapes_product,
+             expect_identity,
+@@ -655,6 +668,7 @@ fn dispatch_with_request(
+             output,
+         } => validate::run(
+             &validate::ValidateOptions {
++                yamlld_input_options: yamlld_input_options.as_deref(),
+                 shacl_profile: shacl_profile.as_deref(),
+                 input,
+                 output,
+@@ -700,6 +714,7 @@ fn dispatch_with_request(
+             schema_from,
+             imports,
+             data,
++            yamlld_input_options,
+             from,
+             base,
+             xpath_regex,
+@@ -711,6 +726,7 @@ fn dispatch_with_request(
+                 schema_from: *schema_from,
+                 imports,
+                 data,
++                yamlld_input_options: yamlld_input_options.as_deref(),
+                 from: *from,
+                 base: base.as_deref(),
+                 xpath_regex: *xpath_regex,
+@@ -723,6 +739,7 @@ fn dispatch_with_request(
+         )
+         .map(|()| CliOutcome::Complete),
+         Command::Describe {
++            yamlld_input_options,
+             iris,
+             from,
+             to,
+@@ -731,6 +748,7 @@ fn dispatch_with_request(
+             output,
+         } => describe::run(
+             &describe::DescribeOptions {
++                yamlld_input_options: yamlld_input_options.as_deref(),
+                 iris,
+                 from: *from,
+                 to: *to,
+@@ -744,6 +762,7 @@ fn dispatch_with_request(
+         )
+         .map(|()| CliOutcome::Complete),
+         Command::Project {
++            yamlld_input_options,
+             profile,
+             config,
+             assets,
+@@ -753,6 +772,7 @@ fn dispatch_with_request(
+             output,
+         } => projection::run_project(
+             *profile,
++            yamlld_input_options.as_deref(),
+             config,
+             assets.as_deref(),
+             *from,
+diff --git crates/cli/src/premise_imports.rs crates/cli/src/premise_imports.rs
+index bfd1bfcb5..368b7cf66 100644
+--- crates/cli/src/premise_imports.rs
++++ crates/cli/src/premise_imports.rs
+@@ -106,7 +106,7 @@ impl PremiseImports {
+         let mut map = ImportMap::default();
+         for pair in &pairs {
+             let document_format = format::resolve(from, pair.path)?;
+-            let document = source::load_dataset(pair.path, document_format, base, canonical)?;
++            let document = source::load_dataset(pair.path, document_format, base, None, canonical)?;
+             // `parse_import_pairs` already blamed the argument for a repeated or relative IRI;
+             // the table's own key policy is the one every insertion site shares.
+             map.try_insert(pair.iri, document)
+diff --git crates/cli/src/projection.rs crates/cli/src/projection.rs
+index 6714ec011..08c53fb3d 100644
+--- crates/cli/src/projection.rs
++++ crates/cli/src/projection.rs
+@@ -49,6 +49,7 @@ impl ViewOp for ProjectOp<'_> {
+ )]
+ pub(crate) fn run_project(
+     profile: CliProjectionProfile,
++    yamlld_input_options: Option<&std::path::Path>,
+     config_path: &str,
+     assets_path: Option<&str>,
+     from: Option<CliRdfFormat>,
+@@ -64,6 +65,10 @@ pub(crate) fn run_project(
+             "--jsonld-options cannot be used with projection carrier output".to_owned(),
+         ));
+     }
++    let source_format = format::resolve(from, input)?;
++    let input_options = yamlld_input_options
++        .map(|path| source::read_yamlld_input_options(path, &[source_format]))
++        .transpose()?;
+     let config = read_config(config_path, input)?;
+     if assets_path == Some("-") && (config_path == "-" || input == "-") {
+         return Err(CliError::Usage(
+@@ -75,7 +80,6 @@ pub(crate) fn run_project(
+         .transpose()?
+         .map(|archive| RoCrateAssets::from_ustar(&archive, config.limits()))
+         .transpose()?;
+-    let source_format = format::resolve(from, input)?;
+     // `project` writes a carrier ARCHIVE, not an RDF document, so the input parse is the
+     // only leg a base could reach.
+     format::refuse_unconsumable_base(
+@@ -86,6 +90,7 @@ pub(crate) fn run_project(
+         input,
+         source_format,
+         base,
++        input_options.as_deref(),
+         ProjectOp {
+             profile,
+             config: &config,
+diff --git crates/cli/src/query.rs crates/cli/src/query.rs
+index 0ff0e58c5..3b45f0e25 100644
+--- crates/cli/src/query.rs
++++ crates/cli/src/query.rs
+@@ -822,6 +822,8 @@ impl ViewOp for EntailedQueryOp<'_> {
+ /// dispatcher hands over one borrow rather than a dozen positional arguments whose order
+ /// is the only thing keeping them apart.
+ pub(crate) struct QueryOptions<'a> {
++    /// Explicit Basic controls for the primary data document only.
++    pub(crate) yamlld_input_options: Option<&'a std::path::Path>,
+     /// The immutable geographic profile selected by `--geo-profile`.
+     pub(crate) geo: &'a purrdf_validate::geo::GeoProfile,
+     /// `--data`: the data-source path.
+@@ -903,6 +905,10 @@ pub(crate) fn run(
+             CliError::Usage(format!("{flag}: {error}"))
+         })?;
+     let data_format = format::resolve(None, options.data)?;
++    let input_options = options
++        .yamlld_input_options
++        .map(|path| source::read_yamlld_input_options(path, &[data_format]))
++        .transpose()?;
+     // A report of a run that will not happen is a request the flag cannot honor, and
+     // honoring it with silence is what this pipeline refuses.
+     if report_target.is_requested() && options.entailment.is_none() {
+@@ -963,6 +969,7 @@ pub(crate) fn run(
+             options.data,
+             data_format,
+             options.base,
++            input_options.as_deref(),
+             ExplainOp {
+                 engine: &engine,
+                 query: options.query,
+@@ -1020,6 +1027,7 @@ pub(crate) fn run(
+             options.data,
+             data_format,
+             options.base,
++            input_options.as_deref(),
+             EntailedQueryOp {
+                 engine: &engine,
+                 query: options.query,
+@@ -1050,6 +1058,7 @@ pub(crate) fn run(
+             options.data,
+             data_format,
+             options.base,
++            input_options.as_deref(),
+             GovernedQueryOp {
+                 engine: &engine,
+                 prepared: &prepared,
+@@ -1076,6 +1085,7 @@ pub(crate) fn run(
+         options.data,
+         data_format,
+         options.base,
++        input_options.as_deref(),
+         QueryOp {
+             engine: &engine,
+             // `prepared` is an `Arc<PreparedQuery>`; reborrow it as `&PreparedQuery`.
+diff --git crates/cli/src/reason.rs crates/cli/src/reason.rs
+index 7663b4595..38507610e 100644
+--- crates/cli/src/reason.rs
++++ crates/cli/src/reason.rs
+@@ -169,6 +169,7 @@ fn read_rule_set(path: &Path) -> Result<RuleSet, CliError> {
+ )]
+ pub(crate) fn run(
+     regime: CliRegime,
++    yamlld_input_options: Option<&Path>,
+     rules: Option<&Path>,
+     limits: &MaterializeLimits,
+     imports: &[String],
+@@ -182,13 +183,15 @@ pub(crate) fn run(
+     report_target: &ReportTarget,
+     canonical: &mut crate::canonical::Request,
+ ) -> Result<(), CliError> {
+-    let plan = EntailmentPlan::resolve(regime, rules)?;
+-
+     // Resolve BOTH formats up front (before touching the source) so an
+     // unresolvable OUT fails fast rather than after the (potentially
+     // expensive) load + materialize work has already run.
+     let source_format = format::resolve(from, input)?;
+     let target_format = format::resolve_target(to, output, "the --to target")?;
++    let input_options = yamlld_input_options
++        .map(|path| crate::source::read_yamlld_input_options(path, &[source_format]))
++        .transpose()?;
++    let plan = EntailmentPlan::resolve(regime, rules)?;
+     // `--base` has two legs here — the source parse and the closure's serialization — and
+     // is refused only when NEITHER can spend it.
+     // `--import` documents parse under `--base` too, so each is a parse leg.
+@@ -219,6 +222,7 @@ pub(crate) fn run(
+         source_format,
+         base,
+         crate::source::TransportPolicy::Detect,
++        input_options.as_deref(),
+         plan.materialization(),
+         &premise_imports,
+         limits,
+diff --git crates/cli/src/report.rs crates/cli/src/report.rs
+index 0d9839f33..3aa420c12 100644
+--- crates/cli/src/report.rs
++++ crates/cli/src/report.rs
+@@ -244,6 +244,7 @@ pub(crate) fn materialize_reported_over_input(
+     format: SourceFormat,
+     base: Option<&str>,
+     policy: TransportPolicy,
++    input_options: Option<&[u8]>,
+     plan: Materialization<'_>,
+     imports: &crate::premise_imports::PremiseImports,
+     limits: &MaterializeLimits,
+@@ -275,6 +276,7 @@ pub(crate) fn materialize_reported_over_input(
+         format,
+         base,
+         policy,
++        input_options,
+         Op {
+             plan,
+             imports,
+diff --git crates/cli/src/shapes_source.rs crates/cli/src/shapes_source.rs
+index cab6fa1a6..766325557 100644
+--- crates/cli/src/shapes_source.rs
++++ crates/cli/src/shapes_source.rs
+@@ -122,7 +122,7 @@ pub(crate) fn read_shapes_document(
+         SourceFormat::Native(native) => native,
+         SourceFormat::Pack | SourceFormat::Gts => {
+             return Ok(ShapesDocument {
+-                dataset: source::load_dataset(path, format, base, canonical)?,
++                dataset: source::load_dataset(path, format, base, None, canonical)?,
+                 prefixes: Vec::new(),
+                 loaded: base.into_iter().map(str::to_owned).collect(),
+             });
+diff --git crates/cli/src/shapes_tools.rs crates/cli/src/shapes_tools.rs
+index 8e66c5288..f6ab4955a 100644
+--- crates/cli/src/shapes_tools.rs
++++ crates/cli/src/shapes_tools.rs
+@@ -194,7 +194,7 @@ pub(crate) fn run_rules(
+         }
+     };
+ 
+-    let data = source::load_dataset(options.input, data_format, options.base, canonical)?;
++    let data = source::load_dataset(options.input, data_format, options.base, None, canonical)?;
+     let mut diagnostics: Vec<lint::MandatoryDiagnostic> = Vec::new();
+     let limits = purrdf::shapes::RuleLimits {
+         max_term_generating_rounds: options.max_term_generating_rounds,
+@@ -574,7 +574,7 @@ pub(crate) fn run_node_expr(
+         canonical,
+     )?;
+     let table = shapes_imports(&root_document, options.imports, canonical)?;
+-    let data = source::load_dataset(options.input, data_format, options.base, canonical)?;
++    let data = source::load_dataset(options.input, data_format, options.base, None, canonical)?;
+     let selector = match (argv_selector, options.expr.expr_turtle_file) {
+         (Some(selector), _) => selector,
+         (None, Some(path)) => {
+diff --git crates/cli/src/shex.rs crates/cli/src/shex.rs
+index eb681e2e3..bd798b5b6 100644
+--- crates/cli/src/shex.rs
++++ crates/cli/src/shex.rs
+@@ -188,6 +188,8 @@ pub(crate) struct ShexOptions<'a> {
+     pub(crate) imports: &'a [String],
+     /// `--data`: the data graph, or `-`.
+     pub(crate) data: &'a str,
++    /// YAML-LD Basic options for the data graph only.
++    pub(crate) yamlld_input_options: Option<&'a std::path::Path>,
+     /// `--from`: the data-graph format override.
+     pub(crate) from: Option<CliRdfFormat>,
+     /// `--base`: the base relative IRIs in the DATA graph and the shape map resolve against.
+@@ -240,9 +242,19 @@ pub(crate) fn run(
+     check_map_syntax(options)?;
+ 
+     let data_format = format::resolve(options.from, options.data)?;
++    let input_options = options
++        .yamlld_input_options
++        .map(|path| source::read_yamlld_input_options(path, &[data_format]))
++        .transpose()?;
+     // No `--base` refusal here, unlike every other subcommand: see the module documentation
+     // for why this run's base can never be inert.
+-    let data = source::load_dataset(options.data, data_format, options.base, canonical)?;
++    let data = source::load_dataset(
++        options.data,
++        data_format,
++        options.base,
++        input_options.as_deref(),
++        canonical,
++    )?;
+ 
+     let schema_base = schema_base(options.schema)?;
+     let schema = read_schema(options.schema, options.schema_from, schema_base.as_deref())?;
+diff --git crates/cli/src/source.rs crates/cli/src/source.rs
+index cb4f91783..b1d822087 100644
+--- crates/cli/src/source.rs
++++ crates/cli/src/source.rs
+@@ -682,10 +682,19 @@ pub(crate) fn run_over_input<Op: ViewOp>(
+     path: &str,
+     format: SourceFormat,
+     base: Option<&str>,
++    input_options: Option<&[u8]>,
+     op: Op,
+     canonical: &mut crate::canonical::Request,
+ ) -> Result<Op::Output, CliError> {
+-    run_over_input_with_transport(path, format, base, TransportPolicy::Detect, op, canonical)
++    run_over_input_with_transport(
++        path,
++        format,
++        base,
++        TransportPolicy::Detect,
++        input_options,
++        op,
++        canonical,
++    )
+ }
+ 
+ /// [`run_over_input`] under an explicit [`TransportPolicy`].
+@@ -699,12 +708,14 @@ pub(crate) fn run_over_input_with_transport<Op: ViewOp>(
+     format: SourceFormat,
+     base: Option<&str>,
+     policy: TransportPolicy,
++    input_options: Option<&[u8]>,
+     op: Op,
+     canonical: &mut crate::canonical::Request,
+ ) -> Result<Op::Output, CliError> {
++    refuse_container_input_options(format, input_options)?;
+     match format {
+         SourceFormat::Native(rdf_format) => {
+-            let dataset = load_native(path, rdf_format, base, policy, None)?;
++            let dataset = load_native(path, rdf_format, base, policy, input_options)?;
+             op.run(&*dataset, canonical)
+         }
+         SourceFormat::Pack => {
+@@ -735,10 +746,18 @@ pub(crate) fn load_dataset(
+     path: &str,
+     format: SourceFormat,
+     base: Option<&str>,
++    input_options: Option<&[u8]>,
+     canonical: &mut crate::canonical::Request,
+ ) -> Result<Arc<RdfDataset>, CliError> {
+-    load_dataset_reporting(path, format, base, TransportPolicy::Detect, canonical)
+-        .map(|(dataset, _)| dataset)
++    load_dataset_reporting(
++        path,
++        format,
++        base,
++        TransportPolicy::Detect,
++        input_options,
++        canonical,
++    )
++    .map(|(dataset, _)| dataset)
+ }
+ 
+ /// [`load_dataset`] plus the ledger of what reading this source dropped.
+@@ -750,11 +769,13 @@ pub(crate) fn load_dataset_reporting(
+     format: SourceFormat,
+     base: Option<&str>,
+     policy: TransportPolicy,
++    input_options: Option<&[u8]>,
+     canonical: &mut crate::canonical::Request,
+ ) -> Result<(Arc<RdfDataset>, LossLedger), CliError> {
++    refuse_container_input_options(format, input_options)?;
+     match format {
+         SourceFormat::Native(rdf_format) => Ok((
+-            load_native(path, rdf_format, base, policy, None)?,
++            load_native(path, rdf_format, base, policy, input_options)?,
+             LossLedger::new(),
+         )),
+         SourceFormat::Pack => {
+@@ -766,6 +787,42 @@ pub(crate) fn load_dataset_reporting(
+     }
+ }
+ 
++/// Reject native text controls before a pack or GTS container is acquired.
++fn refuse_container_input_options(
++    format: SourceFormat,
++    input_options: Option<&[u8]>,
++) -> Result<(), CliError> {
++    if input_options.is_some() && !matches!(format, SourceFormat::Native(_)) {
++        return Err(CliError::Usage(
++            "YAML-LD input options require YAML-LD input".into(),
++        ));
++    }
++    Ok(())
++}
++
++/// Admit formats and read one bounded, named YAML-LD options file before data I/O.
++pub(crate) fn read_yamlld_input_options(
++    path: &std::path::Path,
++    formats: &[SourceFormat],
++) -> Result<Vec<u8>, CliError> {
++    if formats
++        .iter()
++        .any(|format| *format != SourceFormat::Native(NativeRdfFormat::YamlLd))
++    {
++        return Err(CliError::Usage(
++            "--yamlld-input-options requires every input to be YAML-LD".into(),
++        ));
++    }
++    let file = std::fs::File::open(path)
++        .map_err(|error| CliError::Runtime(format!("{}: {error}", path.display())))?;
++    let mut bytes = Vec::new();
++    file.take((purrdf_validate::rdf_input::MAX_OPTIONS_BYTES + 1) as u64)
++        .read_to_end(&mut bytes)
++        .map_err(|error| CliError::Runtime(format!("{}: {error}", path.display())))?;
++    purrdf_validate::rdf_input::options(&bytes).map_err(CliError::native)?;
++    Ok(bytes)
++}
++
+ /// Serialize the input at `path` (text, pack, or GTS) to N-Quads over its view.
+ ///
+ /// A pack is **not** rebuilt into an owned `RdfDataset` to be serialized: the
+@@ -775,6 +832,7 @@ pub(crate) fn serialize_input_to_nquads(
+     path: &str,
+     format: SourceFormat,
+     base: Option<&str>,
++    input_options: Option<&[u8]>,
+     canonical: &mut crate::canonical::Request,
+ ) -> Result<SerializeOutcome, CliError> {
+     struct NQuadsOp;
+@@ -801,5 +859,5 @@ pub(crate) fn serialize_input_to_nquads(
+         }
+     }
+ 
+-    run_over_input(path, format, base, NQuadsOp, canonical)
++    run_over_input(path, format, base, input_options, NQuadsOp, canonical)
+ }
+diff --git crates/cli/src/update.rs crates/cli/src/update.rs
+index b3c8d4d74..c0a3502fb 100644
+--- crates/cli/src/update.rs
++++ crates/cli/src/update.rs
+@@ -17,6 +17,8 @@ use crate::{ledger, sink, source};
+ 
+ /// The resolved `update` flags.
+ pub(crate) struct UpdateOptions<'a> {
++    /// Explicit Basic controls for the primary data document only.
++    pub(crate) yamlld_input_options: Option<&'a std::path::Path>,
+     /// Raw supplied time, decoded before UPDATE source I/O.
+     pub(crate) now: Option<&'a str>,
+     /// Raw supplied initial request seed.
+@@ -71,7 +73,17 @@ pub(crate) fn run(
+             })?;
+     let source_format = format::resolve(options.from, options.data)?;
+     let target_format = format::resolve_target(options.to, options.output, "the --to target")?;
+-    let mut dataset = source::load_dataset(options.data, source_format, options.base, canonical)?;
++    let input_options = options
++        .yamlld_input_options
++        .map(|path| source::read_yamlld_input_options(path, &[source_format]))
++        .transpose()?;
++    let mut dataset = source::load_dataset(
++        options.data,
++        source_format,
++        options.base,
++        input_options.as_deref(),
++        canonical,
++    )?;
+     // The same engine `query` builds: one law for the whole request, and a native
+     // resource refusal is an `Err` that applies nothing and writes no dataset.
+     let engine = purrdf_validate::xpath_regex::sparql_engine(options.xpath_regex);
+diff --git crates/cli/src/validate.rs crates/cli/src/validate.rs
+index 3d348683f..8075dfa9f 100644
+--- crates/cli/src/validate.rs
++++ crates/cli/src/validate.rs
+@@ -203,6 +203,8 @@ use crate::{format, ledger, sink, source};
+ /// Grouped for the reason [`crate::convert::ConvertOptions`] is: it keeps [`run`]'s signature
+ /// small enough to read, and every field is borrowed from the parsed command line.
+ pub(crate) struct ValidateOptions<'a> {
++    /// Explicit Basic controls for the primary data document only.
++    pub(crate) yamlld_input_options: Option<&'a std::path::Path>,
+     /// The data-graph path `IN`, or `-` for stdin (which requires `--from`).
+     pub(crate) input: &'a str,
+     /// The report path `OUT`, or `-` for stdout.
+@@ -452,7 +454,11 @@ pub(crate) fn run(
+     refuse_a_rebuild_with_no_product(options)?;
+ 
+     let data_format = format::resolve(options.from, options.input)?;
+-    // Decided before a byte of anything is read, for the reason `ShapesPlan::decide` is:
++    let input_options = options
++        .yamlld_input_options
++        .map(|path| source::read_yamlld_input_options(path, &[data_format]))
++        .transpose()?;
++    // Decided before data, change or shapes bytes are read, as `ShapesPlan::decide` is:
+     // an unresolvable `--changes-from` is a malformed request about the command line.
+     let change_plan = ChangePlan::decide(options)?;
+     // The DATA parse is the only leg `--base` has here: the shapes graph resolves against
+@@ -476,7 +482,13 @@ pub(crate) fn run(
+     // Decided off the command line too: an IRI that is not one is a malformed request.
+     let validation = validation_options(options)?;
+ 
+-    let data = source::load_dataset(options.input, data_format, options.base, canonical)?;
++    let data = source::load_dataset(
++        options.input,
++        data_format,
++        options.base,
++        input_options.as_deref(),
++        canonical,
++    )?;
+     // The graph this run VALIDATES: `IN` itself, or `IN` with the change applied. Built
+     // before the shapes are read, because its `sh:shapesGraph` links (SHACL 1.2 Core
+     // section 6.4) decide what the shapes graph is — and a change may add or retract a
+@@ -841,7 +853,7 @@ fn apply_changes(
+ ) -> Result<MutableDataset, CliError> {
+     let mut mutation = MutableDataset::new(Arc::clone(base));
+     if let Some((path, format)) = added {
+-        let document = source::load_dataset(path, format, base_iri, canonical)?;
++        let document = source::load_dataset(path, format, base_iri, None, canonical)?;
+         for row in QuadValues::surface_of(&document) {
+             mutation.insert(row).map_err(|error| {
+                 CliError::Runtime(format!("--changes {path}: {}", error.diagnostic_code()))
+@@ -849,7 +861,7 @@ fn apply_changes(
+         }
+     }
+     if let Some((path, format)) = removed {
+-        let document = source::load_dataset(path, format, base_iri, canonical)?;
++        let document = source::load_dataset(path, format, base_iri, None, canonical)?;
+         for row in QuadValues::surface_of(&document) {
+             // A row the data graph does not carry retracts nothing. That is the
+             // `DatasetMut::remove` contract everywhere else in PurRDF, and it is right
+diff --git crates/cli/tests/consistency_cli.rs crates/cli/tests/consistency_cli.rs
+index a52447d1b..0cafc4b8d 100644
+--- crates/cli/tests/consistency_cli.rs
++++ crates/cli/tests/consistency_cli.rs
+@@ -39,6 +39,76 @@ use std::process::Output;
+ mod support;
+ use support::{code, purrdf, run, stderr, stdout, write_file};
+ 
++/// Only primary document selection changes the ontology reaching the decision seam.
++#[test]
++fn configured_yamlld_input_reaches_consistency_primary() {
++    use support::path;
++    let dir = purrdf_testkit::temp_dir!().expect("temporary inputs");
++    let input = write_file(
++        dir.path(),
++        "input.yamlld",
++        "'@id': https://example.org/a\n'@type': http://www.w3.org/2002/07/owl#Thing\n---\n'@id': https://example.org/a\n'@type': http://www.w3.org/2002/07/owl#Nothing\n",
++    );
++    let config = write_file(
++        dir.path(),
++        "all.json",
++        r#"{"version":1,"yaml_ld":{"extract_all_scripts":true}}"#,
++    );
++    for (controls, verdict) in [(None, true), (Some(config.as_str()), false)] {
++        let receipt = path(
++            dir.path(),
++            if verdict {
++                "first-receipt.json"
++            } else {
++                "all-receipt.json"
++            },
++        );
++        let mut args = vec![
++            "consistency",
++            "--canonical-search",
++            "unlimited",
++            "--canonicalization-receipts",
++            &receipt,
++        ];
++        if let Some(controls) = controls {
++            args.extend(["--yamlld-input-options", controls]);
++        }
++        args.push(&input);
++        let selected = run(&args);
++        assert_eq!(code(&selected), 0, "{}", stderr(&selected));
++        assert!(stdout(&selected).starts_with(&format!("consistency {verdict}\n")));
++        assert!(stdout(&selected).contains("\ncompleteness decided\n"));
++    }
++
++    let limited = write_file(
++        dir.path(),
++        "limited.json",
++        r#"{"version":1,"yaml_ld":{"syntax":{"max_input_bytes":0}}}"#,
++    );
++    let refused = run(&["consistency", "--yamlld-input-options", &limited, &input]);
++    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
++    assert!(stderr(&refused).contains("native-yaml-input-limit"));
++    assert_eq!(stdout(&refused), "");
++
++    let malformed = write_file(dir.path(), "malformed.json", "{");
++    let missing = path(dir.path(), "missing.yamlld");
++    let proof = path(dir.path(), "missing.proof");
++    let imports = format!("https://example.org/import={missing}");
++    let refused = run(&[
++        "consistency",
++        "--yamlld-input-options",
++        &malformed,
++        "--import",
++        &imports,
++        "--check-proof",
++        &proof,
++        &missing,
++    ]);
++    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
++    assert!(stderr(&refused).contains("rdf-input-options"));
++    assert_eq!(stdout(&refused), "");
++}
++
+ /// The seventeen-triple equivalence-over-untyped-restrictions ontology, verbatim — see
+ /// `crates/validate/tests/dl_consistency_search_budget.rs`.
+ const ORDINARY_ONTOLOGY: &str = r"
+diff --git crates/cli/tests/convert_cli.rs crates/cli/tests/convert_cli.rs
+index 4cb012ec9..9a5489f90 100644
+--- crates/cli/tests/convert_cli.rs
++++ crates/cli/tests/convert_cli.rs
+@@ -342,7 +342,7 @@ fn configured_yamlld_input_reaches_convert_and_refuses_other_routes() {
+             stderr(&refused)
+         );
+     }
+-    let other = run(&["query", "--yamlld-input-options", &config]);
++    let other = run(&["lift", "--yamlld-input-options", &config]);
+     assert!(!other.status.success());
+     assert!(stderr(&other).contains("unexpected argument"));
+     let limit = write_file(
+diff --git crates/cli/tests/describe_cli.rs crates/cli/tests/describe_cli.rs
+index 339ebf285..f8fa795a7 100644
+--- crates/cli/tests/describe_cli.rs
++++ crates/cli/tests/describe_cli.rs
+@@ -25,6 +25,67 @@
+ mod support;
+ use support::{code, pipe, run, stderr, stdout, write_file};
+ 
++/// Explicit document selection reaches the shared selector/base path before output.
++#[test]
++fn configured_yamlld_input_reaches_describe_selection() {
++    let dir = purrdf_testkit::temp_dir!().expect("temporary inputs");
++    let input = write_file(
++        dir.path(),
++        "input.yamlld",
++        "'@id': first\nhttps://example.org/p: one\n---\n'@id': second\nhttps://example.org/p: two\n",
++    );
++    let config = write_file(
++        dir.path(),
++        "all.json",
++        r#"{"version":1,"yaml_ld":{"extract_all_scripts":true}}"#,
++    );
++    let mut args = vec![
++        "describe",
++        "--iri",
++        "second",
++        "--base",
++        "https://example.org/",
++        "--to",
++        "nquads",
++    ];
++    let mut first_args = args.clone();
++    first_args.push(&input);
++    let first = run(&first_args);
++    assert_eq!(code(&first), 0, "{}", stderr(&first));
++    assert_eq!(stdout(&first), "");
++    args.extend(["--yamlld-input-options", &config, &input]);
++    let selected = run(&args);
++    assert_eq!(code(&selected), 0, "{}", stderr(&selected));
++    assert_eq!(
++        stdout(&selected),
++        "<https://example.org/second> <https://example.org/p> \"two\" .\n"
++    );
++    let limited = write_file(
++        dir.path(),
++        "limited.json",
++        r#"{"version":1,"yaml_ld":{"syntax":{"max_input_bytes":0}}}"#,
++    );
++    let output = write_file(dir.path(), "output.nq", "unchanged destination");
++    let refused = run(&[
++        "describe",
++        "--iri",
++        "second",
++        "--base",
++        "https://example.org/",
++        "--yamlld-input-options",
++        &limited,
++        &input,
++        &output,
++    ]);
++    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
++    assert!(stderr(&refused).contains("native-yaml-input-limit"));
++    assert_eq!(stdout(&refused), "");
++    assert_eq!(
++        std::fs::read_to_string(&output).unwrap(),
++        "unchanged destination"
++    );
++}
++
+ /// A graph exercising every SCBD rule at once:
+ ///
+ /// * `alice → bob` is OUTGOING from the subject;
+diff --git crates/cli/tests/entails_cli.rs crates/cli/tests/entails_cli.rs
+index 487f446c7..9bbec70e2 100644
+--- crates/cli/tests/entails_cli.rs
++++ crates/cli/tests/entails_cli.rs
+@@ -2080,3 +2080,105 @@ fn entails_and_query_take_the_evaluation_limits() {
+     ]);
+     assert_eq!(bare.status.code(), Some(2), "{}", stderr(&bare));
+ }
++
++/// Role-specific YAML controls change only the selected graph and preflight before RDF I/O.
++#[test]
++fn configured_yamlld_controls_reach_entailment_roles() {
++    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
++    let yaml = write_file(
++        dir.path(),
++        "input.yamlld",
++        "'@id': https://example.org/first\nhttps://example.org/p: one\n---\n'@id': https://example.org/second\nhttps://example.org/p: two\n",
++    );
++    let first = write_file(
++        dir.path(),
++        "first.nq",
++        "<https://example.org/first> <https://example.org/p> \"one\" .\n",
++    );
++    let second = write_file(
++        dir.path(),
++        "second.nq",
++        "<https://example.org/second> <https://example.org/p> \"two\" .\n",
++    );
++    let all = write_file(
++        dir.path(),
++        "all.json",
++        r#"{"version":1,"yaml_ld":{"extract_all_scripts":true}}"#,
++    );
++    for (premise, conclusion, flag, configured_verdict) in [
++        (&yaml, &second, "--yamlld-input-options", "entailed"),
++        (
++            &first,
++            &yaml,
++            "--conclusion-yamlld-input-options",
++            "not-entailed",
++        ),
++    ] {
++        for configured in [false, true] {
++            let mut args = vec![
++                "entails",
++                "--regime",
++                "simple",
++                "--premise",
++                premise,
++                "--conclusion",
++                conclusion,
++            ];
++            if configured {
++                args.extend([flag, &all]);
++            }
++            let out = run(&args);
++            assert!(out.status.success(), "{}", stderr(&out));
++            let verdict = if configured {
++                configured_verdict
++            } else if configured_verdict == "entailed" {
++                "not-entailed"
++            } else {
++                "entailed"
++            };
++            assert!(
++                stdout(&out).contains(&format!("entailment {verdict}\n")),
++                "{}",
++                stdout(&out)
++            );
++        }
++    }
++    let missing = path(dir.path(), "missing.yamlld");
++    let refused = run(&[
++        "entails",
++        "--regime",
++        "simple",
++        "--premise",
++        &missing,
++        "--pattern",
++        &missing,
++        "--conclusion-yamlld-input-options",
++        &all,
++    ]);
++    assert_eq!(refused.status.code(), Some(2), "{}", stderr(&refused));
++    let malformed = write_file(dir.path(), "malformed.json", "{");
++    let output = write_file(dir.path(), "answer.txt", "unchanged answer");
++    let report = write_file(dir.path(), "report.txt", "unchanged report");
++    let report_arg = format!("--report={report}");
++    let import = format!("https://example.org/import={missing}");
++    let refused = run(&[
++        "entails",
++        "--regime",
++        "simple",
++        "--premise",
++        &missing,
++        "--conclusion",
++        &missing,
++        "--import",
++        &import,
++        "--conclusion-yamlld-input-options",
++        &malformed,
++        &report_arg,
++        &output,
++    ]);
++    assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
++    assert!(stderr(&refused).contains("rdf-input-options"));
++    assert_eq!(stdout(&refused), "");
++    assert_eq!(std::fs::read_to_string(output).unwrap(), "unchanged answer");
++    assert_eq!(std::fs::read_to_string(report).unwrap(), "unchanged report");
++}
+diff --git crates/cli/tests/projection_cli.rs crates/cli/tests/projection_cli.rs
+index 6abd85aa0..fd83f25f7 100644
+--- crates/cli/tests/projection_cli.rs
++++ crates/cli/tests/projection_cli.rs
+@@ -43,6 +43,86 @@ fn lpg_config() -> &'static [u8] {
+ }"#
+ }
+ 
++/// The archive receives the selected documents; input preflight precedes auxiliaries.
++#[test]
++fn configured_yamlld_input_reaches_project_archive() {
++    use support::{code, stderr, stdout};
++    let dir = purrdf_testkit::temp_dir!().expect("temporary inputs");
++    let input = write(
++        &dir.path().join("input.yamlld"),
++        b"'@id': https://example.org/first\nhttps://example.org/p:\n  '@id': https://example.org/o\n---\n'@id': https://example.org/second\nhttps://example.org/p:\n  '@id': https://example.org/o\n",
++    );
++    let config = write(&dir.path().join("projection.json"), lpg_config());
++    let options = write(
++        &dir.path().join("all.json"),
++        br#"{"version":1,"yaml_ld":{"extract_all_scripts":true}}"#,
++    );
++    for (controls, second) in [(None, false), (Some(options.as_str()), true)] {
++        let archive = dir
++            .path()
++            .join(if second { "all.tar" } else { "first.tar" });
++        let archive = archive.to_str().expect("UTF-8 archive path");
++        let mut args = vec!["project", "--profile", "lpg-csv", "--config", &config];
++        if let Some(controls) = controls {
++            args.extend(["--yamlld-input-options", controls]);
++        }
++        args.extend([input.as_str(), archive]);
++        let projected = run(&args);
++        assert_eq!(code(&projected), 0, "{}", stderr(&projected));
++        let lifted = run(&[
++            "lift",
++            "--profile",
++            "lpg-csv",
++            "--config",
++            &config,
++            "--to",
++            "nquads",
++            archive,
++            "-",
++        ]);
++        assert_eq!(code(&lifted), 0, "{}", stderr(&lifted));
++        assert!(stdout(&lifted).contains("<https://example.org/first>"));
++        assert_eq!(
++            stdout(&lifted).contains("<https://example.org/second>"),
++            second
++        );
++    }
++
++    let malformed = write(&dir.path().join("malformed.json"), b"{");
++    let missing_config = dir.path().join("missing-projection.json");
++    let missing_assets = dir.path().join("missing-assets.tar");
++    let yaml = dir.path().join("missing.yamlld");
++    let turtle = dir.path().join("missing.ttl");
++    let output = write(&dir.path().join("output.tar"), b"unchanged destination");
++    for (input, controls, status, diagnostic) in [
++        (&yaml, malformed.as_str(), 1, "rdf-input-options"),
++        (
++            &turtle,
++            options.as_str(),
++            2,
++            "requires every input to be YAML-LD",
++        ),
++    ] {
++        let refused = run(&[
++            "project",
++            "--profile",
++            "lpg-csv",
++            "--config",
++            missing_config.to_str().expect("UTF-8 config path"),
++            "--assets",
++            missing_assets.to_str().expect("UTF-8 assets path"),
++            "--yamlld-input-options",
++            controls,
++            input.to_str().expect("UTF-8 input path"),
++            &output,
++        ]);
++        assert_eq!(code(&refused), status, "{}", stderr(&refused));
++        assert!(stderr(&refused).contains(diagnostic));
++        assert_eq!(stdout(&refused), "");
++        assert_eq!(std::fs::read(&output).unwrap(), b"unchanged destination");
++    }
++}
++
+ const TURTLE: &[u8] = b"@prefix ex: <https://example.org/> .\nex:s ex:p ex:o .\n";
+ const RESEARCH_SOURCE: &[u8] =
+     include_bytes!("../../rdf/tests/fixtures/research-objects/carrier/shared.ttl");
+diff --git crates/cli/tests/query_cli.rs crates/cli/tests/query_cli.rs
+index 4f6c05888..a048b8d51 100644
+--- crates/cli/tests/query_cli.rs
++++ crates/cli/tests/query_cli.rs
+@@ -44,6 +44,116 @@ const DATA_TTL: &str = concat!(
+     "ex:alice ex:name \"Alice\" .\n",
+ );
+ 
++/// The four primary-input routes share selection and reject configuration before I/O.
++#[test]
++fn configured_yamlld_query_primary_reaches_every_execution_route() {
++    use support::{code, path};
++    let dir = purrdf_testkit::temp_dir!().expect("temporary inputs");
++    let input = write_file(
++        dir.path(),
++        "input.yamlld",
++        "'@id': first\nhttps://example.org/value: one\n---\n'@id': second\nhttps://example.org/value: two\n",
++    );
++    let all = write_file(
++        dir.path(),
++        "all.json",
++        r#"{"version":1,"yaml_ld":{"extract_all_scripts":true}}"#,
++    );
++    let limited = write_file(
++        dir.path(),
++        "limited.json",
++        r#"{"version":1,"yaml_ld":{"syntax":{"max_input_bytes":0}}}"#,
++    );
++    let query = "SELECT ?s WHERE { ?s <https://example.org/value> ?o }";
++    let first = run(&[
++        "query",
++        "--data",
++        &input,
++        "--base",
++        "https://example.org/",
++        query,
++    ]);
++    assert_eq!(code(&first), 0, "{}", stderr(&first));
++    assert!(stdout(&first).contains("https://example.org/first"));
++    assert!(!stdout(&first).contains("https://example.org/second"));
++
++    for lane in [
++        &[][..],
++        &["--fuel", "1000000"][..],
++        &["--entailment", "rdf"][..],
++        &["--explain"][..],
++    ] {
++        let mut args = vec![
++            "query",
++            "--data",
++            &input,
++            "--base",
++            "https://example.org/",
++            "--yamlld-input-options",
++            &all,
++        ];
++        args.extend_from_slice(lane);
++        args.push(query);
++        let selected = run(&args);
++        assert_eq!(code(&selected), 0, "{lane:?}: {}", stderr(&selected));
++        if lane.contains(&"--explain") {
++            assert!(stdout(&selected).starts_with("profile "));
++            assert!(stdout(&selected).contains("rows=2"));
++        } else {
++            for subject in ["first", "second"] {
++                assert!(stdout(&selected).contains(&format!("https://example.org/{subject}")));
++            }
++        }
++        let mut args = vec![
++            "query",
++            "--data",
++            &input,
++            "--yamlld-input-options",
++            &limited,
++        ];
++        args.extend_from_slice(lane);
++        args.push(query);
++        let refused = run(&args);
++        assert_eq!(code(&refused), 1, "{lane:?}: {}", stderr(&refused));
++        assert!(stderr(&refused).contains("native-yaml-input-limit"));
++        assert_eq!(stdout(&refused), "");
++    }
++
++    let missing = path(dir.path(), "missing.yamlld");
++    let rules = path(dir.path(), "missing.xml");
++    let imports = format!("https://example.org/import={missing}");
++    let malformed = write_file(dir.path(), "malformed.json", "{");
++    let refused = run(&[
++        "query",
++        "--data",
++        &missing,
++        "--yamlld-input-options",
++        &malformed,
++        "--entailment",
++        "rif",
++        "--rules",
++        &rules,
++        "--import",
++        &imports,
++        query,
++    ]);
++    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
++    assert!(stderr(&refused).contains("rdf-input-options"));
++    assert_eq!(stdout(&refused), "");
++
++    let pack = path(dir.path(), "missing.purrpck");
++    let refused = run(&[
++        "query",
++        "--data",
++        &pack,
++        "--yamlld-input-options",
++        &all,
++        query,
++    ]);
++    assert_eq!(code(&refused), 2, "{}", stderr(&refused));
++    assert!(stderr(&refused).contains("requires every input to be YAML-LD"));
++}
++
+ /// The SAME SELECT over (a) a Turtle file and (b) an mmap'd `.purrpck` pack built from
+ /// identical data yields byte-identical, non-vacuous results — file/pack query parity.
+ #[test]
+diff --git crates/cli/tests/reason_cli.rs crates/cli/tests/reason_cli.rs
+index e5db1d413..f08fbaa3b 100644
+--- crates/cli/tests/reason_cli.rs
++++ crates/cli/tests/reason_cli.rs
+@@ -35,6 +35,104 @@
+ mod support;
+ use support::{path, purrdf, run, stderr, write_file};
+ 
++/// Selection reaches materialization; invalid controls cannot publish closure or report.
++#[test]
++fn configured_yamlld_input_reaches_reason_closure() {
++    use support::{code, stdout};
++    let dir = purrdf_testkit::temp_dir!().expect("temporary inputs");
++    let input = write_file(
++        dir.path(),
++        "input.yamlld",
++        "'@id': https://example.org/first\nhttps://example.org/p: one\n---\n'@id': https://example.org/second\nhttps://example.org/p: two\n",
++    );
++    let config = write_file(
++        dir.path(),
++        "all.json",
++        r#"{"version":1,"yaml_ld":{"extract_all_scripts":true}}"#,
++    );
++    let report_path = path(dir.path(), "report.txt");
++    let report_arg = format!("--report={report_path}");
++    for (controls, second) in [(None, false), (Some(config.as_str()), true)] {
++        let mut args = vec![
++            "reason",
++            "--regime",
++            "simple",
++            "--to",
++            "nquads",
++            &report_arg,
++        ];
++        if let Some(controls) = controls {
++            args.extend(["--yamlld-input-options", controls]);
++        }
++        args.extend([input.as_str(), "-"]);
++        let selected = run(&args);
++        assert_eq!(code(&selected), 0, "{}", stderr(&selected));
++        assert!(stdout(&selected).contains("<https://example.org/first>"));
++        assert_eq!(
++            stdout(&selected).contains("<https://example.org/second>"),
++            second
++        );
++    }
++    let closure = write_file(dir.path(), "closure.nq", "unchanged closure");
++    std::fs::write(&report_path, "unchanged report").unwrap();
++    let limited = write_file(
++        dir.path(),
++        "limited.json",
++        r#"{"version":1,"yaml_ld":{"syntax":{"max_input_bytes":0}}}"#,
++    );
++    let refused = run(&[
++        "reason",
++        "--regime",
++        "simple",
++        "--yamlld-input-options",
++        &limited,
++        &report_arg,
++        &input,
++        &closure,
++    ]);
++    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
++    assert!(stderr(&refused).contains("native-yaml-input-limit"));
++    assert_eq!(stdout(&refused), "");
++    assert_eq!(
++        std::fs::read_to_string(&closure).unwrap(),
++        "unchanged closure"
++    );
++    assert_eq!(
++        std::fs::read_to_string(&report_path).unwrap(),
++        "unchanged report"
++    );
++
++    let malformed = write_file(dir.path(), "malformed.json", "{");
++    let missing = path(dir.path(), "missing.yamlld");
++    let rules = path(dir.path(), "missing.xml");
++    let imports = format!("https://example.org/import={missing}");
++    let refused = run(&[
++        "reason",
++        "--regime",
++        "rif",
++        "--rules",
++        &rules,
++        "--import",
++        &imports,
++        "--yamlld-input-options",
++        &malformed,
++        &report_arg,
++        &missing,
++        &closure,
++    ]);
++    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
++    assert!(stderr(&refused).contains("rdf-input-options"));
++    assert_eq!(stdout(&refused), "");
++    assert_eq!(
++        std::fs::read_to_string(&closure).unwrap(),
++        "unchanged closure"
++    );
++    assert_eq!(
++        std::fs::read_to_string(&report_path).unwrap(),
++        "unchanged report"
++    );
++}
++
+ /// The rdf:type IRI, spelled out (the inferred-triple assertions key on it).
+ const RDF_TYPE: &str = "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>";
+ 
+diff --git crates/cli/tests/shex_cli.rs crates/cli/tests/shex_cli.rs
+index 026c5e86e..19d26ba7d 100644
+--- crates/cli/tests/shex_cli.rs
++++ crates/cli/tests/shex_cli.rs
+@@ -1852,3 +1852,85 @@ fn imported_numeric_facets_keep_their_exact_bounds() {
+         stderr(&out)
+     );
+ }
++
++/// Data controls reach ShEx without configuring schema acquisition or publishing refusals.
++#[test]
++fn configured_yamlld_input_reaches_shex_data() {
++    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
++    let schema = write_file(dir.path(), "schema.shex", SCHEMA);
++    let data = write_file(
++        dir.path(),
++        "input.yamlld",
++        "'@id': http://example.org/bob\nhttp://example.org/age:\n  '@value': '42'\n  '@type': http://www.w3.org/2001/XMLSchema#integer\n---\n'@id': http://example.org/bob\nhttp://example.org/age: nope\n",
++    );
++    let all = write_file(
++        dir.path(),
++        "all.json",
++        r#"{"version":1,"yaml_ld":{"extract_all_scripts":true}}"#,
++    );
++    for (controls, status) in [(None, "conformant"), (Some(all.as_str()), "nonconformant")] {
++        let mut args = vec!["shex", "--schema", &schema, "--data", &data];
++        if let Some(controls) = controls {
++            args.extend(["--yamlld-input-options", controls]);
++        }
++        args.push(BOB);
++        let out = run(&args);
++        assert_eq!(code(&out), 0, "{}", stderr(&out));
++        assert!(
++            stdout(&out).contains(&format!("\"status\":\"{status}\"")),
++            "{}",
++            stdout(&out)
++        );
++    }
++    let limited = write_file(
++        dir.path(),
++        "limited.json",
++        r#"{"version":1,"yaml_ld":{"syntax":{"max_input_bytes":0}}}"#,
++    );
++    let malformed = write_file(dir.path(), "malformed.json", "{");
++    let missing = dir.path().join("missing.yamlld");
++    let missing = missing.to_str().unwrap();
++    let missing_schema = dir.path().join("missing.shex");
++    let missing_schema = missing_schema.to_str().unwrap();
++    let import = format!("https://example.org/schema={missing_schema}");
++    let output = write_file(dir.path(), "map.json", "unchanged map");
++    for (controls, data, schema, imports, diagnostic) in [
++        (
++            limited.as_str(),
++            data.as_str(),
++            schema.as_str(),
++            false,
++            "native-yaml-input-limit",
++        ),
++        (
++            malformed.as_str(),
++            missing,
++            missing_schema,
++            true,
++            "rdf-input-options",
++        ),
++    ] {
++        let mut args = vec![
++            "shex",
++            "--schema",
++            schema,
++            "--data",
++            data,
++            "--yamlld-input-options",
++            controls,
++        ];
++        if imports {
++            args.extend(["--import", &import]);
++        }
++        args.extend([BOB, &output]);
++        let refused = run(&args);
++        assert_eq!(code(&refused), 1, "{}", stderr(&refused));
++        assert!(
++            stderr(&refused).contains(diagnostic),
++            "{}",
++            stderr(&refused)
++        );
++        assert_eq!(stdout(&refused), "");
++        assert_eq!(std::fs::read_to_string(&output).unwrap(), "unchanged map");
++    }
++}
+diff --git crates/cli/tests/update_cli.rs crates/cli/tests/update_cli.rs
+index b21486dd0..b2d32622f 100644
+--- crates/cli/tests/update_cli.rs
++++ crates/cli/tests/update_cli.rs
+@@ -9,6 +9,110 @@ use support::run;
+ const INSERT: &str =
+     "INSERT DATA { <http://example.org/new> <http://example.org/p> <http://example.org/value> }";
+ 
++/// Primary YAML selection and admission happen before UPDATE or output acquisition.
++#[test]
++fn configured_yamlld_update_selects_documents_and_refuses_before_output() {
++    use support::{code, path, stderr, stdout, write_file};
++    let dir = purrdf_testkit::temp_dir!().expect("temporary inputs");
++    let input = write_file(
++        dir.path(),
++        "input.yamlld",
++        "'@id': first\nurn:value: one\n---\n'@id': second\nurn:value: two\n",
++    );
++    let all = write_file(
++        dir.path(),
++        "all.json",
++        r#"{"version":1,"yaml_ld":{"extract_all_scripts":true}}"#,
++    );
++    let update = "INSERT { ?s <urn:seen> true } WHERE { ?s <urn:value> ?o }";
++    let mut args = vec![
++        "update",
++        "--data",
++        &input,
++        "--base",
++        "https://example.org/",
++        "--to",
++        "nquads",
++    ];
++    let mut first_args = args.clone();
++    first_args.push(update);
++    let first = run(&first_args);
++    assert_eq!(code(&first), 0, "{}", stderr(&first));
++    assert!(stdout(&first).contains("<https://example.org/first> <urn:seen>"));
++    assert!(!stdout(&first).contains("https://example.org/second"));
++    args.extend(["--yamlld-input-options", &all, update]);
++    let selected = run(&args);
++    assert_eq!(code(&selected), 0, "{}", stderr(&selected));
++    for subject in ["first", "second"] {
++        assert!(stdout(&selected).contains(&format!("<https://example.org/{subject}> <urn:seen>")));
++    }
++
++    let output = write_file(dir.path(), "output.nq", "unchanged destination");
++    let limited = write_file(
++        dir.path(),
++        "limited.json",
++        r#"{"version":1,"yaml_ld":{"syntax":{"max_input_bytes":0}}}"#,
++    );
++    let refused = run(&[
++        "update",
++        "--data",
++        &input,
++        "--yamlld-input-options",
++        &limited,
++        "--output",
++        &output,
++        update,
++    ]);
++    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
++    assert!(stderr(&refused).contains("native-yaml-input-limit"));
++    assert_eq!(stdout(&refused), "");
++    assert_eq!(
++        std::fs::read_to_string(&output).unwrap(),
++        "unchanged destination"
++    );
++
++    let missing = path(dir.path(), "missing");
++    for format in ["turtle", "jsonld", "pack", "gts"] {
++        let refused = run(&[
++            "update",
++            "--data",
++            &missing,
++            "--from",
++            format,
++            "--yamlld-input-options",
++            &all,
++            "--output",
++            &output,
++            update,
++        ]);
++        assert_eq!(code(&refused), 2, "{}", stderr(&refused));
++        assert!(stderr(&refused).contains("requires every input to be YAML-LD"));
++        assert_eq!(
++            std::fs::read_to_string(&output).unwrap(),
++            "unchanged destination"
++        );
++    }
++    let malformed = write_file(dir.path(), "malformed.json", "{");
++    let refused = run(&[
++        "update",
++        "--data",
++        &missing,
++        "--from",
++        "yamlld",
++        "--yamlld-input-options",
++        &malformed,
++        "--output",
++        &output,
++        update,
++    ]);
++    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
++    assert!(stderr(&refused).contains("rdf-input-options"));
++    assert_eq!(
++        std::fs::read_to_string(&output).unwrap(),
++        "unchanged destination"
++    );
++}
++
+ /// Exact inputs reach every CLI execution/source route and one random stream
+ /// advances across the request's operations instead of restarting each WHERE.
+ #[test]
+diff --git crates/cli/tests/validate_cli.rs crates/cli/tests/validate_cli.rs
+index f8a910b45..9a82c7e84 100644
+--- crates/cli/tests/validate_cli.rs
++++ crates/cli/tests/validate_cli.rs
+@@ -107,6 +107,115 @@ fn conforms_triple(value: bool) -> String {
+     )
+ }
+ 
++/// Primary YAML selection feeds both validation routes and refuses before publication.
++#[test]
++fn configured_yamlld_primary_reaches_whole_and_incremental_validation() {
++    use support::path;
++    let dir = purrdf_testkit::temp_dir!().expect("temporary inputs");
++    let shapes = write_file(dir.path(), "shapes.ttl", SHAPES);
++    let input = write_file(
++        dir.path(),
++        "input.yamlld",
++        "'@id': http://example.org/bob\n'@type': http://example.org/Person\nhttp://example.org/age:\n  '@value': '42'\n  '@type': http://www.w3.org/2001/XMLSchema#integer\n---\n'@id': http://example.org/alice\n'@type': http://example.org/Person\nhttp://example.org/age: nope\n",
++    );
++    let config = write_file(
++        dir.path(),
++        "all.json",
++        r#"{"version":1,"yaml_ld":{"extract_all_scripts":true}}"#,
++    );
++    let first = run(&["validate", "--shapes", &shapes, &input]);
++    assert_eq!(code(&first), 0, "{}", stderr(&first));
++    assert!(stdout(&first).contains(&conforms_triple(true)));
++    assert!(stderr(&first).contains("shacl conforms true\n"));
++
++    let added = write_file(
++        dir.path(),
++        "added.ttl",
++        "<http://example.org/alice> <http://example.org/age> 42 .\n",
++    );
++    for changes in [None, Some(added.as_str())] {
++        let mut args = vec![
++            "validate",
++            "--shapes",
++            &shapes,
++            "--yamlld-input-options",
++            &config,
++        ];
++        if let Some(changes) = changes {
++            args.extend(["--changes", changes]);
++        }
++        args.push(&input);
++        let selected = run(&args);
++        assert_eq!(code(&selected), 0, "{}", stderr(&selected));
++        assert!(stdout(&selected).contains(&conforms_triple(false)));
++        assert!(stdout(&selected).contains("http://example.org/alice"));
++        assert!(stderr(&selected).contains("shacl conforms false\n"));
++        assert!(stderr(&selected).contains("shacl results 1\n"));
++    }
++
++    let output = write_file(dir.path(), "output.nt", "unchanged destination");
++    let limited = write_file(
++        dir.path(),
++        "limited.json",
++        r#"{"version":1,"yaml_ld":{"syntax":{"max_input_bytes":0}}}"#,
++    );
++    let refused = run(&[
++        "validate",
++        "--shapes",
++        &shapes,
++        "--yamlld-input-options",
++        &limited,
++        &input,
++        &output,
++    ]);
++    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
++    assert!(stderr(&refused).contains("native-yaml-input-limit"));
++    assert_eq!(stdout(&refused), "");
++    assert_eq!(
++        std::fs::read_to_string(&output).unwrap(),
++        "unchanged destination"
++    );
++
++    let malformed = write_file(dir.path(), "malformed.json", "{");
++    let missing = path(dir.path(), "missing.yamlld");
++    let missing_shapes = path(dir.path(), "missing-shapes.ttl");
++    let missing_changes = path(dir.path(), "missing-changes.nt");
++    let refused = run(&[
++        "validate",
++        "--shapes",
++        &missing_shapes,
++        "--changes",
++        &missing_changes,
++        "--yamlld-input-options",
++        &malformed,
++        &missing,
++        &output,
++    ]);
++    assert_eq!(code(&refused), 1, "{}", stderr(&refused));
++    assert!(stderr(&refused).contains("rdf-input-options"));
++    assert_eq!(
++        std::fs::read_to_string(&output).unwrap(),
++        "unchanged destination"
++    );
++
++    let other = path(dir.path(), "missing.ttl");
++    let refused = run(&[
++        "validate",
++        "--shapes",
++        &shapes,
++        "--yamlld-input-options",
++        &config,
++        &other,
++        &output,
++    ]);
++    assert_eq!(code(&refused), 2, "{}", stderr(&refused));
++    assert!(stderr(&refused).contains("requires every input to be YAML-LD"));
++    assert_eq!(
++        std::fs::read_to_string(&output).unwrap(),
++        "unchanged destination"
++    );
++}
++
+ /// A non-conforming data graph produces the SHACL results graph on stdout, the verdict on
+ /// stderr, and exit **0**.
+ ///
+@@ -1413,7 +1522,7 @@ fn a_malformed_shapes_graph_is_a_named_usage_error() {
+ // ── owl:imports in the shapes graph ──────────────────────────────────────────
+ //
+ // Jena's SHACL validator dereferences `owl:imports` over HTTP. PurRDF ships no HTTP client
+-// and must stay wasm32-clean, so the closure is caller-supplied — the same answer `entails
++// and must build for `wasm32-unknown-unknown`, so the closure is caller-supplied — the same answer `entails
+ // --import` and `shex --import` give. Only an `owl:imports` on the shapes document's own IRI,
+ // on an `owl:Ontology` header, or on a node versioning either is an import; any other is data.
+ // An import whose ontology is already IN the shapes graph needs no pair; any other unresolved
+diff --git crates/rdf-wasm/README.md crates/rdf-wasm/README.md
+index 3ef130531..2d6bf2f5b 100644
+--- crates/rdf-wasm/README.md
++++ crates/rdf-wasm/README.md
+@@ -51,6 +51,13 @@ const reparsed = Dataset.parse(nq, "nquads");
+ 
+ ## API
+ 
++`yamlSourceExport(source, sourceIri, profileJson)` accepts original Uint8Array
++bytes and explicit UTF-8 profile JSON bytes, returning a computed `root` and
++`takeDataset()` result. `yamlSourceReconstruct(dataset, root, profileJson)` freezes
++the current native Dataset and returns independent original Uint8Array bytes.
++See the [package source-carrier API](js/README.md#yaml-source-carrier) for admission,
++ownership and native error handling.
++
+ - **`ready(bytesOrUrl?)`** — await once before anything else (instantiates the wasm
+   from bytes, a URL, or a compiled `WebAssembly.Module`).
+ - **`DataFactory`** — `namedNode`, `blankNode`, `literal(value, languageOrDatatype?)`,
+diff --git crates/rdf-wasm/js/README.md crates/rdf-wasm/js/README.md
+index 6a3eab5b1..39a71f806 100644
+--- crates/rdf-wasm/js/README.md
++++ crates/rdf-wasm/js/README.md
+@@ -48,6 +48,33 @@ WebAssembly JavaScript Promise Integration (JSPI): Chrome/Edge 137+, Firefox
+ the synchronous API is unchanged, and the asynchronous methods refuse with one
+ clear error before touching wasm.
+ 
++## YAML source carrier
++
++`yamlSourceExport(source, sourceIri, profileJson)` accepts original `Uint8Array`
++source bytes, an explicit absolute source IRI and UTF-8 JSON profile bytes. The
++closed profile requires `version: 1`, `name`, nonzero `profile_version` and an
++explicit `vocabulary`; optional `bounds` select the native phase ceilings.
++It returns `YamlSourceExport`: read `root`, call `takeDataset()` once, then free
++the result. The returned mutable Dataset owns its native carrier independently.
++`yamlSourceReconstruct(dataset, root, profileJson)` takes the current native
++snapshot and returns independently owned original `Uint8Array` bytes after
++native identity, reparse and complete reprojection verification.
++
++Profile input is capped at 16 KiB before its bridge copy. Rust decodes the profile
++before capturing source input and checks the selected source-byte ceiling before
++copying source bytes. Captured inputs must use non-shared `ArrayBuffer` storage;
++shared, detached or invalidated views throw. Native bridge copies allocate
++fallibly and remain alive through the operation. Host buffers/string glue,
++bridge copies, Dataset snapshots and native phase accounts are separate, rather
++than a combined process-memory ceiling.
++
++Native refusals are JavaScript `Error` objects carrying `code`, `diagnostic`,
++typed `nativeCauseJson` and an owned `nativeCause`. Its `json` getter reads the
++original native cause, including exact byte and line/column positions where
++present; call `nativeCause.free()` when done. Host buffer exceptions are caught
++without poisoning the instance. These functions do not change `Dataset.parse`
++or interpret the source as YAML-LD.
++
+ ## Quickstart
+ 
+ ```js
+diff --git crates/rdf-wasm/js/index.d.ts crates/rdf-wasm/js/index.d.ts
+index 1c8681c82..e70b547ca 100644
+--- crates/rdf-wasm/js/index.d.ts
++++ crates/rdf-wasm/js/index.d.ts
+@@ -968,6 +968,64 @@ export class ProjectionLift {
+   free(): void;
+ }
+ 
++/** A computed YAML source root and an ordinary mutable Dataset. */
++export class YamlSourceExport {
++  private constructor();
++  readonly root: string;
++  /** Move the Dataset out once. It survives freeing this result. */
++  takeDataset(): Dataset | undefined;
++  free(): void;
++}
++
++/** Original diagnostic-backed native failure and its retained admission. */
++export class YamlSourceCause {
++  private constructor();
++  /** Typed native fields, including exact codes and byte/line/column positions. */
++  readonly json: string;
++  free(): void;
++}
++
++export interface YamlSourceFailure extends Error {
++  readonly code: string;
++  readonly diagnostic: object;
++  readonly nativeCauseJson?: string;
++  /** Free this owned cause when it is no longer needed. */
++  readonly nativeCause?: YamlSourceCause;
++}
++
++/**
++ * Export original YAML bytes under an explicit absolute source IRI and a closed
++ * version-one native profile encoded as UTF-8 JSON bytes. The profile requires
++ * version, name, profile_version and vocabulary; bounds are optional.
++ *
++ * Rust checks the 16 KiB profile cap before copying profile bytes, decodes the
++ * profile, then checks its source-byte cap before copying source bytes. Captured
++ * buffers must be Uint8Array views over non-shared ArrayBuffer storage; detached
++ * or invalidated views throw. Copies use fallible admitted native storage held
++ * through the operation. Host buffers/string glue, bridge copies, Dataset
++ * ownership and native phase accounts remain separate.
++ *
++ * @throws {YamlSourceFailure | TypeError} Native refusals retain typed causes;
++ *   host buffer failures are caught exceptions and leave the instance reusable.
++ */
++export function yamlSourceExport(
++  source: Uint8Array,
++  sourceIri: string,
++  profileJson: Uint8Array,
++): YamlSourceExport;
++
++/**
++ * Reconstruct the current native Dataset snapshot under an explicit root/profile.
++ * Returns independently owned original bytes after native verification succeeds.
++ * Profile admission matches yamlSourceExport; snapshot and decode/reparse accounts
++ * remain separate. Later Dataset mutations cannot change the returned Uint8Array.
++ */
++export function yamlSourceReconstruct(
++  dataset: Dataset,
++  root: string,
++  profileJson: Uint8Array,
++): Uint8Array;
++
+ /**
+  * One closure of one document under one SPARQL entailment regime: the canonical
+  * N-Quads and the byte-stable rendered reasoning report. Returned by
+diff --git crates/rdf-wasm/js/index.mjs crates/rdf-wasm/js/index.mjs
+index 0976139d0..cbd863e62 100644
+--- crates/rdf-wasm/js/index.mjs
++++ crates/rdf-wasm/js/index.mjs
+@@ -139,6 +139,10 @@ import init, {
+   version,
+   xsdCanonicalLexical,
+   xsdValueCompare,
++  yamlSourceExport,
++  yamlSourceReconstruct,
++  YamlSourceCause,
++  YamlSourceExport,
+ } from "./pkg/purrdf_wasm.js";
+ import {
+   assertAsyncQueries,
+@@ -1774,4 +1778,8 @@ export {
+   version,
+   xsdCanonicalLexical,
+   xsdValueCompare,
++  yamlSourceExport,
++  yamlSourceReconstruct,
++  YamlSourceCause,
++  YamlSourceExport,
+ };
+diff --git crates/rdf-wasm/js/package.json crates/rdf-wasm/js/package.json
+index 1e26e3226..fc48092a8 100644
+--- crates/rdf-wasm/js/package.json
++++ crates/rdf-wasm/js/package.json
+@@ -40,6 +40,7 @@
+     "cloudflare.mjs",
+     "cloudflare.d.ts",
+     "pkg/purrdf_jspi.mjs",
++    "pkg/purrdf_bytes.mjs",
+     "pkg/purrdf_wasm.js",
+     "pkg/purrdf_wasm.d.ts",
+     "pkg/purrdf_wasm_bg.wasm",
+diff --git crates/rdf-wasm/js/src/purrdf_bytes.mjs crates/rdf-wasm/js/src/purrdf_bytes.mjs
+new file mode 100644
+index 000000000..8c7f6c9d5
+--- /dev/null
++++ crates/rdf-wasm/js/src/purrdf_bytes.mjs
+@@ -0,0 +1,51 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++// Why not Rust: JavaScript owns typed-array brands, buffer views and intrinsic
++// copies; Rust admits native storage before asking this module to fill it.
++
++const Bytes = Uint8Array;
++const apply = Reflect.apply;
++const descriptor = Object.getOwnPropertyDescriptor;
++const typedArray = Object.getPrototypeOf(Bytes.prototype);
++const tag = descriptor(typedArray, Symbol.toStringTag).get;
++const length = descriptor(typedArray, "byteLength").get;
++const offset = descriptor(typedArray, "byteOffset").get;
++const buffer = descriptor(typedArray, "buffer").get;
++const arrayBufferLength = descriptor(ArrayBuffer.prototype, "byteLength").get;
++const set = Bytes.prototype.set;
++const empty = new Bytes(0);
++
++// The returned fixed-length view retains the buffer without copying its bytes.
++export function captureBytes(value) {
++  if (apply(tag, value, []) !== "Uint8Array") {
++    throw new TypeError("YAML source buffers must be Uint8Array values");
++  }
++  const backing = apply(buffer, value, []);
++  // This intrinsic accepts ArrayBuffer only, explicitly refusing shared storage.
++  try {
++    apply(arrayBufferLength, backing, []);
++  } catch (cause) {
++    throw new TypeError("YAML source buffers require non-shared ArrayBuffer storage", { cause });
++  }
++  // Validate detached or out-of-bounds views without changing any caller bytes.
++  apply(set, value, [empty]);
++  return new Bytes(backing, apply(offset, value, []), apply(length, value, []));
++}
++
++// Return a host number intact; Rust checks its portable range before conversion.
++export function byteLength(value) {
++  return apply(length, value, []);
++}
++
++export function copyBytes(source, destination) {
++  if (apply(length, source, []) !== apply(length, destination, [])) {
++    throw new TypeError("YAML source buffer changed before its admitted copy");
++  }
++  apply(set, destination, [source]);
++}
++
++export function ownedBytes(source) {
++  const output = new Bytes(apply(length, source, []));
++  apply(set, output, [source]);
++  return output;
++}
+diff --git crates/rdf-wasm/js/tests/yaml-source.test.mjs crates/rdf-wasm/js/tests/yaml-source.test.mjs
+new file mode 100644
+index 000000000..c69ca9510
+--- /dev/null
++++ crates/rdf-wasm/js/tests/yaml-source.test.mjs
+@@ -0,0 +1,89 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++// Why not Rust: this exercises intrinsic JavaScript buffer imports, wasm-bindgen
++// ownership transfers and caught host/native exceptions in the shipped package.
++
++import { test } from "node:test";
++import assert from "node:assert/strict";
++import { ready, yamlSourceExport, yamlSourceReconstruct } from "../index.mjs";
++
++await ready();
++
++test("YAML source pair preserves owned bytes and rejects before bridge copy", () => {
++  const encoder = new TextEncoder();
++  const config = {
++    version: 1, name: "host-yaml-source", profile_version: 1,
++    vocabulary: "https://example.org/yaml#",
++  };
++  const profile = encoder.encode(JSON.stringify(config));
++  const expected = encoder.encode("\uFEFF# original\r\na: [one, 'two']\r\n");
++  const source = expected.slice();
++  const exported = yamlSourceExport(source, "https://example.org/source.yaml", profile);
++  const root = exported.root;
++  const dataset = exported.takeDataset();
++  assert.ok(dataset);
++  assert.equal(exported.takeDataset(), undefined);
++  exported.free();
++  source.fill(0);
++  assert.deepEqual(yamlSourceReconstruct(dataset, root, profile), expected);
++
++  const limited = encoder.encode(JSON.stringify({
++    ...config, bounds: { syntax: { max_input_bytes: 0 } },
++  }));
++  const shadowed = encoder.encode("x\n");
++  Object.defineProperties(shadowed, {
++    length: { get() { throw new Error("source.length must not be read"); } },
++    byteLength: { get() { throw new Error("source.byteLength must not be read"); } },
++  });
++  assert.throws(() => yamlSourceExport(shadowed, "https://example.org/source.yaml", limited), error => {
++    assert.ok(error instanceof Error);
++    assert.equal(error instanceof WebAssembly.RuntimeError, false);
++    const native = JSON.parse(error.nativeCauseJson);
++    assert.equal(native.code, "yaml-source-limit");
++    assert.equal(native.fields.limit.value, "0");
++    error.nativeCause.free();
++    return true;
++  });
++  assert.throws(() => yamlSourceExport(shadowed, "https://example.org/source.yaml", new Uint8Array(16385)), error => {
++    assert.equal(JSON.parse(error.nativeCauseJson).fields.resource.value, "profile JSON bytes");
++    error.nativeCause.free();
++    return true;
++  });
++
++  let retained;
++  let retainedJson;
++  // Mutate the actual Dataset, so reconstruction must freeze its current content.
++  const quads = dataset.quads();
++  assert.equal(dataset.delete(quads[0]), dataset);
++  for (const quad of quads) quad.free();
++  assert.throws(() => yamlSourceReconstruct(dataset, root, profile), error => {
++    assert.ok(error instanceof Error);
++    assert.equal(error.code, "yaml-source-native");
++    assert.equal(error.diagnostic.code, error.code);
++    retained = error.nativeCause;
++    retainedJson = error.nativeCauseJson;
++    assert.equal(retained.json, retainedJson);
++    return true;
++  });
++  dataset.free();
++  assert.equal(retained.json, retainedJson);
++  retained.free();
++
++  assert.throws(() => yamlSourceExport(encoder.encode("a: [\n"), "https://example.org/source.yaml", profile), error => {
++    assert.equal(error.code, "yaml-source-native");
++    const syntax = JSON.parse(error.nativeCauseJson).fields.cause.value;
++    assert.equal(syntax.code, "yaml-document");
++    assert.equal(syntax.fields.line.kind, "unsigned");
++    assert.equal(syntax.fields.offset.kind, "byte-count");
++    error.nativeCause.free();
++    return true;
++  });
++  assert.throws(() => yamlSourceExport(new Uint8Array(new SharedArrayBuffer(1)),
++    "https://example.org/source.yaml", profile), /non-shared ArrayBuffer/);
++  const reused = yamlSourceExport(expected, "https://example.org/source.yaml", profile);
++  const restored = reused.takeDataset();
++  const output = yamlSourceReconstruct(restored, reused.root, profile);
++  reused.free(); restored.free();
++  assert.ok(output instanceof Uint8Array);
++  assert.deepEqual(output, expected);
++});
+diff --git crates/rdf-wasm/src/canonical.rs crates/rdf-wasm/src/canonical.rs
+index 64d8208a5..f32cdc2ee 100644
+--- crates/rdf-wasm/src/canonical.rs
++++ crates/rdf-wasm/src/canonical.rs
+@@ -3,16 +3,11 @@
+ 
+ //! Explicit synchronous canonical-search requests and immutable receipt envelopes.
+ 
++use crate::host::reflect_set as set_property;
+ use purrdf_core::CanonicalizationControl;
+ use purrdf_validate::canonical::{execute, native_canonical_cause, parse_policy, receipts_json};
+ use wasm_bindgen::prelude::*;
+ 
+-#[wasm_bindgen]
+-extern "C" {
+-    #[wasm_bindgen(catch, js_namespace = Reflect, js_name = set)]
+-    fn set_property(target: &JsValue, key: &JsValue, value: &JsValue) -> Result<bool, JsValue>;
+-}
+-
+ /// An original native cause that retains its immutable payload and admission owner.
+ #[wasm_bindgen]
+ #[derive(Debug)]
+diff --git crates/rdf-wasm/src/host.rs crates/rdf-wasm/src/host.rs
+index ffff96414..d63e1cee4 100644
+--- crates/rdf-wasm/src/host.rs
++++ crates/rdf-wasm/src/host.rs
+@@ -17,6 +17,33 @@ extern "C" {
+     /// maps to its own refusal instead of an exception crossing the wasm boundary.
+     #[wasm_bindgen(js_namespace = Reflect, js_name = get, catch)]
+     fn reflect_get_import(target: &JsValue, key: &str) -> Result<JsValue, JsValue>;
++
++    /// Shared property attachment for original native host error evidence.
++    #[wasm_bindgen(js_namespace = Reflect, js_name = set, catch)]
++    pub(crate) fn reflect_set(
++        target: &JsValue,
++        key: &JsValue,
++        value: &JsValue,
++    ) -> Result<bool, JsValue>;
++}
++
++#[wasm_bindgen(raw_module = "./purrdf_bytes.mjs")]
++extern "C" {
++    /// Retain an intrinsic Uint8Array view without copying its backing bytes.
++    #[wasm_bindgen(catch, js_name = captureBytes)]
++    pub(crate) fn capture_bytes(value: &JsValue) -> Result<JsValue, JsValue>;
++
++    /// Preserve the entire JavaScript length before checked native conversion.
++    #[wasm_bindgen(catch, js_name = byteLength)]
++    pub(crate) fn byte_length(value: &JsValue) -> Result<f64, JsValue>;
++
++    /// Fill an already admitted native slice through the host's intrinsic copy.
++    #[wasm_bindgen(catch, js_name = copyBytes)]
++    pub(crate) fn copy_bytes(source: &JsValue, destination: &mut [u8]) -> Result<(), JsValue>;
++
++    /// Copy retained native output into an independent host Uint8Array.
++    #[wasm_bindgen(catch, js_name = ownedBytes)]
++    pub(crate) fn owned_bytes(source: &[u8]) -> Result<JsValue, JsValue>;
+ }
+ 
+ /// `Reflect.get(target, key)`, with a throwing getter as an `Err` the caller maps to its
+diff --git crates/rdf-wasm/src/lib.rs crates/rdf-wasm/src/lib.rs
+index d9a80dcae..3c934c5ef 100644
+--- crates/rdf-wasm/src/lib.rs
++++ crates/rdf-wasm/src/lib.rs
+@@ -113,6 +113,10 @@ mod stream;
+ mod term;
+ mod xpath_regex;
+ mod xsd;
++mod yaml_source;
++pub use yaml_source::{
++    YamlSourceCause, YamlSourceExport, yaml_source_export, yaml_source_reconstruct,
++};
+ 
+ #[cfg(target_arch = "wasm32")]
+ pub use async_query::purrdf_jspi_run;
+diff --git crates/rdf-wasm/src/yaml_source.rs crates/rdf-wasm/src/yaml_source.rs
+new file mode 100644
+index 000000000..a1df07bd0
+--- /dev/null
++++ crates/rdf-wasm/src/yaml_source.rs
+@@ -0,0 +1,198 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! Exact YAML source bytes through admitted bridge storage and native snapshots.
++
++use purrdf_core::{DatasetHandle, RdfDiagnostic};
++use purrdf_lex::allocation::{Ceiling, Memory, Resident, StorageError};
++use purrdf_validate::yaml_source::{self, Error, MAX_PROFILE_BYTES, YamlError};
++use wasm_bindgen::prelude::*;
++
++use crate::{dataset::Dataset, host, operation};
++
++/// A native export root and a dataset that can be moved out once.
++#[wasm_bindgen]
++#[derive(Debug)]
++pub struct YamlSourceExport {
++    root: String,
++    dataset: Option<Dataset>,
++}
++
++#[wasm_bindgen]
++impl YamlSourceExport {
++    /// The original computed source-carrier root.
++    #[wasm_bindgen(getter)]
++    pub fn root(&self) -> String {
++        self.root.clone()
++    }
++
++    /// Move the dataset out once; freeing this envelope does not free that dataset.
++    #[wasm_bindgen(js_name = takeDataset)]
++    pub fn take_dataset(&mut self) -> Option<Dataset> {
++        self.dataset.take()
++    }
++}
++
++/// The original diagnostic and native cause, retaining their native admission.
++#[wasm_bindgen]
++#[derive(Debug)]
++pub struct YamlSourceCause {
++    diagnostic: RdfDiagnostic,
++}
++
++#[wasm_bindgen]
++impl YamlSourceCause {
++    /// Exact typed fields inspected from the original cause, without a host enum.
++    #[wasm_bindgen(getter)]
++    pub fn json(&self) -> Result<String, JsError> {
++        let cause = self
++            .diagnostic
++            .native_cause()
++            .ok_or_else(|| JsError::new("YAML source diagnostic has no native cause"))?;
++        purrdf_validate::native_error::to_json(cause)
++            .map(|value| value.to_string())
++            .map_err(|error| JsError::new(&error.to_string()))
++    }
++}
++
++fn diagnostic_to_js(diagnostic: RdfDiagnostic) -> JsValue {
++    let attach = || -> Result<JsValue, JsValue> {
++        let copy = diagnostic
++            .clone_with_memory(&mut Memory::new(&mut Resident))
++            .map_err(|error| operation::diagnostic_to_js(error.into()))?;
++        let refused = operation::diagnostic_to_js(copy);
++        if let Some(cause) = diagnostic.native_cause() {
++            let fields = purrdf_validate::native_error::to_json(cause)
++                .map_err(|error| JsError::new(&error.to_string()))?;
++            if !host::reflect_set(
++                &refused,
++                &JsValue::from_str("nativeCauseJson"),
++                &JsValue::from_str(&fields.to_string()),
++            )? {
++                return Err(JsError::new("cannot attach native YAML source cause fields").into());
++            }
++            let original: JsValue = YamlSourceCause { diagnostic }.into();
++            if !host::reflect_set(&refused, &JsValue::from_str("nativeCause"), &original)? {
++                return Err(JsError::new("cannot retain original native YAML source cause").into());
++            }
++        }
++        Ok(refused)
++    };
++    attach().unwrap_or_else(core::convert::identity)
++}
++
++fn source_error(error: Error) -> JsValue {
++    diagnostic_to_js(error.into_diagnostic())
++}
++
++fn storage_error(error: StorageError) -> JsValue {
++    source_error(YamlError::from(error).into())
++}
++
++/// A separate bridge allocation, retained throughout the native operation.
++struct BridgeBytes {
++    bytes: Vec<u8>,
++    _admission: Ceiling,
++}
++
++impl BridgeBytes {
++    fn capture(value: &JsValue, maximum: usize, resource: &'static str) -> Result<Self, JsValue> {
++        let captured = host::capture_bytes(value)?;
++        let length = host::byte_length(&captured)?;
++        // Never accept an i32 ABI coercion of the host's possibly wider length.
++        // Every profile bound is portable u32; layout checks remain separate.
++        if !length.is_finite()
++            || length.fract() != 0.0
++            || length < 0.0
++            || length > f64::from(u32::MAX)
++        {
++            return Err(operation::coded_error(
++                "YAML source buffer byte length exceeds the portable unsigned range",
++                "yaml-source-byte-length",
++            ));
++        }
++        // The finite, integral, nonnegative length is already bounded by u32::MAX.
++        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
++        let length = length as u32 as usize;
++        if length > maximum {
++            return Err(source_error(
++                YamlError::Limit {
++                    resource,
++                    limit: maximum,
++                }
++                .into(),
++            ));
++        }
++        let mut admission = Ceiling(maximum);
++        let mut bytes = Vec::new();
++        Memory::new(&mut admission)
++            .reserve(&mut bytes, length)
++            .map_err(storage_error)?;
++        bytes.resize(length, 0);
++        host::copy_bytes(&captured, &mut bytes)?;
++        Ok(Self {
++            bytes,
++            _admission: admission,
++        })
++    }
++}
++
++/// Export original bytes under an explicit source IRI and UTF-8 profile JSON.
++///
++/// Profile admission and decoding precede source capture. The buffers cross as
++/// handles; only admitted, fallibly allocated native storage receives a copy.
++/// Host arrays/strings, bridge copies, native phases and dataset publication have
++/// separate accounts. Shared buffers are refused. String-glue allocation is
++/// outside bridge admission.
++///
++/// # Errors
++/// Throws host buffer refusals or the original typed native diagnostic.
++#[wasm_bindgen(js_name = yamlSourceExport)]
++pub fn yaml_source_export(
++    source: &JsValue,
++    source_iri: &str,
++    profile_json: &JsValue,
++) -> Result<YamlSourceExport, JsValue> {
++    let profile_bytes =
++        BridgeBytes::capture(profile_json, MAX_PROFILE_BYTES, "profile JSON bytes")?;
++    let profile = yaml_source::profile(&profile_bytes.bytes).map_err(source_error)?;
++    let source = BridgeBytes::capture(
++        source,
++        profile.bounds().syntax.syntax.max_input_bytes,
++        "source bytes",
++    )?;
++    let exported =
++        yaml_source::export(source_iri, &source.bytes, &profile).map_err(source_error)?;
++    let mut owner = Resident;
++    Memory::new(&mut owner)
++        .add_bytes(DatasetHandle::allocation_layout::<Resident>().size())
++        .map_err(storage_error)?;
++    let dataset = DatasetHandle::try_from_admitted(exported.dataset, owner)
++        .map_err(|_| storage_error(StorageError::AllocationFailed))?;
++    Ok(YamlSourceExport {
++        root: exported.root,
++        dataset: Some(Dataset::from_frozen(dataset)?),
++    })
++}
++
++/// Reconstruct a current native snapshot into independently owned original bytes.
++///
++/// The profile bridge, mutable-dataset snapshot and native decode/reparse phases
++/// remain separate accounts. The result is copied into a host-owned Uint8Array.
++///
++/// # Errors
++/// Throws host buffer, native snapshot or verified reconstruction refusals.
++#[wasm_bindgen(js_name = yamlSourceReconstruct)]
++pub fn yaml_source_reconstruct(
++    dataset: &Dataset,
++    root: &str,
++    profile_json: &JsValue,
++) -> Result<JsValue, JsValue> {
++    let profile_bytes =
++        BridgeBytes::capture(profile_json, MAX_PROFILE_BYTES, "profile JSON bytes")?;
++    let profile = yaml_source::profile(&profile_bytes.bytes).map_err(source_error)?;
++    let snapshot = dataset.view().freeze().map_err(diagnostic_to_js)?;
++    let source =
++        yaml_source::reconstruct(snapshot.as_ref(), root, &profile).map_err(source_error)?;
++    host::owned_bytes(source.as_bytes())
++}
+diff --git docs/WASM_TESTING.md docs/WASM_TESTING.md
+index 44f5420e1..adbd077f4 100644
+--- docs/WASM_TESTING.md
++++ docs/WASM_TESTING.md
+@@ -3,6 +3,17 @@
+ 
+ # Native ownership and WASM execution
+ 
++The exact packaged case `YAML source pair preserves owned bytes and rejects before bridge copy`
++in `yaml-source.test.mjs` exercises captured JavaScript typed-array intrinsics,
++admission before the host-to-native copy, the result/Dataset ownership transfer,
++independent Uint8Array output and native-cause fields on caught host errors.
++Shadowed length properties must never run; zero source admission and oversized
++profile admission refuse before copying, and the same instance remains usable.
++The native cause stays inspectable after the Dataset is freed. Source inspection
++establishes copy ordering; this case checks the actual host imports and transport.
++Run only this named case with `node --test --test-name-pattern` against the shipped
++package. Native Rust owns YAML grammar, reconstruction and resource semantics.
++
+ The exact package case `configured YAML input crosses wasm-bindgen with native error records`
+ in `jsonld-configured.test.mjs` checks the appended text-options argument, the
+ preserved `rememberEmptyGraphs` slot, and native code/location records on real
+diff --git docs/YAML_INPUT_OPTIONS.md docs/YAML_INPUT_OPTIONS.md
+index 6b15923fd..0aa76ca44 100644
+--- docs/YAML_INPUT_OPTIONS.md
++++ docs/YAML_INPUT_OPTIONS.md
+@@ -62,9 +62,49 @@ Python exposes `code` and `diagnostic_json`; JavaScript exposes `code` and
+ `diagnostic` on the thrown `Error`.
+ 
+ The CLI accepts `convert --yamlld-input-options PATH`. The flag applies to every
+-conversion input, including canonicalization and entailment. Every input must be
+-YAML-LD; pack, GTS and other native formats are refused before dispatch. Other
+-commands reject the flag. Existing output options are independent.
++conversion input, including canonicalization and entailment. `update` and `query`
++accept the same flag for their sole `--data` document. Query applies it in ordinary,
++governed, explain and entailment execution, using its existing filename-based
++input selection. Query premise imports retain their default input policy.
++`validate` accepts the flag for primary `IN`, on both whole-graph and incremental
++validation. Shapes documents, prepared products, imports and added/removed change
++documents retain their existing input policy. The flag is also valid with
++`--shapes-product`, because the primary data is still parsed.
++`describe` and `project` accept the flag for primary `IN`. Description selectors
++retain their existing base resolution. Projection configuration and assets keep
++their existing input policy; YAML controls are admitted before either is read.
++`lift` reads a carrier archive and does not accept YAML input controls.
++`reason` and `consistency` accept the flag for primary `IN` only. Imports retain
++their existing controls and `--from` scoping. Reason admits the options before RIF
++rule acquisition; consistency retains its lossless N-Quads crossing and existing
++proof/check-proof behavior.
++`entails --yamlld-input-options PATH` configures only `--premise`;
++`--conclusion-yamlld-input-options PATH` independently configures only
++`--conclusion` and requires that graph question, conflicting with `--pattern`.
++Premise controls also apply in pattern mode. Both requested configurations are
++decoded before any RDF source is read. Each configured role must resolve to
++YAML-LD; the other role may use a different inferred format. Imports retain their
++existing input policy and global `--from` scoping.
++`shex --yamlld-input-options PATH` configures only `--data`, with configuration
++decoding before data, schema or schema-import acquisition. Schema syntax, imports,
++shape-map selectors and base policy retain their existing behavior.
++Every selected input must be YAML-LD; pack, GTS and other native formats are
++refused before data acquisition. The bounded named options file is validated
++before primary data, premise imports or rule documents are read; it does not
++consume standard input. Other commands reject the flag. Existing output options
++are independent.
++For validation, configuration decoding also precedes change documents and shapes
++document/product/import acquisition.
++
++```sh
++purrdf update --data input.yamlld --yamlld-input-options options.json --to nquads \
++  'INSERT { ?s <urn:seen> true } WHERE { ?s <urn:value> ?o }'
++```
++
++Without the flag, the existing first-document behavior is preserved. A configured
++input refusal writes no updated dataset and leaves an existing output intact.
++Query input refusals emit no answers or explanation.
++Validation input refusals publish no report and preserve an existing output.
+ 
+ The C ABI takes nullable `input_options` bytes and `input_options_len` after
+ `source_name` in `purrdf_parse`. Null with length zero keeps default parsing;
+diff --git scripts/check-entailment-surface.py scripts/check-entailment-surface.py
+index 9b453bf70..fd0092507 100644
+--- scripts/check-entailment-surface.py
++++ scripts/check-entailment-surface.py
+@@ -294,11 +294,11 @@ _HOST_PLUMBING: dict[str, tuple[str, ...]] = {
+ # The `purrdf entails` flags that answer to no boundary parameter and to no service, and
+ # are therefore the subcommand's own plumbing. `--report` is the certificate target every
+ # reasoning subcommand carries; `--from` is the CLI's own format resolution, which runs in
+-# FRONT of a boundary that parses one media type; `OUT` is positional and so is not a flag
+-# at all. (`--base` is not plumbing: it is how the CLI spells `premise_iris`.) A flag
++# FRONT of a boundary that parses one media type; YAML-LD controls configure those role
++# readers too. `OUT` is positional; `--base` spells `premise_iris`. A flag
+ # outside this list and outside the two tables above is a capability with no boundary
+ # behind it, and fails the gate.
+-_CLI_PLUMBING: frozenset[str] = frozenset({"--report", "--from"})
++_CLI_PLUMBING: frozenset[str] = frozenset({"--report", "--from", "--yamlld-input-options", "--conclusion-yamlld-input-options"})
+ 
+ # Where the CLI's three needles live.
+ _CLI_COMMAND_TREE = Path("crates/cli/src/cli.rs")
+diff --git scripts/check-wasm-dataset-identity.sh scripts/check-wasm-dataset-identity.sh
+index 7bf8cf48d..7246e1552 100755
+--- scripts/check-wasm-dataset-identity.sh
++++ scripts/check-wasm-dataset-identity.sh
+@@ -66,7 +66,7 @@ receipt = {
+ CAPTURE
+ module="$scratch/fixture.wasm"
+ wasm-bindgen --target nodejs --out-name fixture --out-dir "$scratch" "$module"
+-cp crates/rdf-wasm/js/src/purrdf_jspi.mjs "$scratch/purrdf_jspi.mjs"
++cp crates/rdf-wasm/js/src/purrdf_jspi.mjs crates/rdf-wasm/js/src/purrdf_bytes.mjs "$scratch/"
+ cp scripts/fixtures/wasm-identity-transport.ts "$scratch/identity.ts"
+ "$root/crates/rdf-wasm/js/node_modules/.bin/tsc" --ignoreConfig --strict --target ES2020 --lib ES2020,DOM,ESNext.Disposable --module commonjs --noEmit "$scratch/identity.ts"
+ node scripts/fixtures/wasm-dataset-identity.cjs "$scratch/fixture.js"
