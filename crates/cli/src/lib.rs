@@ -100,6 +100,7 @@ mod format;
 mod glob;
 mod glob_rdf;
 pub use glob_rdf::Failure as GlobRdfFailure;
+mod document_expansion;
 mod governors;
 pub mod immutable;
 mod ingest;
@@ -198,6 +199,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
         && matches!(
             &cli.cmd,
             Command::GlobRdf(_)
+                | Command::DocumentExpand { .. }
                 | Command::YamlSource { .. }
                 | Command::WordId { .. }
                 | Command::Glob { .. }
@@ -261,6 +263,19 @@ fn dispatch_with_request(
         })
         .transpose()?;
     match &cli.cmd {
+        Command::DocumentExpand {
+            request,
+            input,
+            output,
+        } => {
+            cli::refuse_document_flags(
+                &ledger_target,
+                jsonld_options.as_ref(),
+                "document-expand accepts no loss ledger",
+                "document-expand accepts no JSON-LD serialization options",
+            )?;
+            document_expansion::run(request, input, output, canonical)
+        }
         Command::YamlSource { command } => {
             cli::refuse_document_flags(
                 &ledger_target,

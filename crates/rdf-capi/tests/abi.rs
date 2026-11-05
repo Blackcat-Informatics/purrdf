@@ -54,6 +54,94 @@ const ATTACHED_ARCHIVE_SHA256: &str =
     "d714b63370b0026a28281f605794520fd4d1bc388ae8e5fdd367c5152cb95f6b";
 
 #[test]
+fn document_expansion_owns_buffer_and_retains_native_refusals() {
+    use purrdf::document_expansion::purrdf_document_expand;
+    use purrdf::error::purrdf_error_native_cause_json;
+    const SOURCE: &[u8] = br#"{"urn:p":"c"}"#;
+    const REQUEST: &[u8] = br#"{"version":1,"format":"jsonld"}"#;
+    unsafe {
+        let mut output = std::ptr::null_mut();
+        let mut error = std::ptr::null_mut();
+        {
+            let source = SOURCE.to_vec();
+            let request = REQUEST.to_vec();
+            assert_eq!(
+                purrdf_document_expand(
+                    source.as_ptr(),
+                    source.len(),
+                    request.as_ptr(),
+                    request.len(),
+                    &raw mut output,
+                    &raw mut error
+                ),
+                PurrdfStatus::Ok as i32
+            );
+        }
+        assert!(error.is_null());
+        assert_eq!(buffer_bytes(output), br#"[{"urn:p":[{"@value":"c"}]}]"#);
+        purrdf_buffer_free(output);
+        let refused = br#"{"version":1,"format":"jsonld","output":{"max_bytes":0}}"#;
+        output = std::ptr::dangling_mut();
+        assert_eq!(
+            purrdf_document_expand(
+                SOURCE.as_ptr(),
+                SOURCE.len(),
+                refused.as_ptr(),
+                refused.len(),
+                &raw mut output,
+                &raw mut error
+            ),
+            PurrdfStatus::SerializeError as i32
+        );
+        assert!(output.is_null());
+        assert!(!error.is_null());
+        let cause = std::ffi::CStr::from_ptr(purrdf_error_native_cause_json(error))
+            .to_str()
+            .unwrap();
+        assert!(cause.contains("json-output-bytes"));
+        purrdf_error_free(error);
+        error = std::ptr::null_mut();
+        for (source, source_len, request, request_len) in [
+            (std::ptr::null(), 0, REQUEST.as_ptr(), REQUEST.len()),
+            (SOURCE.as_ptr(), SOURCE.len(), std::ptr::null(), 0),
+            (SOURCE.as_ptr(), usize::MAX, REQUEST.as_ptr(), REQUEST.len()),
+            (SOURCE.as_ptr(), SOURCE.len(), REQUEST.as_ptr(), usize::MAX),
+        ] {
+            output = std::ptr::dangling_mut();
+            assert_ne!(
+                purrdf_document_expand(
+                    source,
+                    source_len,
+                    request,
+                    request_len,
+                    &raw mut output,
+                    &raw mut error
+                ),
+                PurrdfStatus::Ok as i32
+            );
+            assert!(output.is_null());
+            purrdf_error_free(error);
+            error = std::ptr::null_mut();
+        }
+        let mut aliased: *mut PurrdfBuffer = std::ptr::dangling_mut();
+        let slot = &raw mut aliased;
+        assert_eq!(
+            purrdf_document_expand(
+                SOURCE.as_ptr(),
+                SOURCE.len(),
+                REQUEST.as_ptr(),
+                REQUEST.len(),
+                slot,
+                slot.cast()
+            ),
+            PurrdfStatus::InvalidArgument as i32
+        );
+        assert_eq!(aliased, std::ptr::dangling_mut());
+        purrdf_buffer_free(std::ptr::null_mut());
+    }
+}
+
+#[test]
 fn yaml_source_pair_owns_outputs_and_retains_original_native_failures() {
     use purrdf::error::{purrdf_error_canonicalization_json, purrdf_error_native_cause_json};
     use purrdf::yaml_source::{purrdf_yaml_source_export, purrdf_yaml_source_reconstruct};

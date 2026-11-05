@@ -79,7 +79,10 @@ pub(crate) fn decode<T>(
     }
     let json_failure = |error: json::Error| {
         let storage = match error.kind() {
-            json::ErrorKind::Storage(cause) => Some(cause),
+            json::ErrorKind::Storage(cause)
+            | json::ErrorKind::Escape(purrdf_lex::json_escape::JsonEscapeErrorKind::Storage(
+                cause,
+            )) => Some(cause),
             _ => None,
         };
         failure(code, error, storage)

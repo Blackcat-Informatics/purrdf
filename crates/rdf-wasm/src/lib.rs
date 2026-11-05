@@ -114,9 +114,8 @@ mod term;
 mod xpath_regex;
 mod xsd;
 mod yaml_source;
-pub use yaml_source::{
-    YamlSourceCause, YamlSourceExport, yaml_source_export, yaml_source_reconstruct,
-};
+pub use operation::YamlSourceCause;
+pub use yaml_source::{YamlSourceExport, yaml_source_export, yaml_source_reconstruct};
 
 #[cfg(target_arch = "wasm32")]
 pub use async_query::purrdf_jspi_run;
@@ -131,7 +130,7 @@ pub use dataset::__purrdf_test_large_dataset_identity;
 pub use dataset::Dataset;
 pub use entail::RegimeClosure;
 pub use factory::DataFactory;
-pub use jsonld::CompiledJsonLdContext;
+pub use jsonld::{CompiledJsonLdContext, expand_document};
 pub use projection::{ProjectionLift, ProjectionPackage, lift_projection};
 pub use protocol::SparqlProtocolRequest;
 pub use query::{

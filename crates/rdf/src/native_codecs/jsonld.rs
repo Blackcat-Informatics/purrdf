@@ -88,6 +88,12 @@ const BUNDLED_SCHEMA_REF: &str = "purrdf.schema.json";
 // the carrier contract identical on wasm32 and native targets even when a ceiling exceeds the
 // target address space.
 const MAX_JSON_LD_DOCUMENT_BYTES: ByteLimit = ByteLimit::new(4_u64 * 1024 * 1024 * 1024);
+
+/// The native JSON-LD source decoder's existing logical document-byte bound.
+/// Host acquisition keeps its physical address/layout admission separate.
+pub const fn jsonld_document_max_bytes() -> u64 {
+    MAX_JSON_LD_DOCUMENT_BYTES.bytes()
+}
 // The carrier row budget (terms + quads + reifiers + annotations). Raised to 2^25 so a
 // large whole-ontology bundle (tens of millions of composed statements — the authored graph
 // + the RDF-1.2 statement layer + the reasoned closure + bundle-internal named graphs) stays

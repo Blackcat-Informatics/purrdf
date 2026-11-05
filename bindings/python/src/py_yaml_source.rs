@@ -33,25 +33,7 @@ impl PyYamlSourceExport {
 }
 
 fn source_error(py: Python<'_>, error: yaml_source::Error) -> PyErr {
-    let diagnostic = error.into_diagnostic();
-    let refused = crate::py_store::presentation::value_error(diagnostic.to_string(), &diagnostic);
-    let attach = || -> PyResult<()> {
-        if let Some(cause) = diagnostic.native_cause() {
-            let fields = crate::py_native_fields::inspect(py, cause)?;
-            let json = purrdf_validate::native_error::to_json(cause).map_err(|failure| {
-                pyo3::exceptions::PyRuntimeError::new_err(failure.to_string())
-            })?;
-            refused.value(py).setattr("native_cause", fields)?;
-            refused
-                .value(py)
-                .setattr("native_cause_json", json.to_string())?;
-        }
-        Ok(())
-    };
-    match attach() {
-        Ok(()) => refused,
-        Err(failure) => failure,
-    }
+    crate::py_store::presentation::native_error(py, &error.into_diagnostic())
 }
 
 /// Export immutable original UTF-8 bytes under an explicit source and profile.

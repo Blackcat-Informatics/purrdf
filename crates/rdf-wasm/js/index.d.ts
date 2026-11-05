@@ -985,13 +985,26 @@ export class YamlSourceCause {
   free(): void;
 }
 
-export interface YamlSourceFailure extends Error {
+export interface NativeDiagnosticFailure extends Error {
   readonly code: string;
   readonly diagnostic: object;
   readonly nativeCauseJson?: string;
   /** Free this owned cause when it is no longer needed. */
   readonly nativeCause?: YamlSourceCause;
 }
+
+export interface YamlSourceFailure extends NativeDiagnosticFailure {}
+
+/**
+ * Expand original JSON-LD/YAML-LD bytes using closed version-one request JSON
+ * bytes, returning expanded JSON document text without an RDF dataset.
+ * Request decoding/context compilation precedes source capture. Buffers must be
+ * Uint8Array views over non-shared ArrayBuffer storage; detached views refuse.
+ * Host buffers/string glue, admitted bridge copies, request, native expansion
+ * and bounded output storage have separate authorities.
+ * @throws {NativeDiagnosticFailure | TypeError} Original native and host refusals.
+ */
+export function expandDocument(source: Uint8Array, requestJson: Uint8Array): string;
 
 /**
  * Export original YAML bytes under an explicit absolute source IRI and a closed

@@ -16,6 +16,22 @@ use crate::{
     RdfDataset, classify, parse_dataset, serialize_dataset_to_format_with_jsonld_options,
 };
 
+/// Expand immutable original JSON-LD/YAML-LD bytes to JSON document text.
+#[pyfunction]
+#[pyo3(signature = (source, *, request_json))]
+fn expand_document(
+    py: Python<'_>,
+    source: &Bound<'_, PyBytes>,
+    request_json: &Bound<'_, PyBytes>,
+) -> PyResult<String> {
+    // Both immutable Python owners remain borrowed throughout detach. The shared
+    // request decoder runs before native source parsing, without a bridge copy.
+    let source = source.as_bytes();
+    let request = request_json.as_bytes();
+    py.detach(|| purrdf_validate::document_expansion::expand(source, request))
+        .map_err(|diagnostic| crate::py_store::presentation::native_error(py, &diagnostic))
+}
+
 /// An immutable compiled JSON-LD 1.1 context reusable across datasets.
 #[pyclass(name = "CompiledJsonLdContext", frozen)]
 #[derive(Debug, Clone)]
@@ -126,8 +142,11 @@ pub(crate) fn serialize_frozen(
     })
 }
 
+/// Register the compiled context, dataset serializer and document expander exports.
+/// YAML source export and reconstruction have their own public registrar.
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyCompiledJsonLdContext>()?;
     module.add_function(wrap_pyfunction!(serialize_jsonld, module)?)?;
+    module.add_function(wrap_pyfunction!(expand_document, module)?)?;
     Ok(())
 }

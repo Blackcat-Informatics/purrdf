@@ -3,6 +3,14 @@
 
 # Native ownership and WASM execution
 
+The exact package case `document expansion exports preserve byte transport and native error ownership`
+in `document-expansion-interface.test.mjs` exercises the shipped JavaScript export
+and actual wasm-bindgen byte-buffer imports, request-before-source capture,
+JSON string return transport and the existing retained native-cause owner.
+Run only this named case with `node --test --test-name-pattern` against the built
+package. Native Rust owns expansion semantics, request grammar and limit behavior;
+this selection verifies the actual host interface and native error properties.
+
 The exact packaged case `YAML source pair preserves owned bytes and rejects before bridge copy`
 in `yaml-source.test.mjs` exercises captured JavaScript typed-array intrinsics,
 admission before the host-to-native copy, the result/Dataset ownership transfer,

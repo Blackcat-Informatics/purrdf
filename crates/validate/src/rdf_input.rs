@@ -31,7 +31,7 @@ pub struct RdfInputOptions {
     pub registry: JsonLdContextRegistry,
 }
 
-type Registration = (String, Vec<u8>, JsonLdContextFormat);
+pub(crate) type Registration = (String, Vec<u8>, JsonLdContextFormat);
 
 fn syntax(
     value: &Value,
@@ -99,7 +99,7 @@ fn projection(
     fields.deny_unknown()
 }
 
-fn basic_fields(
+pub(crate) fn basic_fields(
     fields: &mut Record<'_>,
     allocation: &dyn RecordAllocation,
 ) -> Result<YamlLdOptions, DecodeError> {
@@ -121,7 +121,7 @@ fn basic_fields(
     Ok(options)
 }
 
-fn registration(
+pub(crate) fn registration(
     value: &Value,
     allocation: &dyn RecordAllocation,
 ) -> Result<Registration, DecodeError> {

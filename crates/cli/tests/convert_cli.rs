@@ -59,6 +59,46 @@ use support::{
 use purrdf_rdf::JsonLdContextLimits;
 
 #[test]
+fn document_expansion_cli_decodes_request_before_source_and_publishes_bytes() {
+    let dir = purrdf_testkit::temp_dir!().unwrap();
+    let config = write_file(
+        dir.path(),
+        "expand.json",
+        r#"{"version":1,"format":"jsonld"}"#,
+    );
+    let input = write_file(dir.path(), "input.jsonld", r#"{"urn:p":"cli"}"#);
+    let output = path(dir.path(), "expanded.json");
+    let expected = br#"[{"urn:p":[{"@value":"cli"}]}]"#;
+    let result = run(&["document-expand", "--request", &config, &input, &output]);
+    assert!(result.status.success(), "{}", stderr(&result));
+    assert_eq!(std::fs::read(&output).unwrap(), expected);
+    let stdin = run_with_stdin(
+        &["document-expand", "--request", &config, "-", "-"],
+        br#"{"urn:p":"cli"}"#,
+    );
+    assert!(stdin.status.success(), "{}", stderr(&stdin));
+    assert_eq!(stdin.stdout, expected);
+    let shared = run(&["document-expand", "--request", "-", "-", "-"]);
+    assert_eq!(shared.status.code(), Some(2));
+    assert!(stderr(&shared).contains("single stdin"));
+    std::fs::write(&config, r#"{"version":1,"format":"jsonld","unknown":true}"#).unwrap();
+    let missing = path(dir.path(), "never-acquired.jsonld");
+    let refused = run(&["document-expand", "--request", &config, &missing, &output]);
+    assert!(!refused.status.success());
+    assert!(stderr(&refused).contains("unknown"));
+    assert_eq!(std::fs::read(&output).unwrap(), expected);
+    std::fs::write(
+        &config,
+        r#"{"version":1,"format":"jsonld","output":{"max_bytes":0}}"#,
+    )
+    .unwrap();
+    let refused = run(&["document-expand", "--request", &config, &input, &output]);
+    assert!(!refused.status.success());
+    assert_eq!(refused.stdout, Vec::<u8>::new());
+    assert_eq!(std::fs::read(&output).unwrap(), expected);
+}
+
+#[test]
 // This named-file case requires the inherited Unix file-identity capability.
 #[cfg(unix)]
 fn yaml_source_exports_and_reconstructs_exact_bytes_with_explicit_bounds() {

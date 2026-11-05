@@ -9,7 +9,51 @@
 //! reaches through the evaluator it already depends on. A second declaration of either
 //! import fails `scripts/check-shared-helpers.py`.
 
+use purrdf_lex::allocation::{Ceiling, Memory, StorageError};
 use wasm_bindgen::prelude::*;
+
+/// A concrete byte-bridge refusal, mapped by each actual native operation.
+pub(crate) enum ByteCaptureError {
+    Host(JsValue),
+    Length,
+    Limit { maximum: usize },
+    Storage(StorageError),
+}
+
+/// The original admitted byte-copy owner, retained throughout native work.
+pub(crate) struct CapturedBytes {
+    pub(crate) bytes: Vec<u8>,
+    _admission: Ceiling,
+}
+impl CapturedBytes {
+    pub(crate) fn capture(value: &JsValue, maximum: usize) -> Result<Self, ByteCaptureError> {
+        let captured = capture_bytes(value).map_err(ByteCaptureError::Host)?;
+        let length = byte_length(&captured).map_err(ByteCaptureError::Host)?;
+        if !length.is_finite()
+            || length.fract() != 0.0
+            || length < 0.0
+            || length > f64::from(u32::MAX)
+        {
+            return Err(ByteCaptureError::Length);
+        }
+        // The finite integral nonnegative length is bounded by u32::MAX.
+        let length = length as u32 as usize;
+        if length > maximum {
+            return Err(ByteCaptureError::Limit { maximum });
+        }
+        let mut admission = Ceiling(maximum);
+        let mut bytes = Vec::new();
+        Memory::new(&mut admission)
+            .reserve(&mut bytes, length)
+            .map_err(ByteCaptureError::Storage)?;
+        bytes.resize(length, 0);
+        copy_bytes(&captured, &mut bytes).map_err(ByteCaptureError::Host)?;
+        Ok(Self {
+            bytes,
+            _admission: admission,
+        })
+    }
+}
 
 #[wasm_bindgen]
 extern "C" {
