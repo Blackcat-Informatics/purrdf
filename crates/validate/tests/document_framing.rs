@@ -189,7 +189,7 @@ fn framing_preserves_native_documents_context_roles_and_phase_limits() {
     let native_config = json::read(r#"{"version":1,"format":"jsonld"}"#).unwrap();
     let native = framed(
         native,
-        br#"{"@context":{"raw":{"@id":"urn:raw","@type":"@json"}}}"#,
+        br#"{"@context":{"raw":{"@id":"urn:raw","@type":"@json"}},"@id":"urn:s"}"#,
         &native_config,
     );
     assert_eq!(
