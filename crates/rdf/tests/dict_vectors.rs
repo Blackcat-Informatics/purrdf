@@ -10,8 +10,8 @@
 //! per-frame selection).
 //!
 //! Every fixed source and authoring recipe lives in
-//! `purrdf_rdf::gts_dict_vectors`, shared with the freezing binary
-//! `crates/rdf/src/bin/gen_dict_vectors.rs`, so a fresh regeneration here always
+//! `purrdf_rdf::gts_dict_vectors`, shared with the freezing example
+//! `crates/rdf/examples/gen_dict_vectors.rs`, so a fresh regeneration here always
 //! starts from the SAME bytes the frozen vectors were authored from.
 //!
 //! 30/32/33 are byte oracles; 31 is fold-equality evidence only, because

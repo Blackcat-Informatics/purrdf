@@ -4,19 +4,19 @@
 //! Capture the native SPARQL engine as committed goldens.
 //!
 //! The native [`NativeSparqlEngine`] is the SOLE SPARQL authority. This maintainer-only
-//! binary captures the native engine's deterministic SPARQL outputs over OUR corpus
+//! example captures the native engine's deterministic SPARQL outputs over OUR corpus
 //! (`queries/**` + `generated/queries/**`) and over the `$this`-substitution
 //! shapes, writing them as byte-stable golden files under
 //! `crates/sparql-conformance/tests/goldens/`. The native goldens gate then byte-diffs
 //! the engine against these frozen goldens forever (native-vs-native = a regression
 //! gate).
 //!
-//! `crates/sparql-conformance` merely RECEIVES these data files; this binary loads
+//! `crates/sparql-conformance` merely RECEIVES these data files; this example loads
 //! purrdf.gts via `flattened_dataset_from_bytes` and runs only the native engine.
 //!
 //! Determinism contract: every golden is byte-stable across runs. CONSTRUCT/DESCRIBE
 //! goldens are RDFC-1.0 canonical N-Quads; SELECT goldens are the SORTED multiset of
-//! `row_key` lines; ASK goldens are `true`/`false`. Re-running the binary must
+//! `row_key` lines; ASK goldens are `true`/`false`. Re-running the example must
 //! produce NO git diff.
 
 use std::path::{Path, PathBuf};

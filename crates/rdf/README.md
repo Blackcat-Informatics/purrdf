@@ -253,6 +253,24 @@ Attached payload packaging is runnable in
 The caller-configured classes/properties/individuals CSVW view is runnable in
 [`examples/csvw_terms.rs`](https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/rdf/examples/csvw_terms.rs).
 
+## Maintainer authoring tools
+
+Run these examples explicitly from the workspace to author frozen corpus files:
+
+```sh
+cargo run --locked --profile release -p purrdf-rdf --example capture-sparql-goldens
+cargo run --locked --profile release -p purrdf-rdf --example gen-dict-vectors
+cargo run --locked --profile release -p purrdf-rdf --example gen-streamable-vectors
+```
+
+`capture-sparql-goldens` captures native SPARQL outputs under
+`crates/sparql-conformance/tests/goldens/`. `gen-dict-vectors` writes the
+dictionary corpus vectors and their expected-fold JSON under `vectors/`.
+`gen-streamable-vectors` reads the frozen `vectors/25-streamable-source.gts`
+and writes its compacted vector and expected-fold JSON. The examples retain
+their fixed authoring recipes and shared library helpers. Corpus paths resolve
+from the RDF package manifest directory.
+
 ## Part of PurRDF
 
 This crate is one member of the [PurRDF](https://github.com/Blackcat-Informatics/purrdf)

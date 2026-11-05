@@ -3,9 +3,9 @@
 
 //! Freeze the in-band-dictionary corpus vectors.
 //!
-//! Maintainer-only binary, mirroring `capture_sparql_goldens`. Every fixed
+//! Maintainer-only example, mirroring `capture-sparql-goldens`. Every fixed
 //! source and authoring recipe lives in
-//! [`purrdf_rdf::gts_dict_vectors`] — this binary only writes the bytes out, so
+//! [`purrdf_rdf::gts_dict_vectors`] — this example only writes the bytes out, so
 //! the drift-guard test (`tests/dict_vectors.rs`) regenerates from exactly the
 //! same definitions.
 //!
