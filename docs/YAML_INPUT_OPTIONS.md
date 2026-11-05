@@ -67,8 +67,8 @@ accept the same flag for their sole `--data` document. Query applies it in ordin
 governed, explain and entailment execution, using its existing filename-based
 input selection. Query premise imports retain their default input policy.
 `validate` accepts the flag for primary `IN`, on both whole-graph and incremental
-validation. Shapes documents, prepared products, imports and added/removed change
-documents retain their existing input policy. The flag is also valid with
+validation. Prepared products, imports and added/removed change documents retain their existing
+input policy. The flag is also valid with
 `--shapes-product`, because the primary data is still parsed.
 `describe` and `project` accept the flag for primary `IN`. Description selectors
 retain their existing base resolution. Projection configuration and assets keep
@@ -91,9 +91,20 @@ shape-map selectors and base policy retain their existing behavior.
 `rules` and `node-expr` accept the flag for primary `IN` only. Configuration
 admission precedes data, rule, shapes, import and expression document acquisition.
 Both SHACL and SRL rules use the same configured data loader. `rules --check`
-reads no data and refuses the flag. Shapes, SRL, expression and import documents
+reads no data and refuses the flag. SRL, expression and import documents
 retain their existing input policy; coordinates, selectors, bases, governors,
 serialization and reports retain their existing behavior.
+`validate`, `rules` and `node-expr` also accept independent
+`--shapes-yamlld-input-options PATH` for their root `--shapes` document. Each
+configured role must be YAML-LD; data and shapes may otherwise use different
+formats. Both configurations are admitted before either RDF role or any import,
+change, rule or expression document is acquired. Shapes controls require
+`--shapes` and are refused with validation products or SRL/check-only rules.
+`shapes lint --yamlld-input-options PATH` configures its root `FILE`;
+`shacl pack --yamlld-input-options PATH` configures its root `--shapes` document.
+Pack retains its Turtle default, so YAML-LD requires `--shapes-from yamlld`.
+The native shapes parse retains its final declared base and prefix metadata for
+import resolution. Imports keep their default input controls.
 Every selected input must be YAML-LD; pack, GTS and other native formats are
 refused before data acquisition. The bounded named options file is validated
 before primary data, premise imports or rule documents are read; it does not

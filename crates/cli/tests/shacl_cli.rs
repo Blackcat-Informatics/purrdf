@@ -2272,3 +2272,105 @@ fn a_restored_product_reaches_the_same_change_verdict_as_a_parsed_document() {
         stderr(&parsed)
     );
 }
+
+/// Configured root shapes preserve final-base imports and restore through the product consumer.
+#[test]
+fn configured_yamlld_input_reaches_shapes_pack() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let shapes = write_file(dir.path(), "shapes.yamlld", support::YAML_SHAPES_DOCUMENTS);
+    let data = write_file(
+        dir.path(),
+        "data.nq",
+        "<https://example.org/alice> <https://example.org/p> \"value\" .\n",
+    );
+    let all = write_file(
+        dir.path(),
+        "all.json",
+        r#"{"version":1,"yaml_ld":{"extract_all_scripts":true}}"#,
+    );
+    let product = dir.path().join("shapes.purrshp");
+    let product = product.to_str().unwrap();
+    let receipt = dir.path().join("receipt.json");
+    let receipt = receipt.to_str().unwrap();
+    for (controls, conforms) in [(None, true), (Some(all.as_str()), false)] {
+        let mut args = vec![
+            "shacl",
+            "pack",
+            "--shapes",
+            &shapes,
+            "--shapes-from",
+            "yamlld",
+            "--out",
+            product,
+            "--canonical-search",
+            "unlimited",
+            "--canonicalization-receipts",
+            receipt,
+        ];
+        if let Some(controls) = controls {
+            args.extend(["--yamlld-input-options", controls]);
+        }
+        let packed = run(&args);
+        assert_eq!(code(&packed), 0, "{}", stderr(&packed));
+        let restored = run(&[
+            "validate",
+            "--shapes-product",
+            product,
+            "--format",
+            "ntriples",
+            &data,
+        ]);
+        assert_eq!(code(&restored), 0, "{}", stderr(&restored));
+        assert!(
+            stderr(&restored).contains(&format!("shacl conforms {conforms}\n")),
+            "{}",
+            stderr(&restored)
+        );
+    }
+    let limited = write_file(
+        dir.path(),
+        "limited.json",
+        r#"{"version":1,"yaml_ld":{"syntax":{"max_input_bytes":0}}}"#,
+    );
+    let malformed = write_file(dir.path(), "malformed.json", "{");
+    let missing = dir.path().join("missing.yamlld");
+    let missing = missing.to_str().unwrap();
+    let import = format!("https://example.org/import={missing}");
+    std::fs::write(product, "unchanged product").unwrap();
+    for (controls, root, imports, diagnostic) in [
+        (
+            limited.as_str(),
+            shapes.as_str(),
+            false,
+            "native-yaml-input-limit",
+        ),
+        (malformed.as_str(), missing, true, "rdf-input-options"),
+    ] {
+        let mut args = vec![
+            "shacl",
+            "pack",
+            "--shapes",
+            root,
+            "--shapes-from",
+            "yamlld",
+            "--yamlld-input-options",
+            controls,
+            "--out",
+            product,
+        ];
+        if imports {
+            args.extend(["--import", &import]);
+        }
+        let refused = run(&args);
+        assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+        assert!(
+            stderr(&refused).contains(diagnostic),
+            "{}",
+            stderr(&refused)
+        );
+        assert_eq!(
+            std::fs::read_to_string(product).unwrap(),
+            "unchanged product"
+        );
+    }
+}

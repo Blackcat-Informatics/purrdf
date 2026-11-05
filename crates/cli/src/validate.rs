@@ -205,6 +205,8 @@ use crate::{format, ledger, sink, source};
 pub(crate) struct ValidateOptions<'a> {
     /// Explicit Basic controls for the primary data document only.
     pub(crate) yamlld_input_options: Option<&'a std::path::Path>,
+    /// Independent YAML-LD Basic options for the root shapes document only.
+    pub(crate) shapes_yamlld_input_options: Option<&'a std::path::Path>,
     /// The data-graph path `IN`, or `-` for stdin (which requires `--from`).
     pub(crate) input: &'a str,
     /// The report path `OUT`, or `-` for stdout.
@@ -957,12 +959,19 @@ fn load_shapes<D: DatasetView<ReadError = std::convert::Infallible>>(
     path: &str,
     format: SourceFormat,
     base: Option<&str>,
+    input_options: Option<&[u8]>,
     data: &D,
     data_iris: &[&str],
     canonical: &mut crate::canonical::Request,
 ) -> Result<Shapes, CliError> {
-    let root =
-        crate::shapes_source::read_shapes_document(path, format, base, "--shapes", canonical)?;
+    let root = crate::shapes_source::read_shapes_document(
+        path,
+        format,
+        base,
+        "--shapes",
+        input_options,
+        canonical,
+    )?;
     let mut table = crate::shapes_source::shapes_imports(&root, options.imports, canonical)?;
     table.link_data_graph(data, data_iris).map_err(|error| {
         crate::shapes_source::shapes_error(
@@ -1024,6 +1033,8 @@ enum ShapesPlan<'a> {
         path: &'a str,
         /// The syntax it is read as.
         format: SourceFormat,
+        /// Admitted YAML-LD Basic controls, decoded before any RDF acquisition.
+        input_options: Option<Vec<u8>>,
         /// The base it parses under, and that `--shapes-graph` resolved against.
         base: Option<String>,
         /// `--shapes-graph`, resolved to an absolute IRI.
@@ -1050,6 +1061,11 @@ impl<'a> ShapesPlan<'a> {
     ///
     /// Any usage error in `--shapes-from`, `--shapes-graph` or the shapes path.
     fn decide(options: &ValidateOptions<'a>) -> Result<Self, CliError> {
+        if options.shapes_yamlld_input_options.is_some()
+            && (options.shapes.is_none() || options.shapes_product.is_some())
+        {
+            return Err(CliError::Usage("--shapes-yamlld-input-options requires --shapes and conflicts with --shapes-product".to_owned()));
+        }
         if let Some(path) = options.shapes_product {
             // Decoded HERE, before a byte of the product is read: a mis-typed selector is
             // the operator's command line, not the artifact's fault, so it exits as a
@@ -1077,6 +1093,10 @@ impl<'a> ShapesPlan<'a> {
             ));
         };
         let format = format::resolve(options.shapes_from, path)?;
+        let input_options = options
+            .shapes_yamlld_input_options
+            .map(|path| source::read_yamlld_input_options(path, &[format]))
+            .transpose()?;
         // The shapes document's base is derived ONCE and spent twice: the document parses
         // under it, and `--shapes-graph` resolves against it. Deriving it separately per
         // consumer is how the flag would come to name a graph the shapes document cannot.
@@ -1086,6 +1106,7 @@ impl<'a> ShapesPlan<'a> {
         Ok(Self::Document {
             path,
             format,
+            input_options,
             base,
             shapes_graph,
         })
@@ -1155,6 +1176,7 @@ impl<'a> ShapesPlan<'a> {
                 path,
                 format,
                 ref base,
+                ref input_options,
                 ..
             } => load_shapes(
                 options,
@@ -1162,6 +1184,7 @@ impl<'a> ShapesPlan<'a> {
                 path,
                 format,
                 base.as_deref(),
+                input_options.as_deref(),
                 data,
                 data_iris,
                 canonical,

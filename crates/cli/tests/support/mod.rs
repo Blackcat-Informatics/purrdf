@@ -125,3 +125,28 @@ pub(super) fn run_with_stdin(command: &mut Command, bytes: &[u8]) -> Output {
     }
     output
 }
+
+/// The second document adds a property constraint and imports its final declared base.
+/// The ontology header has a distinct identity, so loaded-base metadata resolves the import.
+pub(super) const YAML_SHAPES_DOCUMENTS: &str = r"
+'@id': https://example.org/Shape
+'@type': http://www.w3.org/ns/shacl#NodeShape
+http://www.w3.org/ns/shacl#targetNode:
+  '@id': https://example.org/alice
+---
+'@context':
+  '@base': https://example.org/final-base
+'@graph':
+  - '@id': https://example.org/header
+    '@type': http://www.w3.org/2002/07/owl#Ontology
+    http://www.w3.org/2002/07/owl#imports:
+      '@id': https://example.org/final-base
+  - '@id': https://example.org/Shape
+    http://www.w3.org/ns/shacl#property:
+      '@id': https://example.org/Property
+  - '@id': https://example.org/Property
+    '@type': http://www.w3.org/ns/shacl#PropertyShape
+    http://www.w3.org/ns/shacl#path:
+      '@id': https://example.org/required
+    http://www.w3.org/ns/shacl#minCount: 1
+";

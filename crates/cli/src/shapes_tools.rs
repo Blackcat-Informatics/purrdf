@@ -88,6 +88,8 @@ pub(crate) struct RulesOptions<'a> {
     pub(crate) from: Option<CliRdfFormat>,
     /// YAML-LD Basic options for the primary data graph only.
     pub(crate) yamlld_input_options: Option<&'a std::path::Path>,
+    /// Independent YAML-LD Basic options for the root shapes document only.
+    pub(crate) shapes_yamlld_input_options: Option<&'a std::path::Path>,
     /// `--to`: the output format override.
     pub(crate) to: Option<CliRdfFormat>,
     /// `--base`: the data graph's parse base and the output's base.
@@ -119,6 +121,14 @@ pub(crate) fn run_rules(
     ledger_target: &LedgerTarget,
     canonical: &mut crate::canonical::Request,
 ) -> Result<(), CliError> {
+    if options.shapes_yamlld_input_options.is_some()
+        && (options.shapes.is_none() || options.srl.is_some() || options.check.is_some())
+    {
+        return Err(CliError::Usage(
+            "--shapes-yamlld-input-options requires --shapes and conflicts with --srl and --check"
+                .to_owned(),
+        ));
+    }
     let coordinates =
         purrdf_validate::query::CoordinateInputs::from_parts(options.now, options.entropy_seed)
             .map_err(|error| {
@@ -168,6 +178,18 @@ pub(crate) fn run_rules(
     let input_options = options
         .yamlld_input_options
         .map(|path| source::read_yamlld_input_options(path, &[data_format]))
+        .transpose()?;
+    let shapes_input_options = options
+        .shapes_yamlld_input_options
+        .map(|controls| {
+            let path = options.shapes.ok_or_else(|| {
+                CliError::Usage("--shapes-yamlld-input-options requires --shapes".to_owned())
+            })?;
+            source::read_yamlld_input_options(
+                controls,
+                &[format::resolve(options.shapes_from, path)?],
+            )
+        })
         .transpose()?;
     let target_format = format::resolve_target(options.to, options.output, "the --to target")?;
     format::refuse_unconsumable_base(
@@ -227,7 +249,14 @@ pub(crate) fn run_rules(
             base,
             shapes_graph,
         } => {
-            let root = read_shapes_document(path, *format, base.as_deref(), "--shapes", canonical)?;
+            let root = read_shapes_document(
+                path,
+                *format,
+                base.as_deref(),
+                "--shapes",
+                shapes_input_options.as_deref(),
+                canonical,
+            )?;
             let table = shapes_imports(&root, options.imports, canonical)?;
             let shapes = purrdf::shapes::shapes::from_dataset_with_base(
                 &root.dataset,
@@ -483,6 +512,8 @@ pub(crate) struct NodeExprOptions<'a> {
     pub(crate) from: Option<CliRdfFormat>,
     /// YAML-LD Basic options for the primary data graph only.
     pub(crate) yamlld_input_options: Option<&'a std::path::Path>,
+    /// Independent YAML-LD Basic options for the root shapes document only.
+    pub(crate) shapes_yamlld_input_options: Option<&'a std::path::Path>,
     /// `--base`.
     pub(crate) base: Option<&'a str>,
     /// The data-graph path `IN`, or `-`.
@@ -548,6 +579,10 @@ pub(crate) fn run_node_expr(
         &[format::BaseUse::parse(data_format, "the --from data graph")],
     )?;
     let shapes_format = format::resolve(options.shapes_from, options.shapes)?;
+    let shapes_input_options = options
+        .shapes_yamlld_input_options
+        .map(|path| source::read_yamlld_input_options(path, &[shapes_format]))
+        .transpose()?;
     let shapes_base =
         crate::validate::shapes_document_base(options.shapes, shapes_format, options.shapes_base)?;
     // Every argv term is decided before a document is read: a malformed one is the command
@@ -594,6 +629,7 @@ pub(crate) fn run_node_expr(
         shapes_format,
         shapes_base.as_deref(),
         "--shapes",
+        shapes_input_options.as_deref(),
         canonical,
     )?;
     let table = shapes_imports(&root_document, options.imports, canonical)?;
@@ -670,6 +706,8 @@ pub(crate) fn run_node_expr(
 
 /// The resolved `shapes lint` flags.
 pub(crate) struct LintOptions<'a> {
+    /// YAML-LD Basic options for the root shapes document only.
+    pub(crate) yamlld_input_options: Option<&'a std::path::Path>,
     /// `--from`: the shapes-graph format override.
     pub(crate) from: Option<CliRdfFormat>,
     /// `--base`: the shapes document's base.
@@ -695,6 +733,10 @@ pub(crate) fn run_lint(
 ) -> Result<(), CliError> {
     refuse_text_report_flags("shapes lint", ledger_target, jsonld_options)?;
     let format = format::resolve(options.from, options.input)?;
+    let input_options = options
+        .yamlld_input_options
+        .map(|path| source::read_yamlld_input_options(path, &[format]))
+        .transpose()?;
     let base = match format {
         SourceFormat::Native(native) => {
             source::effective_base(options.input, native, options.base)?
@@ -717,6 +759,7 @@ pub(crate) fn run_lint(
         format,
         base.as_deref(),
         "shapes lint",
+        input_options.as_deref(),
         canonical,
     )?;
     let table = shapes_imports(&root, options.imports, canonical)?;
