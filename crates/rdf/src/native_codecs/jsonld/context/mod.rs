@@ -638,7 +638,12 @@ impl CompiledJsonLdContext {
         Ok(context)
     }
 
-    pub(in crate::native_codecs::jsonld) fn compile_frame_output(
+    /// Compile an output context with independent retrieval and semantic bases.
+    /// The retrieval URL resolves offline context references; the initial semantic
+    /// base governs document IRIs until the context's own base or null replaces it.
+    /// # Errors
+    /// Preserves native context, absolute-IRI and compilation-limit refusals.
+    pub fn compile_with_bases(
         context: &Value,
         retrieval_base: Option<&str>,
         output_base: Option<&str>,

@@ -1543,6 +1543,34 @@ int32_t purrdf_document_expand(const uint8_t *source,
                                PurrdfError **out_error);
 
 /**
+ * Compact source bytes under the explicit output context in the request.
+ * Returns one owned UTF-8 JSON buffer; release buffer/error through their free functions.
+ * # Safety
+ * Inputs must be readable for their addressable lengths, and non-null. Output
+ * slots must be writable, initially empty and independent of the input storage.
+ */
+int32_t purrdf_document_compact(const uint8_t *source,
+                                size_t source_len,
+                                const uint8_t *request_json,
+                                size_t request_len,
+                                PurrdfBuffer **out_buffer,
+                                PurrdfError **out_error);
+
+/**
+ * Flatten source bytes, compacting only with a non-null request output context.
+ * Returns one owned UTF-8 JSON buffer; release buffer/error through their free functions.
+ * # Safety
+ * Inputs must be readable for their addressable lengths, and non-null. Output
+ * slots must be writable, initially empty and independent of the input storage.
+ */
+int32_t purrdf_document_flatten(const uint8_t *source,
+                                size_t source_len,
+                                const uint8_t *request_json,
+                                size_t request_len,
+                                PurrdfBuffer **out_buffer,
+                                PurrdfError **out_error);
+
+/**
  * Materialize an RDF document under a SPARQL entailment regime.
  *
  * `document` is parsed as N-Quads, which accepts an N-Triples document

@@ -1383,6 +1383,14 @@ def expand_document(source: bytes, *, request_json: bytes) -> str:
     """Expand original document bytes under a closed version-one request."""
     ...
 
+def compact_document(source: bytes, *, request_json: bytes) -> str:
+    """Compact source bytes using the explicit request output context."""
+    ...
+
+def flatten_document(source: bytes, *, request_json: bytes) -> str:
+    """Flatten source bytes, optionally compacting under an output context."""
+    ...
+
 def serialize_jsonld(
     data: bytes,
     *,

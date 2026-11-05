@@ -106,8 +106,21 @@ pub fn expand_yamlld_with_context(
     options: &YamlLdOptions,
     limits: &super::JsonLdExpansionLimits,
 ) -> Result<Value, RdfDiagnostic> {
+    expand_yamlld_document_with_context(bytes, context, options, limits)
+        .map(|expanded| expanded.value)
+}
+
+/// Expand selected YAML-LD with the effective base retained by the original walk.
+/// # Errors
+/// Preserves native YAML selection, context, expansion and construction refusals.
+pub fn expand_yamlld_document_with_context(
+    bytes: &[u8],
+    context: &CompiledJsonLdContext,
+    options: &YamlLdOptions,
+    limits: &super::JsonLdExpansionLimits,
+) -> Result<super::JsonLdExpandedDocument, RdfDiagnostic> {
     let value = basic_value(bytes, options)?;
-    super::structural::expand(&value, context, *limits).map(|expanded| expanded.value)
+    super::structural::expand(&value, context, *limits)
 }
 
 /// Flatten selected YAML-LD Basic input without an output context or compaction.
@@ -121,12 +134,7 @@ pub fn flatten_yamlld_with_context(
     flatten_limits: &super::JsonLdFlattenLimits,
 ) -> Result<Value, RdfDiagnostic> {
     let expanded = expand_yamlld_with_context(bytes, context, options, expansion_limits)?;
-    super::node_map::flatten(
-        &expanded,
-        *flatten_limits,
-        super::node_map::Issuance::Normative,
-    )
-    .map(|mapped| mapped.value)
+    super::flatten_expanded(&expanded, flatten_limits)
 }
 
 pub(in crate::native_codecs) fn parse_into_scope(

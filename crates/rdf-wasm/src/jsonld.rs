@@ -7,19 +7,26 @@ use std::sync::Arc;
 
 use crate::{host, operation};
 use purrdf::{CompiledJsonLdContext as EngineContext, JsonLdSerializeMode, JsonLdSerializeOptions};
+use purrdf_validate::document::{self, Operation};
 use wasm_bindgen::prelude::*;
 
-fn capture_error(error: host::ByteCaptureError) -> JsValue {
+fn capture_error(error: host::ByteCaptureError, operation: Operation) -> JsValue {
     match error {
         host::ByteCaptureError::Host(error) => error,
         host::ByteCaptureError::Length => operation::coded_error(
-            "document expansion buffer byte length exceeds the portable unsigned range",
-            "document-expansion-byte-length",
+            &format!(
+                "document {} buffer byte length exceeds the portable unsigned range",
+                operation.name()
+            ),
+            operation.byte_length_code(),
         ),
         host::ByteCaptureError::Limit { maximum } => {
             operation::native_diagnostic_to_js(purrdf_core::RdfDiagnostic::error(
-                "document-expansion-input-limit",
-                format!("document expansion input exceeds {maximum} bytes"),
+                operation.input_limit_code(),
+                format!(
+                    "document {} input exceeds {maximum} bytes",
+                    operation.name()
+                ),
             ))
         }
         host::ByteCaptureError::Storage(error) => operation::native_diagnostic_to_js(error.into()),
@@ -35,15 +42,36 @@ fn capture_error(error: host::ByteCaptureError) -> JsValue {
 /// Throws original host buffer errors or native diagnostic/cause records.
 #[wasm_bindgen(js_name = expandDocument)]
 pub fn expand_document(source: &JsValue, request_json: &JsValue) -> Result<String, JsValue> {
+    run(source, request_json, Operation::Expand)
+}
+
+/// Compact source/request byte buffers under an explicit output context.
+/// Request and admitted byte capture use the same owners as document expansion.
+/// # Errors
+/// Throws original host buffer errors or native diagnostic/cause records.
+#[wasm_bindgen(js_name = compactDocument)]
+pub fn compact_document(source: &JsValue, request_json: &JsValue) -> Result<String, JsValue> {
+    run(source, request_json, Operation::Compact)
+}
+
+/// Flatten source/request byte buffers, optionally compacting under an output context.
+/// Request and admitted byte capture use the same owners as document expansion.
+/// # Errors
+/// Throws original host buffer errors or native diagnostic/cause records.
+#[wasm_bindgen(js_name = flattenDocument)]
+pub fn flatten_document(source: &JsValue, request_json: &JsValue) -> Result<String, JsValue> {
+    run(source, request_json, Operation::Flatten)
+}
+
+fn run(source: &JsValue, request_json: &JsValue, operation: Operation) -> Result<String, JsValue> {
     let bytes =
         host::CapturedBytes::capture(request_json, purrdf_validate::rdf_input::MAX_OPTIONS_BYTES)
-            .map_err(capture_error)?;
-    let request = purrdf_validate::document_expansion::request(&bytes.bytes)
-        .map_err(operation::native_diagnostic_to_js)?;
-    let source =
-        host::CapturedBytes::capture(source, request.max_input_bytes()).map_err(capture_error)?;
-    purrdf_validate::document_expansion::expand_decoded(&source.bytes, &request)
-        .map_err(operation::native_diagnostic_to_js)
+            .map_err(|error| capture_error(error, operation))?;
+    let request =
+        document::request(&bytes.bytes, operation).map_err(operation::native_diagnostic_to_js)?;
+    let source = host::CapturedBytes::capture(source, request.max_input_bytes())
+        .map_err(|error| capture_error(error, operation))?;
+    document::execute_decoded(&source.bytes, &request).map_err(operation::native_diagnostic_to_js)
 }
 
 /// An immutable JSON-LD 1.1 context compiled once and reusable across datasets.

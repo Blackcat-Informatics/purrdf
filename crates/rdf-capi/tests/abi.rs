@@ -54,8 +54,10 @@ const ATTACHED_ARCHIVE_SHA256: &str =
     "d714b63370b0026a28281f605794520fd4d1bc388ae8e5fdd367c5152cb95f6b";
 
 #[test]
-fn document_expansion_owns_buffer_and_retains_native_refusals() {
-    use purrdf::document_expansion::purrdf_document_expand;
+fn document_operations_own_buffers_and_retain_native_refusals() {
+    use purrdf::document_expansion::{
+        purrdf_document_compact, purrdf_document_expand, purrdf_document_flatten,
+    };
     use purrdf::error::purrdf_error_native_cause_json;
     const SOURCE: &[u8] = br#"{"urn:p":"c"}"#;
     const REQUEST: &[u8] = br#"{"version":1,"format":"jsonld"}"#;
@@ -138,6 +140,78 @@ fn document_expansion_owns_buffer_and_retains_native_refusals() {
         );
         assert_eq!(aliased, std::ptr::dangling_mut());
         purrdf_buffer_free(std::ptr::null_mut());
+        type DocumentFunction = unsafe extern "C" fn(
+            *const u8,
+            usize,
+            *const u8,
+            usize,
+            *mut *mut PurrdfBuffer,
+            *mut *mut PurrdfError,
+        ) -> i32;
+        for function in [
+            purrdf_document_compact as DocumentFunction,
+            purrdf_document_flatten,
+        ] {
+            {
+                let source = br#"{"@id":"urn:s","urn:p":"c"}"#.to_vec();
+                let request = br#"{"version":1,"format":"jsonld","output_context":{}}"#.to_vec();
+                assert_eq!(
+                    function(
+                        source.as_ptr(),
+                        source.len(),
+                        request.as_ptr(),
+                        request.len(),
+                        &raw mut output,
+                        &raw mut error
+                    ),
+                    PurrdfStatus::Ok as i32
+                );
+            }
+            assert!(error.is_null());
+            assert_eq!(
+                buffer_bytes(output),
+                br#"{"@context":{},"@id":"urn:s","urn:p":"c"}"#
+            );
+            purrdf_buffer_free(output);
+            let request =
+                br#"{"version":1,"format":"jsonld","output_context":{},"output":{"max_bytes":0}}"#;
+            output = std::ptr::dangling_mut();
+            assert_eq!(
+                function(
+                    SOURCE.as_ptr(),
+                    SOURCE.len(),
+                    request.as_ptr(),
+                    request.len(),
+                    &raw mut output,
+                    &raw mut error
+                ),
+                PurrdfStatus::SerializeError as i32
+            );
+            assert!(output.is_null());
+            assert!(
+                std::ffi::CStr::from_ptr(purrdf_error_native_cause_json(error))
+                    .to_str()
+                    .unwrap()
+                    .contains("json-output-bytes")
+            );
+            purrdf_error_free(error);
+            error = std::ptr::null_mut();
+            let malformed = br#"{"version":1,"format":"jsonld","output_context":false}"#;
+            assert_eq!(
+                function(
+                    [0xff].as_ptr(),
+                    1,
+                    malformed.as_ptr(),
+                    malformed.len(),
+                    &raw mut output,
+                    &raw mut error
+                ),
+                PurrdfStatus::InvalidArgument as i32
+            );
+            assert!(output.is_null());
+            purrdf_error_free(error);
+            error = std::ptr::null_mut();
+        }
     }
 }
 

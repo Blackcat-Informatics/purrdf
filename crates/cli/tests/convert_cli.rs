@@ -59,7 +59,7 @@ use support::{
 use purrdf_rdf::JsonLdContextLimits;
 
 #[test]
-fn document_expansion_cli_decodes_request_before_source_and_publishes_bytes() {
+fn document_operations_cli_decode_requests_before_source_and_publish_bytes() {
     let dir = purrdf_testkit::temp_dir!().unwrap();
     let config = write_file(
         dir.path(),
@@ -96,6 +96,32 @@ fn document_expansion_cli_decodes_request_before_source_and_publishes_bytes() {
     assert!(!refused.status.success());
     assert_eq!(refused.stdout, Vec::<u8>::new());
     assert_eq!(std::fs::read(&output).unwrap(), expected);
+    std::fs::write(&input, r#"{"@id":"urn:s","urn:p":"cli"}"#).unwrap();
+    for command in ["document-compact", "document-flatten"] {
+        std::fs::write(
+            &config,
+            r#"{"version":1,"format":"jsonld","output_context":{}}"#,
+        )
+        .unwrap();
+        let result = run(&[command, "--request", &config, &input, "-"]);
+        assert!(result.status.success(), "{}", stderr(&result));
+        assert_eq!(
+            result.stdout,
+            br#"{"@context":{},"@id":"urn:s","urn:p":"cli"}"#
+        );
+        let shared = run(&[command, "--request", "-", "-", "-"]);
+        assert_eq!(shared.status.code(), Some(2));
+        assert!(stderr(&shared).contains("single stdin"));
+        std::fs::write(
+            &config,
+            r#"{"version":1,"format":"jsonld","output_context":false}"#,
+        )
+        .unwrap();
+        let refused = run(&[command, "--request", &config, &missing, &output]);
+        assert!(!refused.status.success());
+        assert!(stderr(&refused).contains("output_context"));
+        assert_eq!(std::fs::read(&output).unwrap(), expected);
+    }
 }
 
 #[test]

@@ -32,9 +32,15 @@ impl Default for JsonLdExpansionLimits {
     }
 }
 
-pub(super) struct Expanded {
-    pub(super) value: Value,
-    pub(super) document_base: Option<String>,
+/// Structural expansion and the actual document base retained by its native walk.
+/// Moving these values preserves their original expansion authority; it does not
+/// transfer their storage into a later phase's allowance.
+#[derive(Debug)]
+pub struct JsonLdExpandedDocument {
+    /// Expanded lexical document, before node-map construction or RDF lowering.
+    pub value: Value,
+    /// Effective root document base, including in-document base changes or null.
+    pub document_base: Option<String>,
 }
 
 type Context = Rc<CompiledJsonLdContext>;
@@ -102,7 +108,7 @@ pub(super) fn expand(
     input: &Value,
     context: &CompiledJsonLdContext,
     limits: JsonLdExpansionLimits,
-) -> Result<Expanded, RdfDiagnostic> {
+) -> Result<JsonLdExpandedDocument, RdfDiagnostic> {
     run(input, context, limits, Purpose::Document)
 }
 
@@ -111,7 +117,7 @@ pub(super) fn expand_frame(
     context: &CompiledJsonLdContext,
     limits: JsonLdExpansionLimits,
     retrieval_base: Option<&str>,
-) -> Result<Expanded, RdfDiagnostic> {
+) -> Result<JsonLdExpandedDocument, RdfDiagnostic> {
     run(input, context, limits, Purpose::Frame(retrieval_base))
 }
 
@@ -126,7 +132,7 @@ fn run(
     context: &CompiledJsonLdContext,
     limits: JsonLdExpansionLimits,
     purpose: Purpose<'_>,
-) -> Result<Expanded, RdfDiagnostic> {
+) -> Result<JsonLdExpandedDocument, RdfDiagnostic> {
     let frame = matches!(purpose, Purpose::Frame(_));
     let mut ceiling = Ceiling(usize::try_from(limits.max_allocation_bytes).unwrap_or(usize::MAX));
     let mut memory = Memory::new(&mut ceiling);
@@ -187,7 +193,7 @@ fn run(
             value = graph;
         }
         let value = walk.array(value)?;
-        Ok(Expanded {
+        Ok(JsonLdExpandedDocument {
             value,
             document_base: walk.document_base.take(),
         })
