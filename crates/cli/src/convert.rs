@@ -418,6 +418,7 @@ fn run_with_transforms(
                         *source_format,
                         options.base,
                         options.transport,
+                        None,
                         plan.materialization(),
                         &premise_imports,
                         &options.limits,

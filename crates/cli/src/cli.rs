@@ -879,6 +879,10 @@ pub(crate) enum Command {
     },
     /// Materialize an entailment regime's closure over a source graph.
     Reason {
+        /// Closed version-one YAML-LD Basic input-options JSON file, for primary IN only.
+        /// Imports keep their current input controls and existing --from policy.
+        #[arg(long, value_name = "PATH")]
+        yamlld_input_options: Option<PathBuf>,
         /// The entailment regime to close under.
         #[arg(long, value_enum)]
         regime: CliRegime,
@@ -1052,6 +1056,10 @@ pub(crate) enum Command {
     /// shell the same way it does for a tripped query. Which cap it was is read off the
     /// certificate: an exhausted run has `steps` at `budget` or `work` at `work-budget`.
     Consistency {
+        /// Closed version-one YAML-LD Basic input-options JSON file, for primary IN only.
+        /// Imports keep their current input controls and existing --from policy.
+        #[arg(long, value_name = "PATH")]
+        yamlld_input_options: Option<PathBuf>,
         /// Also record the run's PROOF TERM and print it after the certificate.
         ///
         /// Opt-in, and it costs what it records: the completion graph of every tableau run
@@ -2936,6 +2944,7 @@ impl Cli {
                 }
             }
             Command::Reason {
+                yamlld_input_options,
                 rules,
                 report,
                 imports,
@@ -2943,6 +2952,7 @@ impl Cli {
                 output,
                 ..
             } => {
+                paths.extend(yamlld_input_options.iter().cloned());
                 if let Some(path) = rules {
                     paths.push(path.clone());
                 }
@@ -2984,11 +2994,13 @@ impl Cli {
                 paths.push(PathBuf::from(output));
             }
             Command::Consistency {
+                yamlld_input_options,
                 check_proof,
                 imports,
                 input,
                 ..
             } => {
+                paths.extend(yamlld_input_options.iter().cloned());
                 if let Some(path) = check_proof {
                     paths.push(path.clone());
                 }
