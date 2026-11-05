@@ -41,6 +41,84 @@ let nq = serialize_dataset(&ds, "application/n-quads", SerializeGraph::Dataset)
 assert_eq!(nq.as_slice(), b"<https://example.org/cat> <https://example.org/says> \"meow\" .\n");
 ```
 
+## Exact YAML source reconstruction
+
+Semantic YAML-LD translation is described in [JSON-LD contexts and
+compaction](jsonld.md#yaml-ld-semantic-translation). To retain authored bytes,
+use the separate `purrdf::yaml` source carrier. It accepts the native acyclic
+YAML 1.2.2 subset as UTF-8 and retains document boundaries, occurrences, byte
+spans, trivia, comments, quoting, anchors and alias references. Its lexical model can retain complex or repeated
+mapping keys even where YAML-LD Basic semantic processing restricts keys. Source
+analysis does not execute tags, merge keys or JSON-LD expansion.
+
+The umbrella facade's source-cover workflow is:
+
+```rust
+use purrdf::yaml::{Profile, SourceDocument, analyze, decode_stream, project};
+
+let profile = Profile::standard()?;
+let source = SourceDocument {
+    id: "https://example.org/source.yaml",
+    bytes: b"---\nkey: 'value'\n",
+};
+let document = analyze(source, &profile)?;
+let graph = project(&document, &profile)?;
+assert_eq!(decode_stream(&graph, document.id(), &profile)?.as_bytes(), source.bytes);
+# Ok::<(), purrdf::yaml::YamlError>(())
+```
+
+`Profile::standard()` explicitly opts into the shipped vocabulary and bounds;
+analysis never chooses that policy implicitly. CLI callers supply a versioned
+source profile. For example, save this as `source-profile.json`:
+
+```json
+{
+  "version": 1,
+  "name": "authored-yaml",
+  "profile_version": 1,
+  "vocabulary": "https://example.org/yaml-source#",
+  "bounds": {
+    "syntax": { "max_input_bytes": 16777216 }
+  }
+}
+```
+
+The schema `version` is 1; `profile_version` is a nonzero caller version. The
+vocabulary is an explicit absolute namespace ending in `/` or `#`. Optional
+bounds constrain syntax, cover partition, projection and reconstruction phases;
+omitted fields keep their native standard ceilings. These are independent phase
+accounts, not a combined memory ceiling. See the [native source-carrier
+contract](https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/yaml/README.md)
+for their scope. This profile describes lexical cover, independently of
+[YAML-LD semantic input controls](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/YAML_INPUT_OPTIONS.md).
+
+Export the metadata and its computed root to distinct named files, then pass
+that root and the same profile back for reconstruction:
+
+```sh
+purrdf yaml-source export --source-iri https://example.org/authored.yaml \
+  --profile source-profile.json --root-output source-root.txt \
+  authored.yaml source-cover.nq
+read -r source_root < source-root.txt
+purrdf yaml-source reconstruct --root "$source_root" \
+  --profile source-profile.json --max-rdf-bytes 67108864 \
+  source-cover.nq restored.yaml
+```
+
+`--max-rdf-bytes` bounds raw RDF acquisition, separately from parser and native
+decode storage. The exported root binds the source IRI, profile identity
+(including its bounds) and SHA-256 digest of the original source bytes. Equal
+bytes under a different source IRI or profile need not have the same root. Presentation changes can
+change source identity while leaving the represented RDF dataset unchanged.
+
+Reconstruction verifies the complete byte cover and digests, reparses the
+reconstructed stream, recomputes its identity and compares the complete selected
+RDF reprojection before returning bytes. Missing, conflicting, forged or extra
+selected metadata is refused. These checks apply to the selected root and its
+metadata; independent carriers can coexist in a dataset. The cover metadata is
+the source-preservation product; an ordinary semantic RDF conversion does not
+recreate it.
+
 ## Open Knowledge Format bundles
 
 The native OKF codec maps caller-profiled RDF 1.2 datasets to agent-facing
@@ -59,9 +137,9 @@ pinpointed explicitly when writing.
 
 ## Byte determinism
 
-Every serializer is **byte-deterministic**: the same dataset always produces
-the same bytes, on every platform and in every language binding. This is a
-hard workspace invariant, not a best effort — no iteration-order, time, or RNG
+Every serializer is **byte-deterministic**: a fixed dataset, format, context,
+base and options produce the same bytes on every platform and in every language
+binding. This is a hard workspace invariant, not a best effort — no iteration-order, time, or RNG
 dependence is allowed in any output path (hashers are the fixed-key `FixedHasher`
 for exactly this reason), and golden-file tests pin the emitted bytes.
 
