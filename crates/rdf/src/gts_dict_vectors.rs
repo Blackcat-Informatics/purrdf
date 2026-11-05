@@ -6,11 +6,11 @@
 //! `vectors/31-dict-trained.gts`, `vectors/32-dict-rsyncable.gts`,
 //! `vectors/33-multi-dict.gts`).
 //!
-//! ONE definition, shared by the maintainer freezing binary
-//! (`src/bin/gen_dict_vectors.rs`) and the drift-guard test
+//! ONE definition, shared by the maintainer freezing example
+//! (`examples/gen_dict_vectors.rs`) and the drift-guard test
 //! (`tests/dict_vectors.rs`), so a regeneration and a drift check can never
 //! start from different bytes. (The generator and the guard used to duplicate
-//! the builder because a `[[bin]]` target exposes no importable surface — this
+//! the builder because a maintainer target exposes no importable surface — this
 //! module is that surface.)
 //!
 //! It also hosts the shared cross-engine expected-fold oracle
@@ -72,7 +72,7 @@ pub fn keyring() -> FastMap<String, VerifyingKey> {
 /// signature (GTS-SPEC §10.1), never frame authorship. Deliberately a DIFFERENT
 /// key from [`packaging_key`]: distinct frozen corpora should not share signing
 /// key material even when both are fixed maintainer constants. The generator
-/// (`src/bin/gen_streamable_vectors.rs`) and the drift guard
+/// (`examples/gen_streamable_vectors.rs`) and the drift guard
 /// (`tests/streamable_vectors.rs`) both take it from here.
 #[must_use]
 pub fn streamable_packaging_key() -> SigningKey {

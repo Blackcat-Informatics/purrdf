@@ -1,12 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Shared corpus-classification helpers for the native golden-capture binary.
+//! Shared corpus-classification helpers for the native golden-capture example.
 //!
 //! These pure helpers — corpus enumeration, the nondeterministic / multi-query /
 //! deferred-construct classifiers, and the stable solution-row key — are used by the
-//! `capture_sparql_goldens` binary to freeze the native engine's outputs as the
-//! committed conformance goldens. They ride the always-on `gts` feature.
+//! `capture-sparql-goldens` example to freeze the native engine's outputs as the
+//! committed conformance goldens.
 
 use std::path::{Path, PathBuf};
 

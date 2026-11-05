@@ -79,12 +79,12 @@ pub mod gts_compose;
 // The native OWL ↔ RDF 1.2 statement codec folds over the native flat-quad stream.
 pub mod statements;
 // Shared corpus-classification helpers: the pure corpus
-// enumeration / classification helpers the native golden-capture binary
-// (src/bin/capture_sparql_goldens.rs) uses.
+// enumeration / classification helpers the native golden-capture example
+// (examples/capture_sparql_goldens.rs) uses.
 pub mod capture_support;
 // The ONE definition of the frozen in-band-dictionary corpus vectors' fixed
-// sources and authoring recipes, shared by the maintainer freezing binary
-// (src/bin/gen_dict_vectors.rs) and the drift-guard test (tests/dict_vectors.rs).
+// sources and authoring recipes, shared by the maintainer freezing example
+// (examples/gen_dict_vectors.rs) and the drift-guard test (tests/dict_vectors.rs).
 pub mod gts_dict_vectors;
 // The ONE definition of the keystone GTS-ingestion fixture, shared by the
 // integration suite (tests/gts_view_ingestion.rs) and the bench

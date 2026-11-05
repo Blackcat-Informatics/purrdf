@@ -5,9 +5,9 @@
 //! compaction + certification): `vectors/25b-streamable-compacted.gts` and
 //! its companion `vectors/25b-streamable-compacted.expected.json` fold.
 //!
-//! Maintainer-only binary, mirroring `gen_dict_vectors`: `25b-streamable-compacted`
+//! Maintainer-only example, mirroring `gen-dict-vectors`: `25b-streamable-compacted`
 //! has always meant "the streamable compaction of `vectors/25-streamable-source.gts`".
-//! This binary reads the UNTOUCHED, already-frozen `25-streamable-source.gts` from
+//! This example reads the UNTOUCHED, already-frozen `25-streamable-source.gts` from
 //! disk (it is never regenerated or hand-edited here), compacts it through the
 //! CURRENT production compactor
 //! (`purrdf_gts::compact::compact_streamable` via
@@ -37,7 +37,7 @@
 //! written with the same `sort_keys=true`, one-space-indent JSON style as every
 //! other `vectors/*.expected.json` in this corpus.
 //!
-//! Re-running this binary regenerates both files byte-identically: `zstd`/plain
+//! Re-running this example regenerates both files byte-identically: `zstd`/plain
 //! frame compaction is a pure function of the source bytes and the fixed
 //! timestamp/keys below, with no platform-dependent floating point on this path
 //! (unlike `31-dict-trained`'s FastCOVER training).
@@ -63,7 +63,7 @@ fn vectors_dir() -> std::path::PathBuf {
 /// `vectors/25-streamable-source.gts`'s current bytes, read verbatim.
 ///
 /// This source vector is NEVER regenerated here — it is a separately frozen,
-/// hand-curated top-level GTS vector (`25-streamable-source`) that this binary
+/// hand-curated top-level GTS vector (`25-streamable-source`) that this example
 /// only reads.
 fn read_source() -> Vec<u8> {
     let path = vectors_dir().join("25-streamable-source.gts");
