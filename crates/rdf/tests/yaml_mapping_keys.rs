@@ -28,6 +28,448 @@ use purrdf_rdf::native_codecs::parse_dataset;
 use purrdf_rdf::{DatasetSink, OkfBundle, OkfConfig, lift_okf_bundle};
 
 #[test]
+fn document_framing_matches_and_embeds_native_structure() {
+    use purrdf_lex::{
+        json::{self, Value},
+        yaml,
+    };
+    use purrdf_rdf::native_codecs::jsonld::{
+        JsonLdEmbed, JsonLdFramingBase, JsonLdFramingLimits, JsonLdFramingPolicy,
+        frame_jsonld_with_context, frame_value_with_context, frame_yamlld_with_context,
+    };
+    let empty = CompiledJsonLdContext::compile(&json::read("{}").unwrap(), None).unwrap();
+    let policy = JsonLdFramingPolicy::DEFAULT;
+    let limits = JsonLdFramingLimits::DEFAULT;
+    let options = YamlLdOptions::DEFAULT;
+    // Recognizing frame controls must not change ordinary identifier/type
+    // expansion of the reserved forms that previously had no IRI mapping.
+    assert_eq!(
+        expand_jsonld_with_context(
+            br#"{"@id":"@embed","@type":"@default","urn:p":"x"}"#,
+            &empty,
+            &limits.expansion
+        )
+        .unwrap(),
+        json::read(r#"[{"@id":null,"@type":[],"urn:p":[{"@value":"x"}]}]"#).unwrap()
+    );
+    let root = purrdf_testkit::paths::workspace_root().join("vectors/yaml-ld/tests/cases/frame");
+    // Pinned YAML-LD frame-t0001: the complete independent expected document
+    // retains the Book/Chapter properties absent from the pattern.
+    let source = std::fs::read(root.join("0001-in.yamlld")).unwrap();
+    let pattern = std::fs::read(root.join("0001-frame.yamlld")).unwrap();
+    let expected =
+        yaml::read(&std::fs::read_to_string(root.join("0001-out.yamlld")).unwrap()).unwrap();
+    let framed = frame_yamlld_with_context(
+        &source,
+        &pattern,
+        &empty,
+        &empty,
+        None,
+        JsonLdFramingBase::None,
+        &options,
+        &policy,
+        &limits,
+    )
+    .unwrap();
+    assert_eq!(framed, expected);
+    let source = yaml::read(std::str::from_utf8(&source).unwrap()).unwrap();
+    let pattern = yaml::read(std::str::from_utf8(&pattern).unwrap()).unwrap();
+    let source_json = json::write_compact(&source);
+    let pattern_json = json::write_compact(&pattern);
+    assert_eq!(
+        frame_jsonld_with_context(
+            source_json.as_bytes(),
+            pattern_json.as_bytes(),
+            &empty,
+            &empty,
+            None,
+            JsonLdFramingBase::None,
+            &policy,
+            &limits
+        )
+        .unwrap(),
+        expected
+    );
+    assert_eq!(
+        frame_value_with_context(
+            &source,
+            &pattern,
+            &empty,
+            &empty,
+            None,
+            JsonLdFramingBase::None,
+            &policy,
+            &limits
+        )
+        .unwrap(),
+        expected
+    );
+    let run = |source: &str, frame: &str, policy: &JsonLdFramingPolicy| {
+        frame_jsonld_with_context(
+            source.as_bytes(),
+            frame.as_bytes(),
+            &empty,
+            &empty,
+            None,
+            JsonLdFramingBase::None,
+            policy,
+            &limits,
+        )
+        .unwrap()
+    };
+    let check = |source: &str, frame: &str, expected: &str| {
+        let mut expected = json::read(expected).unwrap();
+        expected
+            .as_object_mut()
+            .unwrap()
+            .insert("@context", json::read("{}").unwrap());
+        assert_eq!(run(source, frame, &policy), expected, "frame: {frame}");
+    };
+    let matching = r#"[{"@id":"urn:a","@type":"urn:T","urn:p":"yes","urn:q":"retained"},{"@id":"urn:b","@type":"urn:U","urn:p":"no"},{"@id":"urn:c","@type":"urn:T"}]"#;
+    check(
+        matching,
+        r#"{"@type":"urn:T","urn:p":{},"@requireAll":true,"@explicit":true}"#,
+        r#"{"@id":"urn:a","@type":"urn:T","urn:p":"yes"}"#,
+    );
+    check(
+        matching,
+        r#"{"urn:p":{"@value":["yes","other"]}}"#,
+        r#"{"@id":"urn:a","@type":"urn:T","urn:p":"yes","urn:q":"retained"}"#,
+    );
+    check(
+        matching,
+        r#"{"@id":"urn:c","urn:p":[]}"#,
+        r#"{"@id":"urn:c","@type":"urn:T","urn:p":null}"#,
+    );
+    check(matching, r#"{"@id":"urn:a","urn:p":[]}"#, "{}");
+    check(
+        r#"[{"@id":"urn:s","urn:p":{"@list":[{"@id":"urn:o"}]}},{"@id":"urn:o","@type":"urn:T"}]"#,
+        r#"{"@id":"urn:s","urn:p":{"@list":[{"@type":"urn:T"}]}}"#,
+        r#"{"@id":"urn:s","urn:p":{"@list":[{"@id":"urn:o","@type":"urn:T"}]}}"#,
+    );
+    let cycle = r#"[{"@id":"urn:a","urn:left":{"@id":"urn:b"},"urn:right":{"@id":"urn:b"}},{"@id":"urn:b","urn:back":{"@id":"urn:a"},"urn:name":"B"}]"#;
+    check(
+        cycle,
+        r#"{"@id":"urn:a"}"#,
+        r#"{"@id":"urn:a","urn:left":{"@id":"urn:b","urn:back":{"@id":"urn:a"},"urn:name":"B"},"urn:right":{"@id":"urn:b"}}"#,
+    );
+    for embed in [JsonLdEmbed::Never, JsonLdEmbed::Always] {
+        let actual = run(
+            cycle,
+            r#"{"@id":"urn:a"}"#,
+            &JsonLdFramingPolicy { embed, ..policy },
+        );
+        if embed == JsonLdEmbed::Never {
+            assert_eq!(
+                actual.get("urn:left"),
+                Some(&json::read(r#"{"@id":"urn:b"}"#).unwrap())
+            );
+        } else {
+            assert_eq!(actual.get("urn:left"), actual.get("urn:right"));
+        }
+    }
+    assert_eq!(
+        run(
+            cycle,
+            r#"{"@id":"urn:a","urn:left":{"@embed":false}}"#,
+            &policy
+        )
+        .get("urn:left"),
+        Some(&json::read(r#"{"@id":"urn:b"}"#).unwrap())
+    );
+    check(
+        r#"{"@id":"urn:a","urn:real":"@null","urn:json":{"@value":{"@preserve":0,"@id":"_:opaque","text":"@null"},"@type":"@json"}}"#,
+        r#"{"@id":"urn:a","urn:missing":{"@default":"fallback","@context":false},"urn:null":{},"urn:omitted":{"@omitDefault":true}}"#,
+        r#"{"@id":"urn:a","urn:real":"@null","urn:json":{"@value":{"@preserve":0,"@id":"_:opaque","text":"@null"},"@type":"@json"},"urn:missing":"fallback","urn:null":null}"#,
+    );
+    check(
+        r#"{"@id":"urn:a","urn:json":{"@value":{"@preserve":0,"text":"@null"},"@type":"@json"}}"#,
+        r#"{"urn:json":{"@type":"@json","@value":{"@preserve":0,"text":"@null"}}}"#,
+        r#"{"@id":"urn:a","urn:json":{"@value":{"@preserve":0,"text":"@null"},"@type":"@json"}}"#,
+    );
+    check(
+        r#"{"@id":"urn:a","urn:p":"x"}"#,
+        r#"{"@id":"urn:a","urn:missing":{"@default":{"@id":"urn:default"}}}"#,
+        r#"{"@id":"urn:a","urn:p":"x","urn:missing":{"@id":"urn:default"}}"#,
+    );
+    check(
+        r#"{"@id":"urn:a","urn:p":"x"}"#,
+        r#"{"@type":{"@default":"urn:T"}}"#,
+        r#"{"@id":"urn:a","@type":"urn:T","urn:p":"x"}"#,
+    );
+    check(
+        r#"{"@id":"urn:a","urn:p":{"@value":"x","@language":"en"}}"#,
+        r#"{"urn:p":{"@value":"x"}}"#,
+        r#"{"@id":"urn:a","urn:p":{"@value":"x","@language":"en"}}"#,
+    );
+    check(
+        r#"[{"@id":"urn:a","urn:p":{"@id":"urn:b"}},{"@id":"urn:b","urn:q":"keep"}]"#,
+        r#"{"@id":"urn:a","@explicit":true,"urn:p":{}}"#,
+        r#"{"@id":"urn:a","urn:p":{"@id":"urn:b","urn:q":"keep"}}"#,
+    );
+    check(
+        r#"[{"@id":"urn:a","urn:p":{"@id":"urn:b"}},{"@id":"urn:b","@type":"urn:V"}]"#,
+        r#"{"@id":"urn:a","urn:p":{"@type":"urn:U"}}"#,
+        r#"{"@id":"urn:a","urn:p":null}"#,
+    );
+    assert_eq!(
+        run(
+            r#"{"@id":"urn:a","urn:p":"x"}"#,
+            r#"{"@id":"urn:a","urn:missing":{}}"#,
+            &JsonLdFramingPolicy {
+                compaction: JsonLdCompactionPolicy {
+                    compact_arrays: false,
+                    ..policy.compaction
+                },
+                ..policy
+            }
+        )
+        .pointer("/@graph/0/urn:missing"),
+        Some(&json::read("[]").unwrap())
+    );
+    let graph = r#"[{"@id":"urn:g","@graph":[{"@id":"urn:a","urn:p":"named"}]},{"@id":"urn:a","urn:q":"default"}]"#;
+    check(
+        graph,
+        r#"{"@id":"urn:a"}"#,
+        r#"{"@id":"urn:a","urn:p":"named","urn:q":"default"}"#,
+    );
+    assert_eq!(
+        run(
+            graph,
+            r#"{"@id":"urn:a"}"#,
+            &JsonLdFramingPolicy {
+                frame_default: true,
+                ..policy
+            }
+        )
+        .get("urn:p"),
+        None
+    );
+    check(
+        graph,
+        r#"{"@id":"urn:g","@graph":{"@id":"urn:a"}}"#,
+        r#"{"@id":"urn:g","@graph":[{"@id":"urn:a","urn:p":"named"}]}"#,
+    );
+    check(
+        graph,
+        r#"{"@id":"urn:g","@graph":[]}"#,
+        r#"{"@id":"urn:g","@graph":[{"@id":"urn:a","urn:p":"named"}]}"#,
+    );
+    check(
+        r#"[{"@id":"urn:a","urn:p":{"@id":"urn:b"}},{"@id":"urn:b","urn:name":"B"}]"#,
+        r#"{"@id":"urn:b","@reverse":{"urn:p":{"@id":"urn:a"}}}"#,
+        r#"{"@id":"urn:b","urn:name":"B","@reverse":{"urn:p":{"@id":"urn:a","urn:p":{"@id":"urn:b"}}}}"#,
+    );
+    check(
+        r#"[{"@id":"urn:a","urn:p":"A"},{"@id":"urn:b","urn:p":"B"}]"#,
+        r#"{"@id":"urn:a","@included":{"@id":"urn:b"}}"#,
+        r#"{"@id":"urn:a","urn:p":"A","@included":{"@id":"urn:b","urn:p":"B"}}"#,
+    );
+    let interpretation =
+        CompiledJsonLdContext::compile(&json::read(r#"{"p":"urn:p"}"#).unwrap(), None).unwrap();
+    let no_output_context = frame_jsonld_with_context(
+        br#"{"@id":"urn:a","urn:p":"x"}"#,
+        br#"{"p":{}}"#,
+        &empty,
+        &interpretation,
+        None,
+        JsonLdFramingBase::None,
+        &policy,
+        &limits,
+    )
+    .unwrap();
+    assert_eq!(
+        no_output_context.get("@context"),
+        Some(&json::read("{}").unwrap())
+    );
+    assert_eq!(
+        no_output_context.get("urn:p").and_then(Value::as_str),
+        Some("x")
+    );
+    assert_eq!(
+        run(
+            r#"{"@id":"urn:a"}"#,
+            r#"{"@context":null,"@id":"urn:a"}"#,
+            &policy
+        )
+        .get("@context"),
+        Some(&Value::Null)
+    );
+    let registry = JsonLdContextRegistry::new([(
+        "https://frame.test/context",
+        br#"{"@context":{"p":"urn:p","g":"@graph","id":"@id"}}"#.as_slice(),
+    )])
+    .unwrap();
+    let initial =
+        CompiledJsonLdContext::compile_with_registry(&json::read("{}").unwrap(), None, &registry)
+            .unwrap();
+    let relative = frame_jsonld_with_context(
+        br#"{"@id":"https://output.test/item","urn:p":"x"}"#,
+        br#"{"@context":"context","id":"https://output.test/item"}"#,
+        &empty,
+        &initial,
+        Some("https://frame.test/frame"),
+        JsonLdFramingBase::Iri("https://output.test/"),
+        &JsonLdFramingPolicy {
+            omit_graph: false,
+            ..policy
+        },
+        &limits,
+    )
+    .unwrap();
+    assert_eq!(
+        relative.pointer("/g/0/id").and_then(Value::as_str),
+        Some("item")
+    );
+    assert_eq!(
+        relative.pointer("/g/0/p").and_then(Value::as_str),
+        Some("x")
+    );
+    let initial_base = CompiledJsonLdContext::compile(
+        &json::read(r#"{"@base":"https://frame.test/"}"#).unwrap(),
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        frame_jsonld_with_context(
+            br#"{"@id":"https://frame.test/item","urn:p":"x"}"#,
+            br#"{"@id":"item"}"#,
+            &empty,
+            &initial_base,
+            None,
+            JsonLdFramingBase::None,
+            &policy,
+            &limits
+        )
+        .unwrap()
+        .get("@id")
+        .and_then(Value::as_str),
+        Some("https://frame.test/item")
+    );
+    let input_base =
+        CompiledJsonLdContext::compile(&json::read("{}").unwrap(), Some("https://input.test/doc"))
+            .unwrap();
+    let own_base = frame_jsonld_with_context(
+        br#"{"@id":"item","urn:p":"x"}"#,
+        br#"{"@context":{"@base":"https://output.test/"},"@id":"https://input.test/item"}"#,
+        &input_base,
+        &empty,
+        None,
+        JsonLdFramingBase::Input,
+        &policy,
+        &limits,
+    )
+    .unwrap();
+    assert_eq!(
+        own_base.get("@id").and_then(Value::as_str),
+        Some("https://input.test/item")
+    );
+    let native_source = r#"[{"@id":"_:shared","urn:name":"identity"},{"@id":"urn:s","urn:quoted":{"@triple":{"@subject":{"@id":"_:shared"},"@predicate":"urn:p","@object":{"@id":"urn:o"}}},"urn:annotated":{"@id":"urn:o","@annotation":[{"urn:source":{"@id":"_:shared"}}]}}]"#;
+    let native = run(native_source, "{}", &policy);
+    let rendered = json::write_compact(&native);
+    assert!(rendered.contains("@triple") && rendered.contains("@annotation"));
+    let nodes = native.get("@graph").and_then(Value::as_array).unwrap();
+    let identified = nodes
+        .iter()
+        .find(|node| node.get("urn:name").is_some())
+        .unwrap();
+    assert!(
+        identified
+            .get("@id")
+            .and_then(Value::as_str)
+            .unwrap()
+            .starts_with("_:")
+    );
+    for (source, frame) in [
+        (native_source, r#"{"@id":"urn:s"}"#),
+        (
+            r#"{"@id":"urn:a","urn:p":"x"}"#,
+            r#"{"@id":"urn:a","urn:missing":{"@default":{"@id":"urn:default"}}}"#,
+        ),
+    ] {
+        assert!(
+            frame_jsonld_with_context(
+                source.as_bytes(),
+                frame.as_bytes(),
+                &empty,
+                &empty,
+                None,
+                JsonLdFramingBase::None,
+                &policy,
+                &JsonLdFramingLimits {
+                    max_emitted_nodes: 1,
+                    ..limits
+                }
+            )
+            .is_err()
+        );
+    }
+    check(r#"{"urn:p":"blank"}"#, "{}", r#"{"urn:p":"blank"}"#);
+    for invalid in [
+        r#"{"@embed":"@last"}"#,
+        r#"{"urn:p":[{},{}]}"#,
+        r#"{"urn:p":{"@triple":{}}}"#,
+        r#"{"urn:p":{"@annotation":[]}}"#,
+    ] {
+        assert!(
+            frame_jsonld_with_context(
+                br#"{"urn:p":"x"}"#,
+                invalid.as_bytes(),
+                &empty,
+                &empty,
+                None,
+                JsonLdFramingBase::None,
+                &policy,
+                &limits
+            )
+            .is_err(),
+            "{invalid}"
+        );
+    }
+    for limited in [
+        JsonLdFramingLimits {
+            max_work: 0,
+            ..limits
+        },
+        JsonLdFramingLimits {
+            max_emitted_nodes: 0,
+            ..limits
+        },
+        JsonLdFramingLimits {
+            max_allocation_bytes: 0,
+            ..limits
+        },
+    ] {
+        assert!(
+            frame_jsonld_with_context(
+                br#"{"@id":"urn:a","urn:p":"x"}"#,
+                b"{}",
+                &empty,
+                &empty,
+                None,
+                JsonLdFramingBase::None,
+                &policy,
+                &limited
+            )
+            .is_err()
+        );
+    }
+    assert!(
+        frame_jsonld_with_context(
+            br#"{"@id":"urn:a","urn:p":"x"}"#,
+            b"{}",
+            &empty,
+            &empty,
+            None,
+            JsonLdFramingBase::None,
+            &policy,
+            &limits
+        )
+        .is_ok()
+    );
+}
+
+#[test]
 fn document_compaction_preserves_structure_and_native_terms() {
     use purrdf_lex::json::{self, Value};
     let expansion = JsonLdExpansionLimits::DEFAULT;

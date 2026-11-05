@@ -28,7 +28,10 @@ const KEYWORDS: &[&str] = &[
     "@base",
     "@container",
     "@context",
+    "@default",
     "@direction",
+    "@embed",
+    "@explicit",
     "@graph",
     "@id",
     "@import",
@@ -39,10 +42,12 @@ const KEYWORDS: &[&str] = &[
     "@list",
     "@nest",
     "@none",
+    "@omitDefault",
     "@prefix",
     "@propagate",
     "@protected",
     "@reverse",
+    "@requireAll",
     "@set",
     "@type",
     "@value",
@@ -115,15 +120,28 @@ pub(super) fn compile(
     registry: &JsonLdContextRegistry,
     limits: JsonLdContextLimits,
 ) -> Result<CompiledJsonLdContext, RdfDiagnostic> {
+    compile_with_bases(supplied, document_iri, document_iri, registry, limits)
+}
+
+pub(super) fn compile_with_bases(
+    supplied: &Value,
+    document_iri: Option<&str>,
+    initial_base: Option<&str>,
+    registry: &JsonLdContextRegistry,
+    limits: JsonLdContextLimits,
+) -> Result<CompiledJsonLdContext, RdfDiagnostic> {
     let document_iri = document_iri.map(str::to_owned);
     if let Some(iri) = &document_iri {
         validate_absolute_iri(iri, "JSON-LD document IRI")?;
+    }
+    if let Some(iri) = initial_base {
+        validate_absolute_iri(iri, "JSON-LD initial base IRI")?;
     }
     let context = extract_context(supplied)?;
     let mut compiler = Compiler {
         registry,
         limits,
-        initial_base: document_iri.clone(),
+        initial_base: initial_base.map(str::to_owned),
         budget: Budget::default(),
         remote_stack: Vec::new(),
         remote_cache: BTreeMap::new(),
@@ -140,7 +158,7 @@ pub(super) fn compile(
             limits.max_context_bytes()
         )));
     }
-    let mut active = ActiveContext::new(document_iri.clone());
+    let mut active = ActiveContext::new(initial_base.map(str::to_owned));
     compiler.process_context(
         &mut active,
         &canonical_context,
@@ -544,6 +562,7 @@ impl Compiler<'_> {
                 .ok_or_else(|| context_error("JSON-LD @propagate must be boolean"))?;
         }
         if !remote && let Some(value) = object.get("@base") {
+            active.base_defined = true;
             active.base_iri = match value {
                 Value::Null => None,
                 Value::String(reference) => Some(resolve_reference(

@@ -112,7 +112,12 @@ struct Plan<'a> {
 }
 enum Task<'a> {
     Visit(Request<'a>, Context<'a>),
-    Array { count: usize, collapse: bool },
+    Array {
+        count: usize,
+        collapse: bool,
+        retain_null: bool,
+        framing_items: Option<&'a [Value]>,
+    },
     Object(Plan<'a>),
 }
 
@@ -128,7 +133,17 @@ pub fn compact_expanded_with_context(
     policy: &JsonLdCompactionPolicy,
     limits: &JsonLdCompactionLimits,
 ) -> Result<Value, RdfDiagnostic> {
-    run(input, context, *policy, *limits, true)
+    run(input, context, *policy, *limits, true, None)
+}
+
+pub(super) fn compact_framed<'a>(
+    input: &'a Value,
+    context: &'a CompiledJsonLdContext,
+    policy: JsonLdCompactionPolicy,
+    limits: JsonLdCompactionLimits,
+    defaults: &'a [super::framing::DefaultValue<'a>],
+) -> Result<Value, RdfDiagnostic> {
+    run(input, context, policy, limits, true, Some(defaults))
 }
 
 pub(super) fn compact_node(
@@ -142,6 +157,7 @@ pub(super) fn compact_node(
         policy,
         JsonLdCompactionLimits::DEFAULT,
         false,
+        None,
     )
 }
 fn run(
@@ -150,12 +166,14 @@ fn run(
     policy: JsonLdCompactionPolicy,
     limits: JsonLdCompactionLimits,
     root: bool,
+    defaults: Option<&[super::framing::DefaultValue<'_>]>,
 ) -> Result<Value, RdfDiagnostic> {
     let mut ceiling = Ceiling(usize::try_from(limits.max_allocation_bytes).unwrap_or(usize::MAX));
     Memory::new(&mut ceiling).try_scope(|memory| {
         let mut walk = Walk {
             memory,
             policy,
+            defaults,
             tasks: WorkList::new(),
             results: Vec::new(),
         };
@@ -218,6 +236,7 @@ fn run(
 struct Walk<'a, 'm, 's> {
     memory: &'m mut Memory<'s, Ceiling>,
     policy: JsonLdCompactionPolicy,
+    defaults: Option<&'a [super::framing::DefaultValue<'a>]>,
     tasks: WorkList<Task<'a>, 8>,
     results: Vec<Value>,
 }
@@ -316,13 +335,25 @@ impl<'a> Walk<'a, '_, '_> {
     fn step(&mut self, task: Task<'a>) -> Result<(), RdfDiagnostic> {
         match task {
             Task::Visit(request, context) => self.visit(request, context),
-            Task::Array { count, collapse } => {
+            Task::Array {
+                count,
+                collapse,
+                retain_null,
+                framing_items,
+            } => {
                 let mut values = Vec::new();
                 self.memory.reserve(&mut values, count)?;
-                for _ in 0..count {
-                    let value = self.results.pop().expect("one result per array child");
-                    if !value.is_null() {
-                        values.push(value);
+                for index in 0..count {
+                    let mut value = self.results.pop().expect("one result per array child");
+                    if framing_items.is_some_and(|items| items[index].get("@preserve").is_some())
+                        && let Value::Array(items) = &mut value
+                    {
+                        self.memory.extend(&mut values, items.drain(..))?;
+                        self.memory.release_vec(std::mem::take(items))?;
+                        continue;
+                    }
+                    if retain_null || !value.is_null() {
+                        self.memory.push(&mut values, value)?;
                     }
                 }
                 let value = self.collapse(Value::Array(values), collapse)?;
@@ -374,6 +405,23 @@ impl<'a> Walk<'a, '_, '_> {
                 self.push(Task::Array {
                     count: items.len(),
                     collapse,
+                    framing_items: self.defaults.map(|_| items.as_slice()),
+                    retain_null: self.defaults.is_some()
+                        && (collapse
+                            || items.iter().any(|item| {
+                                item.get("@preserve")
+                                    .and_then(Value::as_u64)
+                                    .and_then(|index| usize::try_from(index).ok())
+                                    .and_then(|index| {
+                                        self.defaults.and_then(|defaults| defaults.get(index))
+                                    })
+                                    .is_some_and(|default| {
+                                        matches!(
+                                            default,
+                                            super::framing::DefaultValue::Value(Value::Null)
+                                        )
+                                    })
+                            })),
                 })?;
                 // Forward scheduling makes the result stack pop in source order.
                 for raw in items {
@@ -397,6 +445,34 @@ impl<'a> Walk<'a, '_, '_> {
                 self.property_done(request.property)
             }
             Value::Object(object) => {
+                if let Some(defaults) = self.defaults
+                    && object.len() == 1
+                    && let Some(index) = object
+                        .get("@preserve")
+                        .and_then(Value::as_u64)
+                        .and_then(|index| usize::try_from(index).ok())
+                {
+                    let default = defaults
+                        .get(index)
+                        .ok_or_else(|| decode("invalid private framing preservation marker"))?;
+                    match default {
+                        super::framing::DefaultValue::Null
+                        | super::framing::DefaultValue::Value(Value::Null) => {
+                            self.property_done(request.property)?;
+                            return self.result(Value::Null);
+                        }
+                        super::framing::DefaultValue::Value(value) => {
+                            return self.push(Task::Visit(
+                                Request {
+                                    raw: value,
+                                    node_only: false,
+                                    ..request
+                                },
+                                context,
+                            ));
+                        }
+                    }
+                }
                 validate(object, request.property.as_deref(), request.component)?;
                 if request.node_only
                     && ["@value", "@list", "@set", "@triple"]
@@ -1023,6 +1099,20 @@ impl<'a> Walk<'a, '_, '_> {
         edge: &Edge<'a>,
         mut value: Value,
     ) -> Result<(), RdfDiagnostic> {
+        if edge.force
+            && self.defaults.is_some_and(|defaults| {
+                edge.raw
+                    .get("@preserve")
+                    .and_then(Value::as_u64)
+                    .and_then(|index| usize::try_from(index).ok())
+                    .and_then(|index| defaults.get(index))
+                    .is_some_and(|default| matches!(default, super::framing::DefaultValue::Null))
+            })
+        {
+            // REC §5.1 removes a sole synthetic null from a retained array.
+            // Actual JSON null and opaque @json null never identify this marker.
+            value = Value::Array(Vec::new());
+        }
         match edge.action {
             Action::Direct | Action::Nodes => self.put(members, &edge.property, value, false),
             Action::Explicit => {

@@ -48,13 +48,22 @@ enum Mode {
 }
 type Members = Vec<(String, Value)>;
 type Entries<'a> = Vec<(&'a str, &'a Value)>;
-struct Node {
-    id: String,
-    members: Members,
+pub(super) struct Node {
+    pub(super) id: String,
+    pub(super) members: Members,
 }
-struct Graph {
-    name: Option<String>,
-    nodes: Vec<usize>,
+pub(super) struct Graph {
+    pub(super) name: Option<String>,
+    pub(super) nodes: Vec<usize>,
+}
+/// The original graph-local map, before flattening consumes descriptions.
+pub(super) struct NodeMap {
+    pub(super) graphs: Vec<Graph>,
+    pub(super) nodes: Vec<Node>,
+}
+enum Built {
+    Flattened(Mapped),
+    Graphs(NodeMap),
 }
 struct Index {
     graph: usize,
@@ -137,6 +146,28 @@ pub(super) fn flatten(
     limits: JsonLdFlattenLimits,
     issuance: Issuance,
 ) -> Result<Mapped, RdfDiagnostic> {
+    match build(input, limits, issuance, false)? {
+        Built::Flattened(mapped) => Ok(mapped),
+        Built::Graphs(_) => unreachable!("flatten finish selected"),
+    }
+}
+
+pub(super) fn build_graphs(
+    input: &Value,
+    limits: JsonLdFlattenLimits,
+) -> Result<NodeMap, RdfDiagnostic> {
+    match build(input, limits, Issuance::Normative, true)? {
+        Built::Graphs(map) => Ok(map),
+        Built::Flattened(_) => unreachable!("graph finish selected"),
+    }
+}
+
+fn build(
+    input: &Value,
+    limits: JsonLdFlattenLimits,
+    issuance: Issuance,
+    graphs: bool,
+) -> Result<Built, RdfDiagnostic> {
     let mut ceiling = Ceiling(usize::try_from(limits.max_allocation_bytes).unwrap_or(usize::MAX));
     Memory::new(&mut ceiling).try_scope(|memory| {
         let mut walk = Walk {
@@ -173,7 +204,7 @@ pub(super) fn flatten(
         walk.discard_roots(root)?;
         walk.memory.release_vec(std::mem::take(&mut walk.results))?;
         std::mem::replace(&mut walk.tasks, WorkList::new()).release_admitted(walk.memory)?;
-        walk.finish()
+        walk.finish(graphs)
     })
 }
 
@@ -882,7 +913,7 @@ impl<'a> Walk<'a, '_, '_> {
         }
         Ok(Value::Array(values))
     }
-    fn finish(mut self) -> Result<Mapped, RdfDiagnostic> {
+    fn finish(mut self, retain_graphs: bool) -> Result<Built, RdfDiagnostic> {
         let mut graphs = Vec::new();
         self.memory
             .reserve(&mut graphs, self.graphs.len().saturating_sub(1))?;
@@ -894,12 +925,22 @@ impl<'a> Walk<'a, '_, '_> {
                 .string(self.graphs[graph].name.as_deref().expect("named graph"))?;
             let node = self.new_node(0, &name, false)?;
             self.memory.release_string(name)?;
-            let value = self.graph_values(graph)?;
-            let member = self.member_slot(node, "@graph")?;
-            self.nodes[node].members[member].1 = value;
+            if !retain_graphs {
+                let value = self.graph_values(graph)?;
+                let member = self.member_slot(node, "@graph")?;
+                self.nodes[node].members[member].1 = value;
+            }
         }
         self.memory.release_vec(graphs)?;
-        let output = self.graph_values(0)?;
+        let retained = retain_graphs.then(|| NodeMap {
+            graphs: std::mem::take(&mut self.graphs),
+            nodes: std::mem::take(&mut self.nodes),
+        });
+        let output = if retain_graphs {
+            Value::Null
+        } else {
+            self.graph_values(0)?
+        };
         for node in self.nodes.drain(..) {
             self.memory.release_string(node.id)?;
             let mut unused = Self::object(node.members);
@@ -940,10 +981,13 @@ impl<'a> Walk<'a, '_, '_> {
         let bytes = hash_table_retained_bound(&self.members).ok_or(StorageError::SizeOverflow)?;
         drop(self.members);
         self.memory.release_bytes(bytes)?;
-        Ok(Mapped {
+        if let Some(map) = retained {
+            return Ok(Built::Graphs(map));
+        }
+        Ok(Built::Flattened(Mapped {
             value: output,
             semantic_index: self.semantic_index,
-        })
+        }))
     }
 }
 

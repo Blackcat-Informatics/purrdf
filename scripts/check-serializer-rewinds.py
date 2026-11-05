@@ -103,16 +103,8 @@ ALLOWLIST: dict[tuple[str, str], str] = {
     ("crates/rdf/src/native_codecs/jsonld/node_map.rs", "pending"): "Blank-label reservation and graph-root validation visit borrowed JSON input and result values; these work lists never contain emitted bytes.",
     ("crates/rdf/src/native_codecs/jsonld/carrier.rs", "stack"): "The JSON-LD carrier's list-fold frames: `fold_lists` walks nested `@list` values over a heap stack of open lists and pops a frame once every item is folded. It holds in-memory values under construction, not output.",
     ("crates/rdf/src/native_codecs/jsonld/carrier.rs", "work"): "The carrier value's `Drop` work list: nested `@list` values are freed over a heap list so depth costs no stack. Nothing here is emitted.",
-    (
-        "crates/rdf/src/native_codecs/jsonld/carrier.rs",
-        "self.work",
-    ): "The `Parts` iterator's pre-order work list over a carrier value's terms and "
-    "annotation nodes. It is a read-only tree walk; nothing popped was written.",
-    (
-        "crates/rdf/src/native_codecs/jsonld/context/mod.rs",
-        "work",
-    ): "The context canonicalizer's work list over a parsed JSON context, checking "
-    "every object for a repeated member. It walks input values, not output.",
+    ("crates/rdf/src/native_codecs/jsonld/carrier.rs", "self.work"): "The `Parts` iterator's pre-order work list over a carrier value's terms and annotation nodes. It is a read-only tree walk; nothing popped was written.",
+    ("crates/rdf/src/native_codecs/jsonld/context/mod.rs", "work"): "The context canonicalizer's work list over a parsed JSON context, checking every object for a repeated member. It walks input values, not output.",
     (
         "crates/rdf/src/native_codecs/jsonld.rs",
         "work",
@@ -165,6 +157,14 @@ ALLOWLIST: dict[tuple[str, str], str] = {
     ("crates/rdf/src/native_codecs/jsonld/compaction.rs", "children"): "The temporary child-task staging stack is consumed in its original scheduling order while retaining admitted capacity until release; no task has been serialized.",
     ("crates/rdf/src/native_codecs/jsonld/compaction.rs", "items"): "Map-key extraction takes the first value from an unpublished JSON metadata array while retaining residual values. The array is document construction, never a drained byte stream.",
     ("crates/rdf/src/native_codecs/jsonld/compaction.rs", "reversed"): "Reverse-property promotion consumes unpublished owned object members before attaching them to the compacted node. The member vector is not serialized output.",
+    ("crates/rdf/src/native_codecs/jsonld/framing.rs", "walk.tasks"): "Framing consumes pending semantic construction frames before returning its document value; these are not emitted bytes.",
+    ("crates/rdf/src/native_codecs/jsonld/framing.rs", "walk.results"): "Framing transfers its final unpublished lexical value from a private result stack before generic compaction or serialization.",
+    ("crates/rdf/src/native_codecs/jsonld/framing.rs", "tasks"): "Frame validation and matching consume borrowed pattern work frames, never an output stream.",
+    ("crates/rdf/src/native_codecs/jsonld/framing.rs", "self.results"): "Framing continuations consume unpublished semantic child values to construct their parent objects and arrays.",
+    ("crates/rdf/src/native_codecs/jsonld/framing.rs", "self.ancestors"): "The framing ancestor stack records graph and subject indexes to refuse circular embeddings; it contains no document bytes.",
+    ("crates/rdf/src/native_codecs/jsonld/framing.rs", "results"): "Iterative matching combines temporary boolean decisions and consumes its final decision; no output buffer is involved.",
+    ("crates/rdf/src/native_codecs/jsonld/framing.rs", "scan"): "Subject-copy admission and blank-identity counting consume read-only semantic traversal frames, not serialized output.",
+    ("crates/rdf/src/native_codecs/jsonld/framing.rs", "cleanup"): "Blank-identifier pruning traverses an unpublished owned JSON value before compaction; no emitted document is rewound.",
 }
 
 

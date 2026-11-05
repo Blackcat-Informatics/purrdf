@@ -333,6 +333,7 @@ impl JsonLdTermDefinition {
 struct ActiveContext {
     original_base_iri: Option<String>,
     base_iri: Option<String>,
+    base_defined: bool,
     vocab_mapping: Option<String>,
     default_language: Option<String>,
     default_direction: Option<JsonLdDirection>,
@@ -346,6 +347,7 @@ impl ActiveContext {
         Self {
             original_base_iri: base_iri.clone(),
             base_iri,
+            base_defined: false,
             vocab_mapping: None,
             default_language: None,
             default_direction: None,
@@ -616,6 +618,39 @@ impl CompiledJsonLdContext {
 
     pub(in crate::native_codecs) fn original_document_iri(&self) -> Option<&str> {
         self.active.original_base_iri.as_deref()
+    }
+
+    pub(in crate::native_codecs::jsonld) fn with_frame_base_fallback(
+        &self,
+        base: Option<&str>,
+    ) -> Result<Self, RdfDiagnostic> {
+        if let Some(base) = base {
+            purrdf_iri::BaseIri::parse(base)
+                .map_err(|cause| context_error(format!("invalid framing base: {cause}")))?;
+        }
+        let mut context = self.clone();
+        if context.active.base_iri.is_none() && !context.active.base_defined {
+            context.active.base_iri = base.map(str::to_owned);
+            if context.active.original_base_iri.is_none() {
+                context.active.original_base_iri = base.map(str::to_owned);
+            }
+        }
+        Ok(context)
+    }
+
+    pub(in crate::native_codecs::jsonld) fn compile_frame_output(
+        context: &Value,
+        retrieval_base: Option<&str>,
+        output_base: Option<&str>,
+        registry: &JsonLdContextRegistry,
+    ) -> Result<Self, RdfDiagnostic> {
+        compiler::compile_with_bases(
+            context,
+            retrieval_base,
+            output_base,
+            registry,
+            JsonLdContextLimits::default(),
+        )
     }
 
     /// Active vocabulary mapping, when configured.
