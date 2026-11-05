@@ -98,7 +98,10 @@ fn compaction_and_context_aware_flattening_preserve_structure_and_independent_ba
         if operation == Operation::Compact {
             assert_eq!(nodes[1]["@id"], "urn:s");
             assert!(subject["child"].get("@id").is_none());
-            assert!(subject["p"]["@annotation"].as_array().is_some());
+            assert_eq!(
+                subject["p"]["@annotation"],
+                json::read(r#"{"urn:source":{"@id":"urn:doc"}}"#).unwrap()
+            );
         } else {
             assert_eq!(subject["p"].as_array().unwrap().len(), 2);
             assert!(subject["child"]["@id"].as_str().unwrap().starts_with("_:"));
