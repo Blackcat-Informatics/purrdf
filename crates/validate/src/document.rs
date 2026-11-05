@@ -32,50 +32,66 @@ pub enum Operation {
     /// Frame source and frame bytes through the original native two-document adapter.
     Frame,
 }
+
+struct OperationMetadata {
+    name: &'static str,
+    request_code: &'static str,
+    output_code: &'static str,
+    byte_length_code: &'static str,
+    input_limit_code: &'static str,
+}
+
 impl Operation {
-    /// Operation noun used in host-facing diagnostics.
-    pub const fn name(self) -> &'static str {
+    const fn metadata(self) -> &'static OperationMetadata {
         match self {
-            Self::Expand => "expansion",
-            Self::Compact => "compaction",
-            Self::Flatten => "flattening",
-            Self::Frame => "framing",
+            Self::Expand => &OperationMetadata {
+                name: "expansion",
+                request_code: "document-expansion-request",
+                output_code: "document-expansion-output",
+                byte_length_code: "document-expansion-byte-length",
+                input_limit_code: "document-expansion-input-limit",
+            },
+            Self::Compact => &OperationMetadata {
+                name: "compaction",
+                request_code: "document-compaction-request",
+                output_code: "document-compaction-output",
+                byte_length_code: "document-compaction-byte-length",
+                input_limit_code: "document-compaction-input-limit",
+            },
+            Self::Flatten => &OperationMetadata {
+                name: "flattening",
+                request_code: "document-flattening-request",
+                output_code: "document-flattening-output",
+                byte_length_code: "document-flattening-byte-length",
+                input_limit_code: "document-flattening-input-limit",
+            },
+            Self::Frame => &OperationMetadata {
+                name: "framing",
+                request_code: "document-framing-request",
+                output_code: "document-framing-output",
+                byte_length_code: "document-framing-byte-length",
+                input_limit_code: "document-framing-input-limit",
+            },
         }
     }
+    /// Operation noun used in host-facing diagnostics.
+    pub const fn name(self) -> &'static str {
+        self.metadata().name
+    }
     const fn request_code(self) -> &'static str {
-        match self {
-            Self::Expand => "document-expansion-request",
-            Self::Compact => "document-compaction-request",
-            Self::Flatten => "document-flattening-request",
-            Self::Frame => "document-framing-request",
-        }
+        self.metadata().request_code
     }
     /// Bounded serialized-output refusal code, for host status classification.
     pub const fn output_code(self) -> &'static str {
-        match self {
-            Self::Expand => "document-expansion-output",
-            Self::Compact => "document-compaction-output",
-            Self::Flatten => "document-flattening-output",
-            Self::Frame => "document-framing-output",
-        }
+        self.metadata().output_code
     }
     /// Portable byte-buffer length refusal code used by the WASM bridge.
     pub const fn byte_length_code(self) -> &'static str {
-        match self {
-            Self::Expand => "document-expansion-byte-length",
-            Self::Compact => "document-compaction-byte-length",
-            Self::Flatten => "document-flattening-byte-length",
-            Self::Frame => "document-framing-byte-length",
-        }
+        self.metadata().byte_length_code
     }
     /// Source-capture limit refusal code used by the WASM bridge.
     pub const fn input_limit_code(self) -> &'static str {
-        match self {
-            Self::Expand => "document-expansion-input-limit",
-            Self::Compact => "document-compaction-input-limit",
-            Self::Flatten => "document-flattening-input-limit",
-            Self::Frame => "document-framing-input-limit",
-        }
+        self.metadata().input_limit_code
     }
 }
 
