@@ -44,8 +44,9 @@ use crate::argv_documents::{
 };
 use crate::cli::{CliRdfFormat, LedgerTarget, ReportTarget, refuse_document_flags};
 use crate::error::CliError;
+use crate::rdf_imports::RdfImportPlan;
 use crate::shapes_source::{
-    ShapesImportPlan, read_shapes_document, resolve_shapes_graph, shapes_error, shapes_imports,
+    read_shapes_document, resolve_shapes_graph, shapes_error, shapes_imports,
 };
 use crate::{format, ledger, report, sink, source};
 
@@ -182,15 +183,17 @@ pub(crate) fn run_rules(
         ("--shapes", options.shapes),
         ("--srl", options.srl),
     ]));
-    readers.extend(import_readers(&srl_pairs));
+    readers.extend(import_readers(srl_pairs.iter().copied()));
     refuse_shared_stdin(&readers)?;
-    let import_plan = ShapesImportPlan::prepare(
+    let import_plan = RdfImportPlan::prepare(
         if options.shapes.is_some() {
             options.imports
         } else {
             &[]
         },
         options.import_yamlld_input_options,
+        ImportRole::SHAPES_GRAPH,
+        None,
     )?;
     let data_format = format::resolve(options.from, options.input)?;
     let input_options = options
@@ -590,8 +593,12 @@ pub(crate) fn run_node_expr(
         ("--shapes".to_owned(), options.shapes),
     ])?;
     let data_format = format::resolve(options.from, options.input)?;
-    let import_plan =
-        ShapesImportPlan::prepare(options.imports, options.import_yamlld_input_options)?;
+    let import_plan = RdfImportPlan::prepare(
+        options.imports,
+        options.import_yamlld_input_options,
+        ImportRole::SHAPES_GRAPH,
+        None,
+    )?;
     let input_options = options
         .yamlld_input_options
         .map(|path| source::read_yamlld_input_options(path, &[data_format]))
@@ -757,8 +764,12 @@ pub(crate) fn run_lint(
 ) -> Result<(), CliError> {
     refuse_text_report_flags("shapes lint", ledger_target, jsonld_options)?;
     let format = format::resolve(options.from, options.input)?;
-    let import_plan =
-        ShapesImportPlan::prepare(options.imports, options.import_yamlld_input_options)?;
+    let import_plan = RdfImportPlan::prepare(
+        options.imports,
+        options.import_yamlld_input_options,
+        ImportRole::SHAPES_GRAPH,
+        None,
+    )?;
     let input_options = options
         .yamlld_input_options
         .map(|path| source::read_yamlld_input_options(path, &[format]))

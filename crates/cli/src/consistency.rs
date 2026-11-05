@@ -62,7 +62,7 @@ use std::path::Path;
 use purrdf_rdf::{JsonLdSerializeOptions, SourceFormat};
 use purrdf_validate::regime::{ReasonerSession, ReasoningAnswer, ReasoningText};
 
-use crate::argv_documents::{ImportRole, import_readers, parse_import_pairs, refuse_shared_stdin};
+use crate::argv_documents::{ImportRole, import_readers, refuse_shared_stdin};
 use crate::cli::{CliRdfFormat, LedgerTarget, refuse_document_flags};
 use crate::error::{CliError, CliOutcome};
 use crate::format;
@@ -82,6 +82,8 @@ pub(crate) struct ConsistencyOptions<'a> {
     /// `--import IRI=FILE`: the ontology's `owl:imports` table, in the order the operator
     /// wrote them.
     pub(crate) imports: &'a [String],
+    /// Per-IRI YAML-LD controls for premise RDF imports.
+    pub(crate) import_yamlld_input_options: &'a [String],
     /// `--from`: the input-format override; inferred from `input`'s extension when absent.
     pub(crate) from: Option<CliRdfFormat>,
     /// `--base`: the base IRI relative IRIs in the input resolve against.
@@ -134,9 +136,14 @@ pub(crate) fn run(
     )?;
     // The `--import` ARGUMENTS are decided before a single document is opened, exactly as
     // `entails` decides them: a malformed pair is a defect in the command line.
-    let import_pairs = parse_import_pairs(options.imports, ImportRole::PREMISE)?;
+    let import_plan = crate::rdf_imports::RdfImportPlan::prepare(
+        options.imports,
+        options.import_yamlld_input_options,
+        ImportRole::PREMISE,
+        options.from,
+    )?;
     let mut readers = vec![("the premise".to_owned(), options.input)];
-    readers.extend(import_readers(&import_pairs));
+    readers.extend(import_readers(import_plan.arguments()));
     refuse_shared_stdin(&readers)?;
     let format = format::resolve(options.from, options.input)?;
     let input_options = options
@@ -148,12 +155,19 @@ pub(crate) fn run(
     // itself, so it resolves in place rather than being refused as missing.
     let premise_base = premise_imports::premise_iri(options.input, format, options.base)?;
     let premise_iris: Vec<&str> = premise_base.as_deref().into_iter().collect();
-    let mut imports = Vec::with_capacity(import_pairs.len());
-    for pair in &import_pairs {
+    let mut imports = Vec::with_capacity(import_plan.pairs().len());
+    for pair in import_plan.pairs() {
         let what = format!("--import {}", pair.iri);
         imports.push((
             pair.iri.to_owned(),
-            read_path_as_nquads(pair.path, &what, options, canonical)?,
+            read_path_as_nquads(
+                pair.path,
+                &what,
+                pair.format,
+                pair.input_options.as_deref(),
+                options,
+                canonical,
+            )?,
         ));
     }
     crate::entails::refuse_unreached_pairs(&document, &imports, &premise_iris)?;
@@ -288,15 +302,16 @@ fn read_as_nquads(
 fn read_path_as_nquads(
     path: &str,
     what: &str,
+    format: SourceFormat,
+    input_options: Option<&[u8]>,
     options: &ConsistencyOptions<'_>,
     canonical: &mut crate::canonical::Request,
 ) -> Result<String, CliError> {
-    let format = format::resolve(options.from, path)?;
     transcode(
         path,
         format,
         options.base,
-        None,
+        input_options,
         &format!("{what} {path}"),
         canonical,
     )

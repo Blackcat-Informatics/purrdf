@@ -298,7 +298,7 @@ _HOST_PLUMBING: dict[str, tuple[str, ...]] = {
 # readers too. `OUT` is positional; `--base` spells `premise_iris`. A flag
 # outside this list and outside the two tables above is a capability with no boundary
 # behind it, and fails the gate.
-_CLI_PLUMBING: frozenset[str] = frozenset({"--report", "--from", "--yamlld-input-options", "--conclusion-yamlld-input-options"})
+_CLI_PLUMBING: frozenset[str] = frozenset({"--report", "--from", "--yamlld-input-options", "--conclusion-yamlld-input-options", "--import-yamlld-input-options"})
 
 # Where the CLI's three needles live.
 _CLI_COMMAND_TREE = Path("crates/cli/src/cli.rs")

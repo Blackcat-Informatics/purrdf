@@ -96,10 +96,10 @@ impl ImportRole {
             "Write the document to a file, or name it with a recognized RDF extension",
         ),
     };
-    /// Per-import input-options files, matched to the shapes graph's declared import pairs.
-    pub(crate) const SHAPES_INPUT_OPTIONS: Self = Self {
+    /// Per-import input-options files, matched to the declared import pairs.
+    pub(crate) const INPUT_OPTIONS: Self = Self {
         flag: "--import-yamlld-input-options",
-        importer: "shapes graph",
+        importer: "RDF input",
         matched: "`--import` IRIs",
         stdin_remedy: None,
     };
@@ -249,9 +249,11 @@ pub(crate) fn supplied_readers<'a>(flags: &[(&str, Option<&'a str>)]) -> Vec<(St
 }
 
 /// The `--import` readers among `pairs`, for [`refuse_shared_stdin`].
-pub(crate) fn import_readers<'a>(pairs: &[ImportPair<'a>]) -> Vec<(String, &'a str)> {
+pub(crate) fn import_readers<'a>(
+    pairs: impl IntoIterator<Item = ImportPair<'a>>,
+) -> Vec<(String, &'a str)> {
     pairs
-        .iter()
+        .into_iter()
         .map(|pair| (format!("--import {}=-", pair.iri), pair.path))
         .collect()
 }

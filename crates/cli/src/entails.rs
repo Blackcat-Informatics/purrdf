@@ -120,8 +120,7 @@ use purrdf_validate::regime::{
 };
 
 use crate::argv_documents::{
-    ImportPair, ImportRole, import_document_legs, import_readers, parse_import_pairs,
-    refuse_shared_stdin,
+    ImportRole, import_document_legs, import_readers, refuse_shared_stdin,
 };
 use crate::cli::{CliRdfFormat, CliRegime, LedgerTarget, ReportTarget, refuse_document_flags};
 use crate::error::CliError;
@@ -190,6 +189,8 @@ pub(crate) struct EntailsOptions<'a> {
     pub(crate) verify: bool,
     /// `--import IRI=FILE`, in the order the operator wrote them.
     pub(crate) imports: &'a [String],
+    /// Per-IRI YAML-LD controls for premise RDF imports.
+    pub(crate) import_yamlld_input_options: &'a [String],
     /// `--max-stored-facts` / `--max-join-steps`: the evaluation limits the question is
     /// answered under, spelled for the command line.
     pub(crate) limits: MaterializeLimits,
@@ -244,14 +245,19 @@ pub(crate) fn run(
     // pair, or an ontology-IRI half that denotes nothing, is a defect in the command line and
     // must fail against it rather than surfacing later as the boundary's refusal naming the
     // premise's own `owl:imports`.
-    let import_pairs = parse_import_pairs(options.imports, ImportRole::PREMISE)?;
+    let import_plan = crate::rdf_imports::RdfImportPlan::prepare(
+        options.imports,
+        options.import_yamlld_input_options,
+        ImportRole::PREMISE,
+        options.from,
+    )?;
     // The premise, the question and every `--import` document may each be `-`, and at most
     // one of them may be.
     let mut readers = vec![
         ("--premise".to_owned(), options.premise),
         (question.flag().to_owned(), question.path()),
     ];
-    readers.extend(import_readers(&import_pairs));
+    readers.extend(import_readers(import_plan.arguments()));
     refuse_shared_stdin(&readers)?;
 
     let premise_format = format::resolve(options.from, options.premise)?;
@@ -290,7 +296,7 @@ pub(crate) fn run(
         SourceFormat::Pack | SourceFormat::Gts => None,
     };
     let premise_iris: Vec<&str> = premise_base.as_deref().into_iter().collect();
-    let imports = read_imports(&import_pairs, options, canonical)?;
+    let imports = read_imports(&import_plan, options, canonical)?;
     let table: Vec<(&str, &str)> = imports
         .iter()
         .map(|(iri, document)| (iri.as_str(), document.as_str()))
@@ -418,20 +424,20 @@ pub(crate) fn refuse_unreached_pairs(
 /// Every argument-level decision was already made by [`crate::argv_documents::parse_import_pairs`], so what remains
 /// here is I/O: this function reads documents and nothing else refuses a command line.
 fn read_imports(
-    pairs: &[ImportPair<'_>],
+    plan: &crate::rdf_imports::RdfImportPlan<'_>,
     options: &EntailsOptions<'_>,
     canonical: &mut crate::canonical::Request,
 ) -> Result<Vec<(String, String)>, CliError> {
-    let mut resolved = Vec::with_capacity(pairs.len());
-    for pair in pairs {
+    let mut resolved = Vec::with_capacity(plan.pairs().len());
+    for pair in plan.pairs() {
         let what = format!("--import {}", pair.iri);
         resolved.push((
             pair.iri.to_owned(),
             read_as_nquads(
                 pair.path,
                 &what,
-                format::resolve(options.from, pair.path)?,
-                None,
+                pair.format,
+                pair.input_options.as_deref(),
                 options,
                 canonical,
             )?,

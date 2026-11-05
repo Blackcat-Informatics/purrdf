@@ -460,6 +460,9 @@ pub(crate) enum Command {
     },
     /// Convert RDF between syntaxes, and to/from the native pack container.
     Convert {
+        /// Independent YAML-LD Basic options for one premise RDF import; repeatable.
+        #[arg(long, value_name = "IRI=PATH", requires_all = ["imports", "entailment"])]
+        import_yamlld_input_options: Vec<String>,
         /// Closed version-one YAML-LD Basic input-options JSON file.
         #[arg(long, value_name = "PATH")]
         yamlld_input_options: Option<PathBuf>,
@@ -556,6 +559,9 @@ pub(crate) enum Command {
     },
     /// Evaluate a SPARQL query over an RDF or pack data source.
     Query {
+        /// Independent YAML-LD Basic options for one premise RDF import; repeatable.
+        #[arg(long, value_name = "IRI=PATH", requires_all = ["imports", "entailment"])]
+        import_yamlld_input_options: Vec<String>,
         /// Closed version-one YAML-LD Basic input-options JSON file, for --data only.
         /// Premise imports keep their default input policy.
         #[arg(long, value_name = "PATH")]
@@ -879,6 +885,9 @@ pub(crate) enum Command {
     },
     /// Materialize an entailment regime's closure over a source graph.
     Reason {
+        /// Independent YAML-LD Basic options for one premise RDF import; repeatable.
+        #[arg(long, value_name = "IRI=PATH", requires = "imports")]
+        import_yamlld_input_options: Vec<String>,
         /// Closed version-one YAML-LD Basic input-options JSON file, for primary IN only.
         /// Imports keep their current input controls and existing --from policy.
         #[arg(long, value_name = "PATH")]
@@ -949,6 +958,9 @@ pub(crate) enum Command {
     },
     /// Decide whether a premise entails a conclusion under an entailment regime.
     Entails {
+        /// Independent YAML-LD Basic options for one premise RDF import; repeatable.
+        #[arg(long, value_name = "IRI=PATH", requires = "imports")]
+        import_yamlld_input_options: Vec<String>,
         /// The entailment regime to decide under. Five of the seven are served;
         /// `owl-direct` and `rif` are each defined by an input this question does
         /// not carry, and the boundary refuses them by name.
@@ -1067,6 +1079,9 @@ pub(crate) enum Command {
     /// shell the same way it does for a tripped query. Which cap it was is read off the
     /// certificate: an exhausted run has `steps` at `budget` or `work` at `work-budget`.
     Consistency {
+        /// Independent YAML-LD Basic options for one premise RDF import; repeatable.
+        #[arg(long, value_name = "IRI=PATH", requires = "imports")]
+        import_yamlld_input_options: Vec<String>,
         /// Closed version-one YAML-LD Basic input-options JSON file, for primary IN only.
         /// Imports keep their current input controls and existing --from policy.
         #[arg(long, value_name = "PATH")]
@@ -2940,8 +2955,14 @@ impl Cli {
                 imports,
                 input,
                 output,
+                import_yamlld_input_options,
                 ..
             } => {
+                for mapping in import_yamlld_input_options {
+                    if let Some((_, path)) = mapping.split_once('=') {
+                        paths.push(PathBuf::from(path));
+                    }
+                }
                 paths.extend(yamlld_input_options.iter().cloned());
                 paths.extend(inputs.iter().map(PathBuf::from));
                 if let Some(path) = rules {
@@ -2965,8 +2986,14 @@ impl Cli {
                 report,
                 imports,
                 query,
+                import_yamlld_input_options,
                 ..
             } => {
+                for mapping in import_yamlld_input_options {
+                    if let Some((_, path)) = mapping.split_once('=') {
+                        paths.push(PathBuf::from(path));
+                    }
+                }
                 paths.push(PathBuf::from(data));
                 paths.extend(yamlld_input_options.iter().cloned());
                 if let Some(path) = rules {
@@ -3005,8 +3032,14 @@ impl Cli {
                 imports,
                 input,
                 output,
+                import_yamlld_input_options,
                 ..
             } => {
+                for mapping in import_yamlld_input_options {
+                    if let Some((_, path)) = mapping.split_once('=') {
+                        paths.push(PathBuf::from(path));
+                    }
+                }
                 paths.extend(yamlld_input_options.iter().cloned());
                 if let Some(path) = rules {
                     paths.push(path.clone());
@@ -3031,8 +3064,14 @@ impl Cli {
                 output,
                 yamlld_input_options,
                 conclusion_yamlld_input_options,
+                import_yamlld_input_options,
                 ..
             } => {
+                for mapping in import_yamlld_input_options {
+                    if let Some((_, path)) = mapping.split_once('=') {
+                        paths.push(PathBuf::from(path));
+                    }
+                }
                 paths.extend(yamlld_input_options.iter().cloned());
                 paths.extend(conclusion_yamlld_input_options.iter().cloned());
                 paths.push(PathBuf::from(premise));
@@ -3057,8 +3096,14 @@ impl Cli {
                 check_proof,
                 imports,
                 input,
+                import_yamlld_input_options,
                 ..
             } => {
+                for mapping in import_yamlld_input_options {
+                    if let Some((_, path)) = mapping.split_once('=') {
+                        paths.push(PathBuf::from(path));
+                    }
+                }
                 paths.extend(yamlld_input_options.iter().cloned());
                 if let Some(path) = check_proof {
                     paths.push(path.clone());

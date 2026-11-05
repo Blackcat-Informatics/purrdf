@@ -35,12 +35,10 @@ use purrdf_entail::{ImportMap, Materialization};
 use purrdf_rdf::SourceFormat;
 use purrdf_validate::regime::MaterializeLimits;
 
-use crate::argv_documents::{
-    ImportRole, import_document_legs, import_readers, parse_import_pairs, refuse_shared_stdin,
-};
+use crate::argv_documents::{import_document_legs, import_readers, refuse_shared_stdin};
 use crate::cli::{CliRdfFormat, ReportTarget};
 use crate::error::CliError;
-use crate::format;
+use crate::rdf_imports::RdfImportPlan;
 use crate::report;
 use crate::source;
 
@@ -78,9 +76,8 @@ pub(crate) struct PremiseImports {
 }
 
 impl PremiseImports {
-    /// Decide every `--import` pair (no I/O), refuse a second stdin, read each document
-    /// through the CLI's own format resolution (`--from`, else the path's extension) and
-    /// `--base`, and declare the premise documents' own IRIs loaded.
+    /// Consume admitted import formats/options, refuse a second stdin, read each document
+    /// under the caller's `--base`, and declare the premise documents' own IRIs loaded.
     ///
     /// `premises` are the premise sources `(path, format)` — one, or `convert`'s merged
     /// list, each of whose IRIs names part of the premise.
@@ -90,23 +87,26 @@ impl PremiseImports {
     /// A usage error for a malformed pair, a relative ontology-IRI half, two stdins or one
     /// ontology IRI named twice; a runtime error for a document that cannot be read.
     pub(crate) fn read(
-        specs: &[String],
-        from: Option<CliRdfFormat>,
+        plan: &RdfImportPlan<'_>,
         base: Option<&str>,
         premises: &[(&str, SourceFormat)],
         canonical: &mut crate::canonical::Request,
     ) -> Result<Self, CliError> {
-        let pairs = parse_import_pairs(specs, ImportRole::PREMISE)?;
         let mut readers: Vec<(String, &str)> = premises
             .iter()
             .map(|(path, _)| ("the premise".to_owned(), *path))
             .collect();
-        readers.extend(import_readers(&pairs));
+        readers.extend(import_readers(plan.arguments()));
         refuse_shared_stdin(&readers)?;
         let mut map = ImportMap::default();
-        for pair in &pairs {
-            let document_format = format::resolve(from, pair.path)?;
-            let document = source::load_dataset(pair.path, document_format, base, None, canonical)?;
+        for pair in plan.pairs() {
+            let document = source::load_dataset(
+                pair.path,
+                pair.format,
+                base,
+                pair.input_options.as_deref(),
+                canonical,
+            )?;
             // `parse_import_pairs` already blamed the argument for a repeated or relative IRI;
             // the table's own key policy is the one every insertion site shares.
             map.try_insert(pair.iri, document)
@@ -127,7 +127,7 @@ impl PremiseImports {
     }
 
     /// The parse legs the `--import` documents give `--base`, for
-    /// [`format::refuse_unconsumable_base`]: each document parses under it.
+    /// [`crate::format::refuse_unconsumable_base`]: each document parses under it.
     pub(crate) fn base_legs(
         specs: &[String],
         from: Option<CliRdfFormat>,
