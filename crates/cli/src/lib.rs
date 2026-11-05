@@ -665,6 +665,8 @@ fn dispatch_with_request(
             base,
             changes,
             changes_removed,
+            changes_yamlld_input_options,
+            changes_removed_yamlld_input_options,
             changes_from,
             format,
             fuel,
@@ -688,6 +690,9 @@ fn dispatch_with_request(
                 output,
                 changes: changes.as_deref(),
                 changes_removed: changes_removed.as_deref(),
+                changes_yamlld_input_options: changes_yamlld_input_options.as_deref(),
+                changes_removed_yamlld_input_options: changes_removed_yamlld_input_options
+                    .as_deref(),
                 changes_from: *changes_from,
                 shapes: shapes.as_deref(),
                 shapes_product: shapes_product.as_deref(),

@@ -1453,6 +1453,9 @@ pub(crate) enum Command {
         /// flag existed.
         #[arg(long, value_name = "FILE")]
         changes: Option<String>,
+        /// Independent YAML-LD Basic input options for this change document only.
+        #[arg(long, value_name = "PATH", requires = "changes")]
+        changes_yamlld_input_options: Option<PathBuf>,
         /// The rows REMOVED from `IN`: the retract half of a change set, and the reason
         /// `--changes` alone would be half of one — a SHACL verdict moves when a row
         /// leaves the graph just as readily as when one joins it.
@@ -1466,6 +1469,9 @@ pub(crate) enum Command {
         /// resulting report does and does not describe.
         #[arg(long = "changes-removed", value_name = "FILE")]
         changes_removed: Option<String>,
+        /// Independent YAML-LD Basic input options for this change document only.
+        #[arg(long, value_name = "PATH", requires = "changes_removed")]
+        changes_removed_yamlld_input_options: Option<PathBuf>,
         /// Change-document format override for `--changes` and `--changes-removed`;
         /// inferred from each path's extension when omitted. Both halves are read as the
         /// same syntax, because they are two halves of one change set.
@@ -3152,8 +3158,12 @@ impl Cli {
                 input,
                 output,
                 import_yamlld_input_options,
+                changes_yamlld_input_options,
+                changes_removed_yamlld_input_options,
                 ..
             } => {
+                paths.extend(changes_yamlld_input_options.iter().cloned());
+                paths.extend(changes_removed_yamlld_input_options.iter().cloned());
                 for mapping in import_yamlld_input_options {
                     if let Some((_, path)) = mapping.split_once('=') {
                         paths.push(PathBuf::from(path));
