@@ -33,6 +33,22 @@
 //!   composed view — freezing nothing, and shipping the bytes the materialized
 //!   flat path ships.
 
+use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
+use purrdf_hash::error::{ErrorValue, StructuredError};
+use purrdf_testkit::error_capture::Capture;
+
+#[global_allocator]
+static GLOBAL: CountingAllocator = CountingAllocator;
+
+fn inspect(error: &dyn StructuredError) -> Capture<'_> {
+    let buffer = Vec::with_capacity(128);
+    let window = CurrentThreadWindow::open();
+    let fields = Capture::read_with_buffer(error, buffer);
+    let measured = window.close();
+    assert_eq!(measured.allocations, 0, "{measured:?}");
+    fields
+}
+
 use purrdf_core::TermBox;
 use purrdf_core::term_fixture::{ProbeFault, RowBudget};
 use std::collections::BTreeMap;
@@ -40,7 +56,8 @@ use std::sync::Arc;
 
 use purrdf_rdf::dataset_view::ViewOperationStatus;
 use purrdf_rdf::gts_compose::{
-    DEFAULT_RSYNCABLE_THRESHOLD, GtsIngestError, MediumPlan, RDF_REIFIES, SnapshotBuilder, emit_gts,
+    DEFAULT_RSYNCABLE_THRESHOLD, GtsEmitError, GtsIngestError, IngestCheckpoint, MediumPlan,
+    OffendingTerm, RDF_REIFIES, SnapshotBuilder, emit_gts,
 };
 // The keystone shape itself lives in the library, so this suite and
 // `benches/gts_ingest.rs` measure ONE fixture rather than two drifting copies.
@@ -540,7 +557,7 @@ fn colliding_blank_wire_values_are_refused_and_neighbouring_ones_are_not() {
     let flat_err = flat
         .add_dataset_scoped(&blank_subject("c"), None, Some("a-b"))
         .expect_err("the flat surface refuses the same collision");
-    assert!(flat_err.contains("a-b-c"), "{flat_err}");
+    assert!(flat_err.to_string().contains("a-b-c"), "{flat_err}");
 }
 
 // ---------------------------------------------------------------------------
@@ -669,10 +686,23 @@ fn quoted_term_cycles_and_excessive_nesting_refuse_but_the_boundary_ingests() {
     for (levels, cyclic, reason) in [(2, true, "cyclic"), (limit + 1, false, "nesting limit")] {
         let mut refused = SnapshotBuilder::new();
         let accepted = refused.snapshot_payload();
-        let message = refused
+        let error = refused
             .add_view(&quoted_chain_view(levels, cyclic))
-            .expect_err("malformed quoted structure must fail closed")
-            .to_string();
+            .expect_err("malformed quoted structure must fail closed");
+        let GtsIngestError::UnrepresentableTerm { term, .. } = &error else {
+            panic!("expected native term evidence")
+        };
+        let mut leaf = term;
+        let mut depth = 0;
+        while let OffendingTerm::Triple { o, .. } = leaf {
+            depth += 1;
+            leaf = o;
+        }
+        assert!(depth <= 8);
+        if cyclic {
+            assert!(matches!(leaf, OffendingTerm::Cutoff));
+        }
+        let message = error.to_string();
         assert!(message.contains(reason), "{message}");
         assert_eq!(refused.snapshot_payload(), accepted);
         assert!(refused.poison().is_some());
@@ -686,6 +716,7 @@ fn quoted_terms_remain_forbidden_in_non_object_positions() {
         "quad graph name",
         "quoted triple subject",
         "quoted predicate",
+        "literal datatype",
     ] {
         let mut view = quoted_chain_view(1, false);
         let quad = view.inner.quads().next().unwrap();
@@ -717,14 +748,84 @@ fn quoted_terms_remain_forbidden_in_non_object_positions() {
                     },
                 );
             }
+            "literal datatype" => {
+                view.term_overrides.insert(
+                    quad.o,
+                    TermRef::Literal {
+                        lexical: "malformed",
+                        datatype: quad.o,
+                        language: None,
+                        direction: Some(RdfTextDirection::Rtl),
+                    },
+                );
+            }
             _ => unreachable!(),
         }
-        let message = SnapshotBuilder::new()
+        let error = SnapshotBuilder::new()
             .add_view(&view)
-            .expect_err("quoted terms are only admitted in RDF 1.2 object positions")
-            .to_string();
+            .expect_err("quoted terms and malformed datatypes must fail closed");
+        drop(view);
+        if position == "literal datatype" {
+            let fields = inspect(&error);
+            let term = fields.child("term");
+            assert_eq!(term.code, "gts-term-literal");
+            assert!(matches!(
+                term.field("lexical"),
+                ErrorValue::Text("malformed")
+            ));
+            assert!(matches!(term.field("direction"), ErrorValue::Code("rtl")));
+            assert_eq!(term.child("datatype").code, "gts-term-literal");
+        }
+        let message = error.to_string();
         assert!(message.contains(position), "{message}");
     }
+}
+
+#[test]
+fn emission_retains_native_writer_failure_and_dictionary_transform_operands() {
+    let builder = SnapshotBuilder::new();
+    let emit = |plan: &MediumPlan| {
+        emit_gts(
+            &builder,
+            "dist",
+            Some(vec!["not-a-codec".to_owned()]),
+            Vec::new(),
+            Vec::new(),
+            None,
+            None,
+            None,
+            DEFAULT_RSYNCABLE_THRESHOLD,
+            plan,
+        )
+    };
+    let error = emit(&MediumPlan::undicted(None)).unwrap_err();
+    let GtsEmitError::Writer(purrdf_gts::writer::WriterError::MissingCatalogEntry(name)) = &error
+    else {
+        panic!("expected native writer cause: {error:?}")
+    };
+    assert_eq!(name, "not-a-codec");
+    let fields = inspect(&error);
+    assert_eq!(fields.code, "gts-emit-writer");
+    assert!(
+        std::error::Error::source(&error)
+            .unwrap()
+            .is::<purrdf_gts::writer::WriterError>()
+    );
+    let plan = MediumPlan {
+        dicts: vec![("dictionary".to_owned(), vec![1])],
+        assignment: BTreeMap::new(),
+        zstd_level: None,
+    };
+    let error = emit(&plan).unwrap_err();
+    let fields = inspect(&error);
+    assert_eq!(fields.code, "gts-emit-dictionaries-transform");
+    assert!(matches!(
+        fields.field("dictionaries"),
+        ErrorValue::Unsigned(1)
+    ));
+    assert!(
+        matches!(error, GtsEmitError::DictionariesTransform { dictionaries: 1, transform } if transform == ["not-a-codec"])
+    );
 }
 
 #[test]
@@ -743,10 +844,11 @@ fn a_failed_ingestion_poisons_both_surfaces_and_emit() {
             builder
                 .add_view_scoped(&poisoned, None, Some("a-b"))
                 .expect_err("distinct blank identities must not share wire bytes")
-                .to_string()
         };
         assert!(
-            first.contains("two distinct blank-node intern keys"),
+            first
+                .to_string()
+                .contains("two distinct blank-node intern keys"),
             "{first}"
         );
         assert!(builder.poison().is_some(), "the failure is terminal");
@@ -764,10 +866,21 @@ fn a_failed_ingestion_poisons_both_surfaces_and_emit() {
                 .to_string()
                 .contains("two distinct blank-node intern keys")
         );
+        let copied = again.clone();
+        drop(again);
+        let fields = inspect(&copied);
+        assert_eq!(
+            fields.child("cause").code,
+            "gts-ingest-blank-wire-collision"
+        );
+        assert!(matches!(
+            fields.child("cause").field("incoming_label"),
+            ErrorValue::Text("c")
+        ));
         let flat_again = builder
             .add_dataset(&source_b())
             .expect_err("a poisoned builder refuses the flat surface");
-        assert!(flat_again.contains("poisoned"), "{flat_again}");
+        assert!(flat_again.to_string().contains("poisoned"), "{flat_again}");
 
         // …and publication refuses rather than shipping the partial ingestion.
         let err = emit_gts(
@@ -783,8 +896,12 @@ fn a_failed_ingestion_poisons_both_surfaces_and_emit() {
             &MediumPlan::undicted(None),
         )
         .expect_err("a poisoned builder must not publish");
-        assert!(err.contains("poisoned"), "{err}");
-        assert!(err.contains("two distinct blank-node intern keys"), "{err}");
+        assert!(err.to_string().contains("poisoned"), "{err}");
+        assert!(
+            err.to_string()
+                .contains("two distinct blank-node intern keys"),
+            "{err}"
+        );
     }
 
     // THE NEIGHBOURING CASE: the same two sources with no failure between them
@@ -923,7 +1040,7 @@ fn a_refused_ingestion_leaves_the_snapshot_accessors_exactly_where_they_were() {
         &MediumPlan::undicted(None),
     )
     .expect_err("a poisoned builder must not publish, rolled back or not");
-    assert!(refused.contains("poisoned"), "{refused}");
+    assert!(refused.to_string().contains("poisoned"), "{refused}");
 }
 
 /// An unrepresentable-term refusal names the term in RDF TEXT, never in the
@@ -958,10 +1075,31 @@ fn an_unrepresentable_quoted_triple_is_named_in_its_own_text() {
     });
 
     let mut builder = SnapshotBuilder::new();
-    let message = builder
+    let error = builder
         .add_view(&invalid)
-        .expect_err("a quoted triple predicate must fail closed")
-        .to_string();
+        .expect_err("a quoted triple predicate must fail closed");
+    drop(invalid);
+    let copy = error.clone();
+    drop(error);
+    let fields = inspect(&copy);
+    let triple = fields.child("term");
+    assert_eq!(triple.code, "gts-term-triple");
+    assert!(matches!(
+        triple.child("subject").field("iri"),
+        ErrorValue::Iri("https://example.org/quoted-subject")
+    ));
+    let literal = triple.child("object");
+    assert!(matches!(
+        literal.field("lexical"),
+        ErrorValue::Text("مرحبا")
+    ));
+    assert!(matches!(literal.field("language"), ErrorValue::Text("ar")));
+    assert!(matches!(
+        literal.field("direction"),
+        ErrorValue::Code("rtl")
+    ));
+    assert!(matches!(literal.field("datatype"), ErrorValue::Absent));
+    let message = copy.to_string();
 
     for text in [
         "https://example.org/quoted-subject",
@@ -984,6 +1122,12 @@ fn an_unrepresentable_quoted_triple_is_named_in_its_own_text() {
 // A purpose-built probe view: budgeted faulting + capability claims
 // ---------------------------------------------------------------------------
 
+#[derive(Debug)]
+enum ProbeFailureChannel {
+    ReadsAndReadiness,
+    Readiness,
+}
+
 /// A view that delegates to a frozen dataset but can (a) fault after a fixed
 /// number of ordinary rows, exactly as a lazy operational backend does, and (b)
 /// claim a statement-layer capability its accessors do not answer for.
@@ -992,6 +1136,8 @@ struct ProbeView {
     inner: Arc<RdfDataset>,
     /// Ordinary rows still yieldable before the view faults.
     budget: RowBudget,
+    /// Publish a readiness refusal without a simultaneous dictionary refusal.
+    failure_channel: ProbeFailureChannel,
     /// Capability claims asserted ON TOP of the inner dataset's own.
     claim_reifiers: bool,
     claim_annotations: bool,
@@ -1008,6 +1154,7 @@ impl ProbeView {
         Self {
             inner,
             budget: RowBudget::new(usize::MAX),
+            failure_channel: ProbeFailureChannel::ReadsAndReadiness,
             claim_reifiers: false,
             claim_annotations: false,
             enumerate_statements: true,
@@ -1073,7 +1220,11 @@ impl DatasetView for ProbeView {
     type ProbePlan = ();
 
     fn read_error(&self) -> Option<Self::ReadError> {
-        self.budget.read_error()
+        if matches!(self.failure_channel, ProbeFailureChannel::Readiness) {
+            None
+        } else {
+            self.budget.read_error()
+        }
     }
 
     fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
@@ -1163,11 +1314,17 @@ fn a_view_that_faults_mid_ingestion_never_mints_a_snapshot() {
         .add_view(&truncating)
         .expect_err("a truncated read must never publish as a snapshot");
     assert_eq!(
-        err,
-        GtsIngestError::SourceRead {
-            cause: "the probe view exhausted its row budget".to_owned(),
-        }
+        std::error::Error::source(&err)
+            .unwrap()
+            .downcast_ref::<ProbeFault>(),
+        Some(&ProbeFault("the probe view exhausted its row budget")),
     );
+    drop(truncating);
+    let source_copy = err.clone();
+    drop(err);
+    let source_fields = inspect(&source_copy);
+    assert_eq!(source_fields.code, "gts-ingest-source-read");
+    assert_eq!(source_fields.child("cause").code, "probe-fault");
     assert!(builder.poison().is_some(), "and the builder is poisoned");
 
     // (ii) The BEFORE checkpoint: a view that has already failed is refused
@@ -1179,12 +1336,44 @@ fn a_view_that_faults_mid_ingestion_never_mints_a_snapshot() {
         .add_view(&pre_faulted)
         .expect_err("an already-failed view is refused at entry");
     assert_eq!(
-        err,
-        GtsIngestError::SourceRead {
-            cause: "the probe view exhausted its row budget".to_owned(),
-        }
+        std::error::Error::source(&err)
+            .unwrap()
+            .downcast_ref::<ProbeFault>(),
+        Some(&ProbeFault("the probe view exhausted its row budget")),
     );
     assert_eq!(pre_faulted.operation_status(), before_status);
+
+    // Readiness-only sources exercise the two original drain checkpoints.
+    for (budget, checkpoint) in [
+        (RowBudget::faulted(), IngestCheckpoint::BeforeRows),
+        (RowBudget::new(0), IngestCheckpoint::AfterRows),
+    ] {
+        let view = ProbeView {
+            budget,
+            failure_channel: ProbeFailureChannel::Readiness,
+            ..ProbeView::honest(Arc::clone(&a))
+        };
+        let mut refused = SnapshotBuilder::new();
+        let error = refused.add_view(&view).unwrap_err();
+        drop(view);
+        let copy = error.clone();
+        drop(error);
+        let GtsIngestError::ViewNotReady {
+            checkpoint: actual, ..
+        } = &copy
+        else {
+            panic!("expected readiness refusal: {copy:?}")
+        };
+        assert_eq!(*actual, checkpoint);
+        let fields = inspect(&copy);
+        assert_eq!(fields.code, "gts-ingest-view-not-ready");
+        assert_eq!(fields.child("cause").code, "probe-fault");
+        assert!(matches!(
+            fields.child("cause").field("message"),
+            ErrorValue::Text("the probe view exhausted its row budget")
+        ));
+        assert!(std::error::Error::source(&copy).unwrap().is::<ProbeFault>());
+    }
 
     // THE NEIGHBOURING CASE: the same probe view with budget for every row
     // ingests, and mints exactly the flat carrier's snapshot.

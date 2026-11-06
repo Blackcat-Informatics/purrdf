@@ -286,7 +286,7 @@ impl PyGtsFoldView {
                 view.relational_rows()
                     .map(|rows| (rows, crate::gts_view::term_directions(view.graph())))
             })
-            .map_err(PyValueError::new_err)?;
+            .map_err(crate::py_gts::native_gts_error)?;
         relational_rows_dict(py, rows, directions)
     }
 }
@@ -316,7 +316,7 @@ fn gts_relational_rows_from_bytes<'py>(
             crate::gts_view::relational_rows(&graph)
                 .map(|rows| (rows, crate::gts_view::term_directions(&graph)))
         })
-        .map_err(PyValueError::new_err)?;
+        .map_err(crate::py_gts::native_gts_error)?;
     relational_rows_dict(py, rows, directions)
 }
 
