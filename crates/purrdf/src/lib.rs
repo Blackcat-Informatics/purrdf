@@ -365,8 +365,8 @@ pub mod markdown {
 /// An analyzed document exposes immutable occurrences through borrowed views.
 ///
 /// ```no_run
-/// use purrdf::mime::{Profile, SourceDocument, analyze, project};
-/// let profile = Profile::standard()?;
+/// use purrdf::mime::{Limits, Profile, SourceDocument, Vocabulary, analyze, project};
+/// let profile = Profile::new("example", Vocabulary::standard()?, Limits::unbounded())?;
 /// let source = SourceDocument {
 ///     id: "https://example.org/message",
 ///     bytes: b"Subject: original\r\n\r\nbody\r\n",
