@@ -199,7 +199,7 @@ fn into_values(mut value: JsonValue) -> Vec<JsonValue> {
     }
 }
 fn literal(object: &json::Object) -> Result<Literal, RdfDiagnostic> {
-    // The sole caller selected this branch with contains_key on the same map.
+    // The sole caller checked contains_key on this same map before calling.
     let value = object.get("@value").expect("expanded value object");
     let explicit = object.get("@type").and_then(JsonValue::as_str);
     let (lexical, inferred) = match (value, explicit) {
