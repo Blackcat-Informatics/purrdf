@@ -335,42 +335,55 @@ purrdf_lex::error_source!(ShexError => {
 /// Convenience alias for fallible ShEx parse operations.
 pub type Result<T> = core::result::Result<T, ShexError>;
 
-/// Why a textual shape-map validation under a native XPath law could not finish.
+/// Why ShEx validation could not finish.
 /// Pattern-language errors remain conformance findings, not variants here.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum XPathValidationError {
+pub enum ValidationError {
     /// Parsing or admitting the requested shape map failed.
     ShapeMap(ShexError),
     /// Native pattern execution or construction was operationally refused.
     Regex(purrdf_core::xsd_regex::xpath::Error),
+    /// Assignment search refused its next state, including terminal count checks.
+    MatcherWork {
+        /// The attempted state number (the maximum plus one on refusal).
+        attempted: u128,
+        /// The caller-admitted maximum states per ambiguous neighbourhood.
+        maximum: u64,
+    },
 }
 
-impl purrdf_hash::error::StructuredError for XPathValidationError {
+impl purrdf_hash::error::StructuredError for ValidationError {
     purrdf_hash::error_visit! {
         ShapeMap(cause) => "shex-xpath-shape-map" { "cause" => Cause(cause) },
         Regex(cause) => "shex-xpath-regex" { "cause" => Cause(cause) },
+        MatcherWork { attempted, maximum } => "shex-matcher-work" { "attempted" => Unsigned(*attempted), "maximum" => Unsigned(u128::from(*maximum)) },
     }
 }
 
-purrdf_lex::variant_from!(XPathValidationError {
+purrdf_lex::variant_from!(ValidationError {
     ShapeMap(ShexError), Regex(purrdf_core::xsd_regex::xpath::Error)
 });
 
-impl fmt::Display for XPathValidationError {
+impl fmt::Display for ValidationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::ShapeMap(error) => error.fmt(f),
             Self::Regex(error) => error.fmt(f),
+            Self::MatcherWork { attempted, maximum } => write!(
+                f,
+                "ShEx matcher attempted state {attempted}, exceeding admitted maximum {maximum}"
+            ),
         }
     }
 }
 
-impl std::error::Error for XPathValidationError {
+impl std::error::Error for ValidationError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::ShapeMap(error) => Some(error),
             Self::Regex(error) => Some(error),
+            Self::MatcherWork { .. } => None,
         }
     }
 }

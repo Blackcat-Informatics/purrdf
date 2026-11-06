@@ -69,7 +69,18 @@ pub use retained::RetainedTerm;
 /// children in this enum's own sense, though a `Meta` may later be bound to
 /// arbitrary structure by [`crate::unify`]); `App` and `Binder` are the two ways
 /// this arena builds compound structure.
+///
+/// This enum is non-exhaustive so additional term forms can be introduced.
+/// External inspection must return an explicit unsupported-form error from its
+/// wildcard arm, retaining the source [`NodeId`] and relevant context; it must
+/// not silently drop the node or substitute another term. Recognizing a stored
+/// form does not imply that a reasoning strategy supports it.
+///
+/// [`TermDag::data`] borrows the complete node. The arena's `intern_leaf`,
+/// `intern_free`, `fresh_meta`, `intern_bound`, `intern_app` and `intern_binder`
+/// methods construct all current forms with their existing payloads and meaning.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
 pub enum NodeData {
     /// An interned atomic constant (an IRI or a rendered literal surface) — not
     /// unifiable, but comparable and shareable.
@@ -166,7 +177,15 @@ impl TermDag {
         self.nodes.is_empty()
     }
 
-    /// The node at `node`.
+    /// Whether this arena has minted the metavariable's local slot.
+    pub(crate) fn has_meta(&self, meta: MetaId) -> bool {
+        meta.index() < self.next_meta
+    }
+
+    /// The complete borrowed node at `node`.
+    ///
+    /// External matches must explicitly refuse unsupported future forms; see
+    /// [`NodeData`] for inspection and construction requirements.
     ///
     /// # Panics
     ///

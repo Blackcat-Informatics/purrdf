@@ -1655,6 +1655,10 @@ pub(crate) enum Command {
         /// exactly as before this flag existed.
         #[arg(long, value_name = "PROFILE", value_parser = XPathRegexParser)]
         xpath_regex: Option<Profile>,
+        /// Maximum assignment-prefix states per ambiguous neighbourhood, including
+        /// terminal cardinality checks. Exhaustion fails the whole shape map.
+        #[arg(long, value_name = "COUNT", default_value_t = 200_000)]
+        matcher_maximum_states: u64,
         /// The query shape map: `<node>@<shape>` associations separated by commas, where a
         /// node is `<iri>` / `_:label` / a Turtle literal / a triple-pattern selector
         /// (`{FOCUS <p> _}`, `{FOCUS a <C>}`, `{_ <p> FOCUS}`), and a shape is `START` or

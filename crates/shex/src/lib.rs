@@ -128,7 +128,7 @@ pub use error::{
     JsonExpectation, JsonMember, JsonMemberReason, JsonOffered, JsonType, LanguageMember,
     LexicalContext, LexicalReason, MapExpectation, NumericFacetOperand, RepeatOperation, Result,
     SHEXJ_LANGUAGE_POLICY, SHEXJ_LANGUAGE_PROFILE, ShapeMapContext, ShapeMapLanguageRefusal,
-    ShapeMapPosition, ShapeMapReason, ShexError, UnsignedFacetOperand, XPathValidationError,
+    ShapeMapPosition, ShapeMapReason, ShexError, UnsignedFacetOperand, ValidationError,
 };
 pub use exact::{
     ExactSchema, validate_exact, validate_exact_with_xpath, validate_shape_map_exact,
@@ -145,6 +145,6 @@ pub use shexc::to_shexc;
 pub use shexj::{parse_shexj, to_shexj};
 pub use structure::{StructureError, check_structure};
 pub use validate::{
-    ConformanceStatus, ExternalResolver, ResultEntry, ResultShapeMap, ShapeSelector,
+    ConformanceStatus, ExternalResolver, MatcherLimits, ResultEntry, ResultShapeMap, ShapeSelector,
     ValidationOptions, XPathValidator, validate, validate_with, validate_with_xpath,
 };

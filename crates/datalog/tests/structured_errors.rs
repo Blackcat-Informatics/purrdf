@@ -7,6 +7,347 @@ use purrdf_datalog::term::{RetainedTerm, TermDag};
 use purrdf_hash::error::ErrorValue;
 use purrdf_testkit::error_capture::Capture;
 
+fn negative_only_demand_observes_asserted_dependency() {
+    use purrdf_datalog::resolve_fol::{
+        FolBudget, FolClause, FolControl, FolLit, FolProgram, FolStatus, FolUnestablished,
+        FolVerdict, Truth, check_fol_proof, resolve_fol,
+    };
+    use purrdf_datalog::unify::SortContext;
+    use std::collections::BTreeMap;
+
+    let mut dag = TermDag::default();
+    let a = dag.intern_leaf("a").unwrap();
+    let p = dag.intern_leaf("p").unwrap();
+    let q = dag.intern_leaf("q").unwrap();
+    let pa = dag.intern_app(p, vec![a]).unwrap();
+    let qa = dag.intern_app(q, vec![a]).unwrap();
+    let untouched = dag.intern_leaf("untouched").unwrap();
+    let (_, variable) = dag.fresh_meta().unwrap();
+    let clauses = vec![
+        FolClause::new(&dag, qa, vec![]).unwrap(),
+        FolClause::new(&dag, pa, vec![FolLit::Neg(qa)]).unwrap(),
+        FolClause::new(&dag, untouched, vec![]).unwrap(),
+    ];
+    let program = FolProgram::new(&dag, clauses, pa, vec![], BTreeMap::new()).unwrap();
+    let FolControl::Decided(outcome) = resolve_fol(
+        &mut dag,
+        &program,
+        &SortContext::default(),
+        &FolBudget { max_steps: 100 },
+    )
+    .unwrap() else {
+        panic!("ground negative demands must be decided");
+    };
+    assert_eq!(outcome.status(), FolStatus::Complete);
+    assert_eq!(
+        outcome.truth_of(&dag, pa),
+        FolVerdict::Established(Truth::False)
+    );
+    assert_eq!(
+        outcome.truth_of(&dag, qa),
+        FolVerdict::Established(Truth::True)
+    );
+    assert_eq!(
+        outcome.answers,
+        [] as [purrdf_datalog::resolve_fol::FolBinding; 0]
+    );
+    assert_eq!(
+        outcome.truth_of(&dag, untouched),
+        FolVerdict::NotEstablished(FolUnestablished::Unevaluated)
+    );
+    assert_eq!(
+        outcome.truth_of(&dag, variable),
+        FolVerdict::NotEstablished(FolUnestablished::NonGround)
+    );
+
+    let FolControl::Decided(partial) = resolve_fol(
+        &mut dag,
+        &program,
+        &SortContext::default(),
+        &FolBudget { max_steps: 1 },
+    )
+    .unwrap() else {
+        panic!("budget interruption must retain a partial outcome");
+    };
+    assert_eq!(partial.status(), FolStatus::Partial);
+    assert_eq!(
+        partial.truth_of(&dag, pa),
+        FolVerdict::NotEstablished(FolUnestablished::Incomplete)
+    );
+    assert_eq!(
+        partial.truth_of(&dag, qa),
+        FolVerdict::NotEstablished(FolUnestablished::Incomplete)
+    );
+    assert_eq!(
+        partial.answers,
+        [] as [purrdf_datalog::resolve_fol::FolBinding; 0]
+    );
+
+    // The neighboring program with no q fact establishes its demanded absence.
+    let absent_program = FolProgram::new(
+        &dag,
+        vec![FolClause::new(&dag, pa, vec![FolLit::Neg(qa)]).unwrap()],
+        pa,
+        vec![],
+        BTreeMap::new(),
+    )
+    .unwrap();
+    let FolControl::Decided(absent) = resolve_fol(
+        &mut dag,
+        &absent_program,
+        &SortContext::default(),
+        &FolBudget { max_steps: 100 },
+    )
+    .unwrap() else {
+        panic!("a completed missing dependency must be decided");
+    };
+    assert_eq!(
+        absent.truth_of(&dag, qa),
+        FolVerdict::Established(Truth::False)
+    );
+    assert_eq!(
+        absent.truth_of(&dag, pa),
+        FolVerdict::Established(Truth::True)
+    );
+    assert_eq!(absent.answers.len(), 1);
+    check_fol_proof(
+        &mut dag,
+        &absent.answers[0].proof,
+        absent_program.clauses(),
+        absent_program.meta_sorts(),
+        &SortContext::default(),
+        &|dag, node| absent.truth_of(dag, node) != FolVerdict::Established(Truth::False),
+    )
+    .unwrap();
+}
+
+fn indirect_negative_demands_reach_facts_and_preserve_cycles() {
+    use purrdf_datalog::resolve_fol::{
+        FolBudget, FolClause, FolControl, FolLit, FolProgram, FolStatus, FolVerdict, Truth,
+        resolve_fol,
+    };
+    use purrdf_datalog::unify::SortContext;
+    use std::collections::BTreeMap;
+
+    let mut dag = TermDag::default();
+    let p = dag.intern_leaf("p").unwrap();
+    let q = dag.intern_leaf("q").unwrap();
+    let r = dag.intern_leaf("r").unwrap();
+    for (dependency, expected) in [
+        (FolLit::Pos(r), Truth::False),
+        (FolLit::Neg(r), Truth::True),
+        (FolLit::Neg(p), Truth::Undefined),
+    ] {
+        let clauses = vec![
+            FolClause::new(&dag, p, vec![FolLit::Neg(q)]).unwrap(),
+            FolClause::new(&dag, q, vec![dependency]).unwrap(),
+            FolClause::new(&dag, r, vec![]).unwrap(),
+        ];
+        let program = FolProgram::new(&dag, clauses, p, vec![], BTreeMap::new()).unwrap();
+        let FolControl::Decided(outcome) = resolve_fol(
+            &mut dag,
+            &program,
+            &SortContext::default(),
+            &FolBudget { max_steps: 100 },
+        )
+        .unwrap() else {
+            panic!("finite ground negative dependencies must be decided");
+        };
+        assert_eq!(outcome.status(), FolStatus::Complete);
+        assert_eq!(outcome.truth_of(&dag, p), FolVerdict::Established(expected));
+        assert_eq!(!outcome.answers.is_empty(), expected == Truth::True);
+    }
+}
+
+fn fol_construction_checks_resident_handles_and_original_positions() {
+    use purrdf_datalog::id::NodeId;
+    use purrdf_datalog::resolve_fol::{
+        FolClause, FolConstructionError, FolLit, FolPosition, FolProgram,
+    };
+    use std::collections::BTreeMap;
+
+    let mut dag = TermDag::default();
+    let head = dag.intern_leaf("head").unwrap();
+    let unknown = NodeId::from_index(dag.len() as u64).unwrap();
+    assert_eq!(
+        FolClause::new(&dag, unknown, vec![]).unwrap_err(),
+        FolConstructionError::UnknownNode {
+            node: unknown,
+            position: FolPosition::Head,
+            clause: None,
+            nodes: dag.len(),
+        }
+    );
+    assert_eq!(
+        FolClause::new(&dag, head, vec![FolLit::Neg(unknown)]).unwrap_err(),
+        FolConstructionError::UnknownNode {
+            node: unknown,
+            position: FolPosition::Body { literal: 0 },
+            clause: None,
+            nodes: dag.len(),
+        }
+    );
+    let clause = FolClause::new(&dag, head, vec![FolLit::Pos(head)]).unwrap();
+    assert_eq!(
+        FolProgram::new(&dag, vec![clause.clone()], unknown, vec![], BTreeMap::new()).unwrap_err(),
+        FolConstructionError::UnknownNode {
+            node: unknown,
+            position: FolPosition::Goal,
+            clause: None,
+            nodes: dag.len(),
+        }
+    );
+
+    assert_eq!(
+        FolProgram::new(
+            &dag,
+            vec![clause.clone()],
+            head,
+            vec![(unknown, "original name".into())],
+            BTreeMap::new()
+        )
+        .unwrap_err(),
+        FolConstructionError::UnknownNode {
+            node: unknown,
+            position: FolPosition::GoalVariable {
+                index: 0,
+                name: "original name".into()
+            },
+            clause: None,
+            nodes: dag.len(),
+        }
+    );
+
+    // Revalidation catches a previously valid clause supplied with a smaller arena.
+    let empty = TermDag::default();
+    assert_eq!(
+        FolProgram::new(&empty, vec![clause.clone()], head, vec![], BTreeMap::new()).unwrap_err(),
+        FolConstructionError::UnknownNode {
+            node: head,
+            position: FolPosition::Head,
+            clause: Some(0),
+            nodes: 0,
+        }
+    );
+    FolProgram::new(&dag, vec![clause], head, vec![], BTreeMap::new()).unwrap();
+}
+
+fn fol_projection_validation_preserves_names_and_admits_aliases() {
+    use purrdf_datalog::resolve_fol::{
+        FolBudget, FolClause, FolConstructionError, FolControl, FolProgram, resolve_fol,
+    };
+    use purrdf_datalog::unify::SortContext;
+    use std::collections::BTreeMap;
+
+    let mut dag = TermDag::default();
+    let pred = dag.intern_leaf("p").unwrap();
+    let value = dag.intern_leaf("value").unwrap();
+    let (_, var) = dag.fresh_meta().unwrap();
+    let (_, other) = dag.fresh_meta().unwrap();
+    let goal = dag.intern_app(pred, vec![var]).unwrap();
+    let asserted = dag.intern_app(pred, vec![value]).unwrap();
+    let fact = FolClause::new(&dag, asserted, vec![]).unwrap();
+    let construct =
+        |projection| FolProgram::new(&dag, vec![fact.clone()], goal, projection, BTreeMap::new());
+    assert_eq!(
+        construct(vec![(value, "constant".into())]).unwrap_err(),
+        FolConstructionError::NotMetavariable {
+            index: 0,
+            node: value,
+            name: "constant".into()
+        }
+    );
+    assert_eq!(
+        construct(vec![(other, "unrelated".into())]).unwrap_err(),
+        FolConstructionError::OutsideGoal {
+            index: 0,
+            node: other,
+            name: "unrelated".into(),
+            goal
+        }
+    );
+    let error = construct(vec![
+        (var, "original name".into()),
+        (var, "original name".into()),
+    ])
+    .unwrap_err();
+    assert_eq!(
+        error,
+        FolConstructionError::DuplicateName {
+            name: "original name".into(),
+            first: 0,
+            second: 1,
+            first_node: var,
+            second_node: var,
+        }
+    );
+    let retained = error.clone();
+    drop(error);
+    assert!(matches!(
+        Capture::read(&retained).field("name"),
+        ErrorValue::Text("original name")
+    ));
+
+    let program = construct(vec![(var, "X".into()), (var, "alias".into())]).unwrap();
+    let FolControl::Decided(outcome) = resolve_fol(
+        &mut dag,
+        &program,
+        &SortContext::default(),
+        &FolBudget { max_steps: 100 },
+    )
+    .unwrap() else {
+        panic!("a ground fact must be decidable");
+    };
+    assert_eq!(outcome.answers.len(), 1);
+    assert_eq!(outcome.answers[0].atom, asserted);
+    assert_eq!(outcome.answers[0].bindings.get("X").unwrap(), "value");
+    assert_eq!(outcome.answers[0].bindings.get("alias").unwrap(), "value");
+}
+
+fn fol_sort_construction_checks_handles_without_rejecting_unused_declarations() {
+    use purrdf_datalog::id::{MetaId, NodeId};
+    use purrdf_datalog::resolve_fol::{FolConstructionError, FolPosition, FolProgram};
+    use std::collections::BTreeMap;
+
+    let mut dag = TermDag::default();
+    let goal = dag.intern_leaf("goal").unwrap();
+    let sort = dag.intern_leaf("sort").unwrap();
+    let (unused, _) = dag.fresh_meta().unwrap();
+    let unknown = MetaId::from_index(unused.index() + 1).unwrap();
+    assert_eq!(
+        FolProgram::new(
+            &dag,
+            vec![],
+            goal,
+            vec![],
+            BTreeMap::from([(unknown, sort)])
+        )
+        .unwrap_err(),
+        FolConstructionError::UnknownMetavariable {
+            variable: unknown,
+            sort
+        }
+    );
+    let unknown_sort = NodeId::from_index(dag.len() as u64).unwrap();
+    assert_eq!(
+        FolProgram::new(
+            &dag,
+            vec![],
+            goal,
+            vec![],
+            BTreeMap::from([(unused, unknown_sort)])
+        )
+        .unwrap_err(),
+        FolConstructionError::UnknownNode {
+            node: unknown_sort,
+            position: FolPosition::Sort { variable: unused },
+            clause: None,
+            nodes: dag.len(),
+        }
+    );
+    FolProgram::new(&dag, vec![], goal, vec![], BTreeMap::from([(unused, sort)])).unwrap();
+}
+
 fn reachable_snapshot_preserves_sharing_binders_and_deep_source_death() {
     let mut dag = TermDag::default();
     let op = dag.intern_leaf("operator").unwrap();
@@ -94,6 +435,11 @@ fn actual_proof_decoder_preserves_rejected_bytes_and_native_lengths() {
 }
 
 purrdf_testkit::harness_main!(
+    negative_only_demand_observes_asserted_dependency,
+    indirect_negative_demands_reach_facts_and_preserve_cycles,
+    fol_construction_checks_resident_handles_and_original_positions,
+    fol_projection_validation_preserves_names_and_admits_aliases,
+    fol_sort_construction_checks_handles_without_rejecting_unused_declarations,
     reachable_snapshot_preserves_sharing_binders_and_deep_source_death,
     actual_proof_decoder_preserves_rejected_bytes_and_native_lengths,
 );

@@ -958,6 +958,84 @@ crosses its recursion bound now returns this typed processor failure instead
 of `ShapesError::Invalid`. Its human-readable message is unchanged. It remains
 a hard failure through SPARQL node-expression calls, including COALESCE and IF.
 
+## Structured Horn program construction
+
+Replace every `FolClause { head, body, rule }` literal with
+`FolClause::new(&dag, head, body)?`. The unused `rule` field is removed: a clause's
+position in `FolProgram::clauses()` is its authored rule index, as it already was
+for resolution and proof checking. Read a clause through `head()` and `body()`.
+
+Replace every `FolProgram { clauses, goal, goal_vars, meta_sorts }` literal with
+`FolProgram::new(&dag, clauses, goal, goal_vars, meta_sorts)?`. The corresponding
+read-only accessors are `clauses()`, `goal()`, `goal_vars()` and `meta_sorts()`.
+To edit a program, construct and validate its replacement. The program owns its
+records and names; its handles still refer to the caller's one term arena, which
+must remain available for inspection and execution. Validation checks resident
+addresses and does not authenticate overlapping local handles from another arena.
+
+Construction returns `FolConstructionError` with the original offending handles,
+names and authored positions. It refuses unaddressable terms, unminted sort
+metavariables, projected non-metavariables, variables outside the goal and duplicate
+projection names that would overwrite answers. A partial projection, distinct
+names for the same goal variable and unused minted sort declarations remain
+valid. Body width and floundering remain execution refusals. The flat Datalog
+adapter uses these constructors and retains failures through
+`FolError::Construction` and the standard error source chain.
+
+`FolLit`, `FolUnsupported` and `FolError` are non-exhaustive. External matches
+must explicitly return or propagate an unsupported-case error rather than omit a
+literal or treat an unknown refusal as success. `FolLit` is now `Clone` rather
+than `Copy`; borrow literals or clone when ownership is needed. The current
+`Pos(NodeId)` and `Neg(NodeId)` payloads retain their meaning. No term rendering,
+canonical key, rule identity, proof identity or admitted execution meaning changes.
+
+## Datalog term inspection
+
+`purrdf_datalog::term::NodeData` is now non-exhaustive. External matches must
+include a wildcard arm that returns an explicit unsupported-form error and
+retains the source `NodeId` and relevant context. Do not silently filter out
+unknown nodes, discard children or fabricate a replacement term. A reasoning
+strategy must also refuse known forms outside its supported fragment.
+
+`TermDag::data` still borrows the complete node. All six current variants keep
+their payloads and meaning; construct them through `intern_leaf`, `intern_free`,
+`fresh_meta`, `intern_bound`, `intern_app` and `intern_binder`. Term identities,
+hash-consing, binder traversal and existing artifacts retain their behavior.
+
+## Scoped structured truth verdicts
+
+`FolOutcome::truth_of` returns `FolVerdict`, distinguishing
+`Established(Truth::{True, False, Undefined})` from
+`NotEstablished(FolUnestablished::{Unevaluated, Incomplete, NonGround})`.
+Update matches and comparisons to preserve that distinction. Interrupted
+search no longer reports a reached unresolved atom as WFS `Undefined`, and an
+unvisited atom is never reported as `False`. Positive proofs found before a
+budget cut can still establish `True`.
+
+Scope includes demanded ground calls and reached ground answers under the
+selected run's original program and sort context. Even an asserted fact outside
+that demand scope is unevaluated. A nonground call pattern does not establish
+symbolic verdicts or authorize arbitrary ground-instance probes. Keep the original
+caller-owned arena for handle inspection; overlapping local handles from another
+arena do not authenticate source identity.
+
+Read completion through `outcome.status()`; the writable `status` field is
+removed. `confirms_not_false` is removed because its Boolean absence result
+could license an unevaluated negation. The conservative adapter for the current
+`check_fol_proof` callback returns `false` only when
+`outcome.truth_of(dag, node) == FolVerdict::Established(Truth::False)`.
+Return `true` for incomplete, unevaluated, nonground or otherwise unsupported
+probes. This callback remains caller-supplied evidence; it is not independent
+source/program authentication.
+
+Safe negative literals now demand their instantiated dependency through the
+same registry as positive literals. Thus `q(a)` with `p(a) :- not q(a)` correctly
+decides `p(a)` false, including indirect dependency chains. Each new negative
+demand consumes the existing call-discovery work charge, so a fixed budget can
+interrupt earlier. Negative cycles remain WFS `Undefined`. Internal negative
+proof construction uses the same completed scope as public truth probes.
+Canonical term keys and clause/proof identity encodings retain their meaning.
+
 ## Datalog proofs and shared heads
 
 Ordinary head conjunctions now execute one shared body. Read `Derivation::head`
@@ -1426,3 +1504,29 @@ and projection path/category remain unchanged. Schema-import and LinkML equality
 compares the original detail; native provenance is supplemental. The panicking assert
 helpers remain explicit invariant/presentation boundaries over these same typed checks.
 No loss profile or serialization format changes.
+
+## JSON Schema evaluation policy
+
+`EvaluationCause` is now non-exhaustive. Replace the old unit pattern
+`EvaluationCause::ReferenceChain` with
+`EvaluationCause::ReferenceChain { attempted, maximum }` and include a wildcard
+arm when matching causes. The counts describe the refused link and the selected
+maximum, rather than a hardcoded default. Structured inspection exposes both
+fields. `ValidationRefusal::ReferenceChain` also gains `attempted`.
+
+`Schema::is_valid` and `evaluate` retain the default reference maximum of 250.
+Existing `is_valid_with_limits` and `evaluate_with_limits` retain their regex-only
+meaning and use that same reference default. To select both budgets, use
+`EvaluationPolicy::default().with_pattern_limits(limits)` and
+`.with_reference_chain_limit(maximum)`, then pass the policy to
+`is_valid_with_policy` or `evaluate_with_policy`. Zero refuses the first
+reference; descending into another instance location starts a new chain.
+True cycles still produce invalid output, while exhausted budgets produce
+`EvaluationError` with the original keyword and instance locations.
+
+Raising the maximum admits more work; it does not improve the algorithm.
+For an acyclic chain of N distinct targets at one instance, the evaluator
+follows N references and performs N × (N − 1) / 2 cycle-membership probes.
+The native API resource-growth case reports allocations, requested bytes,
+retained bytes and peak working bytes for verdict and full-output evaluation;
+its windows exclude schema compilation and keep the full result alive.
