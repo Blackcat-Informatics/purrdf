@@ -2115,8 +2115,7 @@ mod tests {
         assert_eq!(
             rdf_certificate.to_string(),
             format!(
-                "weakly acyclic: {} refined position(s), {} existential edge(s), none in a cycle",
-                rdf_positions, rdf_edges
+                "weakly acyclic: {rdf_positions} refined position(s), {rdf_edges} existential edge(s), none in a cycle"
             )
         );
         // It does NOT vary with the data — a certificate that moved per input would be
