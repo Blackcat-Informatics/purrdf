@@ -30,7 +30,7 @@ use crate::term::{NamedNode, Term, term_id_to_native};
 /// (including any quoted-triple component) is not interned in this dataset, in which
 /// case the pattern matches nothing.
 ///
-/// A quoted triple is resolved over [`Term::fold_nested`]'s work list: its subject,
+/// A quoted triple is resolved over the native term walk's work list: its subject,
 /// predicate and object, each fully before the next, and the first component the
 /// dataset lacks ends the lookup.
 pub fn resolve_id(dataset: &impl ShaclRead, term: &Term) -> Option<TermId> {

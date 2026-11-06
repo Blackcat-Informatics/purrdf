@@ -401,6 +401,10 @@ fn a_link_a_change_adds_is_followed() {
         &[],
     )
     .expect_err("refused");
+    let error = match error {
+        purrdf_shapes::report::CompleteValidationError::Shapes(error) => error,
+        error => panic!("expected the original shapes import refusal, got: {error}"),
+    };
     assert_import_error(
         &error,
         &ShapesImportError::UnresolvedLink {

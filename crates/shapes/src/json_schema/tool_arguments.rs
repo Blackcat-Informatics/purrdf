@@ -996,7 +996,7 @@ fn native_pretty(value: &Value, policy: &mut ToolPolicy) -> Option<String> {
 ///     ex:Arguments a sh:NodeShape; sh:targetClass ex:Call; sh:closed true;
 ///         sh:property [sh:path ex:customer; sh:datatype xsd:string;
 ///                      sh:minCount 1; sh:maxCount 1].
-/// "#, None).map_err(|errors| errors.join("; "))?;
+/// "#, None)?;
 /// let shapes = purrdf_shapes::shapes::from_dataset(&dataset)?;
 /// let namespaces = Namespaces::new("ex", &[("ex".into(), "https://example.org/".into())])?;
 /// let profile = ToolArgumentProfile {
