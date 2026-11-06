@@ -242,6 +242,8 @@ pub enum EmbeddingError {
     CertificateMismatch,
     /// The file is structurally inconsistent.
     Malformed(&'static str),
+    /// Original literal-component refusal, including native language grammar.
+    LiteralComponents(crate::LiteralComponentError),
 }
 
 impl purrdf_hash::error::StructuredError for EmbeddingError {
@@ -301,6 +303,7 @@ impl purrdf_hash::error::StructuredError for EmbeddingError {
         },
         CertificateMismatch => "purremb-certificate-mismatch" {},
         Malformed(context) => "purremb-malformed" { "context" => Text(context) },
+        LiteralComponents(cause) => "purremb-malformed" { "context" => Text(cause.message()), "cause" => Cause(cause) },
     }
 }
 
@@ -386,6 +389,7 @@ impl fmt::Display for EmbeddingError {
                 f.write_str("resident certificate does not match this byte slice")
             }
             Self::Malformed(context) => write!(f, "malformed PURREMB artifact: {context}"),
+            Self::LiteralComponents(cause) => write!(f, "malformed PURREMB artifact: {cause}"),
         }
     }
 }
@@ -394,6 +398,7 @@ impl std::error::Error for EmbeddingError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::FloatEnvironment(error) => Some(error),
+            Self::LiteralComponents(cause) => Some(cause),
             Self::InvalidSourcePack(cause) | Self::InvalidExternalPack(cause) => {
                 Some(cause.as_ref())
             }

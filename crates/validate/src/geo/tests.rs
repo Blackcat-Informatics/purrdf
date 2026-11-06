@@ -1286,6 +1286,54 @@ fn decimal_admission_respects_payload_roles_before_strict_decoding() {
     let unknown = GeoRequest::parse(r#"{"version":1,"operation":"profile","iri":"1e100000"}"#)
         .expect_err("payload role handling still preserves strict unknown-field refusal");
     assert!(matches!(unknown, GeoCallError::Decode(_)));
+    let malformed = {
+        let source = r#"{"version":1,"operation":"geometry","function":"dimension","arguments":[{"kind":"literal","value":"x","language":"en us"}]}"#.to_owned();
+        GeoRequest::parse(&source).expect_err("invalid literal component")
+    };
+    let GeoCallError::Decode(decode) = &malformed else {
+        panic!("same invalid-record category")
+    };
+    assert_eq!(decode.pointer(), "/arguments/0");
+    assert_eq!(
+        (decode.native_cause().unwrap() as &dyn std::error::Error)
+            .downcast_ref::<purrdf_core::LiteralComponentError>(),
+        Some(&purrdf_core::LiteralComponentError::LanguageTag(
+            purrdf_iri::langtag::LanguageTagError::TerminalPrimaryNotAlpha
+        ))
+    );
+    let copy = decode.clone();
+    drop(malformed);
+    let events = Vec::with_capacity(8);
+    let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+    let native = purrdf_testkit::error_capture::Capture::read_with_buffer(
+        copy.native_cause().unwrap(),
+        events,
+    );
+    let measured = window.close();
+    assert_eq!(measured.allocations, 0);
+    assert_eq!(
+        native.child("cause").code,
+        "langtag-terminal-primary-not-alpha"
+    );
+    GeoRequest::parse(r#"{"version":1,"operation":"geometry","function":"dimension","arguments":[{"kind":"literal","value":"x","language":"en"}]}"#).expect("valid component neighbor");
+    let session = GeoSession::default();
+    let (text, success) = session.try_response(r#"{"version":1,"operation":"geometry","function":"dimension","arguments":[{"kind":"literal","value":"x","language":"en us"}]}"#).expect("native refusal metadata remains admitted");
+    assert!(!success);
+    let body = json::read(&text).unwrap();
+    assert_eq!(body["error"]["code"].as_str(), Some("invalid-record"));
+    assert_eq!(body["error"]["pointer"].as_str(), Some("/arguments/0"));
+    assert_eq!(
+        body["error"]["cause"]["code"].as_str(),
+        Some("rdf-literal-component-language")
+    );
+    assert_eq!(
+        body["error"]["cause"]["fields"]["cause"]["value"]["code"].as_str(),
+        Some("langtag-terminal-primary-not-alpha")
+    );
+    let (_, success) = session
+        .try_response(DISTANCE)
+        .expect("valid response neighbor");
+    assert!(success);
 }
 
 #[test]

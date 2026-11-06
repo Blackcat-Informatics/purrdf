@@ -124,6 +124,8 @@ pub enum PackDictError {
     /// the dictionary's own range, a string was not valid UTF-8, or a front-coded
     /// record failed to reconstruct.
     Malformed(&'static str),
+    /// Original literal-component refusal and native language grammar cause.
+    LiteralComponents(crate::LiteralComponentError),
     /// A decoded IRI record is not an absolute IRI, so it violates the IR-boundary
     /// absoluteness invariant enforced by the crate-private `ir::absolute` module.
     ///
@@ -146,6 +148,7 @@ impl purrdf_hash::error::StructuredError for PackDictError {
             "found" => ByteCount(*found as u128),
         },
         Malformed(message) => "pack-dictionary-malformed" { "message" => Text(message) },
+        LiteralComponents(cause) => "pack-dictionary-malformed" { "message" => Text(cause.message()), "cause" => Cause(cause) },
         RelativeIri { iri, reason } => "pack-dictionary-relative-iri" {
             "iri" => Iri(iri),
             "cause" => Cause(reason),
@@ -161,6 +164,7 @@ impl fmt::Display for PackDictError {
                 "pack-dict: truncated input: needed at least {needed} bytes, found {found}"
             ),
             Self::Malformed(reason) => write!(f, "pack-dict: malformed input: {reason}"),
+            Self::LiteralComponents(cause) => write!(f, "pack-dict: malformed input: {cause}"),
             Self::RelativeIri { iri, reason } => write!(
                 f,
                 "pack-dict: IRI record {iri:?} cannot enter the RDF IR [{}]: {reason}",
@@ -170,7 +174,15 @@ impl fmt::Display for PackDictError {
     }
 }
 
-impl std::error::Error for PackDictError {}
+impl std::error::Error for PackDictError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::LiteralComponents(cause) => Some(cause),
+            Self::RelativeIri { reason, .. } => Some(reason),
+            _ => None,
+        }
+    }
+}
 
 impl From<PackBitsError> for PackDictError {
     fn from(e: PackBitsError) -> Self {
@@ -1181,7 +1193,7 @@ impl PackDict {
                         language,
                         *direction,
                     )
-                    .map_err(PackDictError::Malformed)?;
+                    .map_err(PackDictError::LiteralComponents)?;
                     // Test the identity-fold fixed point without allocating a
                     // second tag. Ingress folds language tags for RDF term identity.
                     if language.is_some_and(|tag| !purrdf_iri::langtag::is_identity_folded(tag)) {
@@ -1522,9 +1534,18 @@ mod tests {
                 n_terms: 2,
                 values_bytes: encode_values(&values, &ids),
             };
+            let cause = PackDict::open(&encoded.to_bytes()).expect_err("inconsistent components");
+            let expected = RdfLiteral::validate_components(datatype, language, direction)
+                .expect_err("same native component refusal");
             assert!(
-                PackDict::open(&encoded.to_bytes()).is_err(),
+                matches!(cause, PackDictError::LiteralComponents(actual) if actual == expected),
                 "{datatype} {language:?} {direction:?}"
+            );
+            assert_eq!(
+                std::error::Error::source(&cause)
+                    .unwrap()
+                    .downcast_ref::<crate::LiteralComponentError>(),
+                Some(&expected)
             );
         }
     }

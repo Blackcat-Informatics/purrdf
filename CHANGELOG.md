@@ -329,6 +329,14 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `DecodeReason` is non-exhaustive. Successful output and refusal order are
   unchanged.
 
+- **Typed literal component refusals:** `RdfLiteral::validate_components` returns
+  the non-exhaustive, allocation-free `LiteralComponentError`, retaining native
+  language grammar and distinct shape reasons. Builder/freeze, strict embedding,
+  pack dictionaries and direct geographic record decoding keep the original
+  cause. Python, C and JavaScript factories preserve plain messages and expose
+  retained native fields. Checked and directional WASM Rust factory methods
+  return `JsValue` errors; the explicitly unchecked constructor is unchanged.
+
 - **Canonical reserved-vocabulary refusals:** `ReservedVocabulary` lends its
   original IRI and position through `iri()` and `position()`; clones share the
   immutable payload and its original admission owner, and the refusal stays

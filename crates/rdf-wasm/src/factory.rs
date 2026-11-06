@@ -29,16 +29,23 @@ use crate::term::{Quad, Term, TermInner, parse_direction};
 /// The judgement is case-blind, so it gives the same verdict either side of the
 /// lowercase fold `Term::literal`'s canonicalization applies afterwards.
 ///
-/// Returns the reason as a `&'static str` rather than a [`JsError`], for the
+/// Returns the native typed reason rather than a [`JsError`], for the
 /// same reason [`parse_direction`] does: a `JsError` cannot be constructed off
 /// wasm, so a validator that built one would be untestable on the native gate.
 /// The two `#[wasm_bindgen]` doors below wrap it at the boundary.
-fn validate_literal(literal: &RdfLiteral) -> Result<(), &'static str> {
+fn validate_literal(literal: &RdfLiteral) -> Result<(), purrdf_core::LiteralComponentError> {
     RdfLiteral::validate_components(
         literal.datatype_iri(),
         literal.language.as_deref(),
         literal.direction,
     )
+}
+
+fn literal_error_to_js(cause: purrdf_core::LiteralComponentError) -> JsValue {
+    match cause.into_diagnostic() {
+        Ok(diagnostic) => crate::operation::native_diagnostic_to_js_with_message(diagnostic),
+        Err(storage) => crate::operation::native_diagnostic_to_js(storage.into()),
+    }
 }
 
 /// An RDF/JS `DataFactory`. Stateless except for the auto-generated blank-node
@@ -122,12 +129,12 @@ impl DataFactory {
         &self,
         value: String,
         language: Option<String>,
-    ) -> Result<Term, JsError> {
+    ) -> Result<Term, JsValue> {
         let literal = match language {
             Some(language) => RdfLiteral::language_tagged(value, language),
             None => RdfLiteral::simple(value),
         };
-        validate_literal(&literal).map_err(JsError::new)?;
+        validate_literal(&literal).map_err(literal_error_to_js)?;
         Ok(Term::literal(literal))
     }
 
@@ -160,7 +167,7 @@ impl DataFactory {
         value: String,
         language: String,
         direction: &str,
-    ) -> Result<Term, JsError> {
+    ) -> Result<Term, JsValue> {
         let direction = parse_direction(direction).map_err(|e| JsError::new(&e))?;
         let literal = RdfLiteral {
             lexical_form: value,
@@ -168,7 +175,7 @@ impl DataFactory {
             language: Some(language),
             direction: Some(direction),
         };
-        validate_literal(&literal).map_err(JsError::new)?;
+        validate_literal(&literal).map_err(literal_error_to_js)?;
         Ok(Term::literal(literal))
     }
 

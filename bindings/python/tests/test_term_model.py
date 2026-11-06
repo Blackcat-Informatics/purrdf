@@ -583,25 +583,23 @@ def test_a_native_typed_literal_keeps_its_datatype_and_differs_from_the_plain_on
 
 
 def test_the_native_literal_refuses_a_direction_without_a_language_and_an_unknown_token() -> None:
-    """A ``dirLangString`` is a language tag AND a direction from a closed set.
-
-    Both refusals are on the native constructor rather than the shim, which
-    validates directions again in Python and so cannot witness this. Each is
-    paired with the neighbouring valid call, because an over-refusal here would
-    reject the RDF 1.2 literals this surface exists to express and would read as
-    correct strictness right up to the point a host wrote one.
-    """
+    """Native exceptions keep plain messages and original component causes."""
     import purrdf
 
-    # A direction with no language is not a dirLangString and is not anything
-    # else either, so it is refused rather than silently dropped.
-    with pytest.raises(ValueError, match="requires a language tag"):
+    with pytest.raises(ValueError, match="requires a language tag") as missing:
         purrdf.Literal("x", direction="ltr")
-    # …and the neighbouring call that adds the tag is accepted.
+    assert str(missing.value) == "a base direction requires a language tag (RDF 1.2 dirLangString)"
+    assert missing.value.code == "rdf-ir-literal-shape"
+    assert missing.value.native_cause["code"] == "rdf-literal-component-direction-without-language"
     assert purrdf.Literal("x", language="en", direction="ltr").direction == "ltr"
-
-    # The vocabulary is closed: two tokens, and no third spelling is read as
-    # either of them.
+    for tag in ("en us", ""):
+        with pytest.raises(ValueError) as malformed:
+            purrdf.Literal("x", language=tag)
+        native = malformed.value.native_cause
+        assert native["code"] == "rdf-literal-component-language"
+        assert native["fields"]["cause"]["value"]["code"] == malformed.value.code
+        assert malformed.value.native_cause_json
+    assert str(malformed.value) == "invalid language tag: a language tag must not be empty"
     with pytest.raises(ValueError, match="invalid base direction") as refused:
         purrdf.Literal("x", language="en", direction="up")
     message = str(refused.value)
@@ -611,9 +609,6 @@ def test_the_native_literal_refuses_a_direction_without_a_language_and_an_unknow
     for token in ("ltr", "rtl"):
         assert purrdf.Literal("x", language="en", direction=token).direction == token
 
-    # A literal that carries no direction reports its absence, which is what
-    # makes the getter readable at all: `None` here means "no base direction",
-    # never "the default one".
     assert purrdf.Literal("x").direction is None
     assert purrdf.Literal("x", language="en").direction is None
     assert purrdf.Literal("x", datatype=purrdf.NamedNode(XSD + "integer")).direction is None
