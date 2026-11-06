@@ -178,8 +178,8 @@ pub struct FolProgram {
 pub enum Truth {
     /// The atom is in the well-founded model's true set.
     True,
-    /// The atom is confirmed absent from every ground rule this resolution
-    /// reached — the closed-world default.
+    /// The demanded ground atom is false in the completed well-founded model
+    /// of this run's program and sort context.
     False,
     /// The atom depends on its own negation (directly or through a cycle) and
     /// the well-founded semantics assigns it neither truth value.
@@ -305,16 +305,51 @@ pub enum FolStatus {
     Partial,
 }
 
-/// The decided outcome of [`resolve_fol`]: every projected answer, the
-/// completion status, and the three-valued verdict for any atom via
-/// [`Self::truth_of`].
+/// Why a selected run has not established a ground WFS verdict for a probe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum FolUnestablished {
+    /// The ground atom was neither demanded nor reached as a ground answer.
+    Unevaluated,
+    /// Search was interrupted before establishing this reached atom's verdict.
+    Incomplete,
+    /// The probe still contains metavariables; symbolic verdicts are not supported.
+    NonGround,
+}
+
+/// A scoped WFS verdict, or an explicit absence of an established verdict.
+///
+/// Search incompleteness is distinct from [`Truth::Undefined`], which is a WFS
+/// value established by completed evaluation, including negative cycles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum FolVerdict {
+    /// A WFS value established for this ground atom under the selected run.
+    Established(Truth),
+    /// This run has not established a WFS value for the probe.
+    NotEstablished(FolUnestablished),
+}
+
+/// The outcome of [`resolve_fol`]: projected ground answers, immutable
+/// completion status, and scoped verdicts via [`Self::truth_of`].
 #[derive(Debug, Clone)]
 pub struct FolOutcome {
     /// Every distinct, fully-ground answer to the program's goal, sorted for a
     /// deterministic order.
     pub answers: Vec<FolBinding>,
+    /// The original run's ground demand scope and WFS computation.
+    scope: FolScope,
+}
+
+/// One computation's admitted ground probes and completion evidence.
+#[derive(Debug, Clone)]
+struct FolScope {
     /// Whether grounding ran to completion or was budget-cut.
-    pub status: FolStatus,
+    status: FolStatus,
+    /// Demanded ground calls and reached ground answers, under this run's
+    /// original program and sort context. General call patterns grant no
+    /// symbolic verdicts or arbitrary ground-instance coverage.
+    ground: BTreeSet<String>,
     /// Canon-keys of every atom confirmed NOT false (the alternating fixpoint's
     /// `not_false` set).
     not_false: BTreeSet<String>,
@@ -322,23 +357,46 @@ pub struct FolOutcome {
     true_set: BTreeSet<String>,
 }
 
-impl FolOutcome {
-    /// The three-valued verdict for `node`.
-    pub fn truth_of(&self, dag: &TermDag, node: NodeId) -> Truth {
-        let key = canon(dag, node);
-        if self.true_set.contains(&key) {
-            Truth::True
-        } else if self.not_false.contains(&key) {
-            Truth::Undefined
+impl FolScope {
+    fn verdict(&self, key: &str) -> FolVerdict {
+        if !self.ground.contains(key) {
+            return FolVerdict::NotEstablished(FolUnestablished::Unevaluated);
+        }
+        if self.true_set.contains(key) {
+            FolVerdict::Established(Truth::True)
+        } else if self.status == FolStatus::Partial {
+            FolVerdict::NotEstablished(FolUnestablished::Incomplete)
+        } else if self.not_false.contains(key) {
+            FolVerdict::Established(Truth::Undefined)
         } else {
-            Truth::False
+            FolVerdict::Established(Truth::False)
         }
     }
+}
 
-    /// Whether `node` is confirmed NOT false — the adapter [`check_fol_proof`]'s
-    /// caller-supplied `not_false` predicate is built from.
-    pub fn confirms_not_false(&self, dag: &TermDag, node: NodeId) -> bool {
-        self.not_false.contains(&canon(dag, node))
+impl FolOutcome {
+    /// Whether this original run completed or was interrupted by its budget.
+    #[must_use]
+    pub fn status(&self) -> FolStatus {
+        self.scope.status
+    }
+
+    /// Probe a ground atom within this run's actual evaluated scope.
+    ///
+    /// Only demanded ground calls and reached ground answers are in scope.
+    /// An unevaluated atom is not false. Interrupted search may establish a
+    /// positive proof, but never falsity or WFS undefinedness. A nonground call
+    /// pattern does not authorize symbolic verdicts or arbitrary ground probes.
+    /// All handles must use the original caller-owned arena; as with
+    /// [`FolProgram`], overlapping local handles do not authenticate provenance.
+    ///
+    /// # Panics
+    /// Panics if `node` does not address a resident node in `dag`.
+    pub fn truth_of(&self, dag: &TermDag, node: NodeId) -> FolVerdict {
+        if !dag.free_meta(node).is_empty() {
+            return FolVerdict::NotEstablished(FolUnestablished::NonGround);
+        }
+        self.scope.verdict(&canon(dag, node))
     }
 }
 
@@ -789,9 +847,9 @@ fn is_ground(dag: &mut TermDag, s: &Subst, atom: NodeId) -> Result<bool, Storage
 /// call, and joined against every one of that call's answers CURRENTLY on
 /// file — never by re-solving it natively — which is what makes this a
 /// round-based fixpoint rather than unbounded SLD recursion. A selected
-/// negative literal is simply carried forward (negation is decided later, in
-/// the well-founded fixpoint): selection continues over the remaining literals
-/// with the SAME substitution. If no remaining literal is safe, the clause
+/// negative literal is instantiated and demanded too, then carried forward
+/// (negation is decided later, in the well-founded fixpoint): selection continues
+/// over the remaining literals with the SAME substitution. If no remaining literal is safe, the clause
 /// floundered.
 /// The two invariants carried unchanged through [`solve_body`]'s recursion: the
 /// caller's order-sorted context and the step-budget ceiling. Bundling them keeps
@@ -868,7 +926,9 @@ fn solve_body(
                 }
             }
         }
-        FolLit::Neg(_) => {
+        FolLit::Neg(atom) => {
+            let instantiated = unify::apply(dag, subst, *atom)?;
+            engine.register_call(dag, instantiated, subst);
             solve_body(dag, engine, body, selected, subst, limits, out)?;
         }
     }
@@ -1186,28 +1246,29 @@ fn well_founded(
 /// premise in either direction, so this repeats passes until no new proof is
 /// added rather than assuming any particular order).
 ///
-/// Every negative atom is independently re-checked against `not_false` here —
-/// deliberately not simply trusted from `w`'s own membership, so a defect in
-/// `w`'s computation cannot silently launder into a proof.
+/// Every negative atom must have an established false verdict in the same
+/// completed scope used by public probes. Incomplete or unevaluated atoms
+/// cannot license a negative proof premise.
 fn build_proofs(
     dag: &TermDag,
     engine: &Engine,
     program: &FolProgram,
-    w: &BTreeSet<String>,
-    not_false: &BTreeSet<String>,
+    scope: &FolScope,
 ) -> BTreeMap<String, FolProof> {
     let mut proofs: BTreeMap<String, FolProof> = BTreeMap::new();
     loop {
         let mut changed = false;
         for rule in engine.ground_rules.values() {
             let head_key = canon(dag, rule.head);
-            if proofs.contains_key(&head_key) || !w.contains(&head_key) {
+            if proofs.contains_key(&head_key)
+                || scope.verdict(&head_key) != FolVerdict::Established(Truth::True)
+            {
                 continue;
             }
             let neg_ok = rule
                 .neg
                 .iter()
-                .all(|&n| !not_false.contains(&canon(dag, n)));
+                .all(|&n| scope.verdict(&canon(dag, n)) == FolVerdict::Established(Truth::False));
             if !neg_ok {
                 continue;
             }
@@ -1257,7 +1318,7 @@ fn build_proofs(
     proofs
 }
 
-/// Project every ground atom in `w` against `program.goal`, keeping only the
+/// Project every established true ground atom against `program.goal`, keeping only the
 /// candidates under which the goal becomes FULLY ground, deduplicating by
 /// content key and sorting for a deterministic answer order.
 fn project(
@@ -1265,13 +1326,13 @@ fn project(
     engine: &Engine,
     program: &FolProgram,
     ctx: &SortContext,
-    w: &BTreeSet<String>,
+    scope: &FolScope,
     proofs: &BTreeMap<String, FolProof>,
 ) -> Result<Vec<FolBinding>, StorageError> {
     let mut candidates: Vec<(String, NodeId)> = engine
         .atoms
         .iter()
-        .filter(|(key, _)| w.contains(*key))
+        .filter(|(key, _)| scope.verdict(key) == FolVerdict::Established(Truth::True))
         .map(|(key, &atom)| (key.clone(), atom))
         .collect();
     candidates.sort();
@@ -1299,7 +1360,7 @@ fn project(
             continue;
         }
         let Some(proof) = proofs.get(&atom_key) else {
-            // Provably unreachable given `build_proofs` ran over the same `w`;
+            // Provably unreachable given `build_proofs` ran over the same scope;
             // excluded defensively rather than trusted.
             continue;
         };
@@ -1373,15 +1434,22 @@ pub fn resolve_fol(
     } else {
         FolStatus::Complete
     };
-    let proofs = build_proofs(dag, &engine, program, &true_set, &not_false);
-    let answers = project(dag, &engine, program, ctx, &true_set, &proofs)?;
-
-    Ok(FolControl::Decided(Box::new(FolOutcome {
-        answers,
+    let mut ground: BTreeSet<String> = engine.atoms.keys().cloned().collect();
+    for &call in engine.calls.values() {
+        if dag.free_meta(call).is_empty() {
+            ground.insert(canon(dag, call));
+        }
+    }
+    let scope = FolScope {
         status,
+        ground,
         not_false,
         true_set,
-    })))
+    };
+    let proofs = build_proofs(dag, &engine, program, &scope);
+    let answers = project(dag, &engine, program, ctx, &scope, &proofs)?;
+
+    Ok(FolControl::Decided(Box::new(FolOutcome { answers, scope })))
 }
 
 purrdf_lex::variant_from!(FolProofError { Storage(StorageError) });
@@ -1475,8 +1543,11 @@ impl purrdf_hash::error::StructuredError for FolProofError {
 /// sort-blind program); they make the re-derivation sort-aware and let the
 /// carried [`clause_identity`] be re-derived and matched. `not_false` answers "is
 /// this ground atom confirmed not false" — a caller backs it with the SAME
-/// well-founded computation [`resolve_fol`] produced, via
-/// [`FolOutcome::confirms_not_false`].
+/// well-founded computation [`resolve_fol`] produced. A conservative adapter
+/// returns `false` ONLY for
+/// `FolVerdict::Established(Truth::False)` from [`FolOutcome::truth_of`], so an
+/// unevaluated or incomplete probe cannot license a negation. This freely
+/// supplied Boolean is not independently authenticated checking evidence.
 ///
 /// Every premise is checked FIRST, recursively bottom-up; the clause is freshened
 /// exactly as `ground` freshens it (its variables' sorts declared), its positive
@@ -2022,7 +2093,7 @@ mod tests {
         assert_eq!(answer.bindings.get("R"), Some(&render(&dag, three)));
         assert_eq!(
             outcome.truth_of(&dag, answer.atom),
-            Truth::True,
+            FolVerdict::Established(Truth::True),
             "a projected answer is always in the true set"
         );
 
@@ -2150,10 +2221,13 @@ mod tests {
         let win_f = app(&mut dag, "win", vec![f]);
         let move_ef = fact(&mut dag, "move", vec![e, f]);
         let outcome_e = resolve(&mut dag, vec![move_ef], win_e);
-        assert_eq!(outcome_e.truth_of(&dag, win_e), Truth::True);
+        assert_eq!(
+            outcome_e.truth_of(&dag, win_e),
+            FolVerdict::Established(Truth::True)
+        );
         assert_eq!(
             outcome_e.truth_of(&dag, win_f),
-            Truth::False,
+            FolVerdict::Established(Truth::False),
             "the sink is never derivable, so its default verdict is False"
         );
 
@@ -2163,7 +2237,7 @@ mod tests {
         let outcome_c = resolve(&mut dag, vec![move_cc], win_c);
         assert_eq!(
             outcome_c.truth_of(&dag, win_c),
-            Truth::Undefined,
+            FolVerdict::Established(Truth::Undefined),
             "a genuine self-loop through negation is undefined"
         );
     }
@@ -2182,7 +2256,10 @@ mod tests {
         else {
             panic!("a direct negative loop is decidable (as Undefined), not Unsupported");
         };
-        assert_eq!(outcome.truth_of(&dag, p), Truth::Undefined);
+        assert_eq!(
+            outcome.truth_of(&dag, p),
+            FolVerdict::Established(Truth::Undefined)
+        );
         assert!(
             outcome.answers.is_empty(),
             "an Undefined goal has no True answer"
@@ -2192,10 +2269,8 @@ mod tests {
     // ── 5/6: budget-cut soundness demotion ──────────────────────────────────
 
     /// `base :- .` `goal_atom :- base, not(other).` — a tiny `FolBudget`
-    /// truncates grounding right after `goal_atom`'s own ground rule is
-    /// committed; the run is `Partial`, and `goal_atom` — which depends on a
-    /// negation the truncated grounding never confirmed absent — is reported
-    /// `Undefined`, never `True`.
+    /// truncates grounding after the positive fact is reached. The run is
+    /// `Partial`, and the negative-dependent goal has no established verdict.
     fn budget_cut_program(dag: &mut TermDag) -> (Vec<FolClause>, NodeId, NodeId) {
         let base = leaf(dag, "base");
         let other = leaf(dag, "other");
@@ -2207,33 +2282,65 @@ mod tests {
     }
 
     #[test]
-    fn budget_cut_demotes_dependent_atom_to_undefined_not_true() {
+    fn budget_cut_leaves_dependent_atom_unestablished_not_wfs_undefined() {
         let mut dag = TermDag::default();
         let (clauses, base, goal_atom) = budget_cut_program(&mut dag);
         let program = FolProgram::new(&dag, clauses, goal_atom, vec![], BTreeMap::new()).unwrap();
-        // 4 work units, not 1. `max_steps` now charges every newly demanded call as well
-        // as every committed rule, so 1 unit is spent before the `base` FACT is committed
-        // and the run truncates ahead of the state this test is about. 4 reaches the
-        // intended shape and is truer to this test's name than the old value ever was:
-        // the goal comes back `Undefined` here, where 1 and 2 units yield `False`.
+        // Four steps reach the positive fact and interrupt discovery of the
+        // negative dependency. Negation must not certify truth or falsity.
         let budget = FolBudget { max_steps: 4 };
         let FolControl::Decided(outcome) =
             resolve_fol(&mut dag, &program, &SortContext::default(), &budget).unwrap()
         else {
             panic!("a budget cut is Partial, not Unsupported");
         };
-        assert_eq!(outcome.status, FolStatus::Partial);
-        assert_eq!(outcome.truth_of(&dag, base), Truth::True);
+        assert_eq!(outcome.status(), FolStatus::Partial);
+        assert_eq!(
+            outcome.truth_of(&dag, base),
+            FolVerdict::Established(Truth::True)
+        );
         assert_eq!(
             outcome.truth_of(&dag, goal_atom),
-            Truth::Undefined,
-            "a truncated negation leaves the goal UNDEFINED, not merely not-True"
+            FolVerdict::NotEstablished(FolUnestablished::Incomplete),
+            "interrupted search is distinct from an established WFS undefined value"
         );
         assert_ne!(
             outcome.truth_of(&dag, goal_atom),
-            Truth::True,
+            FolVerdict::Established(Truth::True),
             "a budget-truncated negation must never found a True answer"
         );
+
+        // A positive assertion remains a proved answer even if the selected
+        // run is interrupted before its next grounding pass.
+        let positive = FolProgram::new(
+            &dag,
+            program.clauses().to_vec(),
+            base,
+            vec![],
+            BTreeMap::new(),
+        )
+        .unwrap();
+        let FolControl::Decided(partial) = resolve_fol(
+            &mut dag,
+            &positive,
+            &SortContext::default(),
+            &FolBudget { max_steps: 1 },
+        )
+        .unwrap() else {
+            panic!("a budget cut retains its positive proofs");
+        };
+        assert_eq!(partial.status(), FolStatus::Partial);
+        assert_eq!(partial.answers.len(), 1);
+        let proved = check_fol_proof(
+            &mut dag,
+            &partial.answers[0].proof,
+            positive.clauses(),
+            positive.meta_sorts(),
+            &SortContext::default(),
+            &always_not_false,
+        )
+        .unwrap();
+        assert_eq!(proved, base);
     }
 
     /// The same budget-capped program run twice yields byte-identical answer
@@ -2255,7 +2362,7 @@ mod tests {
             panic!("expected a decision");
         };
         assert_eq!(first.answers, second.answers);
-        assert_eq!(first.status, second.status);
+        assert_eq!(first.status(), second.status());
     }
 
     // ── 7/8: refusals before or during grounding ────────────────────────────
@@ -2549,7 +2656,7 @@ mod tests {
             "sort-blind resolution admits BOTH values — the verdict the sort corrects"
         );
         // A sort clash pruned a candidate; it must NOT be reported as floundering.
-        assert_eq!(sorted_outcome.status, FolStatus::Complete);
+        assert_eq!(sorted_outcome.status(), FolStatus::Complete);
     }
 
     // ── Content-addressed proof identity ─────────────────────────────────────
@@ -2770,7 +2877,10 @@ mod tests {
         else {
             panic!("a neg-only clause with a false negand is decidable");
         };
-        assert_eq!(outcome.truth_of(&dag, holds), Truth::True);
+        assert_eq!(
+            outcome.truth_of(&dag, holds),
+            FolVerdict::Established(Truth::True)
+        );
         assert_eq!(outcome.answers.len(), 1);
         let proof = &outcome.answers[0].proof;
         assert!(
@@ -2787,7 +2897,7 @@ mod tests {
             &clauses,
             &BTreeMap::new(),
             &SortContext::default(),
-            &always_not_false,
+            &|dag, node| outcome.truth_of(dag, node) != FolVerdict::Established(Truth::False),
         )
         .expect("the neg-only derivation re-validates");
         assert_eq!(checked, holds);

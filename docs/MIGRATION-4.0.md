@@ -967,6 +967,40 @@ than `Copy`; borrow literals or clone when ownership is needed. The current
 `Pos(NodeId)` and `Neg(NodeId)` payloads retain their meaning. No term rendering,
 canonical key, rule identity, proof identity or admitted execution meaning changes.
 
+## Scoped structured truth verdicts
+
+`FolOutcome::truth_of` returns `FolVerdict`, distinguishing
+`Established(Truth::{True, False, Undefined})` from
+`NotEstablished(FolUnestablished::{Unevaluated, Incomplete, NonGround})`.
+Update matches and comparisons to preserve that distinction. Interrupted
+search no longer reports a reached unresolved atom as WFS `Undefined`, and an
+unvisited atom is never reported as `False`. Positive proofs found before a
+budget cut can still establish `True`.
+
+Scope includes demanded ground calls and reached ground answers under the
+selected run's original program and sort context. Even an asserted fact outside
+that demand scope is unevaluated. A nonground call pattern does not establish
+symbolic verdicts or authorize arbitrary ground-instance probes. Keep the original
+caller-owned arena for handle inspection; overlapping local handles from another
+arena do not authenticate source identity.
+
+Read completion through `outcome.status()`; the writable `status` field is
+removed. `confirms_not_false` is removed because its Boolean absence result
+could license an unevaluated negation. The conservative adapter for the current
+`check_fol_proof` callback returns `false` only when
+`outcome.truth_of(dag, node) == FolVerdict::Established(Truth::False)`.
+Return `true` for incomplete, unevaluated, nonground or otherwise unsupported
+probes. This callback remains caller-supplied evidence; it is not independent
+source/program authentication.
+
+Safe negative literals now demand their instantiated dependency through the
+same registry as positive literals. Thus `q(a)` with `p(a) :- not q(a)` correctly
+decides `p(a)` false, including indirect dependency chains. Each new negative
+demand consumes the existing call-discovery work charge, so a fixed budget can
+interrupt earlier. Negative cycles remain WFS `Undefined`. Internal negative
+proof construction uses the same completed scope as public truth probes.
+Canonical term keys and clause/proof identity encodings retain their meaning.
+
 ## Datalog proofs and shared heads
 
 Ordinary head conjunctions now execute one shared body. Read `Derivation::head`

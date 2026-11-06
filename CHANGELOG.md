@@ -8,6 +8,14 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Scoped structured truth (breaking Rust API):** `truth_of` distinguishes
+  established WFS values from unevaluated, incomplete and nonground probes.
+  Completion is read through `status()`; `confirms_not_false` is removed.
+  Negative dependencies now participate in budgeted demand discovery, fixing
+  incorrect successful answers when a negated fact was never visited. Internal
+  negative proofs require established absence in that same completed scope;
+  partial positive proofs and WFS negative cycles retain their meaning.
+
 - **Validated structured programs (breaking Rust API):** `FolClause` and
   `FolProgram` use validated constructors and read-only inspection. Original
   handles, projection names and positions survive typed construction failures;

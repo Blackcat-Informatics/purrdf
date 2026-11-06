@@ -7,6 +7,158 @@ use purrdf_datalog::term::{RetainedTerm, TermDag};
 use purrdf_hash::error::ErrorValue;
 use purrdf_testkit::error_capture::Capture;
 
+fn negative_only_demand_observes_asserted_dependency() {
+    use purrdf_datalog::resolve_fol::{
+        FolBudget, FolClause, FolControl, FolLit, FolProgram, FolStatus, FolUnestablished,
+        FolVerdict, Truth, check_fol_proof, resolve_fol,
+    };
+    use purrdf_datalog::unify::SortContext;
+    use std::collections::BTreeMap;
+
+    let mut dag = TermDag::default();
+    let a = dag.intern_leaf("a").unwrap();
+    let p = dag.intern_leaf("p").unwrap();
+    let q = dag.intern_leaf("q").unwrap();
+    let pa = dag.intern_app(p, vec![a]).unwrap();
+    let qa = dag.intern_app(q, vec![a]).unwrap();
+    let untouched = dag.intern_leaf("untouched").unwrap();
+    let (_, variable) = dag.fresh_meta().unwrap();
+    let clauses = vec![
+        FolClause::new(&dag, qa, vec![]).unwrap(),
+        FolClause::new(&dag, pa, vec![FolLit::Neg(qa)]).unwrap(),
+        FolClause::new(&dag, untouched, vec![]).unwrap(),
+    ];
+    let program = FolProgram::new(&dag, clauses, pa, vec![], BTreeMap::new()).unwrap();
+    let FolControl::Decided(outcome) = resolve_fol(
+        &mut dag,
+        &program,
+        &SortContext::default(),
+        &FolBudget { max_steps: 100 },
+    )
+    .unwrap() else {
+        panic!("ground negative demands must be decided");
+    };
+    assert_eq!(outcome.status(), FolStatus::Complete);
+    assert_eq!(
+        outcome.truth_of(&dag, pa),
+        FolVerdict::Established(Truth::False)
+    );
+    assert_eq!(
+        outcome.truth_of(&dag, qa),
+        FolVerdict::Established(Truth::True)
+    );
+    assert_eq!(
+        outcome.answers,
+        [] as [purrdf_datalog::resolve_fol::FolBinding; 0]
+    );
+    assert_eq!(
+        outcome.truth_of(&dag, untouched),
+        FolVerdict::NotEstablished(FolUnestablished::Unevaluated)
+    );
+    assert_eq!(
+        outcome.truth_of(&dag, variable),
+        FolVerdict::NotEstablished(FolUnestablished::NonGround)
+    );
+
+    let FolControl::Decided(partial) = resolve_fol(
+        &mut dag,
+        &program,
+        &SortContext::default(),
+        &FolBudget { max_steps: 1 },
+    )
+    .unwrap() else {
+        panic!("budget interruption must retain a partial outcome");
+    };
+    assert_eq!(partial.status(), FolStatus::Partial);
+    assert_eq!(
+        partial.truth_of(&dag, pa),
+        FolVerdict::NotEstablished(FolUnestablished::Incomplete)
+    );
+    assert_eq!(
+        partial.truth_of(&dag, qa),
+        FolVerdict::NotEstablished(FolUnestablished::Incomplete)
+    );
+    assert_eq!(
+        partial.answers,
+        [] as [purrdf_datalog::resolve_fol::FolBinding; 0]
+    );
+
+    // The neighboring program with no q fact establishes its demanded absence.
+    let absent_program = FolProgram::new(
+        &dag,
+        vec![FolClause::new(&dag, pa, vec![FolLit::Neg(qa)]).unwrap()],
+        pa,
+        vec![],
+        BTreeMap::new(),
+    )
+    .unwrap();
+    let FolControl::Decided(absent) = resolve_fol(
+        &mut dag,
+        &absent_program,
+        &SortContext::default(),
+        &FolBudget { max_steps: 100 },
+    )
+    .unwrap() else {
+        panic!("a completed missing dependency must be decided");
+    };
+    assert_eq!(
+        absent.truth_of(&dag, qa),
+        FolVerdict::Established(Truth::False)
+    );
+    assert_eq!(
+        absent.truth_of(&dag, pa),
+        FolVerdict::Established(Truth::True)
+    );
+    assert_eq!(absent.answers.len(), 1);
+    check_fol_proof(
+        &mut dag,
+        &absent.answers[0].proof,
+        absent_program.clauses(),
+        absent_program.meta_sorts(),
+        &SortContext::default(),
+        &|dag, node| absent.truth_of(dag, node) != FolVerdict::Established(Truth::False),
+    )
+    .unwrap();
+}
+
+fn indirect_negative_demands_reach_facts_and_preserve_cycles() {
+    use purrdf_datalog::resolve_fol::{
+        FolBudget, FolClause, FolControl, FolLit, FolProgram, FolStatus, FolVerdict, Truth,
+        resolve_fol,
+    };
+    use purrdf_datalog::unify::SortContext;
+    use std::collections::BTreeMap;
+
+    let mut dag = TermDag::default();
+    let p = dag.intern_leaf("p").unwrap();
+    let q = dag.intern_leaf("q").unwrap();
+    let r = dag.intern_leaf("r").unwrap();
+    for (dependency, expected) in [
+        (FolLit::Pos(r), Truth::False),
+        (FolLit::Neg(r), Truth::True),
+        (FolLit::Neg(p), Truth::Undefined),
+    ] {
+        let clauses = vec![
+            FolClause::new(&dag, p, vec![FolLit::Neg(q)]).unwrap(),
+            FolClause::new(&dag, q, vec![dependency]).unwrap(),
+            FolClause::new(&dag, r, vec![]).unwrap(),
+        ];
+        let program = FolProgram::new(&dag, clauses, p, vec![], BTreeMap::new()).unwrap();
+        let FolControl::Decided(outcome) = resolve_fol(
+            &mut dag,
+            &program,
+            &SortContext::default(),
+            &FolBudget { max_steps: 100 },
+        )
+        .unwrap() else {
+            panic!("finite ground negative dependencies must be decided");
+        };
+        assert_eq!(outcome.status(), FolStatus::Complete);
+        assert_eq!(outcome.truth_of(&dag, p), FolVerdict::Established(expected));
+        assert_eq!(!outcome.answers.is_empty(), expected == Truth::True);
+    }
+}
+
 fn fol_construction_checks_resident_handles_and_original_positions() {
     use purrdf_datalog::id::NodeId;
     use purrdf_datalog::resolve_fol::{
@@ -283,6 +435,8 @@ fn actual_proof_decoder_preserves_rejected_bytes_and_native_lengths() {
 }
 
 purrdf_testkit::harness_main!(
+    negative_only_demand_observes_asserted_dependency,
+    indirect_negative_demands_reach_facts_and_preserve_cycles,
     fol_construction_checks_resident_handles_and_original_positions,
     fol_projection_validation_preserves_names_and_admits_aliases,
     fol_sort_construction_checks_handles_without_rejecting_unused_declarations,
