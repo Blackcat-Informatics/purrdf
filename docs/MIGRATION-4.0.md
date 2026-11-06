@@ -1337,7 +1337,7 @@ dropped, including in cloned reports. Malformed query artifacts are still skippe
 in artifact order; valid queries continue to contribute dependency evidence.
 Python's ownership lint and ownership-defect classification are unchanged.
 
-### Typed loss-ledger checks
+## Typed loss-ledger checks
 
 `check_ledger_complete` now returns an owned `LossCompletenessError` instead of a
 string. Its `missing()` and `unexpected()` slices contain every distinct differing code
