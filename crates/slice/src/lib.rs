@@ -49,8 +49,8 @@ pub use fix_deps::{ManifestPatch, compute_fix_deps};
 pub use list_functions::emit_list_functions;
 pub use ownership::{
     ArtifactEvidence, DependencyEdge, EdgeEvidence, EdgeKind, OwnershipAnalyzer,
-    OwnershipDiagnostic, OwnershipReport, OwnershipStatus, ReconciliationStatus, SliceIri,
-    TermOwnership,
+    OwnershipDiagnostic, OwnershipReport, OwnershipStatus, QueryArtifactError,
+    ReconciliationStatus, SliceIri, TermOwnership,
 };
 pub use prefix_emit::{emit_core_prefixes, emit_jsonld_context};
 pub use prefix_lint::lint_prefix_consistency;
