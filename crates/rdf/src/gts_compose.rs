@@ -10,7 +10,8 @@
 //! content-addressed blobs — without pulling pyo3.
 //!
 //! [`SnapshotBuilder`] interns terms (append-order, scope-aware blank nodes),
-//! content-sorts them (`(kind, value, datatype-IRI, lang, direction)`, IRIs first), and
+//! content-sorts scalars (`(kind, value, datatype-IRI, lang, direction)`, IRIs first),
+//! then dependency-orders native quoted terms, and
 //! [`emit_gts`] authors the single `dist`-profile `snapshot` frame preceded by the
 //! blob frames (sorted by `(rep, decoded-bytes)`). All CBOR encoding,
 //! canonicalization, frame-id chaining, and signing is delegated to `purrdf-gts`.
@@ -22,10 +23,12 @@ use std::collections::BTreeMap;
 use std::hash::BuildHasher;
 
 use purrdf_core::hash::table::HashTable;
+use purrdf_events::MAX_TERM_NESTING_DEPTH;
 use purrdf_gts::model::{AnnotationRow, ReifierRow, Term, TermKind, is_literal_direction};
 use purrdf_gts::wire::{canonical, digest_str};
 use purrdf_gts::writer::Writer;
 use purrdf_lex::cbor::Value;
+use purrdf_lex::walk::WorkList;
 
 use crate::{
     BlankScope, DatasetView, DrainCheckpoint, FallibleDatasetView, FastHasher, RdfTextDirection,
@@ -77,17 +80,28 @@ struct TermRow {
     /// intern key and the content-sort key. Omitting it from the key merged them
     /// into one term and silently rewrote the graph.
     direction: Option<String>,
+    /// Native components, hash-consed after their scoped identities are interned.
+    triple: Option<(usize, usize, usize)>,
+    /// Zero for scalar terms; quoted terms follow all their dependencies.
+    nesting: usize,
 }
 
 /// The borrowed intern key of a NON-blank term row:
-/// `(kind, value, datatype-or-empty, lang-or-empty, direction-or-empty)`.
+/// `(kind, value, datatype-or-empty, lang-or-empty, direction-or-empty, triple)`.
 ///
 /// Borrowed, not owned: this is the key a per-row LOOKUP hashes and compares,
 /// and a lookup that owned its key allocated five strings per ingested term
 /// position just to discover the term was already interned. Insertion of a
 /// genuinely new term still owns its strings — that is the dictionary itself,
 /// not scratch.
-type RowKey<'a> = (u8, &'a str, &'a str, &'a str, &'a str);
+type RowKey<'a> = (
+    u8,
+    &'a str,
+    &'a str,
+    &'a str,
+    &'a str,
+    Option<(usize, usize, usize)>,
+);
 
 /// The borrowed intern key of an already-stored row.
 fn row_key_of(row: &TermRow) -> RowKey<'_> {
@@ -97,6 +111,7 @@ fn row_key_of(row: &TermRow) -> RowKey<'_> {
         row.datatype.as_deref().unwrap_or(""),
         row.lang.as_deref().unwrap_or(""),
         row.direction.as_deref().unwrap_or(""),
+        row.triple,
     )
 }
 
@@ -268,7 +283,7 @@ impl SnapshotBuilder {
     }
 
     fn intern_iri(&mut self, iri: &str) -> usize {
-        let key = (TermKind::Iri as u8, iri, "", "", "");
+        let key = (TermKind::Iri as u8, iri, "", "", "", None);
         if let Some(id) = lookup_term_row(&self.terms, &self.index, key) {
             return id;
         }
@@ -278,6 +293,8 @@ impl SnapshotBuilder {
             datatype: None,
             lang: None,
             direction: None,
+            triple: None,
+            nesting: 0,
         })
     }
 
@@ -340,6 +357,8 @@ impl SnapshotBuilder {
             datatype: None,
             lang: None,
             direction: None,
+            triple: None,
+            nesting: 0,
         });
         let terms = &self.terms;
         self.bnode_wire.insert_unique(wire_hash, id, |&other| {
@@ -379,6 +398,7 @@ impl SnapshotBuilder {
             datatype.unwrap_or(""),
             lang.unwrap_or(""),
             direction.unwrap_or(""),
+            None,
         );
         if let Some(id) = lookup_term_row(&self.terms, &self.index, key) {
             return id;
@@ -389,6 +409,26 @@ impl SnapshotBuilder {
             datatype: datatype.map(str::to_owned),
             lang: lang.map(str::to_owned),
             direction: direction.map(str::to_owned),
+            triple: None,
+            nesting: 0,
+        })
+    }
+
+    /// Hash-cons a quoted term by its already-interned component identities.
+    fn intern_triple(&mut self, s: usize, p: usize, o: usize) -> usize {
+        let triple = Some((s, p, o));
+        let key = (TermKind::Triple as u8, "", "", "", "", triple);
+        if let Some(id) = lookup_term_row(&self.terms, &self.index, key) {
+            return id;
+        }
+        self.push_term_row(TermRow {
+            kind: TermKind::Triple,
+            value: String::new(),
+            datatype: None,
+            lang: None,
+            direction: None,
+            triple,
+            nesting: self.terms[o].nesting + 1,
         })
     }
 
@@ -691,16 +731,12 @@ impl SnapshotBuilder {
             std::collections::BTreeSet::new();
         let default_gid = default_graph_name.map(|name| self.intern_iri(name));
 
-        // FAIL CLOSED (no-optionality): a row whose subject/object/graph is not
-        // directly representable in the snapshot frame (a quoted-triple term, or a
-        // non-IRI/blank graph name) is NOT silently dropped — that would make the
-        // emitted `purrdf.gts` diverge from the view. Quoted triples are
-        // representable ONLY via the reifier/annotation tables (below), so a Triple
-        // term in plain-quad position is genuine loss and aborts the ingestion.
+        // Objects admit native quoted terms. Subject, predicate and graph slots
+        // retain their RDF 1.2 position restrictions; no refused row is omitted.
         for quad in view.quads() {
             let sid = self.intern_view_term(view, quad.s, scope, "quad subject")?;
             let pid = self.intern_view_iri(view, quad.p, "quad predicate")?;
-            let oid = self.intern_view_term(view, quad.o, scope, "quad object")?;
+            let oid = self.intern_view_object(view, quad.o, scope, "quad object", 0)?;
             let gid = match quad.g {
                 None => default_gid,
                 Some(graph) => {
@@ -715,7 +751,7 @@ impl SnapshotBuilder {
         // The RDF 1.2 statement layer rides the NATIVE side-table accessors, never
         // `quads()`: its virtual rows are excluded from the ordinary row partition,
         // so reading them here neither double-ingests them nor routes a binding's
-        // quoted-triple object through the plain-slot guard above.
+        // quoted-triple object into an ordinary quad.
         for binding in view.reifier_quads() {
             let rid = self.intern_view_term(view, binding.s, scope, "reifier term")?;
             let guard = view
@@ -729,7 +765,8 @@ impl SnapshotBuilder {
             };
             let qs = self.intern_view_term(view, s, scope, "reified subject")?;
             let qp = self.intern_view_iri(view, p, "reified predicate")?;
-            let qo = self.intern_view_term(view, o, scope, "reified object")?;
+            // The binding's enclosing quoted triple consumes one nesting level.
+            let qo = self.intern_view_object(view, o, scope, "reified object", 1)?;
             let gid = match binding.g {
                 None => default_gid,
                 Some(graph) => {
@@ -744,7 +781,7 @@ impl SnapshotBuilder {
         for annotation in view.annotation_quads() {
             let rid = self.intern_view_term(view, annotation.s, scope, "annotation reifier")?;
             let pid = self.intern_view_iri(view, annotation.p, "annotation predicate")?;
-            let oid = self.intern_view_term(view, annotation.o, scope, "annotation object")?;
+            let oid = self.intern_view_object(view, annotation.o, scope, "annotation object", 0)?;
             let gid = match annotation.g {
                 None => default_gid,
                 Some(graph) => {
@@ -759,8 +796,7 @@ impl SnapshotBuilder {
         Ok((rows_consumed, occupied_graphs))
     }
 
-    /// Intern a view term in subject/object/graph position (triple terms are NOT
-    /// interned — the RDF 1.2 layer rides the reifies/annot tables).
+    /// Intern a scalar view term in a slot that does not admit quoted triples.
     ///
     /// Reproduces the flat carrier path's literal normalization exactly: a view's
     /// `TermRef::Literal` ALWAYS carries a datatype id, but a language tag implies
@@ -779,7 +815,70 @@ impl SnapshotBuilder {
         position: &'static str,
     ) -> Result<usize, GtsIngestError> {
         let guard = view.resolve(id).map_err(GtsIngestError::source_read)?;
-        match guard.term() {
+        self.intern_resolved_term(view, id, guard.term(), scope, position)
+    }
+
+    /// Intern an object, preserving nested native triples without machine-stack
+    /// recursion. RDF 1.2 allows a quoted triple only in the object component.
+    fn intern_view_object<D: DatasetView>(
+        &mut self,
+        view: &D,
+        id: D::Id,
+        scope: Option<&str>,
+        position: &'static str,
+        outer_nesting: usize,
+    ) -> Result<usize, GtsIngestError> {
+        // The native bound fits wholly inline: this traversal adds no heap
+        // scratch allocation to the ingestion report's capacity accounting.
+        let mut parents: WorkList<(D::Id, usize, usize), MAX_TERM_NESTING_DEPTH> = WorkList::new();
+        let mut current = id;
+        let mut object = loop {
+            let guard = view.resolve(current).map_err(GtsIngestError::source_read)?;
+            let term = guard.term();
+            let TermRef::Triple { s, p, o } = term else {
+                break self.intern_resolved_term(view, current, term, scope, position)?;
+            };
+            if parents.iter().any(|&(held, _, _)| held == current) {
+                return Err(GtsIngestError::UnrepresentableTerm {
+                    position: "cyclic quoted triple",
+                    term: render_term(view, current)?,
+                });
+            }
+            if parents.len() + outer_nesting == MAX_TERM_NESTING_DEPTH {
+                return Err(GtsIngestError::UnrepresentableTerm {
+                    position: "quoted triple exceeding the native nesting limit",
+                    term: render_term(view, current)?,
+                });
+            }
+            let subject = view.resolve(s).map_err(GtsIngestError::source_read)?;
+            if !matches!(subject.term(), TermRef::Iri(_) | TermRef::Blank { .. }) {
+                return Err(GtsIngestError::UnrepresentableTerm {
+                    position: "quoted triple subject",
+                    term: render_term(view, s)?,
+                });
+            }
+            let sid =
+                self.intern_resolved_term(view, s, subject.term(), scope, "quoted subject")?;
+            let pid = self.intern_view_iri(view, p, "quoted predicate")?;
+            parents.push((current, sid, pid));
+            current = o;
+        };
+        while let Some((_, s, p)) = parents.pop() {
+            object = self.intern_triple(s, p, object);
+        }
+        Ok(object)
+    }
+
+    /// Shared scalar normalization for bare slots and quoted-term leaves.
+    fn intern_resolved_term<D: DatasetView>(
+        &mut self,
+        view: &D,
+        id: D::Id,
+        term: TermRef<'_, D::Id>,
+        scope: Option<&str>,
+        position: &'static str,
+    ) -> Result<usize, GtsIngestError> {
+        match term {
             TermRef::Iri(iri) => Ok(self.intern_iri(iri)),
             TermRef::Blank {
                 label,
@@ -867,17 +966,32 @@ impl SnapshotBuilder {
     /// Re-id every term by content and sort every row (`_Builder._canonical_tables`).
     ///
     /// Returns the canonical `(wire_terms, quads, reifies, annot)` ready for the
-    /// snapshot payload. Terms sort by `(kind, value, datatype-IRI, lang)` with
-    /// IRIs first, so every literal's datatype IRI precedes it.
+    /// snapshot payload. Scalars retain their content order, with IRIs before
+    /// literals; quoted terms follow all their component dependencies.
     fn canonical_tables(&self) -> CanonTables {
         let n = self.terms.len();
         let mut order: Vec<usize> = (0..n).collect();
-        // Compare BORROWED rows: the owned sort key allocated five strings per
-        // element on every comparison to express an order the rows already carry.
-        order.sort_by(|&a, &b| term_order(&self.terms[a], &self.terms[b]));
+        // Scalars keep their existing order. Every quoted term follows its
+        // components, and equal-height triples sort by canonical child ids.
+        order.sort_unstable_by_key(|&id| self.terms[id].nesting);
         let mut remap = vec![0usize; n];
-        for (new_id, &old) in order.iter().enumerate() {
-            remap[old] = new_id;
+        let mut first = 0;
+        while first < n {
+            let nesting = self.terms[order[first]].nesting;
+            let end =
+                first + order[first..].partition_point(|&id| self.terms[id].nesting == nesting);
+            order[first..end].sort_unstable_by(|&a, &b| {
+                match (self.terms[a].triple, self.terms[b].triple) {
+                    (Some((as_, ap, ao)), Some((bs, bp, bo))) => {
+                        (remap[as_], remap[ap], remap[ao]).cmp(&(remap[bs], remap[bp], remap[bo]))
+                    }
+                    _ => term_order(&self.terms[a], &self.terms[b]),
+                }
+            });
+            for (offset, &old) in order[first..end].iter().enumerate() {
+                remap[old] = first + offset;
+            }
+            first = end;
         }
 
         // Wire terms in new-id order; the datatype field becomes the remapped id
@@ -887,7 +1001,7 @@ impl SnapshotBuilder {
             .map(|&old| {
                 let row = &self.terms[old];
                 let datatype = row.datatype.as_deref().map(|dt| {
-                    let key = (TermKind::Iri as u8, dt, "", "", "");
+                    let key = (TermKind::Iri as u8, dt, "", "", "", None);
                     let old_dt = lookup_term_row(&self.terms, &self.index, key)
                         .expect("a literal's datatype IRI is interned before the literal");
                     remap[old_dt]
@@ -899,7 +1013,7 @@ impl SnapshotBuilder {
                     lang: row.lang.clone(),
                     direction: row.direction.clone(),
                     reifier: None,
-                    triple: None,
+                    triple: row.triple.map(|(s, p, o)| (remap[s], remap[p], remap[o])),
                 }
             })
             .collect();
@@ -1206,9 +1320,8 @@ pub enum GtsIngestError {
         /// The view's own sticky root cause, rendered.
         cause: String,
     },
-    /// A term occupies a plain snapshot slot it cannot be represented in — a
-    /// quoted-triple term outside the reifier/annotation tables, or a non-IRI in
-    /// a predicate or datatype slot.
+    /// A term violates an RDF position restriction or the native quoted-term
+    /// acyclicity/nesting bound, or a predicate/datatype is not an IRI.
     UnrepresentableTerm {
         /// The slot the term was read from.
         position: &'static str,
@@ -1265,8 +1378,7 @@ impl std::fmt::Display for GtsIngestError {
             ),
             Self::UnrepresentableTerm { position, term } => write!(
                 f,
-                "carrier {position} is not directly representable in the gts snapshot frame \
-                 (quoted-triple terms must ride the reifier/annotation tables): {term}"
+                "carrier {position} is not directly representable in the gts snapshot frame: {term}"
             ),
             Self::BlankWireCollision {
                 wire_value,

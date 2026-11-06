@@ -141,8 +141,15 @@ enum Task<'a> {
     Discard,
 }
 
+/// Borrowed document operations retain their input; RDF ingress can consume its
+/// already-owned expanded roots after their descriptions join the shared map.
+pub(super) enum Input<'a> {
+    Borrowed(&'a Value),
+    Owned(Value),
+}
+
 pub(super) fn flatten(
-    input: &Value,
+    input: Input<'_>,
     limits: JsonLdFlattenLimits,
     issuance: Issuance,
 ) -> Result<Mapped, RdfDiagnostic> {
@@ -156,14 +163,14 @@ pub(super) fn build_graphs(
     input: &Value,
     limits: JsonLdFlattenLimits,
 ) -> Result<NodeMap, RdfDiagnostic> {
-    match build(input, limits, Issuance::Normative, true)? {
+    match build(Input::Borrowed(input), limits, Issuance::Normative, true)? {
         Built::Graphs(map) => Ok(map),
         Built::Flattened(_) => unreachable!("graph finish selected"),
     }
 }
 
 fn build(
-    input: &Value,
+    input: Input<'_>,
     limits: JsonLdFlattenLimits,
     issuance: Issuance,
     graphs: bool,
@@ -182,7 +189,6 @@ fn build(
             next: 0,
             semantic_index: false,
             issuance,
-            tasks: WorkList::new(),
             results: Vec::new(),
         };
         walk.memory.push(
@@ -193,22 +199,31 @@ fn build(
             },
         )?;
         if matches!(issuance, Issuance::Rdf) {
-            walk.reserve_input_labels(input)?;
+            // Later roots, including their literal and opaque JSON strings, must
+            // reserve their labels before any earlier root can issue a blank.
+            let original = match &input {
+                Input::Borrowed(value) => *value,
+                Input::Owned(value) => value,
+            };
+            walk.reserve_input_labels(original)?;
         }
-        walk.push(Task::Visit(input, 0, Mode::Node))?;
-        while let Some(task) = walk.tasks.pop() {
-            walk.step(task)?;
+        match input {
+            Input::Borrowed(value) => walk.root(value)?,
+            Input::Owned(mut value) => {
+                if let Value::Array(roots) = &mut value {
+                    for root in std::mem::take(roots) {
+                        walk.root(&root)?;
+                    }
+                } else {
+                    walk.root(&value)?;
+                }
+            }
         }
-        // Root visits return references; graph records own the actual descriptions.
-        let root = walk.results.pop().expect("one node-map root result");
-        walk.discard_roots(root)?;
-        walk.memory.release_vec(std::mem::take(&mut walk.results))?;
-        std::mem::replace(&mut walk.tasks, WorkList::new()).release_admitted(walk.memory)?;
         walk.finish(graphs)
     })
 }
 
-struct Walk<'a, 'm, 's> {
+struct Walk<'m, 's> {
     memory: &'m mut Memory<'s, Ceiling>,
     graphs: Vec<Graph>,
     nodes: Vec<Node>,
@@ -220,12 +235,30 @@ struct Walk<'a, 'm, 's> {
     next: u64,
     semantic_index: bool,
     issuance: Issuance,
-    tasks: WorkList<Task<'a>, 8>,
     results: Vec<Value>,
 }
-impl<'a> Walk<'a, '_, '_> {
-    fn push(&mut self, task: Task<'a>) -> Result<(), RdfDiagnostic> {
-        self.tasks
+impl Walk<'_, '_> {
+    fn root(&mut self, input: &Value) -> Result<(), RdfDiagnostic> {
+        // Borrowed task frames live only for this root. Persistent maps contain
+        // owned descriptions, so no reference survives a consumed root's drop.
+        let mut tasks = WorkList::new();
+        self.push(&mut tasks, Task::Visit(input, 0, Mode::Node))?;
+        while let Some(task) = tasks.pop() {
+            self.step(task, &mut tasks)?;
+        }
+        // Root visits return references; graph records own the descriptions.
+        let root = self.results.pop().expect("one node-map root result");
+        self.discard_roots(root)?;
+        self.memory.release_vec(std::mem::take(&mut self.results))?;
+        tasks.release_admitted(self.memory)?;
+        Ok(())
+    }
+    fn push<'a>(
+        &mut self,
+        tasks: &mut WorkList<Task<'a>, 8>,
+        task: Task<'a>,
+    ) -> Result<(), RdfDiagnostic> {
+        tasks
             .try_push_admitted(task, self.memory)
             .map_err(Into::into)
     }
@@ -234,7 +267,7 @@ impl<'a> Walk<'a, '_, '_> {
             .push(&mut self.results, value)
             .map_err(Into::into)
     }
-    fn entries(&mut self, object: &'a Object) -> Result<Entries<'a>, RdfDiagnostic> {
+    fn entries<'a>(&mut self, object: &'a Object) -> Result<Entries<'a>, RdfDiagnostic> {
         let mut entries = Vec::new();
         self.memory.reserve(&mut entries, object.len())?;
         entries.extend(object.iter().map(|(key, value)| (key.as_str(), value)));
@@ -544,7 +577,7 @@ impl<'a> Walk<'a, '_, '_> {
     fn link_value(
         &mut self,
         graph: usize,
-        link: Link<'a>,
+        link: Link<'_>,
         mut value: Value,
     ) -> Result<(), RdfDiagnostic> {
         match link {
@@ -574,9 +607,13 @@ impl<'a> Walk<'a, '_, '_> {
             }
         }
     }
-    fn step(&mut self, task: Task<'a>) -> Result<(), RdfDiagnostic> {
+    fn step<'a>(
+        &mut self,
+        task: Task<'a>,
+        tasks: &mut WorkList<Task<'a>, 8>,
+    ) -> Result<(), RdfDiagnostic> {
         match task {
-            Task::Visit(raw, graph, mode) => self.visit(raw, graph, mode, None)?,
+            Task::Visit(raw, graph, mode) => self.visit(raw, graph, mode, None, tasks)?,
             Task::Array {
                 items,
                 at,
@@ -585,14 +622,17 @@ impl<'a> Walk<'a, '_, '_> {
                 mode,
             } => {
                 if let Some(raw) = items.get(at) {
-                    self.push(Task::Array {
-                        items,
-                        at: at + 1,
-                        start,
-                        graph,
-                        mode,
-                    })?;
-                    self.push(Task::Visit(raw, graph, mode))?;
+                    self.push(
+                        tasks,
+                        Task::Array {
+                            items,
+                            at: at + 1,
+                            start,
+                            graph,
+                            mode,
+                        },
+                    )?;
+                    self.push(tasks, Task::Visit(raw, graph, mode))?;
                 } else {
                     let mut values = Vec::new();
                     self.memory
@@ -601,15 +641,18 @@ impl<'a> Walk<'a, '_, '_> {
                     self.result(Value::Array(values))?;
                 }
             }
-            Task::Fields(fields) => self.fields(fields)?,
+            Task::Fields(fields) => self.fields(fields, tasks)?,
             Task::Linked(raw, graph, link) => {
                 if let Value::Array(items) = raw {
-                    self.push(Task::LinkedItems {
-                        items,
-                        at: 0,
-                        graph,
-                        link,
-                    })?;
+                    self.push(
+                        tasks,
+                        Task::LinkedItems {
+                            items,
+                            at: 0,
+                            graph,
+                            link,
+                        },
+                    )?;
                 } else {
                     let early = raw.as_object().is_some_and(|object| {
                         !["@value", "@list", "@triple", "@annotation"]
@@ -617,9 +660,9 @@ impl<'a> Walk<'a, '_, '_> {
                             .any(|key| object.contains_key(key))
                     });
                     if !early {
-                        self.push(Task::FinishLinked(graph, link))?;
+                        self.push(tasks, Task::FinishLinked(graph, link))?;
                     }
-                    self.visit(raw, graph, Mode::Node, early.then_some(link))?;
+                    self.visit(raw, graph, Mode::Node, early.then_some(link), tasks)?;
                 }
             }
             Task::LinkedItems {
@@ -629,13 +672,16 @@ impl<'a> Walk<'a, '_, '_> {
                 link,
             } => {
                 if let Some(raw) = items.get(at) {
-                    self.push(Task::LinkedItems {
-                        items,
-                        at: at + 1,
-                        graph,
-                        link,
-                    })?;
-                    self.push(Task::Linked(raw, graph, link))?;
+                    self.push(
+                        tasks,
+                        Task::LinkedItems {
+                            items,
+                            at: at + 1,
+                            graph,
+                            link,
+                        },
+                    )?;
+                    self.push(tasks, Task::Linked(raw, graph, link))?;
                 }
             }
             Task::FinishLinked(graph, link) => {
@@ -651,22 +697,25 @@ impl<'a> Walk<'a, '_, '_> {
                 if let Some(&(key, raw)) = entries.get(at) {
                     let property = self.identifier(Some(key))?;
                     self.memory.release_string(property)?;
-                    self.push(Task::Reverse {
-                        entries,
-                        at: at + 1,
-                        node,
-                        graph,
-                    })?;
-                    self.push(Task::Linked(raw, graph, Link::Reverse { node, key }))?;
+                    self.push(
+                        tasks,
+                        Task::Reverse {
+                            entries,
+                            at: at + 1,
+                            node,
+                            graph,
+                        },
+                    )?;
+                    self.push(tasks, Task::Linked(raw, graph, Link::Reverse { node, key }))?;
                 } else {
                     self.memory.release_vec(entries)?;
                 }
             }
-            Task::Generic(plan) => self.generic(plan)?,
+            Task::Generic(plan) => self.generic(plan, tasks)?,
             Task::GenericAssign(mut plan, key) => {
                 let value = self.results.pop().expect("normalized object member");
                 self.memory.push(&mut plan.members, (key, value))?;
-                self.push(Task::Generic(plan))?;
+                self.push(tasks, Task::Generic(plan))?;
             }
             Task::Annotate(mut value) => {
                 let annotations = self.results.pop().expect("detached annotations");
@@ -707,21 +756,25 @@ impl<'a> Walk<'a, '_, '_> {
         value.release_with_memory(self.memory)?;
         Ok(())
     }
-    fn visit(
+    fn visit<'a>(
         &mut self,
         raw: &'a Value,
         graph: usize,
         mode: Mode,
         link: Option<Link<'a>>,
+        tasks: &mut WorkList<Task<'a>, 8>,
     ) -> Result<(), RdfDiagnostic> {
         if let Value::Array(items) = raw {
-            return self.push(Task::Array {
-                items,
-                at: 0,
-                start: self.results.len(),
-                graph,
-                mode,
-            });
+            return self.push(
+                tasks,
+                Task::Array {
+                    items,
+                    at: 0,
+                    start: self.results.len(),
+                    graph,
+                    mode,
+                },
+            );
         }
         let Some(object) = raw.as_object() else {
             if matches!(mode, Mode::Atomic) {
@@ -736,13 +789,16 @@ impl<'a> Walk<'a, '_, '_> {
             || object.contains_key("@triple")
         {
             let entries = self.entries(object)?;
-            return self.push(Task::Generic(Generic {
-                entries,
-                at: 0,
-                members: Vec::new(),
-                graph,
-                mode,
-            }));
+            return self.push(
+                tasks,
+                Task::Generic(Generic {
+                    entries,
+                    at: 0,
+                    members: Vec::new(),
+                    graph,
+                    mode,
+                }),
+            );
         }
         // §7.2 remaps type blank identifiers BEFORE issuing the node identifier.
         if let Some(types) = object.get("@type") {
@@ -760,17 +816,24 @@ impl<'a> Walk<'a, '_, '_> {
         }
         let mut entries = self.entries(object)?;
         entries.sort_unstable_by(|a, b| rank(a.0).cmp(&rank(b.0)).then(a.0.cmp(b.0)));
-        self.push(Task::Fields(Fields {
-            entries,
-            at: 0,
-            node,
-            graph,
-            detached,
-            prelinked: link.is_some(),
-            raw: object,
-        }))
+        self.push(
+            tasks,
+            Task::Fields(Fields {
+                entries,
+                at: 0,
+                node,
+                graph,
+                detached,
+                prelinked: link.is_some(),
+                raw: object,
+            }),
+        )
     }
-    fn fields(&mut self, mut plan: Fields<'a>) -> Result<(), RdfDiagnostic> {
+    fn fields<'a>(
+        &mut self,
+        mut plan: Fields<'a>,
+        tasks: &mut WorkList<Task<'a>, 8>,
+    ) -> Result<(), RdfDiagnostic> {
         let Some(&(key, raw)) = plan.entries.get(plan.at) else {
             self.memory.release_vec(plan.entries)?;
             // Only annotation-free linked nodes set this flag; their complete
@@ -784,8 +847,8 @@ impl<'a> Walk<'a, '_, '_> {
                 self.reference(plan.node)?
             };
             if let Some(annotations) = plan.raw.get("@annotation") {
-                self.push(Task::Annotate(value))?;
-                self.push(Task::Visit(annotations, plan.graph, Mode::Detached))?;
+                self.push(tasks, Task::Annotate(value))?;
+                self.push(tasks, Task::Visit(annotations, plan.graph, Mode::Detached))?;
             } else {
                 self.result(value)?;
             }
@@ -794,7 +857,7 @@ impl<'a> Walk<'a, '_, '_> {
         plan.at += 1;
         let node = plan.node;
         let graph = plan.graph;
-        self.push(Task::Fields(plan))?;
+        self.push(tasks, Task::Fields(plan))?;
         match key {
             "@id" | "@annotation" => {}
             "@type" => {
@@ -819,22 +882,25 @@ impl<'a> Walk<'a, '_, '_> {
                     raw.as_object()
                         .ok_or_else(|| decode("expanded reverse map must be an object"))?,
                 )?;
-                self.push(Task::Reverse {
-                    entries,
-                    at: 0,
-                    node,
-                    graph,
-                })?;
+                self.push(
+                    tasks,
+                    Task::Reverse {
+                        entries,
+                        at: 0,
+                        node,
+                        graph,
+                    },
+                )?;
             }
             "@graph" => {
                 let name = self.memory.string(&self.nodes[node].id)?;
                 let named = self.graph(name)?;
-                self.push(Task::Discard)?;
-                self.push(Task::Visit(raw, named, Mode::Node))?;
+                self.push(tasks, Task::Discard)?;
+                self.push(tasks, Task::Visit(raw, named, Mode::Node))?;
             }
             "@included" => {
-                self.push(Task::Discard)?;
-                self.push(Task::Visit(raw, graph, Mode::Node))?;
+                self.push(tasks, Task::Discard)?;
+                self.push(tasks, Task::Visit(raw, graph, Mode::Node))?;
             }
             control if super::context::is_control(control) => {
                 return Err(decode(format!(
@@ -845,12 +911,19 @@ impl<'a> Walk<'a, '_, '_> {
                 let key = self.identifier(Some(key))?;
                 let member = self.member_slot(node, &key)?;
                 self.memory.release_string(key)?;
-                self.push(Task::Linked(raw, graph, Link::Forward { node, member }))?;
+                self.push(
+                    tasks,
+                    Task::Linked(raw, graph, Link::Forward { node, member }),
+                )?;
             }
         }
         Ok(())
     }
-    fn generic(&mut self, mut plan: Generic<'a>) -> Result<(), RdfDiagnostic> {
+    fn generic<'a>(
+        &mut self,
+        mut plan: Generic<'a>,
+        tasks: &mut WorkList<Task<'a>, 8>,
+    ) -> Result<(), RdfDiagnostic> {
         let Some(&(key, raw)) = plan.entries.get(plan.at) else {
             self.memory.release_vec(plan.entries)?;
             return self.result(Self::object(plan.members));
@@ -862,7 +935,7 @@ impl<'a> Walk<'a, '_, '_> {
             // Record semantic metadata for RDF refusal before omitting it; an
             // opaque @json payload is copied at @value and never enters here.
             if plan.entries.iter().any(|(name, _)| *name == "@list") {
-                return self.push(Task::Generic(plan));
+                return self.push(tasks, Task::Generic(plan));
             }
         }
         if key == "@id"
@@ -872,7 +945,7 @@ impl<'a> Walk<'a, '_, '_> {
             let value = self.identifiers(raw)?;
             let key = self.memory.string(key)?;
             self.memory.push(&mut plan.members, (key, value))?;
-            return self.push(Task::Generic(plan));
+            return self.push(tasks, Task::Generic(plan));
         }
         if key == "@value"
             || (!matches!(plan.mode, Mode::Atomic)
@@ -881,7 +954,7 @@ impl<'a> Walk<'a, '_, '_> {
             let value = raw.clone_with_memory(self.memory)?;
             let key = self.memory.string(key)?;
             self.memory.push(&mut plan.members, (key, value))?;
-            return self.push(Task::Generic(plan));
+            return self.push(tasks, Task::Generic(plan));
         }
         let mode = if key == "@annotation" {
             Mode::Detached
@@ -898,8 +971,8 @@ impl<'a> Walk<'a, '_, '_> {
         } else {
             self.memory.string(key)?
         };
-        self.push(Task::GenericAssign(plan, key))?;
-        self.push(Task::Visit(raw, graph, mode))
+        self.push(tasks, Task::GenericAssign(plan, key))?;
+        self.push(tasks, Task::Visit(raw, graph, mode))
     }
     fn graph_values(&mut self, graph: usize) -> Result<Value, RdfDiagnostic> {
         let nodes = &mut self.graphs[graph].nodes;

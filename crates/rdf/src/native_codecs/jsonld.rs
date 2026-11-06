@@ -2105,8 +2105,12 @@ pub fn flatten_expanded(
     expanded: &Value,
     flatten_limits: &JsonLdFlattenLimits,
 ) -> Result<Value, RdfDiagnostic> {
-    node_map::flatten(expanded, *flatten_limits, node_map::Issuance::Normative)
-        .map(|mapped| mapped.value)
+    node_map::flatten(
+        node_map::Input::Borrowed(expanded),
+        *flatten_limits,
+        node_map::Issuance::Normative,
+    )
+    .map(|mapped| mapped.value)
 }
 
 /// Validate `iri` as an absolute IRI and return the native term.

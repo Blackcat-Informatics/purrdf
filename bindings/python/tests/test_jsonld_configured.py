@@ -20,7 +20,7 @@ def _assert_compacted(text: str) -> None:
         "schema": {"@id": "https://schema.org/", "@prefix": True},
     }
     assert document["@graph"][0]["@id"] == "ex:alice"
-    assert document["@graph"][0]["schema:name"] == {"@value": "Alice"}
+    assert document["@graph"][0]["schema:name"] == "Alice"
 
 def test_direct_serializer_options_and_compiled_context_are_byte_identical() -> None:
     """The versioned decoder and reusable handle reach one deterministic engine."""

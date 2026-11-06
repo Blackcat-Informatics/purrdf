@@ -22,7 +22,7 @@ pub(super) fn expanded_to_dataset(document: JsonValue) -> Result<Arc<RdfDataset>
 
 pub(super) fn expanded_to_carrier(document: JsonValue) -> Result<Document, RdfDiagnostic> {
     let flattened = super::node_map::flatten(
-        &document,
+        super::node_map::Input::Owned(document),
         super::JsonLdFlattenLimits::DEFAULT,
         super::node_map::Issuance::Rdf,
     )?;
@@ -31,7 +31,6 @@ pub(super) fn expanded_to_carrier(document: JsonValue) -> Result<Document, RdfDi
             "data-bearing @index metadata has no RDF dataset representation",
         ));
     }
-    drop(document);
     let mut document = Document {
         default_nodes: Vec::new(),
         named_graphs: Vec::new(),
