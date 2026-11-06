@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1112-v4-api-make-governor-dimensions-and",
+  "branch": "paudley/1112-v4-api-make-governor-dimensions-and",
+  "base_ref": "refs/remotes/origin/main",
+  "head": "5ebc0f069e551f71396a91b85640aef44c7a5e48",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/1112-v4-api-make-governor-dimensions-and/.stage/v4-api-make-governor-dimensions-and/sync/20261106T051323-4685d9a2df184851bc70ca0c570e6ae9",
+  "conflicts": [
+    "CHANGELOG.md"
+  ],
+  "status": "completed",
+  "base": "7de2439ef0024e999f61ee78989da44fc2db0311",
+  "merge_bases": [
+    "05d1e3550752d8f185710da0b00459651955d9f1"
+  ],
+  "merge_index": "199e774749e28fea181f721dde9da4e62076ab4f0e351882a3c731b052b2c39a",
+  "reused_paths": [],
+  "rerere_output": "Recorded preimage for 'CHANGELOG.md'\n",
+  "candidate_tree": "0eced05d7710f2a2d5f2e0d356025e10b674aa4b",
+  "candidate_patch": "candidate-2506340b90314bffb14f9b0847e5ed00.patch",
+  "validation_records": [
+    "validation-runs/20261106T033328-92bcc4b99c/result.json",
+    "validation-runs/20261106T033855-8e049d175a/result.json",
+    "validation-runs/20261106T034140-a818d42c01/result.json",
+    "validation-runs/20261106T035559-6ba41ddefe/result.json",
+    "validation-runs/20261106T040550-a699ca06f2/result.json",
+    "validation-runs/20261106T042844-fb1df2a917/result.json"
+  ],
+  "commit": "a9a9db899a529a4dba519b791cc48cdf852328bd",
+  "tree": "0eced05d7710f2a2d5f2e0d356025e10b674aa4b"
+}

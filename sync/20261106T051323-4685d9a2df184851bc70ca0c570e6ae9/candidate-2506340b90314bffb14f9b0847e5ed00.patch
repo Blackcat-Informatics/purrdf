@@ -1,0 +1,2039 @@
+diff --git CHANGELOG.md CHANGELOG.md
+index 9fff300c3..f7c8ff93d 100644
+--- CHANGELOG.md
++++ CHANGELOG.md
+@@ -14,6 +14,32 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
+   Core dimension index; current labels, defaults, accounting and the fixed C
+   projection remain unchanged.
+ 
++- **Typed skipped-query diagnostics (breaking Rust API):** slice ownership
++  diagnostics retain original UTF-8 and SPARQL errors through
++  `QueryArtifactError`. `OwnershipDiagnostic` is non-exhaustive; malformed query
++  artifacts remain nonfatal findings and valid artifacts still contribute edges.
++
++- **General prepared chase certificates (breaking Rust API):** prepared admission
++  exposes an opaque, owned proof with its criterion, law version and program
++  identity. Explicit WA evidence remains available by borrowed view. Entailment
++  borrows its retained native summary and exposes WA counts as optional values;
++  `TerminationCertificate` no longer implements `Copy`. Current WA proofs,
++  grants, witnesses and report bytes retain their existing behavior.
++
++- **Typed USTAR refusals (breaking Rust API):** archive readers, member
++  iterators and writers return `UstarError` with original offsets, lengths,
++  size-field bytes and native UTF-8 causes. Projection packages preserve that
++  cause through structured inspection and the standard error source chain.
++
++- **Extensible format and glob refusals (breaking Rust API):** `SourceFormat`
++  and `purrdf_glob::SyntaxReason` are non-exhaustive. External matches need an
++  unsupported-case arm; the CLI refuses unknown source kinds rather than
++  routing them through an existing syntax or container.
++
++- **Extensible planner estimates (breaking Rust API):** `PlanEstimate` is
++  non-exhaustive and constructed with `PlanEstimate::new(rows, peak_rows, columns)`.
++  Its public fields, estimate semantics and EXPLAIN output remain unchanged.
++
+ - **Fresh OWL refutation witnesses:** generated symbols are checked against the
+   current term interner, including caller terms introduced after preparation.
+   Repeated role-inclusion queries preserve distinct witness identities.
+diff --git crates/cli/src/describe.rs crates/cli/src/describe.rs
+index 61e897362..c88f39b01 100644
+--- crates/cli/src/describe.rs
++++ crates/cli/src/describe.rs
+@@ -191,8 +191,12 @@ fn refuse_uncarriable_named_graphs<D: DatasetView>(
+     description: &D,
+     target: SourceFormat,
+ ) -> Result<(), CliError> {
+-    let SourceFormat::Native(format) = target else {
+-        return Ok(());
++    let format = match target {
++        SourceFormat::Native(format) => format,
++        SourceFormat::Pack | SourceFormat::Gts => return Ok(()),
++        _ => {
++            return Err(format::unsupported_format(target, "the output target"));
++        }
+     };
+     if format.supports_datasets() {
+         return Ok(());
+@@ -322,5 +326,6 @@ fn subject_base(
+     match source_format {
+         SourceFormat::Native(native) => source::effective_base(options.input, native, options.base),
+         SourceFormat::Pack | SourceFormat::Gts => Ok(options.base.map(ToOwned::to_owned)),
++        _ => Err(format::unsupported_format(source_format, "the data input")),
+     }
+ }
+diff --git crates/cli/src/entails.rs crates/cli/src/entails.rs
+index cad147df6..e1d3ec43c 100644
+--- crates/cli/src/entails.rs
++++ crates/cli/src/entails.rs
+@@ -294,6 +294,12 @@ pub(crate) fn run(
+             source::effective_base(options.premise, native, options.base)?
+         }
+         SourceFormat::Pack | SourceFormat::Gts => None,
++        _ => {
++            return Err(format::unsupported_format(
++                premise_format,
++                "the premise input",
++            ));
++        }
+     };
+     let premise_iris: Vec<&str> = premise_base.as_deref().into_iter().collect();
+     let imports = read_imports(&import_plan, options, canonical)?;
+diff --git crates/cli/src/format.rs crates/cli/src/format.rs
+index 5d37a10d4..207915925 100644
+--- crates/cli/src/format.rs
++++ crates/cli/src/format.rs
+@@ -51,6 +51,15 @@ use purrdf_rdf::{SourceFormat, classify_source, strip_transport_suffix};
+ use crate::cli::CliRdfFormat;
+ use crate::error::CliError;
+ 
++/// Refuse a format introduced by a newer library until this CLI supports its routes.
++pub(crate) fn unsupported_format(format: SourceFormat, role: &str) -> CliError {
++    CliError::Usage(format!(
++        "{role} uses format `{}`, which this CLI does not support. Choose a supported \
++         native syntax or container, or upgrade the CLI to a version supporting this format",
++        format.token()
++    ))
++}
++
+ /// Resolve a `--from`/`--to` choice plus a path into a [`SourceFormat`].
+ ///
+ /// Precedence: an explicit choice always wins. Otherwise a recognized gzip/zstd
+@@ -214,8 +223,8 @@ impl<'a> BaseUse<'a> {
+     /// Decided ENTIRELY by the two format-registry columns, so a newly registered syntax
+     /// is classified by its own row rather than by a list kept here that someone would
+     /// have to remember to extend.
+-    fn consumes_base(self) -> bool {
+-        match self.format {
++    fn consumes_base(self) -> Result<bool, CliError> {
++        Ok(match self.format {
+             SourceFormat::Native(native) => match self.leg {
+                 BaseLeg::Parse => native.admits_relative_iri(),
+                 BaseLeg::Serialize => native.emits_base(),
+@@ -223,7 +232,8 @@ impl<'a> BaseUse<'a> {
+             // Both native containers store fully-resolved terms and have no relative-IRI
+             // syntax, in either direction.
+             SourceFormat::Pack | SourceFormat::Gts => false,
+-        }
++            _ => return Err(unsupported_format(self.format, self.role)),
++        })
+     }
+ 
+     /// Why this leg cannot consume one, in the operator's vocabulary.
+@@ -275,7 +285,14 @@ pub(crate) fn refuse_unconsumable_base(
+     base: Option<&str>,
+     legs: &[BaseUse<'_>],
+ ) -> Result<(), CliError> {
+-    if base.is_none() || legs.iter().copied().any(BaseUse::consumes_base) {
++    if base.is_none() {
++        return Ok(());
++    }
++    let mut consumes_base = false;
++    for leg in legs {
++        consumes_base |= leg.consumes_base()?;
++    }
++    if consumes_base {
+         return Ok(());
+     }
+     let reasons = legs
+diff --git crates/cli/src/premise_imports.rs crates/cli/src/premise_imports.rs
+index ea1d0598a..5baff6fbb 100644
+--- crates/cli/src/premise_imports.rs
++++ crates/cli/src/premise_imports.rs
+@@ -64,6 +64,10 @@ pub(crate) fn premise_iri(
+     match format {
+         SourceFormat::Native(native) => source::effective_base(path, native, base),
+         SourceFormat::Pack | SourceFormat::Gts => Ok(None),
++        _ => Err(crate::format::unsupported_format(
++            format,
++            "the premise input",
++        )),
+     }
+ }
+ 
+diff --git crates/cli/src/shapes_source.rs crates/cli/src/shapes_source.rs
+index d40116651..96e73eaf7 100644
+--- crates/cli/src/shapes_source.rs
++++ crates/cli/src/shapes_source.rs
+@@ -133,6 +133,12 @@ pub(crate) fn read_shapes_document(
+                 loaded: base.into_iter().map(str::to_owned).collect(),
+             });
+         }
++        _ => {
++            return Err(crate::format::unsupported_format(
++                format,
++                "the shapes input",
++            ));
++        }
+     };
+     let (dataset, document_base, prefixes) = if native == NativeRdfFormat::Turtle {
+         let bytes = source::read_bytes(path)?;
+diff --git crates/cli/src/shapes_tools.rs crates/cli/src/shapes_tools.rs
+index 566f94bfd..c2de30dd7 100644
+--- crates/cli/src/shapes_tools.rs
++++ crates/cli/src/shapes_tools.rs
+@@ -789,6 +789,9 @@ pub(crate) fn run_lint(
+                 )));
+             }
+         },
++        _ => {
++            return Err(format::unsupported_format(format, "the shapes input"));
++        }
+     };
+     let shapes_graph = resolve_shapes_graph(options.shapes_graph, base.as_deref())?;
+     let root = read_shapes_document(
+diff --git crates/cli/src/sink.rs crates/cli/src/sink.rs
+index 3296bb79e..c8ca670d3 100644
+--- crates/cli/src/sink.rs
++++ crates/cli/src/sink.rs
+@@ -387,6 +387,7 @@ pub(crate) fn write_rdf<D: DatasetView>(
+         // for the caller who reaches the sink by some other route.
+         SourceFormat::Gts => Err(format::refuse_gts_target(target, "the output target")
+             .expect_err("refuse_gts_target rejects SourceFormat::Gts")),
++        _ => Err(format::unsupported_format(target, "the output target")),
+     }
+ }
+ 
+diff --git crates/cli/src/source.rs crates/cli/src/source.rs
+index 969b5005f..9d0f9634f 100644
+--- crates/cli/src/source.rs
++++ crates/cli/src/source.rs
+@@ -733,6 +733,10 @@ pub(crate) fn run_over_input_with_transport<Op: ViewOp>(
+             let (dataset, _envelope_ledger) = load_gts(path, policy)?;
+             op.run(&*dataset, canonical)
+         }
++        _ => Err(crate::format::unsupported_format(
++            format,
++            "the input source",
++        )),
+     }
+ }
+ 
+@@ -790,6 +794,10 @@ pub(crate) fn load_dataset_reporting(
+             Ok((dataset_from_view(&view)?, LossLedger::new()))
+         }
+         SourceFormat::Gts => load_gts(path, policy),
++        _ => Err(crate::format::unsupported_format(
++            format,
++            "the input source",
++        )),
+     }
+ }
+ 
+diff --git crates/cli/src/validate.rs crates/cli/src/validate.rs
+index f484e22a8..7eab4e771 100644
+--- crates/cli/src/validate.rs
++++ crates/cli/src/validate.rs
+@@ -685,6 +685,7 @@ fn data_graph_iris(
+                 .collect())
+         }
+         SourceFormat::Pack | SourceFormat::Gts => Ok(Vec::new()),
++        _ => Err(format::unsupported_format(format, "the data input")),
+     }
+ }
+ 
+@@ -1373,6 +1374,7 @@ pub(crate) fn shapes_document_base(
+                  --shapes an RDF text document"
+             ))),
+         },
++        _ => Err(format::unsupported_format(format, "the shapes input")),
+     }
+ }
+ 
+diff --git crates/datalog/src/chase.rs crates/datalog/src/chase.rs
+index 264e6b5aa..ff7372576 100644
+--- crates/datalog/src/chase.rs
++++ crates/datalog/src/chase.rs
+@@ -134,8 +134,9 @@ use crate::store::{Arity, Bound, RelationStore, ShapeFact, StoreShape, TermInter
+ 
+ mod termination;
+ pub use termination::{
+-    AnalysisLimits, AnalysisReport, PreparedChase, SourcePosition, TerminationError,
+-    TerminationViolation, WA_LAW_VERSION, WaCertificate, certify, certify_with,
++    AnalysisLimits, AnalysisReport, ChaseCertificate, PreparedChase, SourcePosition,
++    TerminationCriterion, TerminationError, TerminationViolation, WA_LAW_VERSION, WaCertificate,
++    certify, certify_with,
+ };
+ 
+ /// What the termination analysis proved about a clause set.
+@@ -143,6 +144,7 @@ pub use termination::{
+ /// Computed by [`certify`] and carried on [`ChaseOutcome`] so a caller can put the
+ /// certificate in a report next to the facts it justifies.
+ #[derive(Debug, Clone, PartialEq, Eq)]
++#[non_exhaustive]
+ pub enum ChaseTermination {
+     /// No existential edge of the position dependency graph lies in a cycle.
+     ///
+@@ -168,8 +170,20 @@ pub enum ChaseTermination {
+ 
+ impl ChaseTermination {
+     /// Whether the analysis certified termination.
+-    pub fn is_certified(&self) -> bool {
+-        matches!(self, Self::WeaklyAcyclic { .. })
++    pub const fn is_certified(&self) -> bool {
++        match self {
++            Self::WeaklyAcyclic { .. } => true,
++            Self::Uncertified { .. } => false,
++        }
++    }
++
++    /// The sufficient criterion proved by this summary, absent for a refusal.
++    #[must_use]
++    pub const fn criterion(&self) -> Option<TerminationCriterion> {
++        match self {
++            Self::WeaklyAcyclic { .. } => Some(TerminationCriterion::WeaklyAcyclic),
++            Self::Uncertified { .. } => None,
++        }
+     }
+ }
+ 
+@@ -1047,10 +1061,10 @@ where
+ 
+     /// The termination certificate that admitted the program.
+     ///
+-    /// Always [`ChaseTermination::WeaklyAcyclic`] on a successful run — the
++    /// Its native criterion certified the program before execution. The
+     /// [`Uncertified`](ChaseTermination::Uncertified) case is returned as
+-    /// [`ChaseError::Termination`] instead — and carried here so a caller can report the
+-    /// proof alongside the facts it justifies.
++    /// [`ChaseError::Termination`] instead. The certified summary accompanies the facts
++    /// so a caller can report the proof alongside the conclusions it justifies.
+     pub fn termination(&self) -> &ChaseTermination {
+         &self.termination
+     }
+diff --git crates/datalog/src/chase/termination.rs crates/datalog/src/chase/termination.rs
+index c1555e509..2097c4142 100644
+--- crates/datalog/src/chase/termination.rs
++++ crates/datalog/src/chase/termination.rs
+@@ -18,6 +18,38 @@ use purrdf_lex::allocation::{Admission, Memory, Resident, StorageError};
+ /// Version of the refined, frontier-dependent WA proof law.
+ pub const WA_LAW_VERSION: u32 = 1;
+ 
++/// The sufficient termination criterion proved by native admission.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++#[non_exhaustive]
++pub enum TerminationCriterion {
++    /// Constant-refined, frontier-dependent weak acyclicity.
++    WeaklyAcyclic,
++}
++
++impl TerminationCriterion {
++    /// Stable name of the criterion, independent of human presentation.
++    #[must_use]
++    pub const fn label(self) -> &'static str {
++        match self {
++            Self::WeaklyAcyclic => "weakly-acyclic",
++        }
++    }
++
++    /// Version of the evidence law this criterion currently proves.
++    #[must_use]
++    pub const fn law_version(self) -> u32 {
++        match self {
++            Self::WeaklyAcyclic => WA_LAW_VERSION,
++        }
++    }
++}
++
++impl purrdf_hash::error::StructuredError for TerminationCriterion {
++    purrdf_hash::error_visit! {
++        WeaklyAcyclic => "chase-criterion-weakly-acyclic" {},
++    }
++}
++
+ /// Logical work ceiling for preparation or independent checking.
+ #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+ pub struct AnalysisLimits {
+@@ -86,6 +118,7 @@ impl core::fmt::Display for TerminationViolation {
+ 
+ /// No error variant is a termination certificate or a proof of nontermination.
+ #[derive(Clone, Copy, Debug, PartialEq, Eq)]
++#[non_exhaustive]
+ pub enum TerminationError {
+     /// The sufficient WA criterion did not hold.
+     Uncertified(TerminationViolation),
+@@ -249,7 +282,7 @@ impl<A: Admission> WaCertificate<A> {
+         match checked {
+             Ok(verification) => Ok(PreparedChase {
+                 program,
+-                certificate: self,
++                certificate: ChaseCertificate { evidence: self },
+                 verification,
+             }),
+             Err(original) => {
+@@ -320,19 +353,73 @@ impl<A: Admission> WaCertificate<A> {
+     }
+ }
+ 
++/// Verified native admission evidence with its original allocation owner.
++/// The representation is private so additional criteria can retain their own
++/// evidence without changing the prepared executor's public certificate type.
++/// This owner neither clones evidence nor allocates another copy of it.
++pub struct ChaseCertificate<A: Admission = Resident> {
++    evidence: WaCertificate<A>,
++}
++purrdf_hash::debug_non_exhaustive!([A: Admission] ChaseCertificate<A> { evidence });
++
++impl<A: Admission> ChaseCertificate<A> {
++    /// The criterion independently checked before this owner was constructed.
++    #[must_use]
++    pub const fn criterion(&self) -> TerminationCriterion {
++        TerminationCriterion::WeaklyAcyclic
++    }
++
++    /// Version retained in the original admitted evidence.
++    #[must_use]
++    pub const fn law_version(&self) -> u32 {
++        self.evidence.law
++    }
++
++    /// Identity of the complete authored program admitted by this evidence.
++    #[must_use]
++    pub const fn program_identity(&self) -> &[u8; 32] {
++        self.evidence.program_identity()
++    }
++
++    /// Original production work and retained evidence layouts.
++    #[must_use]
++    pub const fn report(&self) -> AnalysisReport {
++        self.evidence.report()
++    }
++
++    /// Native summary carried by an execution admitted under this certificate.
++    #[must_use]
++    pub fn summary(&self) -> ChaseTermination {
++        self.evidence.summary()
++    }
++
++    /// Original WA positions and ranks, when this is a WA proof.
++    #[must_use]
++    pub const fn weakly_acyclic(&self) -> Option<&WaCertificate<A>> {
++        Some(&self.evidence)
++    }
++
++    /// Destroy evidence before returning its original allocation grant.
++    /// # Errors
++    /// Preserves the original account's refund refusal.
++    pub fn close(self) -> Result<(), TerminationError> {
++        self.evidence.close()
++    }
++}
++
+ /// Immutable program and independently checked admission, reusable across source stores.
+ /// Execution has the existing chase allocation/interrupt contract. Call [`Self::close`]
+ /// when done to reclaim the original evidence grant with typed failure.
+ pub struct PreparedChase<'p, A: Admission, const N: usize = 4> {
+     program: &'p [DlClause<N>],
+-    certificate: WaCertificate<A>,
++    certificate: ChaseCertificate<A>,
+     verification: AnalysisReport,
+ }
+ purrdf_hash::debug_non_exhaustive!(['p, A: Admission, const N: usize] PreparedChase<'p, A, N> { certificate, verification });
+ impl<A: Admission, const N: usize> PreparedChase<'_, A, N> {
+     /// The original verified admission evidence.
+     #[must_use]
+-    pub const fn certificate(&self) -> &WaCertificate<A> {
++    pub const fn certificate(&self) -> &ChaseCertificate<A> {
+         &self.certificate
+     }
+     /// Work spent checking, separate from production and execution work.
+@@ -792,11 +879,23 @@ mod tests {
+     #[test]
+     fn prepared_admission_reuses_evidence_without_changing_chase_results() {
+         let program = [rule()];
+-        let prepared = certify(&program)
+-            .unwrap()
++        let evidence = certify(&program).unwrap();
++        let original_work = evidence.report();
++        let original_program = *evidence.program_identity();
++        let original_summary = evidence.summary();
++        let original_positions = evidence.positions().as_ptr();
++        let original_ranks = evidence.ranks().as_ptr();
++        let prepared = evidence
+             .prepare(&program, AnalysisLimits::default(), None)
+             .unwrap();
+-        let original_work = prepared.certificate().report();
++        let certificate = prepared.certificate();
++        assert_eq!(certificate.criterion(), TerminationCriterion::WeaklyAcyclic);
++        assert_eq!(certificate.law_version(), WA_LAW_VERSION);
++        assert_eq!(certificate.program_identity(), &original_program);
++        assert_eq!(certificate.summary(), original_summary);
++        let wa = certificate.weakly_acyclic().expect("prepared WA evidence");
++        assert_eq!(wa.positions().as_ptr(), original_positions);
++        assert_eq!(wa.ranks().as_ptr(), original_ranks);
+         let check_work = prepared.verification();
+         for _ in 0..2 {
+             let reference = super::super::chase(&program, edb()).unwrap();
+@@ -999,9 +1098,12 @@ mod tests {
+             None,
+         )
+         .unwrap();
++        let prepared = evidence
++            .prepare(&program, AnalysisLimits::default(), None)
++            .unwrap();
+         refuse.set(true);
+         assert_eq!(
+-            evidence.close(),
++            prepared.close(),
+             Err(TerminationError::Storage(StorageError::AdmissionFailed))
+         );
+         assert!(retained.get() > 0);
+diff --git crates/entail/src/lib.rs crates/entail/src/lib.rs
+index a3826e9bb..4172c9b79 100644
+--- crates/entail/src/lib.rs
++++ crates/entail/src/lib.rs
+@@ -2089,15 +2089,26 @@ mod tests {
+         let rdfs = materialize(&ds, Materialization::Rdfs).expect("closed").1;
+         let rdf_certificate = rdf.termination().expect("the RDF lane is chased");
+         let rdfs_certificate = rdfs.termination().expect("the RDFS lane is chased");
+-        assert!(rdf_certificate.existential_edges() > 0);
+-        assert!(rdf_certificate.positions() > 0);
++        assert_eq!(
++            rdf_certificate.criterion(),
++            purrdf_datalog::chase::TerminationCriterion::WeaklyAcyclic
++        );
++        assert_eq!(
++            rdf_certificate.law_version(),
++            purrdf_datalog::chase::WA_LAW_VERSION
++        );
++        assert!(rdf_certificate.summary().is_certified());
++        let rdf_edges = rdf_certificate.existential_edges().expect("WA statistics");
++        let rdf_positions = rdf_certificate.positions().expect("WA statistics");
++        assert!(rdf_edges > 0);
++        assert!(rdf_positions > 0);
+         assert_ne!(
+             rdf_certificate, rdfs_certificate,
+             "the certificate is a function of the CLAUSE SET, so two different rule tables \
+              must not prove the same thing"
+         );
+         assert!(
+-            rdfs_certificate.existential_edges() > rdf_certificate.existential_edges(),
++            rdfs_certificate.existential_edges().expect("WA statistics") > rdf_edges,
+             "RDFS states rdfs14/rdfs14a besides rdfD1/rdfD1a"
+         );
+         // It is `purrdf-datalog`'s own sentence, not a second spelling of it.
+@@ -2105,8 +2116,7 @@ mod tests {
+             rdf_certificate.to_string(),
+             format!(
+                 "weakly acyclic: {} refined position(s), {} existential edge(s), none in a cycle",
+-                rdf_certificate.positions(),
+-                rdf_certificate.existential_edges()
++                rdf_positions, rdf_edges
+             )
+         );
+         // It does NOT vary with the data — a certificate that moved per input would be
+diff --git crates/entail/src/report.rs crates/entail/src/report.rs
+index 5f1885cbb..ca36335d0 100644
+--- crates/entail/src/report.rs
++++ crates/entail/src/report.rs
+@@ -59,7 +59,7 @@ use core::fmt;
+ 
+ use purrdf_core::{DatasetView, TermRef, TermValue};
+ use purrdf_datalog::cache::ContractHash;
+-use purrdf_datalog::chase::ChaseTermination;
++use purrdf_datalog::chase::{ChaseTermination, TerminationCriterion};
+ use purrdf_datalog::seminaive::{BudgetReport, EvalOptions};
+ 
+ use crate::Regime;
+@@ -77,16 +77,10 @@ use crate::rules::{RuleId, extensions, implemented, rules};
+ /// existential edge lies in a cycle. This is the certificate that admitted the program
+ /// PurRDF actually ran, carried out to the caller instead of discarded.
+ ///
+-/// # It is a NEWTYPE, not `ChaseTermination` re-exported
+-///
+-/// `purrdf_datalog::chase::ChaseTermination` has two variants and only one of them can
+-/// reach a report: an uncertified program is
+-/// `ChaseError::Termination` and produces no run at all. Storing that enum here would
+-/// put a variant in a report that no run can carry — the same unrepresentable-state
+-/// question [`Completeness`] answers by deriving rather than storing — so the report
+-/// carries the certified case's two numbers and there is no `Uncertified` value to read. Its
+-/// fields are private and its one (crate-internal) constructor refuses the other variant,
+-/// so an uncertified verdict has no way in even from inside this crate.
++/// Its private state retains the original native summary and its criterion.
++/// The constructor accepts only a summary the native classification certifies;
++/// an uncertified program produces no completed run or report. WA-specific
++/// counts are optional so another criterion need not claim it proved WA.
+ ///
+ /// The sentence is still `purrdf-datalog`'s: [`fmt::Display`] delegates to
+ /// `ChaseTermination`'s, so the prose has one author and cannot drift.
+@@ -99,25 +93,24 @@ use crate::rules::{RuleId, extensions, implemented, rules};
+ /// // A chased lane carries its certificate.
+ /// let (_, rdfs) = materialize(&ds, Materialization::Rdfs).expect("closed");
+ /// let certificate = rdfs.termination().expect("the RDFS lane is chased");
+-/// assert!(certificate.existential_edges() > 0);
++/// assert!(certificate.existential_edges().expect("WA statistics") > 0);
+ /// assert!(certificate.to_string().starts_with("weakly acyclic: "));
+ /// // A lane that invents no term has no obligation to prove, and says so.
+ /// let (_, owl) = materialize(&ds, Materialization::OwlRl).expect("closed");
+ /// assert!(owl.termination().is_none());
+ /// ```
+-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++#[derive(Debug, Clone, PartialEq, Eq)]
+ pub struct TerminationCertificate {
+-    /// Distinct refined positions in the position dependency graph — the proof's size.
+-    positions: usize,
+-    /// Distinct existential edges checked, none of which lies in a cycle.
+-    existential_edges: usize,
++    summary: ChaseTermination,
++    criterion: TerminationCriterion,
+ }
+ 
+ impl purrdf_hash::error::StructuredError for TerminationCertificate {
+     purrdf_hash::error_visit! {
+-        @record self { positions, existential_edges } => "entailment-termination" {
+-            "positions" => Unsigned(self.positions as u128),
+-            "existential_edges" => Unsigned(self.existential_edges as u128),
++        @record self { summary, criterion } => "entailment-termination" {
++            "summary" => Record(&self.summary),
++            "criterion" => Record(&self.criterion),
++            "law_version" => Unsigned(u128::from(self.law_version())),
+         }
+     }
+ }
+@@ -129,40 +122,56 @@ impl TerminationCertificate {
+     /// `ChaseError::Termination` for it rather than an outcome — so this returning
+     /// `None` for `Uncertified` is what makes the type's invariant hold by construction
+     /// rather than by convention.
+-    pub(crate) const fn of_chase(termination: &ChaseTermination) -> Option<Self> {
+-        match termination {
+-            ChaseTermination::WeaklyAcyclic {
+-                positions,
+-                existential_edges,
+-            } => Some(Self {
+-                positions: *positions,
+-                existential_edges: *existential_edges,
+-            }),
+-            ChaseTermination::Uncertified { .. } => None,
++    pub(crate) fn of_chase(termination: &ChaseTermination) -> Option<Self> {
++        termination.criterion().map(|criterion| Self {
++            summary: termination.clone(),
++            criterion,
++        })
++    }
++
++    /// The native summary that admitted the completed run.
++    #[must_use]
++    pub const fn summary(&self) -> &ChaseTermination {
++        &self.summary
++    }
++
++    /// The sufficient criterion proved by the native admission.
++    #[must_use]
++    pub const fn criterion(&self) -> TerminationCriterion {
++        self.criterion
++    }
++
++    /// Version of the evidence law the native criterion proves.
++    #[must_use]
++    pub const fn law_version(&self) -> u32 {
++        self.criterion.law_version()
++    }
++
++    /// Distinct refined positions, when this summary proves weak acyclicity.
++    #[must_use]
++    pub const fn positions(&self) -> Option<usize> {
++        match &self.summary {
++            ChaseTermination::WeaklyAcyclic { positions, .. } => Some(*positions),
++            _ => None,
+         }
+     }
+ 
+-    /// How many distinct refined positions the dependency graph holds — the proof's size.
++    /// Checked existential edges, when this summary proves weak acyclicity.
+     #[must_use]
+-    pub const fn positions(&self) -> usize {
+-        self.positions
+-    }
+-
+-    /// How many distinct existential edges were checked, none of them in a cycle.
+-    #[must_use]
+-    pub const fn existential_edges(&self) -> usize {
+-        self.existential_edges
++    pub const fn existential_edges(&self) -> Option<usize> {
++        match &self.summary {
++            ChaseTermination::WeaklyAcyclic {
++                existential_edges, ..
++            } => Some(*existential_edges),
++            _ => None,
++        }
+     }
+ }
+ 
+ impl fmt::Display for TerminationCertificate {
+     /// `purrdf-datalog`'s own sentence, delegated rather than restated.
+     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+-        ChaseTermination::WeaklyAcyclic {
+-            positions: self.positions,
+-            existential_edges: self.existential_edges,
+-        }
+-        .fmt(f)
++        self.summary.fmt(f)
+     }
+ }
+ 
+@@ -1006,7 +1015,7 @@ impl InconsistentRun {
+ /// it by accident. What this crate adds is the two measurements the evaluator has no way
+ /// to make — which rule a committed derivation is attributed to under the active regime's
+ /// specification names, and how many conclusions the RDF 1.2 IR could not hold.
+-#[derive(Debug, Clone, Copy)]
++#[derive(Debug, Clone)]
+ pub(crate) struct RunStats {
+     /// Conclusions committed AND materialized, per [`ChaseRule`], indexed by
+     /// [`ChaseRule::index`].
+@@ -1097,7 +1106,7 @@ impl RunStats {
+     /// Assigned rather than folded: `certify` is a pure function of the clause set, so the
+     /// `1 + n` graph evaluations of one `materialize` call all compute the same
+     /// certificate, and combining `n` copies of one value would suggest they could differ.
+-    pub(crate) const fn certify(&mut self, certificate: Option<TerminationCertificate>) {
++    pub(crate) fn certify(&mut self, certificate: Option<TerminationCertificate>) {
+         if let Some(certificate) = certificate {
+             self.termination = Some(certificate);
+         }
+@@ -1404,7 +1413,7 @@ impl ReasoningReport {
+                 stats.budget,
+                 inconsistency,
+                 stats.surrogate_drops,
+-                stats.termination,
++                stats.termination.clone(),
+             )
+         })
+     }
+@@ -1725,13 +1734,13 @@ impl ReasoningReport {
+     ///
+     /// The uncertified verdict never reaches here — an existential edge in a cycle is
+     /// `ChaseError::Termination`, so the run produces no report to carry it — which is
+-    /// why [`TerminationCertificate`] holds the certified case's numbers and no variant
+-    /// for the other. What the numbers say still varies: the certificate is a function of
++    /// why [`TerminationCertificate`] retains only a certified native summary.
++    /// What the evidence says still varies: the certificate is a function of
+     /// the CLAUSE SET, so the `RDF` lane's differs from the `RDFS` lane's, and a rule
+     /// added to either moves that lane's. It does not vary with the data.
+     #[must_use]
+-    pub const fn termination(&self) -> Option<TerminationCertificate> {
+-        self.termination
++    pub const fn termination(&self) -> Option<&TerminationCertificate> {
++        self.termination.as_ref()
+     }
+ 
+     /// WHICH of the seven conclusion-directed mechanisms read an answer off this run.
+diff --git crates/entail/tests/oracle.rs crates/entail/tests/oracle.rs
+index 6bdcf0623..607e0cbba 100644
+--- crates/entail/tests/oracle.rs
++++ crates/entail/tests/oracle.rs
+@@ -5903,11 +5903,13 @@ fn render_report(out: &mut String, report: &ReasoningReport) {
+         "{indent}termination: {}",
+         report.termination().map_or_else(
+             || "none".to_owned(),
+-            |c| format!(
+-                "weakly-acyclic positions={} existential-edges={}",
+-                c.positions(),
+-                c.existential_edges()
+-            )
++            |c| match (c.positions(), c.existential_edges()) {
++                (Some(positions), Some(existential_edges)) => format!(
++                    "{} positions={positions} existential-edges={existential_edges}",
++                    c.criterion().label(),
++                ),
++                _ => format!("{} law={}", c.criterion().label(), c.law_version()),
++            }
+         )
+     );
+     let _ = writeln!(
+diff --git crates/glob/src/lib.rs crates/glob/src/lib.rs
+index 61f203d4b..1d298bdaf 100644
+--- crates/glob/src/lib.rs
++++ crates/glob/src/lib.rs
+@@ -52,8 +52,10 @@ impl purrdf_hash::error::StructuredError for IriComponent {
+     }
+ }
+ 
+-/// A closed syntax refusal; offsets always refer to the original pattern bytes.
++/// A syntax refusal; offsets always refer to the original pattern bytes.
++/// New reasons may be added without changing existing patterns or refusal payloads.
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
++#[non_exhaustive]
+ pub enum SyntaxReason {
+     /// A backslash has no following scalar.
+     TrailingEscape,
+@@ -81,7 +83,7 @@ impl purrdf_hash::error::StructuredError for SyntaxReason {
+ /// An original syntax or physical storage failure during compilation.
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+ pub enum CompileError {
+-    /// Invalid pattern, with the original byte offset and closed reason.
++    /// Invalid pattern, with the original byte offset and native reason.
+     Syntax {
+         /// Zero-based pattern byte offset.
+         offset: usize,
+diff --git crates/rdf/src/native_codecs/source_format.rs crates/rdf/src/native_codecs/source_format.rs
+index 39b4aaafa..6169dcca5 100644
+--- crates/rdf/src/native_codecs/source_format.rs
++++ crates/rdf/src/native_codecs/source_format.rs
+@@ -46,7 +46,11 @@ pub const GTS_EXTENSIONS: &[&str] = &["gts"];
+ /// the RDF text syntaxes" and "a container" — not just "which text syntax" — resolves
+ /// through [`classify_source`] to this type rather than hand-rolling a second
+ /// container/extension decision.
++///
++/// New routing kinds may be added. Consumers outside this crate must explicitly
++/// handle an unsupported kind instead of treating it as a known syntax or container.
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
++#[non_exhaustive]
+ pub enum SourceFormat {
+     /// One of the native RDF text syntaxes (see [`NativeRdfFormat`]).
+     Native(NativeRdfFormat),
+diff --git crates/rdf/src/projections/error.rs crates/rdf/src/projections/error.rs
+index 2aabf73ec..ad89a15d7 100644
+--- crates/rdf/src/projections/error.rs
++++ crates/rdf/src/projections/error.rs
+@@ -57,6 +57,7 @@ pub struct ProjectionError {
+ enum ProjectionCause {
+     Storage(purrdf_lex::allocation::StorageError),
+     Xsd(Box<purrdf_xsd::XsdError>),
++    Ustar(crate::ustar::UstarError),
+ }
+ 
+ impl ProjectionError {
+@@ -109,6 +110,7 @@ impl ProjectionError {
+         match &self.cause {
+             Some(ProjectionCause::Storage(error)) => Some(error),
+             Some(ProjectionCause::Xsd(error)) => Some(error.as_ref()),
++            Some(ProjectionCause::Ustar(error)) => Some(error),
+             None => None,
+         }
+     }
+@@ -138,7 +140,7 @@ impl ProjectionError {
+     pub const fn storage_error(&self) -> Option<purrdf_lex::allocation::StorageError> {
+         match &self.cause {
+             Some(ProjectionCause::Storage(error)) => Some(*error),
+-            Some(ProjectionCause::Xsd(_)) | None => None,
++            Some(ProjectionCause::Xsd(_) | ProjectionCause::Ustar(_)) | None => None,
+         }
+     }
+ }
+@@ -172,6 +174,14 @@ impl From<purrdf_lex::allocation::StorageError> for ProjectionError {
+     }
+ }
+ 
++impl From<crate::ustar::UstarError> for ProjectionError {
++    fn from(error: crate::ustar::UstarError) -> Self {
++        let mut result = Self::package(error.to_string());
++        result.cause = Some(ProjectionCause::Ustar(error));
++        result
++    }
++}
++
+ impl From<purrdf_core::RdfDiagnostic> for ProjectionError {
+     fn from(error: purrdf_core::RdfDiagnostic) -> Self {
+         error
+diff --git crates/rdf/src/projections/package.rs crates/rdf/src/projections/package.rs
+index 9f9de2a09..6a391d831 100644
+--- crates/rdf/src/projections/package.rs
++++ crates/rdf/src/projections/package.rs
+@@ -312,7 +312,7 @@ impl ProjectionPackage {
+             ));
+         }
+         let bytes = crate::ustar::write_archive_borrowed(self.artifacts())
+-            .map_err(ProjectionError::package)?;
++            .map_err(ProjectionError::from)?;
+         debug_assert_eq!(bytes.len(), self.archive_bytes);
+         Ok(bytes)
+     }
+@@ -334,7 +334,7 @@ impl ProjectionPackage {
+         }
+         let mut package = Self::new(limits);
+         for member in crate::ustar::archive_members(bytes) {
+-            let member = member.map_err(ProjectionError::package)?;
++            let member = member.map_err(ProjectionError::from)?;
+             package.insert_borrowed(member.name, member.data)?;
+         }
+         if package.is_empty() {
+@@ -458,6 +458,33 @@ mod tests {
+         assert_eq!(decoded.to_ustar().expect("rewrite"), archive);
+     }
+ 
++    #[test]
++    fn malformed_archive_keeps_the_original_native_refusal() {
++        let raw = crate::ustar::write_archive(&[("a.csv".to_owned(), b"body".to_vec())])
++            .expect("archive");
++        let error = ProjectionPackage::from_ustar(&raw[..700], limits())
++            .expect_err("incomplete member padding");
++        assert_eq!(error.kind(), super::super::ProjectionErrorKind::Package);
++        let cause = std::error::Error::source(&error)
++            .expect("native archive refusal")
++            .downcast_ref::<crate::ustar::UstarError>()
++            .expect("original USTAR error");
++        assert_eq!(
++            cause,
++            &crate::ustar::UstarError::TruncatedPadding {
++                offset: 516,
++                required: 508,
++                available: 184,
++            }
++        );
++        let capture = purrdf_testkit::error_capture::Capture::read(&error).child("cause");
++        assert_eq!(capture.code, "ustar-truncated-padding");
++        assert!(matches!(
++            capture.field("available"),
++            purrdf_hash::error::ErrorValue::ByteCount(184)
++        ));
++    }
++
+     #[test]
+     fn noncanonical_member_order_is_rejected() {
+         let raw = crate::ustar::write_archive(&[
+diff --git crates/rdf/src/ustar.rs crates/rdf/src/ustar.rs
+index db0d7d909..12a3c7381 100644
+--- crates/rdf/src/ustar.rs
++++ crates/rdf/src/ustar.rs
+@@ -17,6 +17,9 @@
+ //!
+ //! The reader handles both regular (`'0'` / `\0`) and LongLink (`'L'`) records.
+ 
++mod error;
++pub use error::UstarError;
++
+ /// The GNU long-name sentinel: a `'L'`-typeflag record carrying a member path
+ /// that overflows the 100-byte USTAR `name` field.
+ const LONGLINK_NAME: &str = "././@LongLink";
+@@ -32,9 +35,9 @@ const LONGLINK_NAME: &str = "././@LongLink";
+ ///
+ /// # Errors
+ ///
+-/// Returns `Err(String)` if a USTAR header cannot be constructed (unexpected for
+-/// well-formed inputs).
+-pub fn write_archive(members: &[(String, Vec<u8>)]) -> Result<Vec<u8>, String> {
++/// Shares the typed [`UstarError`] result interface with the readers. Current
++/// resident header construction produces no refusal.
++pub fn write_archive(members: &[(String, Vec<u8>)]) -> Result<Vec<u8>, UstarError> {
+     write_archive_borrowed(
+         members
+             .iter()
+@@ -51,21 +54,22 @@ pub fn write_archive(members: &[(String, Vec<u8>)]) -> Result<Vec<u8>, String> {
+ ///
+ /// # Errors
+ ///
+-/// Returns `Err(String)` if a USTAR header cannot be constructed.
++/// Shares the typed [`UstarError`] result interface with the readers. Current
++/// resident header construction produces no refusal.
+ pub fn write_archive_borrowed<'a>(
+     members: impl IntoIterator<Item = (&'a str, &'a [u8])>,
+-) -> Result<Vec<u8>, String> {
++) -> Result<Vec<u8>, UstarError> {
+     let mut out: Vec<u8> = Vec::new();
+     for (name, data) in members {
+         if name.len() > 100 {
+             let mut payload = name.as_bytes().to_vec();
+             payload.push(0); // GNU LongLink bodies are NUL-terminated.
+-            out.extend_from_slice(&ustar_header(LONGLINK_NAME, payload.len(), b'L')?);
++            out.extend_from_slice(&ustar_header(LONGLINK_NAME, payload.len(), b'L'));
+             out.extend_from_slice(&payload);
+             let pad = (512 - payload.len() % 512) % 512;
+             out.extend(std::iter::repeat_n(0u8, pad));
+         }
+-        out.extend_from_slice(&ustar_header(name, data.len(), b'0')?);
++        out.extend_from_slice(&ustar_header(name, data.len(), b'0'));
+         out.extend_from_slice(data);
+         let pad = (512 - data.len() % 512) % 512;
+         out.extend(std::iter::repeat_n(0u8, pad));
+@@ -106,64 +110,99 @@ pub fn archive_members(tar: &[u8]) -> ArchiveMembers<'_> {
+ }
+ 
+ impl<'a> ArchiveMembers<'a> {
+-    fn fail(&mut self, message: impl Into<String>) -> Option<Result<ArchiveMember<'a>, String>> {
++    fn fail(&mut self, error: UstarError) -> Option<Result<ArchiveMember<'a>, UstarError>> {
+         self.done = true;
+-        Some(Err(message.into()))
++        Some(Err(error))
+     }
+ }
+ 
+ impl<'a> Iterator for ArchiveMembers<'a> {
+-    type Item = Result<ArchiveMember<'a>, String>;
++    type Item = Result<ArchiveMember<'a>, UstarError>;
+ 
+     fn next(&mut self) -> Option<Self::Item> {
+         loop {
+             if self.done {
+                 return None;
+             }
+-            let Some(header_end) = self.offset.checked_add(512) else {
+-                return self.fail("USTAR archive: header offset overflow");
++            let header_offset = self.offset;
++            let Some(header_end) = header_offset.checked_add(512) else {
++                return self.fail(UstarError::HeaderOffsetOverflow {
++                    offset: header_offset,
++                });
+             };
+             if header_end > self.tar.len() {
+                 if self.offset == self.tar.len() {
+                     self.done = true;
+                     return None;
+                 }
+-                return self.fail("USTAR archive: truncated header");
++                return self.fail(UstarError::TruncatedHeader {
++                    offset: header_offset,
++                    required: 512,
++                    available: self.tar.len() - header_offset,
++                });
+             }
+ 
+             let tar = self.tar;
+-            let header = &tar[self.offset..header_end];
++            let header = &tar[header_offset..header_end];
+             if header.iter().all(|&byte| byte == 0) {
+                 self.done = true;
+                 return None;
+             }
+             let typeflag = header[156];
+             let Some(size) = parse_octal(&header[124..136]) else {
+-                return self.fail("USTAR archive: unreadable size field");
++                let mut field = [0; 12];
++                field.copy_from_slice(&header[124..136]);
++                return self.fail(UstarError::InvalidSize {
++                    offset: header_offset + 124,
++                    field,
++                });
+             };
+             let Some(body_end) = header_end.checked_add(size) else {
+-                return self.fail("USTAR archive: member body offset overflow");
++                return self.fail(UstarError::BodyOffsetOverflow {
++                    offset: header_end,
++                    required: size,
++                });
+             };
+             if body_end > tar.len() {
+-                return self.fail("USTAR archive: member body overruns archive");
++                return self.fail(UstarError::TruncatedBody {
++                    offset: header_end,
++                    required: size,
++                    available: tar.len() - header_end,
++                });
+             }
+             let body = &tar[header_end..body_end];
+             let pad = (512 - size % 512) % 512;
+             let Some(next_offset) = body_end.checked_add(pad) else {
+-                return self.fail("USTAR archive: padded member offset overflow");
++                return self.fail(UstarError::PaddingOffsetOverflow {
++                    offset: body_end,
++                    required: pad,
++                });
+             };
+             if next_offset > tar.len() {
+-                return self.fail("USTAR archive: member padding overruns archive");
++                return self.fail(UstarError::TruncatedPadding {
++                    offset: body_end,
++                    required: pad,
++                    available: tar.len() - body_end,
++                });
+             }
+             self.offset = next_offset;
+ 
+             match typeflag {
+                 b'L' => {
+                     let Some(name_bytes) = body.strip_suffix(&[0]) else {
+-                        return self.fail("USTAR archive: LongLink name is not NUL-terminated");
++                        return self.fail(UstarError::UnterminatedLongName {
++                            offset: header_end,
++                            length: size,
++                        });
+                     };
+-                    let Ok(name) = std::str::from_utf8(name_bytes) else {
+-                        return self.fail("USTAR archive: LongLink name is not UTF-8");
++                    let name = match std::str::from_utf8(name_bytes) {
++                        Ok(name) => name,
++                        Err(cause) => {
++                            return self.fail(UstarError::LongNameUtf8 {
++                                offset: header_end,
++                                cause,
++                            });
++                        }
+                     };
+                     self.long_name = Some(name);
+                 }
+@@ -176,10 +215,15 @@ impl<'a> Iterator for ArchiveMembers<'a> {
+                             .iter()
+                             .position(|&byte| byte == 0)
+                             .unwrap_or(name_bytes.len());
+-                        let Ok(name) = std::str::from_utf8(&name_bytes[..end]) else {
+-                            return self.fail("USTAR archive: member name is not UTF-8");
+-                        };
+-                        name
++                        match std::str::from_utf8(&name_bytes[..end]) {
++                            Ok(name) => name,
++                            Err(cause) => {
++                                return self.fail(UstarError::NameUtf8 {
++                                    offset: header_offset,
++                                    cause,
++                                });
++                            }
++                        }
+                     };
+                     return Some(Ok(ArchiveMember { name, data: body }));
+                 }
+@@ -199,9 +243,8 @@ impl<'a> Iterator for ArchiveMembers<'a> {
+ ///
+ /// # Errors
+ ///
+-/// Returns `Err(String)` if the archive is structurally malformed (unreadable size
+-/// field or a body that overruns the archive).
+-pub fn read_archive(tar: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
++/// Returns the original typed refusal if the archive is structurally malformed.
++pub fn read_archive(tar: &[u8]) -> Result<Vec<(String, Vec<u8>)>, UstarError> {
+     archive_members(tar)
+         .map(|member| {
+             let member = member?;
+@@ -215,7 +258,7 @@ pub fn read_archive(tar: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
+ /// — the caller MUST have emitted a preceding LongLink record carrying the full
+ /// path. For a name ≤ 100 bytes the bytes are identical to the pre
+ /// single-typeflag header.
+-fn ustar_header(name: &str, size: usize, typeflag: u8) -> Result<[u8; 512], String> {
++fn ustar_header(name: &str, size: usize, typeflag: u8) -> [u8; 512] {
+     let nb = name.as_bytes();
+     let n = nb.len().min(100);
+     let mut h = [0u8; 512];
+@@ -235,7 +278,7 @@ fn ustar_header(name: &str, size: usize, typeflag: u8) -> Result<[u8; 512], Stri
+     // 6 octal digits, then NUL + space (the canonical checksum encoding).
+     let chk = format!("{sum:06o}\0 ");
+     h[148..156].copy_from_slice(chk.as_bytes());
+-    Ok(h)
++    h
+ }
+ 
+ /// Write `value` as right-justified, zero-padded octal into `field`, NUL-terminated.
+@@ -395,10 +438,120 @@ mod tests {
+     fn borrowed_reader_rejects_truncated_padding() {
+         let raw = write_archive(&[("a".to_owned(), b"body".to_vec())]).expect("archive");
+         let truncated = &raw[..700];
+-        let error = archive_members(truncated)
++        let mut members = archive_members(truncated);
++        let error = members
+             .next()
+             .expect("one result")
+             .expect_err("padding must be complete");
+-        assert!(error.contains("padding overruns"));
++        assert_eq!(
++            error,
++            UstarError::TruncatedPadding {
++                offset: 516,
++                required: 508,
++                available: 184,
++            }
++        );
++        assert!(error.to_string().contains("padding overruns"));
++        assert!(members.next().is_none(), "the first refusal ends iteration");
++    }
++
++    #[test]
++    fn malformed_records_keep_original_fields_and_refusal_priority() {
++        let raw = write_archive(&[("a".to_owned(), b"body".to_vec())]).expect("archive");
++        let field = *b"00000000008\0";
++        let mut invalid_size = raw.clone();
++        invalid_size[124..136].copy_from_slice(&field);
++        let long_name = "a".repeat(101);
++        let mut invalid_long = write_archive(&[(long_name, b"body".to_vec())]).expect("archive");
++        invalid_long[512] = 0xff;
++        invalid_long[613] = b'x';
++        for (bytes, expected) in [
++            (
++                raw[..100].to_vec(),
++                UstarError::TruncatedHeader {
++                    offset: 0,
++                    required: 512,
++                    available: 100,
++                },
++            ),
++            (invalid_size, UstarError::InvalidSize { offset: 124, field }),
++            (
++                raw[..514].to_vec(),
++                UstarError::TruncatedBody {
++                    offset: 512,
++                    required: 4,
++                    available: 2,
++                },
++            ),
++            (
++                invalid_long,
++                UstarError::UnterminatedLongName {
++                    offset: 512,
++                    length: 102,
++                },
++            ),
++        ] {
++            let mut members = archive_members(&bytes);
++            assert_eq!(members.next().expect("refused record"), Err(expected));
++            assert!(members.next().is_none(), "a refused archive cannot resume");
++        }
++        assert_eq!(read_archive(&raw).expect("valid neighbor")[0].1, b"body");
++    }
++
++    #[test]
++    fn name_refusals_keep_native_causes_after_source_drops_without_inspection_allocation() {
++        use purrdf_alloc_probe::CurrentThreadWindow;
++        use purrdf_hash::error::ErrorValue;
++        use purrdf_testkit::error_capture::Capture;
++
++        for long in [false, true] {
++            let name = "a".repeat(if long { 101 } else { 1 });
++            let offset = if long { 512 } else { 0 };
++            let error = {
++                let mut raw = write_archive(&[(name, b"body".to_vec())]).expect("archive");
++                raw[offset] = 0xff;
++                archive_members(&raw)
++                    .next()
++                    .expect("one record")
++                    .expect_err("bad UTF-8")
++            };
++            let outer_events = Vec::with_capacity(8);
++            let native_events = Vec::with_capacity(8);
++            let window = CurrentThreadWindow::open();
++            let capture = Capture::read_with_buffer(&error, outer_events);
++            let ErrorValue::Cause(cause) = capture.field("cause") else {
++                panic!("the original UTF-8 refusal must remain a native cause");
++            };
++            let native = Capture::read_with_buffer(cause, native_events);
++            let measured = window.close();
++            assert_eq!(measured.allocations, 0);
++            assert_eq!(measured.requested_bytes, 0);
++            assert_eq!(
++                capture.code,
++                if long {
++                    "ustar-long-name-utf8"
++                } else {
++                    "ustar-name-utf8"
++                }
++            );
++            assert!(
++                matches!(capture.field("offset"), ErrorValue::ByteCount(value) if value == offset as u128)
++            );
++            assert_eq!(native.code, "std-utf8");
++            assert!(matches!(
++                native.field("valid_up_to"),
++                ErrorValue::ByteCount(0)
++            ));
++            assert!(matches!(
++                native.field("error_len"),
++                ErrorValue::ByteCount(1)
++            ));
++            let original = std::error::Error::source(&error)
++                .expect("native source")
++                .downcast_ref::<core::str::Utf8Error>()
++                .expect("original UTF-8 error");
++            assert_eq!(original.valid_up_to(), 0);
++            assert_eq!(original.error_len(), Some(1));
++        }
+     }
+ }
+diff --git crates/rdf/src/ustar/error.rs crates/rdf/src/ustar/error.rs
+new file mode 100644
+index 000000000..9d18d0e4d
+--- /dev/null
++++ crates/rdf/src/ustar/error.rs
+@@ -0,0 +1,166 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! Original archive coordinates and native decoding refusals.
++
++/// A malformed USTAR record, retaining its original archive byte coordinates.
++///
++/// Inspect this error directly or through the shared borrowed error visitor.
++/// Its human presentation does not encode the retained fields.
++#[derive(Debug, Clone, PartialEq, Eq)]
++#[non_exhaustive]
++pub enum UstarError {
++    /// The next fixed-size header would overflow the native address space.
++    HeaderOffsetOverflow {
++        /// Original header offset.
++        offset: usize,
++    },
++    /// The archive ends inside a header.
++    TruncatedHeader {
++        /// Original header offset.
++        offset: usize,
++        /// Required header bytes.
++        required: usize,
++        /// Remaining archive bytes.
++        available: usize,
++    },
++    /// The size field is not an admitted native USTAR size.
++    InvalidSize {
++        /// Original size-field offset.
++        offset: usize,
++        /// The complete original field, including padding and terminators.
++        field: [u8; 12],
++    },
++    /// The declared member body would overflow the native address space.
++    BodyOffsetOverflow {
++        /// Original body offset.
++        offset: usize,
++        /// Declared body bytes.
++        required: usize,
++    },
++    /// The archive ends inside a declared member body.
++    TruncatedBody {
++        /// Original body offset.
++        offset: usize,
++        /// Declared body bytes.
++        required: usize,
++        /// Remaining archive bytes.
++        available: usize,
++    },
++    /// Member padding would overflow the native address space.
++    PaddingOffsetOverflow {
++        /// Original padding offset.
++        offset: usize,
++        /// Required padding bytes.
++        required: usize,
++    },
++    /// The archive ends inside member padding.
++    TruncatedPadding {
++        /// Original padding offset.
++        offset: usize,
++        /// Required padding bytes.
++        required: usize,
++        /// Remaining archive bytes.
++        available: usize,
++    },
++    /// A GNU LongLink body has no final NUL byte.
++    UnterminatedLongName {
++        /// Original LongLink body offset.
++        offset: usize,
++        /// Declared LongLink body bytes.
++        length: usize,
++    },
++    /// A GNU LongLink name is not UTF-8.
++    LongNameUtf8 {
++        /// Original LongLink body offset, before advancing to the next record.
++        offset: usize,
++        /// Original UTF-8 decoding failure, relative to that body.
++        cause: core::str::Utf8Error,
++    },
++    /// A regular record's name field is not UTF-8.
++    NameUtf8 {
++        /// Original name-field offset, before advancing to the next record.
++        offset: usize,
++        /// Original UTF-8 decoding failure, relative to that name field.
++        cause: core::str::Utf8Error,
++    },
++}
++
++impl UstarError {
++    /// The original native decoder refusal, when this record failed UTF-8 admission.
++    #[must_use]
++    pub const fn utf8_error(&self) -> Option<&core::str::Utf8Error> {
++        match self {
++            Self::LongNameUtf8 { cause, .. } | Self::NameUtf8 { cause, .. } => Some(cause),
++            _ => None,
++        }
++    }
++}
++
++impl purrdf_hash::error::StructuredError for UstarError {
++    purrdf_hash::error_visit! {
++        HeaderOffsetOverflow { offset } => "ustar-header-offset-overflow" {
++            "offset" => ByteCount(*offset as u128),
++        },
++        TruncatedHeader { offset, required, available } => "ustar-truncated-header" {
++            "offset" => ByteCount(*offset as u128),
++            "required" => ByteCount(*required as u128),
++            "available" => ByteCount(*available as u128),
++        },
++        InvalidSize { offset, field } => "ustar-invalid-size" {
++            "offset" => ByteCount(*offset as u128),
++            "field" => Bytes(field),
++        },
++        BodyOffsetOverflow { offset, required } => "ustar-body-offset-overflow" {
++            "offset" => ByteCount(*offset as u128),
++            "required" => ByteCount(*required as u128),
++        },
++        TruncatedBody { offset, required, available } => "ustar-truncated-body" {
++            "offset" => ByteCount(*offset as u128),
++            "required" => ByteCount(*required as u128),
++            "available" => ByteCount(*available as u128),
++        },
++        PaddingOffsetOverflow { offset, required } => "ustar-padding-offset-overflow" {
++            "offset" => ByteCount(*offset as u128),
++            "required" => ByteCount(*required as u128),
++        },
++        TruncatedPadding { offset, required, available } => "ustar-truncated-padding" {
++            "offset" => ByteCount(*offset as u128),
++            "required" => ByteCount(*required as u128),
++            "available" => ByteCount(*available as u128),
++        },
++        UnterminatedLongName { offset, length } => "ustar-unterminated-long-name" {
++            "offset" => ByteCount(*offset as u128),
++            "length" => ByteCount(*length as u128),
++        },
++        LongNameUtf8 { offset, cause } => "ustar-long-name-utf8" {
++            "offset" => ByteCount(*offset as u128),
++            "cause" => Cause(cause),
++        },
++        NameUtf8 { offset, cause } => "ustar-name-utf8" {
++            "offset" => ByteCount(*offset as u128),
++            "cause" => Cause(cause),
++        },
++    }
++}
++
++impl core::fmt::Display for UstarError {
++    fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
++        out.write_str(match self {
++            Self::HeaderOffsetOverflow { .. } => "USTAR archive: header offset overflow",
++            Self::TruncatedHeader { .. } => "USTAR archive: truncated header",
++            Self::InvalidSize { .. } => "USTAR archive: unreadable size field",
++            Self::BodyOffsetOverflow { .. } => "USTAR archive: member body offset overflow",
++            Self::TruncatedBody { .. } => "USTAR archive: member body overruns archive",
++            Self::PaddingOffsetOverflow { .. } => "USTAR archive: padded member offset overflow",
++            Self::TruncatedPadding { .. } => "USTAR archive: member padding overruns archive",
++            Self::UnterminatedLongName { .. } => {
++                "USTAR archive: LongLink name is not NUL-terminated"
++            }
++            Self::LongNameUtf8 { .. } => "USTAR archive: LongLink name is not UTF-8",
++            Self::NameUtf8 { .. } => "USTAR archive: member name is not UTF-8",
++        })
++    }
++}
++
++purrdf_hash::error_sources!(UstarError, native utf8_error);
+diff --git crates/slice/src/lib.rs crates/slice/src/lib.rs
+index 78e734e39..b7631f664 100644
+--- crates/slice/src/lib.rs
++++ crates/slice/src/lib.rs
+@@ -49,8 +49,8 @@ pub use fix_deps::{ManifestPatch, compute_fix_deps};
+ pub use list_functions::emit_list_functions;
+ pub use ownership::{
+     ArtifactEvidence, DependencyEdge, EdgeEvidence, EdgeKind, OwnershipAnalyzer,
+-    OwnershipDiagnostic, OwnershipReport, OwnershipStatus, ReconciliationStatus, SliceIri,
+-    TermOwnership,
++    OwnershipDiagnostic, OwnershipReport, OwnershipStatus, QueryArtifactError,
++    ReconciliationStatus, SliceIri, TermOwnership,
+ };
+ pub use prefix_emit::{emit_core_prefixes, emit_jsonld_context};
+ pub use prefix_lint::lint_prefix_consistency;
+diff --git crates/slice/src/ownership.rs crates/slice/src/ownership.rs
+index cfce47214..1eeba8319 100644
+--- crates/slice/src/ownership.rs
++++ crates/slice/src/ownership.rs
+@@ -41,6 +41,9 @@ use crate::error::SliceError;
+ use crate::rdf_query::{Dataset, NamedNode};
+ use crate::vocab::SliceVocab;
+ 
++mod query_error;
++pub use query_error::QueryArtifactError;
++
+ // ── Namespace constants ───────────────────────────────────────────────────────
+ //
+ // Only W3C terms are hardcoded; the slice-framework vocabulary (the ownership
+@@ -156,6 +159,19 @@ pub enum EdgeKind {
+     Generated,
+ }
+ 
++impl purrdf_hash::error::StructuredError for EdgeKind {
++    purrdf_hash::error_visit! {
++        Ontology => "slice-edge-ontology" {},
++        Shape => "slice-edge-shape" {},
++        Mapping => "slice-edge-mapping" {},
++        Query => "slice-edge-query" {},
++        Test => "slice-edge-test" {},
++        Example => "slice-edge-example" {},
++        Documentation => "slice-edge-documentation" {},
++        Generated => "slice-edge-generated" {},
++    }
++}
++
+ impl EdgeKind {
+     /// Whether this edge kind reconciles against `<vocab>sliceDependsOn`
+     /// (a documentation link must not become a build dependency — RFC §10).
+@@ -218,6 +234,7 @@ pub struct DependencyEdge {
+ /// A non-fatal observation produced during analysis (conflicts, mismatches,
+ /// stale/undeclared dependencies, unparsable queries).
+ #[derive(Debug, Clone, PartialEq, Eq)]
++#[non_exhaustive]
+ pub enum OwnershipDiagnostic {
+     /// A term is claimed by multiple slices.
+     Conflict {
+@@ -265,11 +282,70 @@ pub enum OwnershipDiagnostic {
+         slice: SliceIri,
+         /// The artifact's normalized logical path within its slice.
+         logical_path: String,
+-        /// The parser's error message.
+-        message: String,
++        /// The original decoding or parsing refusal.
++        cause: QueryArtifactError,
+     },
+ }
+ 
++impl purrdf_hash::error::StructuredError for OwnershipDiagnostic {
++    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
++        use purrdf_hash::error::{ErrorValue, visit_list};
++        match self {
++            Self::Conflict { term, claimants } => {
++                visitor.variant("slice-ownership-conflict");
++                visitor.value(Some("term"), ErrorValue::Iri(term.as_str()));
++                visit_list(
++                    visitor,
++                    Some("claimants"),
++                    claimants.iter().map(|iri| ErrorValue::Iri(iri)),
++                );
++            }
++            Self::Mismatch {
++                term,
++                declared,
++                physical,
++            } => {
++                visitor.variant("slice-ownership-mismatch");
++                visitor.value(Some("term"), ErrorValue::Iri(term.as_str()));
++                visitor.value(Some("declared"), ErrorValue::Iri(declared));
++                visitor.value(Some("physical"), ErrorValue::Iri(physical));
++            }
++            Self::UndeclaredDependency {
++                from_slice,
++                to_slice,
++                edge_kind,
++            } => {
++                visitor.variant("slice-ownership-undeclared-dependency");
++                visitor.value(Some("from_slice"), ErrorValue::Iri(from_slice));
++                visitor.value(Some("to_slice"), ErrorValue::Iri(to_slice));
++                visitor.value(Some("edge_kind"), ErrorValue::Record(edge_kind));
++            }
++            Self::StaleDependency {
++                from_slice,
++                to_slice,
++            } => {
++                visitor.variant("slice-ownership-stale-dependency");
++                visitor.value(Some("from_slice"), ErrorValue::Iri(from_slice));
++                visitor.value(Some("to_slice"), ErrorValue::Iri(to_slice));
++            }
++            Self::Unowned { term } => {
++                visitor.variant("slice-ownership-unowned");
++                visitor.value(Some("term"), ErrorValue::Iri(term.as_str()));
++            }
++            Self::UnparseableQuery {
++                slice,
++                logical_path,
++                cause,
++            } => {
++                visitor.variant("slice-ownership-unparseable-query");
++                visitor.value(Some("slice"), ErrorValue::Iri(slice));
++                visitor.value(Some("logical_path"), ErrorValue::Text(logical_path));
++                visitor.value(Some("cause"), ErrorValue::Cause(cause));
++            }
++        }
++    }
++}
++
+ /// The complete result of an ownership + dependency analysis.
+ #[derive(Debug, Clone)]
+ pub struct OwnershipReport {
+@@ -507,11 +583,11 @@ impl<'a> OwnershipAnalyzer<'a> {
+                 if kind == EdgeKind::Query {
+                     let referenced = match extract_query_iris(artifact, &self.parser_options) {
+                         Ok(set) => set,
+-                        Err(message) => {
++                        Err(cause) => {
+                             diagnostics.push(OwnershipDiagnostic::UnparseableQuery {
+                                 slice: from.clone(),
+                                 logical_path: artifact.logical_path.clone(),
+-                                message,
++                                cause,
+                             });
+                             continue;
+                         }
+@@ -828,12 +904,11 @@ fn collect_term_iri_refs<'a>(store: &'a RdfDataset, term: TermId, out: &mut BTre
+ fn extract_query_iris(
+     artifact: &ArtifactRecord,
+     options: &ParserOptions,
+-) -> Result<BTreeSet<NamedNode>, String> {
+-    let text = std::str::from_utf8(&artifact.content)
+-        .map_err(|e| format!("query is not valid UTF-8: {e}"))?;
++) -> Result<BTreeSet<NamedNode>, QueryArtifactError> {
++    let text = std::str::from_utf8(&artifact.content).map_err(QueryArtifactError::Utf8)?;
+     let query = SparqlParser::new()
+         .parse_query_with(text, options)
+-        .map_err(|e| e.to_string())?;
++        .map_err(QueryArtifactError::Sparql)?;
+ 
+     let mut out: BTreeSet<NamedNode> = BTreeSet::new();
+     match &query {
+diff --git crates/slice/src/ownership/query_error.rs crates/slice/src/ownership/query_error.rs
+new file mode 100644
+index 000000000..e06140a8e
+--- /dev/null
++++ crates/slice/src/ownership/query_error.rs
+@@ -0,0 +1,35 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! Original nonfatal query-artifact refusals, independent of their source bytes.
++
++/// Why an ownership analyzer skipped a query artifact.
++///
++/// These causes retain their original fields after the catalog is dropped.
++/// A refusal remains a diagnostic; it does not fail the ownership analysis.
++#[derive(Debug, Clone, PartialEq, Eq)]
++#[non_exhaustive]
++pub enum QueryArtifactError {
++    /// The artifact was not UTF-8, before any SPARQL parsing was attempted.
++    Utf8(core::str::Utf8Error),
++    /// The native SPARQL parser refused the decoded artifact.
++    Sparql(purrdf_sparql_algebra::ParseError),
++}
++
++impl core::fmt::Display for QueryArtifactError {
++    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
++        match self {
++            Self::Utf8(cause) => write!(formatter, "query is not valid UTF-8: {cause}"),
++            Self::Sparql(cause) => cause.fmt(formatter),
++        }
++    }
++}
++
++purrdf_hash::error_sources!(QueryArtifactError, Utf8, Sparql);
++
++impl purrdf_hash::error::StructuredError for QueryArtifactError {
++    purrdf_hash::error_visit! {
++        Utf8(cause) => "slice-query-utf8" { "cause" => Cause(cause) },
++        Sparql(cause) => "slice-query-sparql" { "cause" => Cause(cause) },
++    }
++}
+diff --git crates/slice/tests/ownership_tests.rs crates/slice/tests/ownership_tests.rs
+index dda19c76e..5be34f530 100644
+--- crates/slice/tests/ownership_tests.rs
++++ crates/slice/tests/ownership_tests.rs
+@@ -12,7 +12,7 @@ use purrdf_testkit::temp_dir;
+ 
+ use purrdf_slice::{
+     EdgeKind, NamedNode, OwnershipAnalyzer, OwnershipDiagnostic, OwnershipStatus, ParserOptions,
+-    ReconciliationStatus, SliceCatalog, SliceVocab,
++    QueryArtifactError, ReconciliationStatus, SliceCatalog, SliceVocab,
+ };
+ 
+ /// Pure fixtures use a caller-supplied example.org vocabulary (the slice
+@@ -259,6 +259,9 @@ fn ownership_mismatch() {
+ 
+ #[test]
+ fn parsed_not_textual_edges() {
++    use purrdf_hash::error::ErrorValue;
++    use purrdf_testkit::error_capture::Capture;
++
+     let tmp = temp_dir!().unwrap();
+     let root = tmp.path();
+ 
+@@ -300,6 +303,23 @@ fn parsed_not_textual_edges() {
+         ),
+     );
+ 
++    let invalid_utf8 = vec![b'#', b' ', 255];
++    let expected_utf8 = std::str::from_utf8(&invalid_utf8).unwrap_err();
++    std::fs::write(
++        root.join("slices/grpB/sliceB/queries/competency/a-invalid-utf8.rq"),
++        &invalid_utf8,
++    )
++    .unwrap();
++    let invalid_sparql = "SELECT WHERE {".to_owned();
++    let expected_sparql = purrdf_sparql_algebra::SparqlParser::new()
++        .parse_query_with(&invalid_sparql, &ParserOptions::default())
++        .unwrap_err();
++    write(
++        root,
++        "slices/grpB/sliceB/queries/competency/b-invalid-sparql.rq",
++        &invalid_sparql,
++    );
++
+     let catalog = SliceCatalog::discover(
+         root,
+         test_vocab(),
+@@ -308,6 +328,69 @@ fn parsed_not_textual_edges() {
+     .unwrap();
+     let report = OwnershipAnalyzer::new(&catalog).analyze().unwrap();
+ 
++    drop(catalog);
++    drop(tmp);
++    drop(invalid_utf8);
++    drop(invalid_sparql);
++    assert!(!report.has_ownership_defect());
++    assert_eq!(report.clone().diagnostics, report.diagnostics);
++    let skipped: Vec<_> = report.diagnostics.iter().filter_map(|diagnostic| {
++        if let OwnershipDiagnostic::UnparseableQuery { slice, logical_path, cause } = diagnostic {
++            let captured = Capture::read(diagnostic);
++            assert_eq!(captured.code, "slice-ownership-unparseable-query");
++            assert!(matches!(captured.field("slice"), ErrorValue::Iri(value) if value == iri("sliceB")));
++            assert!(matches!(captured.field("logical_path"), ErrorValue::Text(value) if value == logical_path));
++            Some((slice, logical_path, cause, captured.child("cause")))
++        } else {
++            None
++        }
++    }).collect();
++    let [
++        (slice, path, utf8, captured_utf8),
++        (_, sparql_path, sparql, captured_sparql),
++    ] = skipped.as_slice()
++    else {
++        panic!("both malformed queries must remain nonfatal diagnostics");
++    };
++    assert_eq!(*slice, &iri("sliceB"));
++    assert_eq!(path.as_str(), "queries/competency/a-invalid-utf8.rq");
++    assert_eq!(
++        sparql_path.as_str(),
++        "queries/competency/b-invalid-sparql.rq"
++    );
++    assert_eq!(utf8, &&QueryArtifactError::Utf8(expected_utf8));
++    assert_eq!(
++        sparql,
++        &&QueryArtifactError::Sparql(expected_sparql.clone())
++    );
++    assert_eq!(
++        utf8.to_string(),
++        format!("query is not valid UTF-8: {expected_utf8}")
++    );
++    assert_eq!(sparql.to_string(), expected_sparql.to_string());
++    assert_eq!(captured_utf8.code, "slice-query-utf8");
++    assert!(matches!(
++        captured_utf8.child("cause").field("valid_up_to"),
++        ErrorValue::ByteCount(2)
++    ));
++    assert_eq!(captured_sparql.code, "slice-query-sparql");
++    assert_eq!(
++        captured_sparql.child("cause").code,
++        Capture::read(&expected_sparql).code
++    );
++    assert_eq!(
++        std::error::Error::source(*utf8)
++            .unwrap()
++            .downcast_ref::<std::str::Utf8Error>(),
++        Some(&expected_utf8)
++    );
++    assert_eq!(
++        std::error::Error::source(*sparql)
++            .unwrap()
++            .downcast_ref::<purrdf_sparql_algebra::ParseError>(),
++        Some(&expected_sparql)
++    );
++
+     // Exactly one B → A query edge, with termT as evidence.
+     let edge = report
+         .edges
+diff --git crates/sparql-eval/src/bgp.rs crates/sparql-eval/src/bgp.rs
+index 1a021d3f9..ba4bb3fea 100644
+--- crates/sparql-eval/src/bgp.rs
++++ crates/sparql-eval/src/bgp.rs
+@@ -3646,11 +3646,14 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
+             // Leaves that hold no BGP: there is no triple-pattern join order to choose and
+             // no base cardinality to probe.
+             GraphPattern::Values { variables, bindings } => {
+-                survey.record(pattern, PlanEstimate {
+-                    rows: bindings.len() as u64,
+-                    peak_rows: bindings.len() as u64,
+-                    columns: variables.len() as u64,
+-                });
++                survey.record(
++                    pattern,
++                    PlanEstimate::new(
++                        bindings.len() as u64,
++                        bindings.len() as u64,
++                        variables.len() as u64,
++                    ),
++                );
+             }
+             GraphPattern::Path { .. } | GraphPattern::Service { .. } => {}
+         }
+@@ -3660,11 +3663,7 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
+ 
+ /// The estimate of a `GRAPH <name> { ... }` block whose name addresses no graph: no
+ /// row, and an inner pattern that is never evaluated.
+-const EMPTY_SCOPE: PlanEstimate = PlanEstimate {
+-    rows: 0,
+-    peak_rows: 0,
+-    columns: 0,
+-};
++const EMPTY_SCOPE: PlanEstimate = PlanEstimate::new(0, 0, 0);
+ 
+ /// The graph `GRAPH <name> { ... }` scopes its block to, as evaluation decides it
+ /// (`modifier::eval_graph`): the name's term, when it names a graph of `dataset` that
+@@ -3767,11 +3766,11 @@ fn forecast_bgp<D: DatasetView>(
+             compiled, dataset, &scope, &order, &initial, seed.rows, &workspace,
+         )?
+     };
+-    let estimate = PlanEstimate {
++    let estimate = PlanEstimate::new(
+         rows,
+         peak_rows,
+-        columns: u64::try_from(working.len()).map_err(|_| EvalError::WorkspaceBoundOverflow)?,
+-    };
++        u64::try_from(working.len()).map_err(|_| EvalError::WorkspaceBoundOverflow)?,
++    );
+     Ok((schema, estimate, order))
+ }
+ 
+@@ -3961,14 +3960,7 @@ fn record_call_estimate(
+     // bound cannot be denominated out of a cell ceiling; saturating, because a `usize`
+     // arity beyond `u64` is already past any ceiling a caller can express.
+     let columns = u64::try_from(arity.total()).unwrap_or(u64::MAX).max(1);
+-    survey.record(
+-        node,
+-        PlanEstimate {
+-            rows,
+-            peak_rows: rows,
+-            columns,
+-        },
+-    );
++    survey.record(node, PlanEstimate::new(rows, rows, columns));
+     Ok(())
+ }
+ 
+@@ -6899,11 +6891,11 @@ mod survey_tests {
+             } => {
+                 survey.record(
+                     pattern,
+-                    PlanEstimate {
+-                        rows: bindings.len() as u64,
+-                        peak_rows: bindings.len() as u64,
+-                        columns: variables.len() as u64,
+-                    },
++                    PlanEstimate::new(
++                        bindings.len() as u64,
++                        bindings.len() as u64,
++                        variables.len() as u64,
++                    ),
+                 );
+                 Ok(())
+             }
+diff --git crates/sparql-eval/src/bgp/positive.rs crates/sparql-eval/src/bgp/positive.rs
+index a8ba73045..ceffd0a25 100644
+--- crates/sparql-eval/src/bgp/positive.rs
++++ crates/sparql-eval/src/bgp/positive.rs
+@@ -350,11 +350,7 @@ impl PositivePlan {
+                     left.certain = left.certain.union_admitted(&right.certain, &workspace)?;
+                     Summary {
+                         certain: left.certain,
+-                        estimate: PlanEstimate {
+-                            rows,
+-                            peak_rows,
+-                            columns: left.schema.len() as u64,
+-                        },
++                        estimate: PlanEstimate::new(rows, peak_rows, left.schema.len() as u64),
+                         schema: left.schema,
+                     }
+                 }
+@@ -386,11 +382,7 @@ impl PositivePlan {
+                     }
+                     Summary {
+                         certain: certain.unwrap_or_default(),
+-                        estimate: PlanEstimate {
+-                            rows,
+-                            peak_rows: peak_rows.max(rows),
+-                            columns: schema.len() as u64,
+-                        },
++                        estimate: PlanEstimate::new(rows, peak_rows.max(rows), schema.len() as u64),
+                         schema,
+                     }
+                 }
+@@ -789,14 +781,14 @@ impl PositivePlan {
+                             .estimate_of(first)
+                             .expect("first driver was surveyed");
+                         let rows = first.rows.saturating_mul(second.rows);
+-                        PlanEstimate {
++                        PlanEstimate::new(
+                             rows,
+-                            peak_rows: rows,
+-                            columns: u64::try_from(
++                            rows,
++                            u64::try_from(
+                                 crate::eval::syntactic_schema_admitted(node, &workspace)?.len(),
+                             )
+                             .map_err(|_| EvalError::WorkspaceBoundOverflow)?,
+-                        }
++                        )
+                     } else {
+                         second.clone()
+                     };
+@@ -817,14 +809,7 @@ impl PositivePlan {
+                         &*crate::eval::syntactic_schema_admitted(node, &workspace)?,
+                         &seed.schema,
+                     )?);
+-                    survey.record(
+-                        node,
+-                        PlanEstimate {
+-                            rows,
+-                            peak_rows: rows,
+-                            columns,
+-                        },
+-                    );
++                    survey.record(node, PlanEstimate::new(rows, rows, columns));
+                 }
+             }
+         }
+diff --git crates/sparql-eval/src/governor/ledger.rs crates/sparql-eval/src/governor/ledger.rs
+index a7aaef882..992d5821e 100644
+--- crates/sparql-eval/src/governor/ledger.rs
++++ crates/sparql-eval/src/governor/ledger.rs
+@@ -129,7 +129,9 @@ use crate::workspace::{AdmittedRecords, AdmittedVec, SharedWorkspace};
+ 
+ /// The cost planner's prediction for one basic graph pattern, recorded before evaluation
+ /// so the ledger can print it beside the row count that actually materialised.
++/// These estimates are predictions, not guaranteed output bounds.
+ #[derive(Debug, Clone, PartialEq, Eq)]
++#[non_exhaustive]
+ pub struct PlanEstimate {
+     /// The estimated size of the BGP's final output, in rows.
+     pub rows: u64,
+@@ -145,6 +147,16 @@ pub struct PlanEstimate {
+ }
+ 
+ impl PlanEstimate {
++    /// Construct the planner's row, peak-row and working-width predictions.
++    #[must_use]
++    pub const fn new(rows: u64, peak_rows: u64, columns: u64) -> Self {
++        Self {
++            rows,
++            peak_rows,
++            columns,
++        }
++    }
++
+     /// The estimated peak intermediate bag, in cells — the estimate compared against the
+     /// caller's intermediate-cardinality ceiling at admission.
+     ///
+diff --git crates/validate/src/regime.rs crates/validate/src/regime.rs
+index e15287291..b601542a2 100644
+--- crates/validate/src/regime.rs
++++ crates/validate/src/regime.rs
+@@ -835,6 +835,7 @@ fn rule_lines(rules: &[purrdf_entail::RuleId]) -> String {
+ /// contract-hash <64 lowercase hex>
+ /// withheld-surrogates <n>
+ /// termination none | termination weakly-acyclic positions <n> existential-edges <n>
++///   | termination <criterion> law <version>
+ /// inconsistency none | inconsistency <rule-id> premises <n>
+ /// inconsistency-graph default | inconsistency-graph <term>   (only after a witness)
+ /// inconsistency-premise <s> <p> <o>       (n of them, the rule's own premise order)
+@@ -852,6 +853,10 @@ fn rule_lines(rules: &[purrdf_entail::RuleId]) -> String {
+ /// they fired, because a caller choosing whether to trust a closure needs to know which
+ /// rule set produced it. Whether an extension actually contributed is the `fired` line.
+ ///
++/// Termination criterion labels are extensible. The WA form retains its original
++/// counts; another certified criterion carries its native label and law version.
++/// An unfamiliar criterion is not an absent certificate or a claim of WA.
++///
+ /// `termination` is the chase's own proof that the run had to stop. `rdf` and `rdfs` state
+ /// existentially quantified rules and are evaluated by `purrdf-datalog`'s restricted
+ /// chase, which INVENTS terms — so their programs are certified weakly acyclic before a
+@@ -1078,12 +1083,19 @@ impl fmt::Display for RenderedReport<'_> {
+         writeln!(f, "withheld-surrogates {}", report.withheld_surrogates())?;
+         match report.termination() {
+             None => writeln!(f, "termination none")?,
+-            Some(certificate) => writeln!(
+-                f,
+-                "termination weakly-acyclic positions {} existential-edges {}",
+-                certificate.positions(),
+-                certificate.existential_edges()
+-            )?,
++            Some(certificate) => match (certificate.positions(), certificate.existential_edges()) {
++                (Some(positions), Some(existential_edges)) => writeln!(
++                    f,
++                    "termination {} positions {positions} existential-edges {existential_edges}",
++                    certificate.criterion().label(),
++                )?,
++                _ => writeln!(
++                    f,
++                    "termination {} law {}",
++                    certificate.criterion().label(),
++                    certificate.law_version(),
++                )?,
++            },
+         }
+         let Some(witness) = report.inconsistency() else {
+             return writeln!(f, "inconsistency none");
+diff --git docs/MIGRATION-4.0.md docs/MIGRATION-4.0.md
+index b50b30c4e..c3e4f449b 100644
+--- docs/MIGRATION-4.0.md
++++ docs/MIGRATION-4.0.md
+@@ -8,6 +8,14 @@ the PurRDF crates together when adopting them.
+ 
+ ## At a glance
+ 
++The USTAR reader, borrowed-member iterator and writer functions now return
++`purrdf::ustar::UstarError` instead of `String`. Match its non-exhaustive variants
++with a wildcard or inspect the borrowed structured fields. Refusals retain their
++original byte offsets, declared and available lengths, raw size fields and native
++UTF-8 causes. Use `Display` only for presentation; projection-package failures
++also retain the archive error in their standard source chain. Current valid
++archive bytes and member ordering are unchanged.
++
+ GTS transport decoding retains original native Zstandard frame errors through
+ `TransportError::cause` and the standard I/O source chain. Inspect structured
+ causes for decoder fields; `message()` remains an explicit presentation accessor.
+@@ -49,6 +57,26 @@ division, WKT and GeoJSON parsing resource policies, the SPARQL pre-binding rewr
+ SPARQL diagnostic codes.
+ Each has its own section below.
+ 
++## Extensible source formats and glob refusals
++
++`SourceFormat` and `purrdf_glob::SyntaxReason` are now non-exhaustive.
++External matches must include an unsupported-case arm. Keep known variants'
++behavior explicit; an unknown source format must produce an actionable refusal
++rather than acquire the behavior of a native syntax or container. The CLI
++refuses unknown kinds when reading, writing or resolving a document base.
++
++Existing format routing, glob matching and refusal payloads remain unchanged.
++Future language or compiled-plan laws must preserve existing valid patterns and
++readable 4.0 portable descriptions, or use explicitly selected versioned forms.
++
++## Planner estimates
++
++`PlanEstimate` is non-exhaustive. Replace struct literals with
++`PlanEstimate::new(rows, peak_rows, columns)`, and include `..` when destructuring
++the record. Its public fields remain readable. Row and peak-row estimates, and
++the cell estimate returned by `peak_cells()`, are predictions rather than
++guaranteed output bounds; their meaning and EXPLAIN representation are unchanged.
++
+ ## Streaming GTS payloads
+ 
+ `BlobPayload::bytes` now uses `BlobContent`: source-backed CBOR chunks,
+@@ -645,6 +673,32 @@ Target-specific capacity default constants have been removed.
+ `EvalOptions::without_stored_fact_limit`,
+ `without_join_step_limit` and `without_term_arena_limit` remove selected ceilings.
+ 
++## Prepared chase certificates
++
++`PreparedChase::certificate()` now borrows an opaque `ChaseCertificate`, which
++retains the original verified evidence and its allocation owner. Inspect its
++`criterion()`, `law_version()`, `program_identity()`, `report()` and `summary()`
++without copying the proof. `weakly_acyclic()` returns an optional borrowed
++`WaCertificate` for WA-specific positions and ranks. The `certify` and
++`certify_with` functions still produce owned WA evidence with independent
++verification before preparation. Explicit
++`close()` still owns evidence destruction and the original fallible grant refund.
++
++`ChaseTermination`, `TerminationError` and `TerminationCriterion` are
++non-exhaustive. Match known variants with a future-case arm; use the native
++criterion classification rather than treating an unfamiliar certified summary
++as an absent certificate. The implemented criterion remains weak acyclicity
++under law version 1; the chase, witnesses and model identities are unchanged.
++
++Entailment's `TerminationCertificate` retains the native certified summary and
++criterion and implements `Clone` without `Copy`. `ReasoningReport::termination()`
++returns `Option<&TerminationCertificate>`. Borrow it for inspection or explicitly
++clone it when an owned value is required. `positions()` and `existential_edges()`
++return `Option<usize>` because these counts belong to WA evidence. Structured
++inspection exposes the original `summary` and `criterion` records with the law
++version. Display delegates to the original native summary, and current WA report
++bytes remain unchanged. A lane that invents no term still reports no certificate.
++
+ ## HNSW arithmetic refusals
+ 
+ Shared distance pair and batch APIs now return `Result<f64, NonFinite>` instead
+@@ -1192,3 +1246,16 @@ parameter slots are reset before applying its dictionary. No execution inputs
+ are retained from a previous call. Ordinary, RDFLib, governed and entailment
+ query methods accept the same coordinate keywords; parser/provider settings
+ remain preparation-time configuration. See the [Python API reference](book/src/reference/python-api.md#supplied-query-time-and-entropy).
++
++## Slice ownership query diagnostics
++
++`OwnershipDiagnostic` is non-exhaustive. Its `UnparseableQuery` variant replaces
++`message: String` with `cause: QueryArtifactError`, retaining the original
++`Utf8Error` or SPARQL `ParseError`. Use `cause.to_string()` at the presentation
++boundary for the former message, or inspect the native cause through `source()`
++and `StructuredError`. External matches need an arm for unfamiliar diagnostics.
++
++The causes, owning slice and logical path remain available after the catalog is
++dropped, including in cloned reports. Malformed query artifacts are still skipped
++in artifact order; valid queries continue to contribute dependency evidence.
++Python's ownership lint and ownership-defect classification are unchanged.
