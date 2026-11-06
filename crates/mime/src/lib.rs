@@ -17,6 +17,9 @@ mod profile;
 mod project;
 mod transfer;
 
+#[cfg(test)]
+mod ownership_tests;
+
 pub use decode::decode_document;
 pub use error::MimeError;
 pub use model::{

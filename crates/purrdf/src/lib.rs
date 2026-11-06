@@ -361,6 +361,24 @@ pub mod markdown {
 
 /// Original-byte MIME carrier with explicit profiles, ordered RDF occurrences
 /// and reconstruction through the shared kernel cover law.
+///
+/// An analyzed document exposes immutable occurrences through borrowed views.
+///
+/// ```no_run
+/// use purrdf::mime::{Profile, SourceDocument, analyze, project};
+/// let profile = Profile::standard()?;
+/// let source = SourceDocument {
+///     id: "https://example.org/message",
+///     bytes: b"Subject: original\r\n\r\nbody\r\n",
+/// };
+/// let document = analyze(source, &profile)?;
+/// let subject = document.headers()[0].unfolded(document.source().bytes);
+/// assert_eq!(subject, b" original");
+/// let graph = project(&document, &profile)?;
+/// let restored = purrdf::mime::decode_document(&graph, document.id(), &profile)?;
+/// assert_eq!(restored, source.bytes);
+/// # Ok::<(), purrdf::mime::MimeError>(())
+/// ```
 pub mod mime {
     pub use purrdf_mime::*;
 }
