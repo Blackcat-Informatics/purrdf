@@ -3,6 +3,9 @@
 
 //! Shared native carriers for SHACL, with compact validation-local term handles.
 
+mod admission;
+pub use admission::ViewAdmissionError;
+
 use purrdf_core::TermBox;
 use std::convert::Infallible;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -146,15 +149,25 @@ where
         + 'static,
 {
     /// The retention charge of a `count`-term adapter, refused past `limits`.
-    fn admit(count: usize, limits: ViewLimits) -> Result<usize, String> {
-        let auxiliary_bytes = count
-            .checked_mul(size_of::<D::Id>() * 3 + size_of::<TermId>() * 2 + 16)
-            .ok_or("SHACL term mapping size overflow")?;
-        if count > limits.max_terms
-            || count >= u32::MAX as usize
+    fn admit(count: u64, limits: ViewLimits) -> Result<usize, ViewAdmissionError> {
+        let bytes_per_term = size_of::<D::Id>() * 3 + size_of::<TermId>() * 2 + 16;
+        let local_count = usize::try_from(count).map_err(|cause| {
+            ViewAdmissionError::mapping(count, limits, bytes_per_term, None, Some(cause))
+        })?;
+        let auxiliary_bytes = local_count.checked_mul(bytes_per_term).ok_or_else(|| {
+            ViewAdmissionError::mapping(count, limits, bytes_per_term, None, None)
+        })?;
+        if local_count > limits.max_terms
+            || local_count >= u32::MAX as usize
             || auxiliary_bytes > limits.max_auxiliary_bytes
         {
-            return Err("SHACL view exceeds term or auxiliary retention limit".to_owned());
+            return Err(ViewAdmissionError::mapping(
+                count,
+                limits,
+                bytes_per_term,
+                Some(auxiliary_bytes),
+                None,
+            ));
         }
         Ok(auxiliary_bytes)
     }
@@ -163,11 +176,8 @@ where
         source: Arc<D>,
         ids: impl FnOnce(&D) -> Box<[D::Id]>,
         limits: ViewLimits,
-    ) -> Result<Self, String> {
-        let auxiliary_bytes = Self::admit(
-            usize::try_from(source.term_count()).map_err(|_| "SHACL term mapping size overflow")?,
-            limits,
-        )?;
+    ) -> Result<Self, ViewAdmissionError> {
+        let auxiliary_bytes = Self::admit(source.term_count(), limits)?;
         let ids = ids(&source);
         let local_ids = ids
             .iter()
@@ -191,11 +201,8 @@ where
         lower: fn(D::Id) -> Option<usize>,
         lift: fn(usize) -> D::Id,
         limits: ViewLimits,
-    ) -> Result<Self, String> {
-        let auxiliary_bytes = Self::admit(
-            usize::try_from(source.term_count()).map_err(|_| "SHACL term mapping size overflow")?,
-            limits,
-        )?;
+    ) -> Result<Self, ViewAdmissionError> {
+        let auxiliary_bytes = Self::admit(source.term_count(), limits)?;
         let added_local = added
             .iter()
             .copied()
@@ -372,7 +379,7 @@ impl ShaclDatasetView {
         source: Arc<CompositeDatasetView>,
         projected: bool,
         limits: ViewLimits,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, ViewAdmissionError> {
         let dense = Dense::new(source, |source| source.term_ids().collect(), limits)?;
         Ok(Self::new(Source::Composite(dense), projected))
     }
@@ -393,7 +400,7 @@ impl ShaclDatasetView {
         source: Arc<DeltaDatasetView>,
         projected: bool,
         limits: ViewLimits,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, ViewAdmissionError> {
         let base = source.base().as_ref().term_count();
         let added = source.added_term_ids().collect();
         let dense = Dense::layered(
@@ -461,7 +468,7 @@ impl ShaclDatasetView {
         &self,
         terms: Arc<RdfDataset>,
         limits: ViewLimits,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, ViewAdmissionError> {
         debug_assert_eq!(terms.quad_count(), 0, "a term supplement carries no rows");
         let extra = ::purrdf_rdf::ir::CompositeSource::new(terms);
         let (composite, wrapped_delta) = match &self.source {
@@ -490,7 +497,7 @@ impl ShaclDatasetView {
                 self.wrapped_delta.clone(),
             ),
         };
-        let composite = composite.map_err(|error| error.to_string())?;
+        let composite = composite.map_err(ViewAdmissionError::composite)?;
         let dense = Dense::new(
             Arc::new(composite),
             |source| source.term_ids().collect(),

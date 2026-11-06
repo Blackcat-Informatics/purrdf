@@ -35,10 +35,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::data::{GraphFilter, native_quads};
-use crate::model::rdf;
-use crate::term::Term;
 use purrdf_rdf::RdfDataset;
+use purrdf_shapes::data::{GraphFilter, native_quads};
+use purrdf_shapes::model::rdf;
+use purrdf_shapes::term::Term;
 
 use super::{
     W3cCase, file_iri, iri_to_path, list_items, manifest_includes, mf, object, objects,
@@ -218,12 +218,19 @@ impl Status12 {
 /// The seven SPARQL 1.2 RL test types (`srlt:` vocabulary).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SrlKind {
+    /// The rule text must parse.
     PositiveSyntax,
+    /// The rule text must fail parsing.
     NegativeSyntax,
+    /// The parsed rules must pass well-formedness checks.
     PositiveWellFormedness,
+    /// The parsed rules must fail well-formedness checks.
     NegativeWellFormedness,
+    /// The rule set must admit stratification.
     PositiveStratification,
+    /// The rule set must fail stratification.
     NegativeStratification,
+    /// Rule evaluation must produce the expected inference graph.
     Eval,
 }
 
@@ -276,7 +283,9 @@ impl SrlKind {
 /// blank nodes and `expr` would name nothing in them.
 #[derive(Debug)]
 pub struct NodeExprCase {
+    /// Manifest file that also supplies the focus graph.
     pub file: PathBuf,
+    /// Retained manifest dataset owning expression and focus terms.
     pub dataset: Arc<RdfDataset>,
     /// `sht:nodeExpr`.
     pub expr: Term,
@@ -304,15 +313,20 @@ pub enum InferExpected {
 /// One `sht:Infer` entry.
 #[derive(Debug)]
 pub struct InferCase {
+    /// File containing the shapes and rules.
     pub shapes_path: PathBuf,
+    /// File containing the input data graph.
     pub data_path: PathBuf,
+    /// Retrieval IRI used for the shapes graph.
     pub shapes_graph_iri: String,
+    /// Inference outcome declared by the manifest.
     pub expected: InferExpected,
 }
 
 /// One SPARQL 1.2 RL entry.
 #[derive(Debug)]
 pub struct SrlCase {
+    /// Syntax, well-formedness, stratification or evaluation obligation.
     pub kind: SrlKind,
     /// The `.srl` rule set under test.
     pub ruleset: PathBuf,
@@ -325,9 +339,13 @@ pub struct SrlCase {
 /// The body of a discovered case, by test type.
 #[derive(Debug)]
 pub enum Body {
+    /// Validate data against a shapes graph.
     Validate(W3cCase),
+    /// Evaluate an expression over its retained focus graph.
     NodeExpr(NodeExprCase),
+    /// Run SHACL inference rules.
     Infer(InferCase),
+    /// Check or execute SPARQL rule text.
     Srl(SrlCase),
 }
 
@@ -346,6 +364,7 @@ pub struct Case12 {
     pub id: String,
     /// The id's directory, e.g. `core/node`.
     pub section: String,
+    /// Operation and its declared inputs and expectations.
     pub body: Body,
     /// The manifest root that discovered the entry. [`Root12::Unlisted`] for the
     /// entries of [`W3C12_UNINCLUDED_MANIFESTS`], which no upstream manifest
@@ -545,7 +564,7 @@ fn parse_case(
             .unwrap_or_else(|| panic!("{id}: sht:Validate entry was not parsed"));
         tc.id.clone_from(&id);
         tc.section.clone_from(&section);
-        tc.profile = crate::profile::ShaclProfile::ED_20261016;
+        tc.profile = purrdf_shapes::profile::ShaclProfile::ED_20261016;
         Body::Validate(tc)
     } else if ty == sht12::EVAL_NODE_EXPR {
         Body::NodeExpr(parse_node_expr_case(g, entry, manifest_path, &id))

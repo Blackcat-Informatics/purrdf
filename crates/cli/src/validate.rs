@@ -424,8 +424,12 @@ fn validation_options(
         // `complete_profile`, and the dated law's XPath bundle checked against
         // `--xpath-regex`.
         if let Some(profile) =
-            purrdf_validate::requested_shacl_profile(Some(id), options.xpath_regex)
-                .map_err(|message| CliError::Usage(format!("--shacl-profile {id}: {message}")))?
+            purrdf_validate::requested_shacl_profile(Some(id), options.xpath_regex).map_err(
+                |cause| CliError::ShaclProfileRequest {
+                    id: id.to_owned(),
+                    cause,
+                },
+            )?
         {
             validation = validation.with_profile(profile);
         }

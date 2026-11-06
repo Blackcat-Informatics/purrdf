@@ -241,6 +241,10 @@ fn every_boundary_entry_point_refuses_without_the_table_and_applies_it_with() {
     let refused =
         validate_changes_to_sarif_string(IMPORTER, None, "", Some(DATA), None, &options, &[])
             .expect_err("the change path refuses");
+    let refused = match refused {
+        purrdf_shapes::report::CompleteValidationError::Shapes(error) => error,
+        error => panic!("expected the original shapes import refusal, got: {error}"),
+    };
     assert_unresolved(&refused, "validate_changes_to_sarif_string");
     let (sarif, _) =
         validate_changes_to_sarif_string(IMPORTER, None, "", Some(DATA), None, &options, TABLE)

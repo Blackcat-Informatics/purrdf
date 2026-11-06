@@ -15,6 +15,9 @@
 //! does not re-allocate the shape's variable names once per focus node.
 
 pub(crate) mod coordinates;
+mod operation;
+
+pub use operation::OperationError;
 
 use std::cell::RefCell;
 use std::marker::PhantomData;
@@ -685,13 +688,13 @@ pub(crate) fn eval_select_nodes_view<
 ///
 /// # Errors
 ///
-/// Returns `Err(String)` if `agg` is not one of `"MIN"`/`"MAX"`/`"SUM"`, or if
+/// Returns a typed SHACL failure if `agg` is not one of `"MIN"`/`"MAX"`/`"SUM"`, or if
 /// the accumulator refuses an operand.
 pub fn eval_aggregate(
     dataset: &Arc<RdfDataset>,
     agg: &str,
     values: &[Term],
-) -> Result<Option<Term>, String> {
+) -> Result<Option<Term>, crate::error::ShapesError> {
     eval_aggregate_view(dataset, agg, values)
 }
 
@@ -706,20 +709,18 @@ pub(crate) fn eval_aggregate_view<
     _dataset: &D,
     agg: &str,
     values: &[Term],
-) -> Result<Option<Term>, String> {
+) -> Result<Option<Term>, crate::error::ShapesError> {
     let aggregate = match agg {
         "MIN" => ValueAggregate::Min,
         "MAX" => ValueAggregate::Max,
         "SUM" => ValueAggregate::Sum,
         other => {
-            return Err(format!(
-                "unsupported aggregate {other} (expected MIN/MAX/SUM)"
-            ));
+            return Err(format!("unsupported aggregate {other} (expected MIN/MAX/SUM)").into());
         }
     };
     let operands: Vec<TermValue> = values.iter().map(Term::to_term_value).collect();
-    let folded = fold_values(aggregate, &operands)
-        .map_err(|e| format!("aggregate {agg} evaluation error: {e}"))?;
+    let folded =
+        fold_values(aggregate, &operands).map_err(|error| OperationError::aggregate(agg, error))?;
     Ok(folded.as_ref().map(term_value_to_native))
 }
 
@@ -740,14 +741,14 @@ pub(crate) fn eval_aggregate_view<
 ///
 /// # Errors
 ///
-/// Returns `Err(String)` never in the current implementation; the signature keeps
+/// Returns no error in the current implementation; the signature keeps
 /// the fallible shape its callers already thread so a future comparator that can
 /// refuse an operand does not become a breaking change.
 pub fn eval_order(
     dataset: &Arc<RdfDataset>,
     values: &[Term],
     descending: bool,
-) -> Result<Vec<Term>, String> {
+) -> Result<Vec<Term>, crate::error::ShapesError> {
     eval_order_view(dataset, values, descending)
 }
 
@@ -760,7 +761,7 @@ pub(crate) fn eval_order_view<
     _dataset: &D,
     values: &[Term],
     descending: bool,
-) -> Result<Vec<Term>, String> {
+) -> Result<Vec<Term>, crate::error::ShapesError> {
     let operands: Vec<TermValue> = values.iter().map(Term::to_term_value).collect();
     Ok(order_values(operands, descending)
         .iter()
@@ -1339,8 +1340,8 @@ impl AmbientScopes {
     ///
     /// # Errors
     ///
-    /// `Err(String)` if the extension environment cannot be derived.
-    fn snapshot() -> Result<Self, String> {
+    /// A typed native failure if the extension environment cannot be derived.
+    fn snapshot() -> Result<Self, crate::error::ShapesError> {
         let governors = current_governors();
         // Sources exist only beside a governor state (see `CURRENT_SOURCES`), so the
         // ungoverned path does not touch their slot at all.
@@ -1357,7 +1358,7 @@ impl AmbientScopes {
             coordinate_recorder: coordinates::recorder(),
             now: coordinates::now(),
             functions: CURRENT_FUNCTIONS.with(|slot| slot.borrow().clone()),
-            env: current_env().map_err(|e| format!("query evaluation error: {e}"))?,
+            env: current_env()?,
             governors,
             sources,
             call_depth: current_call_depth(),
@@ -2159,8 +2160,9 @@ impl Drop for FunctionScope {
 ///
 /// # Errors
 ///
-/// A message if a registered relation's or aggregate's declaration methods panic.
-pub fn current_env() -> Result<Arc<ExtensionEnv<'static>>, String> {
+/// The original evaluator failure if a registered relation's or aggregate's
+/// declaration methods panic.
+pub fn current_env() -> Result<Arc<ExtensionEnv<'static>>, crate::error::ShapesError> {
     let relations = current_property_functions();
     let aggregates = current_aggregates();
     let options = current_parser_options();
@@ -2191,7 +2193,7 @@ pub fn current_env() -> Result<Arc<ExtensionEnv<'static>>, String> {
                 .as_deref()
                 .map_or(AggregateRegistry::EMPTY, Clone::clone),
         )
-        .map_err(|e| format!("extension environment: {e}"))?,
+        .map_err(OperationError::environment)?,
     );
     CACHED_ENV.with(|slot| {
         *slot.borrow_mut() = Some(CachedEnv {
@@ -2269,14 +2271,14 @@ impl CachedEnv {
 ///
 /// # Errors
 ///
-/// A message naming the function whose body failed to parse or to admit — a body
+/// A typed native diagnostic naming the function whose body failed to parse or to admit — a body
 /// naming a declared-but-unregistered relation IRI, or one whose relation chain no
 /// declared access mode can serve, fails HERE, once, rather than per row during
 /// evaluation.
 pub fn bind_in_current_env(
     shapes: &crate::shapes::Shapes,
     shapes_graph: Option<&str>,
-) -> Result<Arc<BoundFunctionRegistry>, String> {
+) -> Result<Arc<BoundFunctionRegistry>, crate::error::ShapesError> {
     let functions = &shapes.functions;
     let shapes_graph = shapes_graph.or(shapes.shapes_graph.as_deref());
     // Nothing declared, nothing to bind — and an empty bound registry is compatible
@@ -2309,7 +2311,7 @@ pub fn bind_in_current_env(
     }
     let bound = SPARQL_ENGINE
         .with(|engine| engine.bind_functions(functions.as_ref().clone(), &env))
-        .map_err(|e| e.to_string())?;
+        .map_err(OperationError::binding)?;
     if !bound.requires_focus_graph()
         && shapes.validation_options.is_default()
         && shapes_graph.is_none()
@@ -3454,7 +3456,10 @@ mod tests {
     fn eval_aggregate_rejects_unknown_agg() {
         let dataset = dataset_from_ntriples(&[]);
         let err = eval_aggregate(&dataset, "AVG", &[int_lit("1")]).unwrap_err();
-        assert!(err.contains("unsupported aggregate"), "got: {err}");
+        assert!(
+            err.to_string().contains("unsupported aggregate"),
+            "got: {err}"
+        );
     }
 
     // ── eval_order ────────────────────────────────────────────────────────────
@@ -3582,12 +3587,86 @@ mod tests {
     /// test is evidence it does.
     #[derive(Debug)]
     struct DenyListRelation {
+        panic_arity: bool,
         modes: [purrdf_sparql_eval::BindingPattern; 1],
+    }
+
+    #[test]
+    fn current_environment_retains_native_declaration_failure_after_scope_drop() {
+        use purrdf_testkit::error_capture::Capture;
+        use std::error::Error;
+
+        let error = {
+            let mut registry = PropertyFunctionRegistry::new();
+            let mut relation = DenyListRelation::new();
+            relation.panic_arity = true;
+            registry.register("http://example.org/broken", Arc::new(relation));
+            let _scope = enter_property_function_scope(Arc::new(registry));
+            current_env().expect_err("a broken declaration must fail")
+        };
+        assert_eq!(error.failure_class(), crate::error::FailureClass::Processor);
+        let native = error
+            .source()
+            .unwrap()
+            .source()
+            .unwrap()
+            .downcast_ref::<purrdf_sparql_eval::EvalError>()
+            .unwrap();
+        let captured = Capture::read(&error).child("cause");
+        assert_eq!(captured.code, "shapes-sparql-environment");
+        assert_eq!(captured.child("cause").code, Capture::read(native).code);
+        assert!(
+            current_env().is_ok(),
+            "the restored empty scope remains valid"
+        );
+    }
+
+    #[test]
+    fn function_binding_retains_original_diagnostic_after_declarations_drop() {
+        use purrdf_sparql_eval::{TypeConstraint, UserFnBody, UserFunction};
+        use purrdf_testkit::error_capture::Capture;
+        use std::error::Error;
+
+        let declared = |body: &str| {
+            let mut shapes = crate::shapes::Shapes::default();
+            Arc::make_mut(&mut shapes.functions).insert(
+                "http://example.org/f",
+                UserFunction {
+                    params: Vec::new(),
+                    required: 0,
+                    body: Arc::from(body),
+                    kind: UserFnBody::Select,
+                    return_constraint: TypeConstraint::default(),
+                },
+            );
+            shapes
+        };
+        let error = bind_in_current_env(&declared("SELECT WHERE {"), None)
+            .expect_err("the malformed function body must fail");
+        let native = error
+            .source()
+            .unwrap()
+            .source()
+            .unwrap()
+            .downcast_ref::<purrdf_core::RdfDiagnostic>()
+            .unwrap();
+        assert_eq!(native.code, "native-sparql-query-parse");
+        assert!(native.message.contains("http://example.org/f"));
+        assert_eq!(
+            error.failure_class(),
+            crate::error::FailureClass::Evaluation
+        );
+        let captured = Capture::read(&error).child("cause");
+        assert_eq!(captured.code, "shapes-sparql-function-binding");
+        assert_eq!(captured.child("cause").code, Capture::read(native).code);
+        bind_in_current_env(&declared("SELECT (1 AS ?value) WHERE {}"), None)
+            .expect("the neighboring valid function body still binds");
     }
 
     impl DenyListRelation {
         fn new() -> Self {
             Self {
+                panic_arity: false,
                 modes: [purrdf_sparql_eval::BindingPattern::from_code("bf")],
             }
         }
@@ -3599,6 +3678,7 @@ mod tests {
         }
 
         fn arity(&self) -> purrdf_sparql_eval::PfArity {
+            assert!(!self.panic_arity, "native declaration failed");
             purrdf_sparql_eval::PfArity::new(1, 1)
         }
 

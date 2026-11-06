@@ -3,12 +3,9 @@
 
 //! **The one reader for the two SHACL corpora this crate is graded against.**
 //!
-//! This is test support, not API: it is hidden from the documentation, carries no
-//! stability promise, and reads the corpora from this crate's source checkout. It
-//! lives in the library so that every harness that grades these corpora — this
-//! crate's conformance tests and the command-line crate's tests that drive the
-//! built binary over the same entries — imports one reader instead of compiling
-//! a copy of it.
+//! Unpublished conformance support shared by the Shapes and CLI integration
+//! tests. It reads frozen corpora from the workspace checkout and keeps their
+//! discovery and grading in one implementation, outside the shipping SHACL API.
 //!
 //! Two corpora exist, with two different discovery rules, and more than one
 //! harness needs to walk each of them:
@@ -59,14 +56,15 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::data::{GraphFilter, native_quads, resolve_id};
 use purrdf_rdf::{DatasetView as _, GraphMatch, RdfDataset};
+use purrdf_shapes::data::{GraphFilter, native_quads, resolve_id};
 
 pub mod node_expr_grading;
 pub mod report_grading;
 pub mod shacl12;
-use crate::model::{BoxRoleVocab, rdf, sh};
-use crate::term::{NamedNode, Term, term_id_to_native};
+pub mod vocab;
+use purrdf_shapes::model::{BoxRoleVocab, rdf, sh};
+use purrdf_shapes::term::{NamedNode, Term, term_id_to_native};
 
 // ── Corpus locations ──────────────────────────────────────────────────────────
 
@@ -83,7 +81,7 @@ pub const W3C_SUITE_COMMIT: &str = "08adb3776709a014bc3062ede793c36275b22446";
 pub const W3C_SUBSET_CASES: usize = 120;
 
 /// The first-party numbered-case corpus.
-pub const CORPUS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/corpus");
+pub const CORPUS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../shapes/corpus");
 
 /// Exact number of `sht:Validate` entries the manifest tree must discover.
 /// Bump only when the vendored corpus itself changes (it is byte-frozen).
@@ -191,7 +189,9 @@ pub type Multiset = BTreeMap<Tuple, usize>;
 /// EXACTLY that multiset, recursively.
 #[derive(Clone, Debug)]
 pub struct ExpectedResult {
+    /// Normalized result fields compared by the shared grader.
     pub tuple: Tuple,
+    /// Required nested results, or no constraint on nested results.
     pub details: Option<Vec<Self>>,
 }
 
@@ -201,7 +201,12 @@ pub enum Expected {
     /// `mf:result sht:Failure` — the validator must reject the input.
     Failure,
     /// A full expected `sh:ValidationReport`.
-    Report { conforms: bool, results: Multiset },
+    Report {
+        /// Expected report conformance.
+        conforms: bool,
+        /// Expected normalized result multiplicities.
+        results: Multiset,
+    },
 }
 
 /// One `sht:Validate` entry from the vendored manifest tree.
@@ -211,11 +216,14 @@ pub struct W3cCase {
     pub id: String,
     /// Manifest section, e.g. `core/node`.
     pub section: String,
+    /// File containing the shapes graph.
     pub shapes_path: PathBuf,
+    /// File containing the data graph.
     pub data_path: PathBuf,
     /// IRI supplied by `sht:shapesGraph` (often `<>` resolving to the test file),
     /// used as the named graph for `$shapesGraph` pre-binding in SHACL-SPARQL.
     pub shapes_graph_iri: Option<String>,
+    /// Outcome declared by the manifest.
     pub expected: Expected,
     /// The `sh:conformanceDisallows` IRIs of the EXPECTED report, which the suite
     /// uses as a validation parameter ("the test framework needs to use the
@@ -249,7 +257,7 @@ pub struct W3cCase {
     /// shacl-shacl differential lane deliberately does not: it judges structural
     /// validity once per shapes file, which a dated law's extra refusals would
     /// confound, so it runs the compatibility law.
-    pub profile: crate::profile::ShaclProfile,
+    pub profile: purrdf_shapes::profile::ShaclProfile,
     /// Whether the case belongs to the first-party `af/` seam rather than to the
     /// vendored W3C suite. Set by [`w3c_cases`]; every other discovery path leaves
     /// it `false`.
@@ -261,8 +269,11 @@ pub struct W3cCase {
 pub struct FirstPartyCase {
     /// The directory name, e.g. `01-min-count`.
     pub name: String,
+    /// File containing the shapes graph.
     pub shapes_path: PathBuf,
+    /// File containing the data graph.
     pub data_path: PathBuf,
+    /// File containing the frozen expected validation report.
     pub expected_report_path: PathBuf,
 }
 
@@ -277,6 +288,7 @@ pub fn first_party_box_role_vocab() -> BoxRoleVocab {
 
 // ── Graph helpers ─────────────────────────────────────────────────────────────
 
+/// Construct a named term from a trusted fixture IRI.
 pub fn named(iri: &str) -> Term {
     Term::NamedNode(NamedNode::new_unchecked(iri))
 }
@@ -284,7 +296,7 @@ pub fn named(iri: &str) -> Term {
 /// The distinct objects of `(subject, predicate, ?)` in any graph:
 /// [`DatasetView::objects`](purrdf_rdf::DatasetView::objects), lifted to native terms.
 pub fn objects(g: &RdfDataset, subject: &Term, predicate: &str) -> Vec<Term> {
-    crate::data::objects_of(g, subject, predicate)
+    purrdf_shapes::data::objects_of(g, subject, predicate)
 }
 
 /// The first object of `(subject, predicate, ?)`, if any.
@@ -331,10 +343,12 @@ pub fn norm(t: &Term) -> String {
 
 // ── IRI ↔ path mapping ────────────────────────────────────────────────────────
 
+/// Spell a fixture path as a file IRI for relative reference resolution.
 pub fn file_iri(path: &Path) -> String {
     format!("file://{}", path.display())
 }
 
+/// Recover the fixture path from a file IRI, panicking on another scheme.
 pub fn iri_to_path(iri: &str) -> PathBuf {
     PathBuf::from(
         iri.strip_prefix("file://")
@@ -566,7 +580,7 @@ pub fn parse_entry(
         expected_messages,
         expected_annotations,
         expected_details,
-        profile: crate::profile::ShaclProfile::LEGACY,
+        profile: purrdf_shapes::profile::ShaclProfile::LEGACY,
         first_party: false,
     })
 }
@@ -626,7 +640,7 @@ fn expected_result_messages(g: &RdfDataset, report_node: &Term) -> Vec<(Tuple, B
 pub fn is_annotation_property(predicate: &str) -> bool {
     predicate != rdf::TYPE
         && !predicate.starts_with(sh::NS)
-        && !predicate.starts_with(crate::model::shnex::NS)
+        && !predicate.starts_with(purrdf_shapes::model::shnex::NS)
 }
 
 /// Every expected result carrying result annotations, with its `(property,

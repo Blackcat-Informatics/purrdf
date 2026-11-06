@@ -28,6 +28,20 @@ cannot change the analyzed document. Attachment decoding, part covers and RDF
 projection reuse its established invariants. Unknown parts, transfer refusals,
 profile checks and strict verification of external RDF remain enforced.
 
+### Conformance fixtures leave the shipping API
+
+`purrdf_shapes::shacl_corpora` and the vocabulary fixture readers
+`purrdf_shapes::spec::{declared, declared_terms, Vocabulary, DeclaredFunction,
+DeclaredParam}` move to the unpublished `purrdf-shacl-conformance` support crate.
+Repository integration tests use it through a path-only dev dependency. Corpus
+readers are at its root and vocabulary readers are in `vocab`. Published runtime
+consumers must supply their own fixtures; these checkout-based readers no longer
+ship as part of the SHACL API.
+
+The existing resident lookup implementations are available as
+`purrdf_shapes::data::{resolve_id, objects_of}`. They preserve scope-qualified
+blank-node resolution, raw default-scope fallback and distinct object results.
+
 ### Other API migrations
 
 The USTAR reader, borrowed-member iterator and writer functions now return
@@ -1708,3 +1722,53 @@ follows N references and performs N × (N − 1) / 2 cycle-membership probes.
 The native API resource-growth case reports allocations, requested bytes,
 retained bytes and peak working bytes for verdict and full-output evaluation;
 its windows exclude schema compilation and keep the full result alive.
+
+## Standalone RDF and SHACL helpers
+
+`purrdf_rdf::dataset_from_bytes` now returns the original `RdfDiagnostic`
+instead of `String`. Its code, locations, storage classification and native
+cause remain available after the input bytes are dropped. Add presentation
+prefixes at the host boundary rather than replacing the diagnostic.
+
+`purrdf_shapes::sparql::{eval_aggregate, eval_order, current_env,
+bind_in_current_env}` now return `ShapesError`. Native aggregate and environment
+failures retain their original `EvalError`; function-binding failures retain the
+original `RdfDiagnostic`. `ShapesError::SparqlOperation` exposes the operation
+and original cause through borrowed structured inspection and standard error
+sources. Aggregate failures also retain the aggregate name. Processor failures
+propagate through SHACL alternatives; ordinary evaluation failures remain
+catchable. Ordering still uses the same infallible native comparator.
+
+`purrdf_shapes::shape_union::shape_files` now returns `ShapesError` instead of
+`String`. `ShapesError::ShapeFiles` retains the original directory or file path,
+discovery operation and native I/O cause through `ShapeFilesError`. Missing
+generated shapes retain their original directory as a configuration failure;
+I/O failures are operational processor failures. File ordering, exclusions and
+fail-closed discovery remain unchanged. File reads in `load_shapes` use the same
+native owner. Retrieval-IRI and RDF loading still use their existing contracts.
+
+## Typed SHACL admission and request errors
+
+Replace explicit `String` error annotations at these Rust boundaries:
+
+| Operation | Error type |
+| --- | --- |
+| `ShaclDatasetView::composite` and `delta` | `purrdf_shapes::data_view::ViewAdmissionError` |
+| `requested_shacl_profile` | `purrdf_validate::ProfileRequestError` |
+| `requested_shacl_recursion` | `purrdf_validate::RecursionRequestError` |
+| `srl::ir::ElementRule::check_well_formed` | `purrdf_shapes::srl::ir::WellFormednessError` |
+| `rules::shacl_rule_set` | `purrdf_shapes::rules::RuleAdmissionError` |
+| `shapes::__linked_declarations` | `purrdf_shapes::ShapesError` |
+
+These owners have private representations. Inspect original counts, maxima,
+computed mapping bytes, variable names, processor terms and absent request limits
+through `StructuredError`. Native profile, regex-law and composite failures remain
+available through standard error sources. Convert to a string only when presenting
+an error. `SrlError::WellFormedness` now carries a typed `cause` instead of a
+`message` field; `ShapesError` and `RulesError` retain the same typed owners when
+these operations fail during validation or rule execution.
+
+The schema guards `limits::ensure_depth` and `ensure_emitted` are internal.
+Public schema depth and output-budget constants, and `emitted_bytes_bound`, remain
+available for caller planning. Carrier thresholds, request defaults, rule selection,
+refusal order and successful RDF identities are unchanged.

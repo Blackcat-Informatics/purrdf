@@ -62,6 +62,8 @@ use crate::term::{NamedNode, Term, Triple};
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SrlError {
+    /// Original violated condition of a directly evaluated IR rule.
+    RuleWellFormedness(super::ir::WellFormednessError),
     /// Original rule failure and its actual execution coordinates.
     Execution(Box<crate::rules::RuleExecutionError>),
     /// Original failure of the graph-free input operation.
@@ -98,8 +100,8 @@ pub enum SrlError {
     WellFormedness {
         /// The rule, as [`SrlRule::describe`] names it.
         rule: String,
-        /// The violated condition.
-        message: String,
+        /// The original violated condition and variable operands.
+        cause: super::ir::WellFormednessError,
     },
     /// The rule set violates the stratification condition (§4.4.1): "there is no
     /// recursive dependency involving a closed dependency in the dependency graph".
@@ -129,9 +131,40 @@ pub enum SrlError {
     },
 }
 
+impl purrdf_hash::error::StructuredError for SrlError {
+    purrdf_hash::error_visit! {
+        RuleWellFormedness(cause) => "srl-rule-well-formedness" { "cause" => Cause(cause) },
+        Execution(cause) => "srl-execution" { "cause" => Cause(cause.as_ref()) },
+        TripleSource(cause) => "srl-triple-source" { "cause" => Cause(cause) },
+        Shapes(cause) => "srl-shapes" { "cause" => Cause(cause) },
+        Syntax { document, line, column, message } => "srl-syntax" {
+            "document" => Value(document.as_deref().map_or(purrdf_hash::error::ErrorValue::Absent, purrdf_hash::error::ErrorValue::Iri)),
+            "line" => Unsigned(u128::from(*line)), "column" => Unsigned(u128::from(*column)),
+            "message" => Message(message),
+        },
+        Import { iri, message } => "srl-import" { "iri" => Iri(iri), "message" => Message(message) },
+        UnreachedImports { iris } => "srl-unreached-imports" {
+            "iris" => List(iris.iter().map(|iri| purrdf_hash::error::ErrorValue::Iri(iri))),
+        },
+        WellFormedness { rule, cause } => "srl-well-formedness" {
+            "rule" => Text(rule), "cause" => Cause(cause),
+        },
+        Stratification { rule, depends_on, cycle } => "srl-stratification" {
+            "rule" => Text(rule), "depends_on" => Text(depends_on),
+            "cycle" => List(cycle.iter().map(|rule| purrdf_hash::error::ErrorValue::Text(rule))),
+        },
+        LimitExceeded(cause) => "srl-limit-exceeded" { "cause" => Cause(cause.as_ref()) },
+        Stopped { cause } => "srl-stopped" { "cause" => Cause(cause.as_ref()) },
+        Evaluation { message } => "srl-evaluation" { "message" => Message(message) },
+    }
+}
+
 impl fmt::Display for SrlError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::RuleWellFormedness(cause) => {
+                write!(f, "SPARQL 1.2 RL evaluation failed: {cause}")
+            }
             Self::Execution(error) => {
                 let mut cause = error.cause.as_ref();
                 while let crate::rules::RulesError::Execution(nested) = cause {
@@ -140,6 +173,9 @@ impl fmt::Display for SrlError {
                 match cause {
                     crate::rules::RulesError::LimitExceeded(limit) => {
                         write!(f, "SPARQL 1.2 RL evaluation failed: {limit}")
+                    }
+                    crate::rules::RulesError::WellFormedness(cause) => {
+                        write!(f, "SPARQL 1.2 RL evaluation failed: {cause}")
                     }
                     crate::rules::RulesError::Failed(message) => {
                         write!(f, "SPARQL 1.2 RL evaluation failed: {message}")
@@ -178,8 +214,8 @@ impl fmt::Display for SrlError {
                 if iris.len() == 1 { "set" } else { "sets" },
                 if iris.len() == 1 { "it" } else { "them" },
             ),
-            Self::WellFormedness { rule, message } => {
-                write!(f, "SPARQL 1.2 RL {rule} is not well formed: {message}")
+            Self::WellFormedness { rule, cause } => {
+                write!(f, "SPARQL 1.2 RL {rule} is not well formed: {cause}")
             }
             Self::Stratification {
                 rule,
@@ -208,6 +244,8 @@ impl std::error::Error for SrlError {
             Self::Execution(error) => Some(error.as_ref()),
             Self::Shapes(error) => Some(error),
             Self::TripleSource(error) => Some(error),
+            Self::WellFormedness { cause, .. } => Some(cause),
+            Self::RuleWellFormedness(cause) => Some(cause),
             Self::LimitExceeded(error) => Some(error.as_ref()),
             Self::Stopped { cause } => Some(cause.as_ref()),
             _ => None,
@@ -725,6 +763,7 @@ impl RuleSetDocument {
                 SrlError::LimitExceeded(limit)
             }
             crate::rules::RulesError::Failed(message) => SrlError::Evaluation { message },
+            crate::rules::RulesError::WellFormedness(cause) => SrlError::RuleWellFormedness(cause),
             crate::rules::RulesError::Stopped { cause } => SrlError::Stopped { cause },
         }
     }
@@ -786,9 +825,9 @@ impl RuleSetDocument {
         for rule in &self.rules {
             rule.rule
                 .check_well_formed()
-                .map_err(|message| SrlError::WellFormedness {
+                .map_err(|cause| SrlError::WellFormedness {
                     rule: rule.describe(),
-                    message,
+                    cause,
                 })?;
         }
         Ok(())
@@ -1065,4 +1104,25 @@ fn parse_document(
         versions: parsed.versions,
         location: base.map(ToOwned::to_owned),
     })
+}
+
+impl SrlError {
+    /// Whether an original rule refusal is semantic or operational.
+    #[must_use]
+    pub const fn failure_class(&self) -> crate::error::FailureClass {
+        match self {
+            Self::Execution(error) => error.failure_class(),
+            Self::Shapes(error) => error.failure_class(),
+            Self::TripleSource(_) | Self::LimitExceeded(_) | Self::Stopped { .. } => {
+                crate::error::FailureClass::Processor
+            }
+            Self::Syntax { .. }
+            | Self::Import { .. }
+            | Self::UnreachedImports { .. }
+            | Self::WellFormedness { .. }
+            | Self::RuleWellFormedness(_)
+            | Self::Stratification { .. }
+            | Self::Evaluation { .. } => crate::error::FailureClass::Evaluation,
+        }
+    }
 }

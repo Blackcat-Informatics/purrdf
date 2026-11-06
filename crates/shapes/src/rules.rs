@@ -55,6 +55,9 @@
 //! literal subject or a non-IRI predicate produces no triple for that combination, and
 //! a SPARQL rule's CONSTRUCT already omits them by SPARQL's own CONSTRUCT semantics.
 
+mod admission;
+pub use admission::RuleAdmissionError;
+
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
@@ -789,7 +792,9 @@ impl RuleExecutionError {
             RulesError::LimitExceeded(_) | RulesError::Stopped { .. } => {
                 crate::error::FailureClass::Processor
             }
-            RulesError::Failed(_) => crate::error::FailureClass::Evaluation,
+            RulesError::Failed(_) | RulesError::WellFormedness(_) => {
+                crate::error::FailureClass::Evaluation
+            }
         }
     }
 }
@@ -808,6 +813,8 @@ impl std::error::Error for RuleExecutionError {
 /// failure, as the engine's diagnostic.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RulesError {
+    /// Original violated rule condition and native operands.
+    WellFormedness(srl::ir::WellFormednessError),
     /// Executed contexts retained beside the original failure.
     Execution(Box<RuleExecutionError>),
     /// A typed shapes or data materialization refusal.
@@ -829,6 +836,7 @@ impl purrdf_hash::error::StructuredError for RulesError {
         Shapes(cause) => "shacl-rules-shapes" { "cause" => Cause(cause) },
         LimitExceeded(cause) => "shacl-rules-limit-exceeded" { "cause" => Cause(cause.as_ref()) },
         Stopped { cause } => "shacl-rules-stopped" { "cause" => Cause(cause.as_ref()) },
+        WellFormedness(cause) => "shacl-rules-well-formedness" { "cause" => Cause(cause) },
         Failed(message) => "shacl-rules-failed" { "message" => Text(message) },
     }
 }
@@ -889,6 +897,7 @@ impl std::fmt::Display for RulesError {
             Self::Shapes(error) => error.fmt(f),
             Self::LimitExceeded(limit) => write!(f, "SHACL rules did not complete: {limit}"),
             Self::Stopped { cause } => cause.fmt(f),
+            Self::WellFormedness(error) => error.fmt(f),
             Self::Failed(message) => f.write_str(message),
         }
     }
@@ -901,6 +910,7 @@ impl std::error::Error for RulesError {
             Self::Shapes(error) => Some(error),
             Self::LimitExceeded(error) => Some(error.as_ref()),
             Self::Stopped { cause } => Some(cause.as_ref()),
+            Self::WellFormedness(error) => Some(error),
             Self::Failed(_) => None,
         }
     }
@@ -1096,7 +1106,7 @@ pub fn run_rules_with_options(
         .map_err(|error| match error {
             srl::SrlError::Execution(error) => crate::error::ShapesError::RuleExecution(error),
             srl::SrlError::Shapes(error) => error,
-            error => crate::error::ShapesError::Invalid(error.to_string()),
+            error => crate::error::ShapesError::Srl(Box::new(error)),
         }),
     }
 }
@@ -1121,6 +1131,9 @@ pub(crate) fn infer_with(
         match error {
             RulesError::Execution(error) => crate::error::ShapesError::RuleExecution(error),
             RulesError::Shapes(error) => error,
+            RulesError::WellFormedness(error) => {
+                crate::error::ShapesError::RuleWellFormedness(error)
+            }
             error => crate::error::ShapesError::Invalid(error.to_string()),
         }
     })
@@ -1163,16 +1176,14 @@ pub fn entail_dataset(
 pub fn shacl_rule_set<'a>(
     shapes: &'a Shapes,
     options: &RuleOptions,
-) -> Result<srl::ir::RuleSet<'a>, String> {
+) -> Result<srl::ir::RuleSet<'a>, RuleAdmissionError> {
     for set in &shapes.rules.rule_sets {
         for value in &set.processors {
             if options.rule_processor(value).is_none() {
-                return Err(format!(
-                    "rule set {} declares sh:ruleProcessor {value}, which this rules engine \
-                     has not been given a processor for; SHACL 1.2 Inference Rules: \"A rules \
-                     engine that encounters rules or rule sets with a value for \
-                     sh:ruleProcessor that they are unable to handle MUST report a failure\"",
-                    Term::NamedNode(set.id.clone())
+                return Err(RuleAdmissionError::processor(
+                    Term::NamedNode(set.id.clone()),
+                    value.clone(),
+                    true,
                 ));
             }
         }
@@ -1232,15 +1243,13 @@ pub fn shacl_rule_set<'a>(
 }
 
 /// Refuse a rule whose `sh:ruleProcessor` the host has not registered.
-fn check_rule_processors(rule: &Rule, options: &RuleOptions) -> Result<(), String> {
+fn check_rule_processors(rule: &Rule, options: &RuleOptions) -> Result<(), RuleAdmissionError> {
     for value in &rule.processors {
         if options.rule_processor(value).is_none() {
-            return Err(format!(
-                "rule {} declares sh:ruleProcessor {value}, which this rules engine has not \
-                 been given a processor for; SHACL 1.2 Inference Rules: \"A rules engine that \
-                 encounters rules or rule sets with a value for sh:ruleProcessor that they are \
-                 unable to handle MUST report a failure\"",
-                rule.id
+            return Err(RuleAdmissionError::processor(
+                rule.id.clone(),
+                value.clone(),
+                false,
             ));
         }
     }
@@ -1288,7 +1297,10 @@ fn ir_rule<'a>(rule: &'a Rule, shapes: Vec<&'a Shape>) -> srl::ir::IrRule<'a> {
 /// # Errors
 ///
 /// When an IRI, or a rule set it includes, is not a declared rule set.
-fn rule_set_members(sets: &[RuleSetDeclaration], iris: &[NamedNode]) -> Result<Vec<Term>, String> {
+fn rule_set_members(
+    sets: &[RuleSetDeclaration],
+    iris: &[NamedNode],
+) -> Result<Vec<Term>, RuleAdmissionError> {
     let mut members: Vec<Term> = Vec::new();
     let mut pending = iris.to_vec();
     let mut seen: Vec<NamedNode> = Vec::new();
@@ -1297,10 +1309,7 @@ fn rule_set_members(sets: &[RuleSetDeclaration], iris: &[NamedNode]) -> Result<V
             continue;
         }
         let Some(set) = sets.iter().find(|set| set.id == next) else {
-            return Err(format!(
-                "rule set {} is not declared in the shapes graph (no sh:RuleSet of that IRI)",
-                Term::NamedNode(next)
-            ));
+            return Err(RuleAdmissionError::missing_set(next));
         };
         members.extend(set.rules.iter().cloned());
         pending.extend(set.includes.iter().cloned());

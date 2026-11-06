@@ -163,6 +163,7 @@ fn validate(
 ) -> PyResult<Py<PyAny>> {
     let selection = crate::xpath_regex::selection(xpath_regex)?;
     let base_options = requested_law(
+        py,
         engine::ValidationOptions::default()
             .with_subclass_of_in_shapes_graph(subclass_of_in_shapes_graph),
         shacl_profile,
@@ -272,6 +273,7 @@ fn validate(
 /// `ValueError` naming both laws when `selection` (the caller's `xpath_regex`) is not the
 /// XPath law the selected dated law requires.
 fn requested_law(
+    py: Python<'_>,
     options: engine::ValidationOptions,
     shacl_profile: Option<&str>,
     selection: Option<(
@@ -284,8 +286,16 @@ fn requested_law(
 ) -> PyResult<engine::ValidationOptions> {
     let profile =
         purrdf_validate::requested_shacl_profile(shacl_profile, selection.map(|(law, _)| law))
-            .map_err(|message| {
-                pyo3::exceptions::PyValueError::new_err(format!("shacl_profile: {message}"))
+            .map_err(|cause| {
+                let message = format!("shacl_profile: {cause}");
+                let diagnostic =
+                    purrdf_validate::native_error::diagnostic("shacl-profile-request", cause, None);
+                let message = if diagnostic.storage_error().is_some() {
+                    diagnostic.message.clone()
+                } else {
+                    message
+                };
+                crate::py_store::presentation::native_error_with_message(py, message, &diagnostic)
             })?;
     let options = match profile {
         Some(profile) => options.with_profile(profile),
@@ -296,7 +306,7 @@ fn requested_law(
         recursion_max_pairs,
         recursion_max_iterations,
     )
-    .map_err(pyo3::exceptions::PyValueError::new_err)?;
+    .map_err(|cause| native_shacl_error(py, cause))?;
     Ok(match recursion {
         Some(recursion) => options.with_recursion(recursion),
         None => options,
@@ -1005,6 +1015,7 @@ impl PyShapes {
         recursion_max_iterations: Option<u64>,
     ) -> PyResult<Self> {
         let options = requested_law(
+            py,
             engine::ValidationOptions::default()
                 .with_subclass_of_in_shapes_graph(subclass_of_in_shapes_graph),
             shacl_profile,
@@ -1980,6 +1991,7 @@ fn restore_product_request(
         .transpose()
         .map_err(pyo3::exceptions::PyValueError::new_err)?;
     let options = requested_law(
+        py,
         engine::ValidationOptions::default(),
         None,
         None,
@@ -2039,6 +2051,7 @@ fn pack_product(
     cancel: Option<&crate::py_store::PyCancellationToken>,
 ) -> PyResult<crate::py_canonical::PyCanonicalResult> {
     let options = requested_law(
+        py,
         engine::ValidationOptions::default(),
         None,
         None,

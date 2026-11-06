@@ -253,9 +253,9 @@ const BUILTIN_PREFIXES: &[(&str, &str)] = &[
 /// # ";
 /// # let dataset = purrdf_shapes::text_ingest::parse_turtle_to_dataset(ttl, None).unwrap();
 /// # let shapes = purrdf_shapes::shapes::from_dataset(&dataset).unwrap();
-/// let out = compile(&shapes, &ns).map_err(|error| error.to_string())?;
+/// let out = compile(&shapes, &ns)?;
 /// # assert!(out.schema_json.contains("gmeow:Cat"));
-/// # Ok::<(), String>(())
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Debug, Clone)]
 pub struct Namespaces {

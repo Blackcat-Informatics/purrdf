@@ -192,3 +192,8 @@ pub use shapes_tools::{
     parse_check_level, parse_scope_binding,
 };
 pub use xpath_regex::{UnknownXPathRegex, XPathValidationError};
+
+/// Original explicit SHACL profile selection or regex-law conflict.
+pub use purrdf_shapes::profile::ProfileRequestError;
+/// Original explicit recursive SHACL request mode and limits.
+pub use purrdf_shapes::recursion::RecursionRequestError;

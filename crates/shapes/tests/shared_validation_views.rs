@@ -168,6 +168,9 @@ fn same_document_blank_target_and_current_shape_keep_their_identity() {
 
 #[test]
 fn validation_handle_budget_is_admitted_before_mapping() {
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::Capture;
+
     let source = data();
     let snapshot = Arc::new(
         MutableDataset::new(source)
@@ -178,7 +181,29 @@ fn validation_handle_budget_is_admitted_before_mapping() {
         max_auxiliary_bytes: 0,
         ..ViewLimits::default()
     };
-    assert!(ShaclDatasetView::delta(snapshot, true, limits).is_err());
+    let count = snapshot.term_count();
+    let refused = ShaclDatasetView::delta(Arc::clone(&snapshot), true, limits)
+        .err()
+        .expect("mapping bytes exceed zero");
+    ShaclDatasetView::delta(snapshot, true, ViewLimits::default()).expect("admitted neighbor");
+    let captured = Capture::read(&refused);
+    assert_eq!(captured.code, "shacl-view-retention-limit");
+    assert!(
+        matches!(captured.field("count"), ErrorValue::Unsigned(value) if value == u128::from(count))
+    );
+    assert!(matches!(
+        captured.field("max_auxiliary_bytes"),
+        ErrorValue::ByteCount(0)
+    ));
+    assert!(matches!(captured.field("auxiliary_bytes"), ErrorValue::ByteCount(value) if value > 0));
+
+    let composite =
+        Arc::new(CompositeDatasetView::new(vec![data()], ViewLimits::default()).unwrap());
+    let refused = ShaclDatasetView::composite(Arc::clone(&composite), true, limits)
+        .err()
+        .expect("composite mapping bytes exceed zero");
+    ShaclDatasetView::composite(composite, true, ViewLimits::default()).expect("admitted neighbor");
+    assert_eq!(Capture::read(&refused).code, "shacl-view-retention-limit");
 }
 
 #[test]

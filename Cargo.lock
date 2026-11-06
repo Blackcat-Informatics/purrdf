@@ -491,6 +491,7 @@ dependencies = [
  "purrdf-iri",
  "purrdf-lex",
  "purrdf-rdf",
+ "purrdf-shacl-conformance",
  "purrdf-shapes",
  "purrdf-sparql-eval",
  "purrdf-sparql-results",
@@ -844,6 +845,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "purrdf-shacl-conformance"
+version = "3.0.1"
+dependencies = [
+ "purrdf-core",
+ "purrdf-iri",
+ "purrdf-rdf",
+ "purrdf-shapes",
+ "purrdf-sparql-eval",
+ "purrdf-xsd",
+]
+
+[[package]]
 name = "purrdf-shapes"
 version = "3.0.1"
 dependencies = [
@@ -859,6 +872,7 @@ dependencies = [
  "purrdf-jsonschema",
  "purrdf-lex",
  "purrdf-rdf",
+ "purrdf-shacl-conformance",
  "purrdf-slice",
  "purrdf-sparql-algebra",
  "purrdf-sparql-eval",

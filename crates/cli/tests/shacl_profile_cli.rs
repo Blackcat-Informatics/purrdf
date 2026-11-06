@@ -26,7 +26,7 @@
 
 use std::path::PathBuf;
 
-use purrdf_shapes::shacl_corpora::shacl12::shacl12_root;
+use purrdf_shacl_conformance::shacl12::shacl12_root;
 
 mod support;
 use support::{code, run, stderr, write_file};

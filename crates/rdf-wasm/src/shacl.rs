@@ -181,6 +181,15 @@ impl ShaclImportError {
 /// [`shapes_error_message`] for anything else.
 fn shapes_rejection(error: ShapesError) -> JsValue {
     match error {
+        ShapesError::ProfileRequest(cause) => {
+            let message = format!("shaclProfile {cause}");
+            let mut diagnostic =
+                purrdf_validate::native_error::diagnostic("shacl-profile-request", cause, None);
+            if diagnostic.storage_error().is_none() {
+                diagnostic.message = message;
+            }
+            crate::operation::native_diagnostic_to_js_with_message(diagnostic)
+        }
         ShapesError::ImportArrays(cause) => {
             let diagnostic = purrdf_validate::native_error::diagnostic(
                 "import-array-refused",
@@ -1412,8 +1421,7 @@ fn requested_law(
     name: Option<&str>,
     xpath_regex: Option<Profile>,
 ) -> Result<Option<ShaclProfile>, ShapesError> {
-    purrdf_validate::requested_shacl_profile(name, xpath_regex)
-        .map_err(|message| ShapesError::Invalid(format!("shaclProfile {message}")))
+    purrdf_validate::requested_shacl_profile(name, xpath_regex).map_err(ShapesError::ProfileRequest)
 }
 
 /// [`shapes_profile`] for a product entry: refused before the product is opened, so

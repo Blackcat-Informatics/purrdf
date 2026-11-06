@@ -2457,7 +2457,7 @@ reason = "PropertyFunction::arity is a required method with no default: every re
 
 [[distinct]]
 members = [
-    "purrdf_shapes::shacl_corpora::CorpusRelation::arity",
+    "purrdf_shacl_conformance::CorpusRelation::arity",
     "purrdf_sparql_eval::test_crate::prepared_admission::SubjectBoundRelation::arity",
     "purrdf_sparql_eval::test_crate::query_completion::StoredProducer::arity",
 ]

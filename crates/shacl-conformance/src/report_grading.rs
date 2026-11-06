@@ -73,12 +73,12 @@
 
 use std::fs;
 
-use crate::engine::ValidationOptions;
-use crate::report::{ConformanceDisallows, ValidationReport, ValidationResult};
+use purrdf_shapes::engine::ValidationOptions;
+use purrdf_shapes::report::{ConformanceDisallows, ValidationReport, ValidationResult};
 
 use std::collections::BTreeSet;
 
-use crate::term::Term;
+use purrdf_shapes::term::Term;
 
 use super::{Expected, ExpectedResult, Multiset, Tuple, W3cCase, file_iri, norm};
 
@@ -87,7 +87,7 @@ use super::{Expected, ExpectedResult, Multiset, Tuple, W3cCase, file_iri, norm};
 /// Turtle that does not parse.
 type LoadedShapes = (
     std::sync::Arc<purrdf_rdf::RdfDataset>,
-    Result<crate::shapes::Shapes, crate::ShapesError>,
+    Result<purrdf_shapes::shapes::Shapes, purrdf_shapes::ShapesError>,
 );
 
 /// Read and parse a case's shapes graph and load it with an empty import table: no
@@ -95,12 +95,15 @@ type LoadedShapes = (
 fn load_shapes(tc: &W3cCase) -> Result<LoadedShapes, String> {
     let shapes_text = fs::read_to_string(&tc.shapes_path)
         .map_err(|e| format!("cannot read shapes {}: {e}", tc.shapes_path.display()))?;
-    let crate::text_ingest::TurtleDocument {
+    let purrdf_shapes::text_ingest::TurtleDocument {
         dataset: shapes_dataset,
         prefixes: doc_prefixes,
         ..
-    } = crate::text_ingest::parse_turtle_document(&shapes_text, Some(&file_iri(&tc.shapes_path)))
-        .map_err(|errors| {
+    } = purrdf_shapes::text_ingest::parse_turtle_document(
+        &shapes_text,
+        Some(&file_iri(&tc.shapes_path)),
+    )
+    .map_err(|errors| {
         format!(
             "shapes graph parse error: {}",
             errors
@@ -110,28 +113,28 @@ fn load_shapes(tc: &W3cCase) -> Result<LoadedShapes, String> {
                 .join("; ")
         )
     })?;
-    let shapes = if tc.profile == crate::profile::ShaclProfile::LEGACY {
-        crate::shapes::from_dataset_with_base(
+    let shapes = if tc.profile == purrdf_shapes::profile::ShaclProfile::LEGACY {
+        purrdf_shapes::shapes::from_dataset_with_base(
             &shapes_dataset,
             None,
             &doc_prefixes,
             None,
             tc.shapes_graph_iri.clone(),
-            &crate::ShapesImports::new(),
+            &purrdf_shapes::ShapesImports::new(),
         )
     } else {
-        crate::shapes::from_dataset_with_options(
+        purrdf_shapes::shapes::from_dataset_with_options(
             &shapes_dataset,
             None,
             &doc_prefixes,
             None,
             tc.shapes_graph_iri.clone(),
-            &crate::ShapesImports::new(),
+            &purrdf_shapes::ShapesImports::new(),
             &ValidationOptions::default().with_profile(tc.profile),
         )
         .map_err(|error| match error {
-            crate::report::CompleteValidationError::Shapes(error) => error,
-            other => crate::ShapesError::Invalid(other.to_string()),
+            purrdf_shapes::report::CompleteValidationError::Shapes(error) => error,
+            other => purrdf_shapes::ShapesError::Invalid(other.to_string()),
         })
     };
     Ok((shapes_dataset, shapes))
@@ -161,7 +164,7 @@ pub fn validate_case(tc: &W3cCase) -> Result<ValidationReport, String> {
         );
     }
 
-    crate::engine::validate_dataset_with_shapes_graph(
+    purrdf_shapes::engine::validate_dataset_with_shapes_graph(
         data_dataset.as_ref(),
         &shapes,
         shapes_graph_iri,
@@ -177,7 +180,7 @@ fn grade_report_details(tc: &W3cCase, report: &ValidationReport) -> Result<(), S
         let dataset = report
             .to_dataset()
             .map_err(|error| format!("report graph emission failed: {error}"))?;
-        let echoed = crate::report::conformance_disallows_from_dataset(&dataset)
+        let echoed = purrdf_shapes::report::conformance_disallows_from_dataset(&dataset)
             .map_err(|e| format!("the report's own sh:conformanceDisallows: {e}"))?;
         let requested = ConformanceDisallows::from_iris(&tc.conformance_disallows)
             .map_err(|e| format!("the expected report's sh:conformanceDisallows: {e}"))?;

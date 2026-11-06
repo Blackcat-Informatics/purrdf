@@ -3,6 +3,9 @@
 
 //! Explicit semantics and finite work for recursive SHACL validation.
 
+mod request;
+pub use request::RecursionRequestError;
+
 pub(crate) mod cache;
 pub(crate) mod closed;
 pub use closed::{ClosedRecursionRefusal, RecursionDefinition, RecursionDefinitionKind};

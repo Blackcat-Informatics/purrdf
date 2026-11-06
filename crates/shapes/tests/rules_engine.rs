@@ -96,6 +96,19 @@ fn a_known_rule_processor_loads_and_an_unknown_one_is_refused() {
         NamedNode::from("http://www.w3.org/2001/XMLSchema#boolean"),
     ));
     for body in [at_rule, at_set] {
+        let native = {
+            let shapes = shapes(body).expect("processor declaration parses");
+            purrdf_shapes::rules::shacl_rule_set(&shapes, &RuleOptions::default()).unwrap_err()
+        };
+        let captured = purrdf_testkit::error_capture::Capture::read(&native);
+        assert!(matches!(
+            captured.code,
+            "shacl-rule-processor" | "shacl-rule-set-processor"
+        ));
+        let processor = captured.child("processor");
+        assert!(
+            matches!(processor.field("iri"), purrdf_hash::error::ErrorValue::Iri(value) if value == format!("{EX}Standard"))
+        );
         let refused = run("ex:alice a ex:Person .", body, &RuleOptions::default())
             .expect_err("an unregistered processor is refused");
         assert!(refused.contains("sh:ruleProcessor"), "{refused}");

@@ -63,7 +63,7 @@ mod report;
 #[path = "support/w3c_earl.rs"]
 mod w3c_earl;
 
-use purrdf_shapes::shacl_corpora;
+use purrdf_shacl_conformance as shacl_corpora;
 use report::merge;
 
 use std::collections::BTreeMap;
@@ -321,7 +321,9 @@ fn eval_node_expr_case(tc: &NodeExprCase) -> Result<Vec<Term>, String> {
         }
     };
 
-    let _function_scope = sparql::enter_function_scope(sparql::bind_in_current_env(&shapes, None)?);
+    let _function_scope = sparql::enter_function_scope(
+        sparql::bind_in_current_env(&shapes, None).map_err(|error| error.to_string())?,
+    );
     let _aggregate_scope = sparql::enter_aggregate_scope(Arc::clone(&shapes.aggregates));
     let mut guard = RecursionGuard::default();
     eval_in_scope(&data, &focus, &expr, &mut guard, &tc.scope, Scope::EMPTY)

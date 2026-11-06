@@ -8,6 +8,9 @@
 //! parsed algebra. Executing a validation under that bundle additionally requires
 //! its XPath law for Core patterns and SPARQL `REGEX`/`REPLACE`.
 
+mod request;
+pub use request::ProfileRequestError;
+
 use std::fmt;
 
 use purrdf_core::xsd_regex::xpath::{Limits, Profile};

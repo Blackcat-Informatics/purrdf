@@ -3755,3 +3755,9 @@ mod term_walk_tests {
         }
     }
 }
+
+impl From<crate::data_view::ViewAdmissionError> for CompleteValidationError {
+    fn from(cause: crate::data_view::ViewAdmissionError) -> Self {
+        Self::Shapes(cause.into())
+    }
+}

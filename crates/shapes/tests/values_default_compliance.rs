@@ -38,10 +38,10 @@ mod turtle;
 use std::sync::Arc;
 
 use purrdf_rdf::try_canonicalize;
+use purrdf_shacl_conformance::vocab::declared_terms;
 use purrdf_shapes::entail_dataset;
 use purrdf_shapes::report::ValidationReport;
 use purrdf_shapes::spec::census::{Role, Site, TermClass, classify};
-use purrdf_shapes::spec::declared_terms;
 
 const PREFIXES: &str = "
 @prefix ex:     <http://example.org/ns#> .
