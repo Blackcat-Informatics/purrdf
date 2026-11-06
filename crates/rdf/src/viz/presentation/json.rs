@@ -21,7 +21,10 @@ impl ToJson for VizNavigation {
 impl FromJson for VizNavigation {
     fn from_json(value: &Value) -> Result<Self, DecodeError> {
         let text = String::from_json(value)?;
-        Self::parse(&text).map_err(DecodeError::custom)
+        Self::parse(&text).map_err(|cause| match cause {
+            super::VizError::Storage(storage) => DecodeError::from_storage(storage),
+            cause => DecodeError::native(cause),
+        })
     }
 }
 

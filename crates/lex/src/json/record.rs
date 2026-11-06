@@ -249,17 +249,58 @@ impl<S: crate::allocation::Admission + ?Sized> RecordAllocation for RecordMemory
 
 /// A JSON value that does not have the shape its type requires, and the
 /// RFC 6901 JSON Pointer of that value.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct DecodeError {
     pointer: String,
     message: String,
-    failure: error::Failure,
+    details: error::Details,
 }
+
+// Supplemental native provenance has no generic value equality. Preserve the
+// established comparison of the original pointer, presentation and failure.
+impl PartialEq for DecodeError {
+    fn eq(&self, other: &Self) -> bool {
+        self.pointer == other.pointer
+            && self.message == other.message
+            && self.failure() == other.failure()
+    }
+}
+impl Eq for DecodeError {}
 
 mod error;
 pub use error::DecodeReason;
 
 impl DecodeError {
+    /// Retain a native validation refusal and its unchanged human presentation.
+    /// Physical cause-retention failure uses the typed storage channel.
+    #[must_use]
+    pub fn native(cause: impl purrdf_hash::error::NativeError + 'static) -> Self {
+        Self::native_with_allocation(cause, None)
+    }
+
+    /// Retain a native cause independently, then admit presentation through the
+    /// original record account. That account owns only its text and pointer;
+    /// the shared cause retains its own Resident grant across record copies.
+    #[must_use]
+    pub fn native_with_allocation(
+        cause: impl purrdf_hash::error::NativeError + 'static,
+        allocation: Option<&dyn RecordAllocation>,
+    ) -> Self {
+        match crate::allocation::retain_native_cause(cause) {
+            Ok(cause) => Self::from_reason_native(DecodeReason::Native(&cause), allocation),
+            Err(storage) => Self::from_storage(storage),
+        }
+    }
+
+    /// Borrow the retained original cause without rendering or allocation.
+    #[must_use]
+    pub fn native_cause(&self) -> Option<&(dyn purrdf_hash::error::NativeError + 'static)> {
+        match &self.details {
+            error::Details::Native(cause) => Some(&***cause),
+            error::Details::Plain(_) => None,
+        }
+    }
+
     /// A refusal carrying a validation message.
     pub fn custom(message: impl fmt::Display) -> Self {
         Self::custom_native(message, None)
@@ -280,14 +321,14 @@ impl DecodeError {
         Self {
             pointer: String::new(),
             message: String::new(),
-            failure: error::Failure::Storage(storage),
+            details: error::Details::Plain(error::Failure::Storage(storage)),
         }
     }
 
     /// The original physical cause, distinct from malformed input.
     #[must_use]
     pub const fn storage_error(&self) -> Option<crate::allocation::StorageError> {
-        self.failure.storage_error()
+        self.failure().storage_error()
     }
 
     /// `found` is not the JSON kind `expected` names.
@@ -402,7 +443,18 @@ impl fmt::Display for DecodeError {
     }
 }
 
-impl std::error::Error for DecodeError {}
+impl std::error::Error for DecodeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        if let Some(cause) = self.native_cause() {
+            return Some(cause);
+        }
+        match self.failure() {
+            error::Failure::Json(cause) => Some(cause),
+            error::Failure::Storage(cause) => Some(cause),
+            _ => None,
+        }
+    }
+}
 
 impl From<Error> for DecodeError {
     fn from(error: Error) -> Self {

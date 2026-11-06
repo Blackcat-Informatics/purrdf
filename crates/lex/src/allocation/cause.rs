@@ -6,6 +6,9 @@
 use super::{Memory, Resident, SharedOwned, StorageError};
 use purrdf_hash::error::NativeError;
 
+/// An independently admitted original native cause, shared without payload copies.
+pub type NativeCause = SharedOwned<Box<dyn NativeError>>;
+
 /// Retain an original native failure without copying or rendering its payload.
 ///
 /// The erased payload and shared owner use the common fallible allocation path.
@@ -13,9 +16,7 @@ use purrdf_hash::error::NativeError;
 ///
 /// # Errors
 /// Returns the original allocation refusal before publishing a partial owner.
-pub fn retain_native_cause(
-    cause: impl NativeError + 'static,
-) -> Result<SharedOwned<Box<dyn NativeError>>, StorageError> {
+pub fn retain_native_cause(cause: impl NativeError + 'static) -> Result<NativeCause, StorageError> {
     let mut resident = Resident;
     let mut memory = Memory::new(&mut resident);
     let cause: Box<dyn NativeError> = memory.boxed(cause)?;
