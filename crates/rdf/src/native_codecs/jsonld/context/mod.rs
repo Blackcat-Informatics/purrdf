@@ -309,7 +309,7 @@ impl JsonLdTermDefinition {
         self.index_mapping.as_deref()
     }
 
-    pub(in crate::native_codecs::jsonld) fn index_term(&self) -> Option<&str> {
+    pub(in crate::native_codecs::jsonld) fn index_lexical(&self) -> Option<&str> {
         self.index_term.as_deref()
     }
 

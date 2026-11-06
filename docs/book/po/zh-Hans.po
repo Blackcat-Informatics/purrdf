@@ -7270,17 +7270,18 @@ msgstr ""
 msgid "Byte determinism"
 msgstr "字节确定性"
 
-#: src/concepts/codecs.md:62
+#: src/concepts/codecs.md:140
 msgid ""
-"Every serializer is **byte-deterministic**: the same dataset always produces "
-"the same bytes, on every platform and in every language binding. This is a "
+"Every serializer is **byte-deterministic**: a fixed dataset, format, context, "
+"base and options produce the same bytes on every platform and in every language "
+"binding. This is a "
 "hard workspace invariant, not a best effort — no iteration-order, time, or "
 "RNG dependence is allowed in any output path (hashers are the fixed-key "
 "`FixedHasher` for exactly this reason), and golden-file tests pin the "
 "emitted bytes."
 msgstr ""
-"每个序列化器都是**逐字节确定性**的：同一数据集在每个平台、每种语言绑定中总是"
-"产生相同的字节。这是工作区的硬性不变量，而非尽力而为——任何输出路径都不允许依"
+"每个序列化器都是**逐字节确定性**的：固定的数据集、格式、上下文、基准和选项"
+"在每个平台、每种语言绑定中都产生相同的字节。这是工作区的硬性不变量，而非尽力而为——任何输出路径都不允许依"
 "赖迭代顺序、时间或随机数生成器（哈希器使用固定密钥的 `FixedHasher` 正是出于这"
 "个原因），且黄金文件测试固定了输出的字节。"
 
@@ -8415,8 +8416,10 @@ msgid "PurRDF has three explicit JSON-LD/YAML-LD serialization modes:"
 msgstr "PurRDF 有三种显式的 JSON-LD/YAML-LD 序列化模式："
 
 #: src/concepts/jsonld.md:10
-msgid "`expanded` preserves the byte-frozen empty-`@context` representation;"
-msgstr "`expanded` 保留逐字节冻结的空 `@context` 表示；"
+msgid ""
+"`expanded` emits a deterministic empty-`@context` representation with `@type` "
+"entries written as IRI strings;"
+msgstr "`expanded` 使用确定性的空 `@context` 表示，`@type` 条目写为 IRI 字符串；"
 
 #: src/concepts/jsonld.md:11
 msgid ""

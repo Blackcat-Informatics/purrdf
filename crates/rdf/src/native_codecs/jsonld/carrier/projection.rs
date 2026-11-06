@@ -4,7 +4,8 @@
 //! Typed RDF preparation projected to the shared expanded-value compactor.
 
 use super::super::{
-    JsonLdContainer, JsonLdTermSelection, JsonLdTermSelectionKind, JsonLdTypeMapping, RdfDiagnostic,
+    JsonLdContainer, JsonLdTermSelection, JsonLdTermSelectionKind, JsonLdTypeMapping,
+    RdfDiagnostic, ordered_object,
 };
 use super::{CompactionScope, NamedGraph, Node, Term, Value};
 use crate::native_codecs::jsonld::compaction::Context;
@@ -64,7 +65,13 @@ pub(super) fn node<'a>(
             results: Vec::new(),
             memory,
         };
-        projection.push(Task::Node(node, graph, Context::Borrowed(scope.context)))?;
+        projection
+            .tasks
+            .try_push_admitted(
+                Task::Node(node, graph, Context::Borrowed(scope.context)),
+                projection.memory,
+            )
+            .map_err(RdfDiagnostic::from)?;
         while let Some(task) = projection.tasks.pop() {
             projection.step(task)?;
         }
@@ -78,16 +85,6 @@ pub(super) fn node<'a>(
     })
 }
 impl<'a> Projection<'a, '_, '_> {
-    fn push(&mut self, task: Task<'a>) -> Result<(), RdfDiagnostic> {
-        self.tasks
-            .try_push_admitted(task, self.memory)
-            .map_err(Into::into)
-    }
-    fn result(&mut self, value: JsonValue) -> Result<(), RdfDiagnostic> {
-        self.memory
-            .push(&mut self.results, value)
-            .map_err(Into::into)
-    }
     fn string(&mut self, text: &str) -> Result<JsonValue, RdfDiagnostic> {
         Ok(JsonValue::String(self.memory.string(text)?))
     }
@@ -106,16 +103,16 @@ impl<'a> Projection<'a, '_, '_> {
         self.memory.push(keys, key)?;
         Ok(())
     }
-    fn object(&self, mut members: Members) -> JsonValue {
-        members.sort_unstable_by(|a, b| a.0.cmp(&b.0));
-        JsonValue::Object(Object::from(members))
-    }
     fn schedule(&mut self, fields: Fields, tasks: Vec<Task<'a>>) -> Result<(), RdfDiagnostic> {
-        self.push(Task::Fields(fields))?;
+        self.tasks
+            .try_push_admitted(Task::Fields(fields), self.memory)
+            .map_err(RdfDiagnostic::from)?;
         let mut tasks = tasks;
         tasks.reverse();
         while let Some(task) = tasks.pop() {
-            self.push(task)?;
+            self.tasks
+                .try_push_admitted(task, self.memory)
+                .map_err(RdfDiagnostic::from)?;
         }
         self.memory.release_vec(tasks)?;
         Ok(())
@@ -124,10 +121,14 @@ impl<'a> Projection<'a, '_, '_> {
         match task {
             Task::Group(fields, tasks) => self.schedule(fields, tasks),
             Task::GroupArray(mut tasks) => {
-                self.push(Task::Array(tasks.len()))?;
+                self.tasks
+                    .try_push_admitted(Task::Array(tasks.len()), self.memory)
+                    .map_err(RdfDiagnostic::from)?;
                 tasks.reverse();
                 while let Some(task) = tasks.pop() {
-                    self.push(task)?;
+                    self.tasks
+                        .try_push_admitted(task, self.memory)
+                        .map_err(RdfDiagnostic::from)?;
                 }
                 self.memory.release_vec(tasks)?;
                 Ok(())
@@ -138,8 +139,10 @@ impl<'a> Projection<'a, '_, '_> {
                     self.memory.push(&mut fields.members, (key, value))?;
                 }
                 self.memory.release_vec(fields.keys)?;
-                let value = self.object(fields.members);
-                self.result(value)
+                let value = ordered_object(fields.members);
+                self.memory
+                    .push(&mut self.results, value)
+                    .map_err(RdfDiagnostic::from)
             }
             Task::Array(count) => {
                 let mut values = Vec::new();
@@ -147,7 +150,9 @@ impl<'a> Projection<'a, '_, '_> {
                 for _ in 0..count {
                     values.push(self.results.pop().expect("one projection per array item"));
                 }
-                self.result(JsonValue::Array(values))
+                self.memory
+                    .push(&mut self.results, JsonValue::Array(values))
+                    .map_err(RdfDiagnostic::from)
             }
             Task::Annotated(count) => {
                 let mut nodes = Vec::new();
@@ -161,23 +166,41 @@ impl<'a> Projection<'a, '_, '_> {
                     .expect("all carrier terms project objects");
                 let mut fields = std::mem::take(object).into_members();
                 self.field(&mut fields, "@annotation", JsonValue::Array(nodes))?;
-                let value = self.object(fields);
-                self.result(value)
+                let value = ordered_object(fields);
+                self.memory
+                    .push(&mut self.results, value)
+                    .map_err(RdfDiagnostic::from)
             }
             Task::Value(value, context) => {
                 if value.annotations.is_empty() {
-                    return self.push(Task::Term(&value.term, context));
+                    return self
+                        .tasks
+                        .try_push_admitted(Task::Term(&value.term, context), self.memory)
+                        .map_err(RdfDiagnostic::from);
                 }
-                self.push(Task::Annotated(value.annotations.len()))?;
+                self.tasks
+                    .try_push_admitted(Task::Annotated(value.annotations.len()), self.memory)
+                    .map_err(RdfDiagnostic::from)?;
                 for annotation in &value.annotations {
-                    self.push(Task::Node(annotation, None, context.clone()))?;
+                    self.tasks
+                        .try_push_admitted(
+                            Task::Node(annotation, None, context.clone()),
+                            self.memory,
+                        )
+                        .map_err(RdfDiagnostic::from)?;
                 }
-                self.push(Task::Term(&value.term, context))
+                self.tasks
+                    .try_push_admitted(Task::Term(&value.term, context), self.memory)
+                    .map_err(RdfDiagnostic::from)
             }
             Task::Values(values, context) => {
-                self.push(Task::Array(values.len()))?;
+                self.tasks
+                    .try_push_admitted(Task::Array(values.len()), self.memory)
+                    .map_err(RdfDiagnostic::from)?;
                 for value in values {
-                    self.push(Task::Value(value, context.clone()))?;
+                    self.tasks
+                        .try_push_admitted(Task::Value(value, context.clone()), self.memory)
+                        .map_err(RdfDiagnostic::from)?;
                 }
                 Ok(())
             }
@@ -205,26 +228,45 @@ impl<'a> Projection<'a, '_, '_> {
                     Term::List(values) => {
                         let mut keys = Vec::new();
                         self.key(&mut keys, "@list")?;
-                        self.push(Task::Fields(Fields { members, keys }))?;
-                        return self.push(Task::Values(values, context));
+                        self.tasks
+                            .try_push_admitted(Task::Fields(Fields { members, keys }), self.memory)
+                            .map_err(RdfDiagnostic::from)?;
+                        return self
+                            .tasks
+                            .try_push_admitted(Task::Values(values, context), self.memory)
+                            .map_err(RdfDiagnostic::from);
                     }
                     Term::Triple(triple) => {
                         let mut keys = Vec::new();
                         self.key(&mut keys, "@triple")?;
-                        self.push(Task::Fields(Fields { members, keys }))?;
+                        self.tasks
+                            .try_push_admitted(Task::Fields(Fields { members, keys }), self.memory)
+                            .map_err(RdfDiagnostic::from)?;
                         let mut members = Vec::new();
                         let predicate = self.string(&triple.predicate)?;
                         self.field(&mut members, "@predicate", predicate)?;
                         let mut keys = Vec::new();
                         self.key(&mut keys, "@subject")?;
                         self.key(&mut keys, "@object")?;
-                        self.push(Task::Fields(Fields { members, keys }))?;
-                        self.push(Task::Term(&triple.subject, context.clone()))?;
-                        return self.push(Task::Term(&triple.object, context));
+                        self.tasks
+                            .try_push_admitted(Task::Fields(Fields { members, keys }), self.memory)
+                            .map_err(RdfDiagnostic::from)?;
+                        self.tasks
+                            .try_push_admitted(
+                                Task::Term(&triple.subject, context.clone()),
+                                self.memory,
+                            )
+                            .map_err(RdfDiagnostic::from)?;
+                        return self
+                            .tasks
+                            .try_push_admitted(Task::Term(&triple.object, context), self.memory)
+                            .map_err(RdfDiagnostic::from);
                     }
                 }
-                let value = self.object(members);
-                self.result(value)
+                let value = ordered_object(members);
+                self.memory
+                    .push(&mut self.results, value)
+                    .map_err(RdfDiagnostic::from)
             }
             Task::Graph(graph, keep_id, index, context) => {
                 let mut members = Vec::new();
@@ -236,17 +278,26 @@ impl<'a> Projection<'a, '_, '_> {
                     let mut lexical = Vec::new();
                     let value = self.string(key)?;
                     self.field(&mut lexical, "@value", value)?;
-                    let value = self.object(lexical);
+                    let value = ordered_object(lexical);
                     let mut values = Vec::new();
                     self.memory.push(&mut values, value)?;
                     self.field(&mut members, mapping, JsonValue::Array(values))?;
                 }
                 let mut keys = Vec::new();
                 self.key(&mut keys, "@graph")?;
-                self.push(Task::Fields(Fields { members, keys }))?;
-                self.push(Task::Array(graph.nodes.len()))?;
+                self.tasks
+                    .try_push_admitted(Task::Fields(Fields { members, keys }), self.memory)
+                    .map_err(RdfDiagnostic::from)?;
+                self.tasks
+                    .try_push_admitted(Task::Array(graph.nodes.len()), self.memory)
+                    .map_err(RdfDiagnostic::from)?;
                 for node in &graph.nodes {
-                    self.push(Task::Node(node, Some(graph.id.as_str()), context.clone()))?;
+                    self.tasks
+                        .try_push_admitted(
+                            Task::Node(node, Some(graph.id.as_str()), context.clone()),
+                            self.memory,
+                        )
+                        .map_err(RdfDiagnostic::from)?;
                 }
                 Ok(())
             }
@@ -286,7 +337,7 @@ impl<'a> Projection<'a, '_, '_> {
                         let datatype = self.string("@json")?;
                         self.field(&mut candidate, "@type", datatype)?;
                         self.field(&mut candidate, "@value", parsed)?;
-                        let mut candidate = self.object(candidate);
+                        let mut candidate = ordered_object(candidate);
                         let term =
                             context.compact_property_iri(property, &candidate, false, true, &[])?;
                         if context.term(&term).is_some_and(|definition| {

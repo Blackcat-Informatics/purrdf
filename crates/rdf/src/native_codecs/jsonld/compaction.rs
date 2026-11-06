@@ -5,7 +5,7 @@
 
 use super::{
     CompiledJsonLdContext, JsonLdContainer as C, JsonLdDirection, JsonLdNullable,
-    JsonLdTermDefinition, JsonLdTypeMapping, RdfDiagnostic, decode,
+    JsonLdTermDefinition, JsonLdTypeMapping, RdfDiagnostic, decode, ordered_object,
 };
 use purrdf_lex::allocation::{Ceiling, Memory};
 use purrdf_lex::json::{Object, Value};
@@ -177,17 +177,22 @@ fn run(
             tasks: WorkList::new(),
             results: Vec::new(),
         };
-        walk.push(Task::Visit(
-            Request {
-                raw: input,
-                property: None,
-                shape: Shape::Policy,
-                component: false,
-                node_only: root,
-                keep_map_metadata: false,
-            },
-            Context::Borrowed(context),
-        ))?;
+        walk.tasks
+            .try_push_admitted(
+                Task::Visit(
+                    Request {
+                        raw: input,
+                        property: None,
+                        shape: Shape::Policy,
+                        component: false,
+                        node_only: root,
+                        keep_map_metadata: false,
+                    },
+                    Context::Borrowed(context),
+                ),
+                walk.memory,
+            )
+            .map_err(RdfDiagnostic::from)?;
         while let Some(task) = walk.tasks.pop() {
             walk.step(task)?;
         }
@@ -211,7 +216,7 @@ fn run(
                         Value::Array(std::mem::take(values)),
                         false,
                     )?;
-                    walk.object(members)
+                    ordered_object(members)
                 }
                 Value::Object(_) => output,
                 _ => {
@@ -227,7 +232,7 @@ fn run(
                     .expect("root finish produces an object");
                 let mut members = std::mem::take(object).into_members();
                 walk.put(&mut members, "@context", retained, false)?;
-                output = walk.object(members);
+                output = ordered_object(members);
             }
         }
         Ok(output)
@@ -241,20 +246,6 @@ struct Walk<'a, 'm, 's> {
     results: Vec<Value>,
 }
 impl<'a> Walk<'a, '_, '_> {
-    fn push(&mut self, task: Task<'a>) -> Result<(), RdfDiagnostic> {
-        self.tasks
-            .try_push_admitted(task, self.memory)
-            .map_err(Into::into)
-    }
-    fn result(&mut self, value: Value) -> Result<(), RdfDiagnostic> {
-        self.memory
-            .push(&mut self.results, value)
-            .map_err(Into::into)
-    }
-    fn object(&self, mut members: Members) -> Value {
-        members.sort_unstable_by(|a, b| a.0.cmp(&b.0));
-        Value::Object(Object::from(members))
-    }
     fn copy(&mut self, value: &Value) -> Result<Value, RdfDiagnostic> {
         value.clone_with_memory(self.memory).map_err(Into::into)
     }
@@ -357,7 +348,9 @@ impl<'a> Walk<'a, '_, '_> {
                     }
                 }
                 let value = self.collapse(Value::Array(values), collapse)?;
-                self.result(value)
+                self.memory
+                    .push(&mut self.results, value)
+                    .map_err(RdfDiagnostic::from)
             }
             Task::Object(mut plan) => {
                 for edge in plan.edges.drain(..) {
@@ -369,8 +362,10 @@ impl<'a> Walk<'a, '_, '_> {
                     }
                 }
                 self.memory.release_vec(plan.edges)?;
-                let value = self.object(plan.members);
-                self.result(value)
+                let value = ordered_object(plan.members);
+                self.memory
+                    .push(&mut self.results, value)
+                    .map_err(RdfDiagnostic::from)
             }
         }
     }
@@ -402,7 +397,7 @@ impl<'a> Walk<'a, '_, '_> {
                             })
                     }
                 };
-                self.push(Task::Array {
+                let task = Task::Array {
                     count: items.len(),
                     collapse,
                     framing_items: self.defaults.map(|_| items.as_slice()),
@@ -422,7 +417,10 @@ impl<'a> Walk<'a, '_, '_> {
                                         )
                                     })
                             })),
-                })?;
+                };
+                self.tasks
+                    .try_push_admitted(task, self.memory)
+                    .map_err(RdfDiagnostic::from)?;
                 // Forward scheduling makes the result stack pop in source order.
                 for raw in items {
                     let property = request
@@ -430,17 +428,22 @@ impl<'a> Walk<'a, '_, '_> {
                         .as_deref()
                         .map(|property| self.memory.string(property))
                         .transpose()?;
-                    self.push(Task::Visit(
-                        Request {
-                            raw,
-                            property,
-                            shape: Shape::Policy,
-                            component: request.component,
-                            node_only: request.node_only,
-                            keep_map_metadata: request.keep_map_metadata,
-                        },
-                        context.clone(),
-                    ))?;
+                    self.tasks
+                        .try_push_admitted(
+                            Task::Visit(
+                                Request {
+                                    raw,
+                                    property,
+                                    shape: Shape::Policy,
+                                    component: request.component,
+                                    node_only: request.node_only,
+                                    keep_map_metadata: request.keep_map_metadata,
+                                },
+                                context.clone(),
+                            ),
+                            self.memory,
+                        )
+                        .map_err(RdfDiagnostic::from)?;
                 }
                 self.property_done(request.property)
             }
@@ -459,17 +462,26 @@ impl<'a> Walk<'a, '_, '_> {
                         super::framing::DefaultValue::Null
                         | super::framing::DefaultValue::Value(Value::Null) => {
                             self.property_done(request.property)?;
-                            return self.result(Value::Null);
+                            return self
+                                .memory
+                                .push(&mut self.results, Value::Null)
+                                .map_err(RdfDiagnostic::from);
                         }
                         super::framing::DefaultValue::Value(value) => {
-                            return self.push(Task::Visit(
-                                Request {
-                                    raw: value,
-                                    node_only: false,
-                                    ..request
-                                },
-                                context,
-                            ));
+                            return self
+                                .tasks
+                                .try_push_admitted(
+                                    Task::Visit(
+                                        Request {
+                                            raw: value,
+                                            node_only: false,
+                                            ..request
+                                        },
+                                        context,
+                                    ),
+                                    self.memory,
+                                )
+                                .map_err(RdfDiagnostic::from);
                         }
                     }
                 }
@@ -504,7 +516,10 @@ impl<'a> Walk<'a, '_, '_> {
                         self.scalar(object, &context, request.property.as_deref())?
                 {
                     self.property_done(request.property)?;
-                    return self.result(scalar);
+                    return self
+                        .memory
+                        .push(&mut self.results, scalar)
+                        .map_err(RdfDiagnostic::from);
                 }
                 if let Some(list) = object.get("@list")
                     && request
@@ -515,31 +530,41 @@ impl<'a> Walk<'a, '_, '_> {
                     && !object.contains_key("@annotation")
                     && !object.contains_key("@index")
                 {
-                    self.push(Task::Visit(
-                        Request {
-                            raw: list,
-                            property: request.property,
-                            shape: Shape::Array,
-                            component: false,
-                            node_only: false,
-                            keep_map_metadata: request.keep_map_metadata,
-                        },
-                        context,
-                    ))?;
+                    self.tasks
+                        .try_push_admitted(
+                            Task::Visit(
+                                Request {
+                                    raw: list,
+                                    property: request.property,
+                                    shape: Shape::Array,
+                                    component: false,
+                                    node_only: false,
+                                    keep_map_metadata: request.keep_map_metadata,
+                                },
+                                context,
+                            ),
+                            self.memory,
+                        )
+                        .map_err(RdfDiagnostic::from)?;
                     return Ok(());
                 }
                 if let Some(set) = object.get("@set") {
-                    self.push(Task::Visit(
-                        Request {
-                            raw: set,
-                            property: request.property,
-                            shape: Shape::Policy,
-                            component: false,
-                            node_only: false,
-                            keep_map_metadata: request.keep_map_metadata,
-                        },
-                        context,
-                    ))?;
+                    self.tasks
+                        .try_push_admitted(
+                            Task::Visit(
+                                Request {
+                                    raw: set,
+                                    property: request.property,
+                                    shape: Shape::Policy,
+                                    component: false,
+                                    node_only: false,
+                                    keep_map_metadata: request.keep_map_metadata,
+                                },
+                                context,
+                            ),
+                            self.memory,
+                        )
+                        .map_err(RdfDiagnostic::from)?;
                     return Ok(());
                 }
                 if !object.contains_key("@value")
@@ -783,20 +808,25 @@ impl<'a> Walk<'a, '_, '_> {
                     let component = edge.property == "@subject"
                         || edge.property == "@object"
                         || matches!(edge.action, Action::Map(C::Id));
-                    self.push(Task::Visit(
-                        Request {
-                            raw,
-                            property,
-                            shape,
-                            component,
-                            node_only: matches!(edge.action, Action::Nodes),
-                            keep_map_metadata: matches!(edge.action, Action::Explicit)
-                                || plan
-                                    .context
-                                    .property_keeps_index(&edge.property, edge.raw)?,
-                        },
-                        plan.context.clone(),
-                    ))?;
+                    self.tasks
+                        .try_push_admitted(
+                            Task::Visit(
+                                Request {
+                                    raw,
+                                    property,
+                                    shape,
+                                    component,
+                                    node_only: matches!(edge.action, Action::Nodes),
+                                    keep_map_metadata: matches!(edge.action, Action::Explicit)
+                                        || plan
+                                            .context
+                                            .property_keeps_index(&edge.property, edge.raw)?,
+                                },
+                                plan.context.clone(),
+                            ),
+                            self.memory,
+                        )
+                        .map_err(RdfDiagnostic::from)?;
                 }
                 // The finish must run after its children, despite being planned last.
                 // WorkList is LIFO, so insert the parent beneath the just scheduled frames.
@@ -805,7 +835,9 @@ impl<'a> Walk<'a, '_, '_> {
             }
             Value::Null => {
                 self.property_done(request.property)?;
-                self.result(Value::Null)
+                self.memory
+                    .push(&mut self.results, Value::Null)
+                    .map_err(RdfDiagnostic::from)
             }
             _ => {
                 self.property_done(request.property)?;
@@ -822,9 +854,13 @@ impl<'a> Walk<'a, '_, '_> {
         for _ in 0..count {
             children.push(self.tasks.pop().expect("scheduled child count"));
         }
-        self.push(Task::Object(plan))?;
+        self.tasks
+            .try_push_admitted(Task::Object(plan), self.memory)
+            .map_err(RdfDiagnostic::from)?;
         while let Some(child) = children.pop() {
-            self.push(child)?;
+            self.tasks
+                .try_push_admitted(child, self.memory)
+                .map_err(RdfDiagnostic::from)?;
         }
         self.memory.release_vec(children)?;
         Ok(())
@@ -958,7 +994,7 @@ impl<'a> Walk<'a, '_, '_> {
                 .ok_or_else(|| decode("compacted @nest must be an object"))?;
             let mut nested = std::mem::take(object).into_members();
             self.insert_property(&mut nested, property, None, value, force)?;
-            *target = self.object(nested);
+            *target = ordered_object(nested);
             return Ok(());
         }
         let value = if force { self.array(value)? } else { value };
@@ -982,7 +1018,7 @@ impl<'a> Walk<'a, '_, '_> {
         if first && field.as_array().is_some_and(Vec::is_empty) {
             self.memory.release_string(name)?;
             self.discard(field)?;
-            *value = self.object(members);
+            *value = ordered_object(members);
             return Ok(None);
         }
         let result = if first
@@ -1006,7 +1042,7 @@ impl<'a> Walk<'a, '_, '_> {
             self.memory.release_string(name)?;
             field
         };
-        *value = self.object(members);
+        *value = ordered_object(members);
         Ok(Some(result))
     }
     fn extract_map_key(
@@ -1066,7 +1102,7 @@ impl<'a> Walk<'a, '_, '_> {
                 .ok_or_else(|| decode("container @nest must be an object"))?;
             let mut nested = std::mem::take(object).into_members();
             self.map_entry_at(&mut nested, edge, key, value, None)?;
-            *target = self.object(nested);
+            *target = ordered_object(nested);
             return Ok(());
         }
         let mut map = if let Some(old) = purrdf_lex::assoc::get_mut(members, &edge.property) {
@@ -1084,7 +1120,7 @@ impl<'a> Walk<'a, '_, '_> {
             value
         };
         self.put(&mut entries, key, value, true)?;
-        let map = self.object(entries);
+        let map = ordered_object(entries);
         if let Some(old) = purrdf_lex::assoc::get_mut(members, &edge.property) {
             *old = map;
         } else {
@@ -1141,7 +1177,7 @@ impl<'a> Walk<'a, '_, '_> {
                 }
                 self.memory.release_vec(reversed)?;
                 if !remaining.is_empty() {
-                    let value = self.object(remaining);
+                    let value = ordered_object(remaining);
                     self.put(members, &edge.property, value, false)
                 } else {
                     self.memory.release_vec(remaining)?;
@@ -1174,7 +1210,7 @@ impl<'a> Walk<'a, '_, '_> {
                     self.put(&mut list, &alias, index, false)?;
                 }
                 // Annotation-bearing list objects are compacted as complete objects instead.
-                let value = self.object(list);
+                let value = ordered_object(list);
                 self.insert_property(
                     members,
                     &edge.property,
@@ -1314,7 +1350,7 @@ impl<'a> Walk<'a, '_, '_> {
                 let object = value.as_object_mut().expect("compacted graph");
                 let mut fields = std::mem::take(object).into_members();
                 self.put(&mut fields, &graph_alias, body, false)?;
-                body = self.object(fields);
+                body = ordered_object(fields);
             }
             return self.map_key(members, edge, key, body);
         }
@@ -1345,7 +1381,7 @@ impl<'a> Walk<'a, '_, '_> {
                 if body.as_array().is_some_and(|items| items.len() > 1) {
                     let mut fields = Vec::new();
                     self.put(&mut fields, &graph_alias, body, false)?;
-                    body = self.object(fields);
+                    body = ordered_object(fields);
                 }
                 value = body;
             }
@@ -1361,7 +1397,7 @@ impl<'a> Walk<'a, '_, '_> {
                 let alias = context.compact_iri("@included", true)?;
                 let mut fields = Vec::new();
                 self.put(&mut fields, &alias, body, false)?;
-                body = self.object(fields);
+                body = ordered_object(fields);
             }
             return self.insert_property(
                 members,
@@ -1455,7 +1491,10 @@ fn validate(object: &Object, property: Option<&str>, component: bool) -> Result<
         return Err(decode("expanded @language must be a string"));
     }
     if let Some(direction) = object.get("@direction")
-        && !matches!(direction.as_str(), Some("ltr" | "rtl"))
+        && direction
+            .as_str()
+            .and_then(purrdf_events::TextDirection::from_str_token)
+            .is_none()
     {
         return Err(decode("expanded @direction must be ltr or rtl"));
     }
