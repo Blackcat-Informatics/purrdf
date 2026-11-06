@@ -96,8 +96,10 @@ that projection by term value, independently of dataset intern IDs and statement
 order. Missing, invented, conflicting, foreign-membership, named-graph,
 reifier/annotation or changed occurrence metadata refuses before any bytes escape.
 Separate document namespaces may coexist. Extra claims in the selected namespace
-are never silently discarded. Public mutable model fields are likewise validated
-against original-source analysis before projection.
+are never silently discarded. An analyzed document retains immutable source and
+occurrence state behind read-only accessors. Analysis establishes its invariants
+once; part access and projection use that retained state without reparsing the
+message. Editing source bytes requires analysis of the changed source.
 
 A repair, OCR result, embedding window or extracted region can cite the kernel's
 digest-bound `SpanReference`; it does not overwrite this carrier's covered source.

@@ -802,6 +802,7 @@ fn dispatch_with_request(
             from,
             base,
             xpath_regex,
+            matcher_maximum_states,
             map,
             output,
         } => shex::run(
@@ -814,6 +815,7 @@ fn dispatch_with_request(
                 from: *from,
                 base: base.as_deref(),
                 xpath_regex: *xpath_regex,
+                matcher_maximum_states: *matcher_maximum_states,
                 map,
                 output,
                 jsonld_options: jsonld_options.as_ref(),

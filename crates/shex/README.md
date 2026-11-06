@@ -87,18 +87,33 @@ pattern and flag text directly. ShExC retains its concrete-syntax escape and
 flag grammar.
 
 An invalid pattern or flag produces an ordinary facet finding. Source,
-compiler, program-storage or matching exhaustion returns the typed native
-`xpath::Error` and aborts the whole shape map. Negation, alternative branches,
+compiler, program-storage or matching exhaustion returns `ValidationError::Regex`
+with the typed native `xpath::Error` and aborts the whole shape map. Negation, alternative branches,
 triple assignment and previously computed entries cannot turn that refusal
 into a finding or a partial map. The textual shape-map door wraps its actual
-map error or native cause in `XPathValidationError`.
+map error or native cause in `ValidationError`.
 
 Keep `XPathValidator::new(&schema)` for repeated fixed-map validations. Each
 call still supplies its dated profile and current limits; the product retains
 at most one successful native program, never a finding, failed compilation or
 spent execution budget. Cache hits recheck source/program/storage admission,
 and matching receives fresh current fuel. The existing `validate`,
-`validate_with` and `validate_shape_map` retain their compatibility behavior.
+`validate_with` and `validate_shape_map` retain their compatibility pattern behavior.
+
+All validation entry points return `Result`: matcher exhaustion is
+`ValidationError::MatcherWork { attempted, maximum }`, never a conformance
+verdict. Select `ValidationOptions::matcher_limits` with `MatcherLimits::new`;
+the default admits 200,000 states per ambiguous neighbourhood. One entered
+assignment prefix, including a terminal cardinality check, costs one state.
+Zero refuses the first state. Refusal discards the whole result map and a later
+call can admit more work. Python exposes `matcher_maximum_states=`, and the CLI
+exposes `--matcher-maximum-states`.
+
+`ValidationOptions` is non-exhaustive. Construct it with `Default` and select
+policy with `with_matcher_limits`, `with_external_resolver`, `with_sem_acts`
+or `with_extern_start_acts`; its existing fields can also be updated individually.
+For example, `ValidationOptions::default().with_matcher_limits(MatcherLimits::new(1_000_000))`
+admits a larger assignment search without selecting a different pattern law.
 
 ## Part of PurRDF
 

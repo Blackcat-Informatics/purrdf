@@ -8,6 +8,28 @@ the PurRDF crates together when adopting them.
 
 ## At a glance
 
+### Immutable MIME documents
+
+`purrdf::mime::Document` keeps its analyzed source and occurrence tables private.
+Replace direct field reads with these read-only methods:
+
+| Previous field | Method | Returned view |
+| --- | --- | --- |
+| `source` | `source()` | `SourceDocument<'a>` |
+| `cover` | `cover()` | `&ByteCover<'a>` |
+| `parts` | `parts()` | `&[Part]` |
+| `headers` | `headers()` | `&[Header]` |
+| `structures` | `structures()` | `&[Structure]` |
+| `problems` | `problems()` | `&[Problem]` |
+
+Construct documents through `analyze`; edited bytes require a new analysis.
+Standalone part and header values can still be edited as snapshots, but they
+cannot change the analyzed document. Attachment decoding, part covers and RDF
+projection reuse its established invariants. Unknown parts, transfer refusals,
+profile checks and strict verification of external RDF remain enforced.
+
+### Other API migrations
+
 The USTAR reader, borrowed-member iterator and writer functions now return
 `purrdf::ustar::UstarError` instead of `String`. Match its non-exhaustive variants
 with a wildcard or inspect the borrowed structured fields. Refusals retain their
@@ -967,6 +989,19 @@ than `Copy`; borrow literals or clone when ownership is needed. The current
 `Pos(NodeId)` and `Neg(NodeId)` payloads retain their meaning. No term rendering,
 canonical key, rule identity, proof identity or admitted execution meaning changes.
 
+## Datalog term inspection
+
+`purrdf_datalog::term::NodeData` is now non-exhaustive. External matches must
+include a wildcard arm that returns an explicit unsupported-form error and
+retains the source `NodeId` and relevant context. Do not silently filter out
+unknown nodes, discard children or fabricate a replacement term. A reasoning
+strategy must also refuse known forms outside its supported fragment.
+
+`TermDag::data` still borrows the complete node. All seven current variants keep
+their payloads and meaning; construct them through `intern_leaf`, `intern_free`,
+`fresh_meta`, `intern_bound`, `intern_app`, `intern_binder` and `intern_rdf`. Term identities,
+hash-consing, binder traversal and existing artifacts retain their behavior.
+
 ## Owned structural answers
 
 Pass `FolAnswerContract::GroundOnly` to `resolve_fol` between its sort context
@@ -1564,3 +1599,29 @@ and projection path/category remain unchanged. Schema-import and LinkML equality
 compares the original detail; native provenance is supplemental. The panicking assert
 helpers remain explicit invariant/presentation boundaries over these same typed checks.
 No loss profile or serialization format changes.
+
+## JSON Schema evaluation policy
+
+`EvaluationCause` is now non-exhaustive. Replace the old unit pattern
+`EvaluationCause::ReferenceChain` with
+`EvaluationCause::ReferenceChain { attempted, maximum }` and include a wildcard
+arm when matching causes. The counts describe the refused link and the selected
+maximum, rather than a hardcoded default. Structured inspection exposes both
+fields. `ValidationRefusal::ReferenceChain` also gains `attempted`.
+
+`Schema::is_valid` and `evaluate` retain the default reference maximum of 250.
+Existing `is_valid_with_limits` and `evaluate_with_limits` retain their regex-only
+meaning and use that same reference default. To select both budgets, use
+`EvaluationPolicy::default().with_pattern_limits(limits)` and
+`.with_reference_chain_limit(maximum)`, then pass the policy to
+`is_valid_with_policy` or `evaluate_with_policy`. Zero refuses the first
+reference; descending into another instance location starts a new chain.
+True cycles still produce invalid output, while exhausted budgets produce
+`EvaluationError` with the original keyword and instance locations.
+
+Raising the maximum admits more work; it does not improve the algorithm.
+For an acyclic chain of N distinct targets at one instance, the evaluator
+follows N references and performs N × (N − 1) / 2 cycle-membership probes.
+The native API resource-growth case reports allocations, requested bytes,
+retained bytes and peak working bytes for verdict and full-output evaluation;
+its windows exclude schema compilation and keep the full result alive.

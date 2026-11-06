@@ -42,6 +42,23 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `Copy`; `FolUnsupported` and `FolError` are non-exhaustive. Current term,
   clause and proof identity laws retain their meaning.
 
+- **JSON Schema evaluation policy (breaking Rust API):** reference-chain causes
+  retain attempted and selected maximum counts, and `EvaluationCause` is
+  non-exhaustive. Caller-selected policies share regex budgets and configure
+  consecutive references without disabling cycle detection or descent resets.
+  Existing convenience methods retain their defaults.
+
+- **Extensible Datalog terms (breaking Rust API):** `NodeData` is
+  non-exhaustive. External inspection must explicitly refuse unsupported forms
+  while retaining the source node and context. Current payloads, constructors,
+  term identities, binder behavior and artifacts retain their existing meaning.
+
+- **Immutable MIME documents (breaking Rust API):** analyzed source and occurrence
+  tables use read-only accessors. Attachment extraction, part covers and projection
+  reuse the trusted model without reanalyzing the complete message. Original
+  bytes, occurrence identities, transfer refusals and external RDF verification
+  are preserved.
+
 - **Typed reasoning requests (breaking Rust API):** regime, session, proof,
   profile, import and fixture operations retain owned native failures through
   non-exhaustive errors. Facade request parsing shares the typed boundary;

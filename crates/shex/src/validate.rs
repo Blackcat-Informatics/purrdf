@@ -48,6 +48,7 @@ use purrdf_core::{
 use purrdf_lex::json_escape::{JsonEscapes, push_string};
 use purrdf_lex::term_syntax;
 
+use crate::ValidationError;
 use crate::ast::{ExprRef, Schema, SemAct, Shape, ShapeExpr, TripleExpr};
 use crate::semact::{SemActContext, SemActRegistry};
 use crate::statement;
@@ -219,9 +220,47 @@ pub(crate) fn shape_term_string(shape: &ShapeSelector) -> String {
 /// externally-defined expression.
 pub type ExternalResolver<'a> = dyn Fn(&str) -> Option<ShapeExpr> + 'a;
 
-/// Optional validator knobs.
+/// Admission for each ambiguous arc-assignment search.
+///
+/// One state is charged on entering an assignment prefix, including the final
+/// cardinality check. Candidate resumption and rollback are uncharged. Unique
+/// predicate assignments do not backtrack and do not consume this allowance.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MatcherLimits {
+    maximum_states: u64,
+}
+
+impl MatcherLimits {
+    /// Admit at most `maximum_states` search states per ambiguous neighbourhood.
+    /// Zero refuses the first state. A refusal attempts exactly maximum plus one;
+    /// its `u128` count represents this even for a `u64::MAX` allowance.
+    #[must_use]
+    pub const fn new(maximum_states: u64) -> Self {
+        Self { maximum_states }
+    }
+
+    /// Maximum admitted states per ambiguous neighbourhood.
+    #[must_use]
+    pub const fn maximum_states(self) -> u64 {
+        self.maximum_states
+    }
+}
+
+impl Default for MatcherLimits {
+    fn default() -> Self {
+        Self::new(200_000)
+    }
+}
+
+/// Validation policy, constructed with [`Default`] and the `with_*` methods.
+///
+/// Non-exhaustive so adding a future policy dimension does not require another
+/// breaking migration. The existing public fields remain individually mutable.
 #[derive(Default)]
+#[non_exhaustive]
 pub struct ValidationOptions<'a> {
+    /// Explicit assignment-search admission; defaults to 200,000 states.
+    pub matcher_limits: MatcherLimits,
     /// Resolves `EXTERNAL` shape declarations by label. Without it, an
     /// `EXTERNAL` shape fails every node (its semantics are unavailable).
     pub external_resolver: Option<&'a ExternalResolver<'a>>,
@@ -233,11 +272,42 @@ pub struct ValidationOptions<'a> {
     pub extern_start_acts: &'a [SemAct],
 }
 
+impl<'a> ValidationOptions<'a> {
+    /// Select assignment-search admission for every ambiguous neighbourhood.
+    #[must_use]
+    pub const fn with_matcher_limits(mut self, limits: MatcherLimits) -> Self {
+        self.matcher_limits = limits;
+        self
+    }
+
+    /// Resolve externally defined shape expressions.
+    #[must_use]
+    pub fn with_external_resolver(mut self, resolver: &'a ExternalResolver<'a>) -> Self {
+        self.external_resolver = Some(resolver);
+        self
+    }
+
+    /// Supply semantic-action implementations.
+    #[must_use]
+    pub fn with_sem_acts(mut self, registry: SemActRegistry<'a>) -> Self {
+        self.sem_acts = registry;
+        self
+    }
+
+    /// Supply query-level start actions.
+    #[must_use]
+    pub const fn with_extern_start_acts(mut self, actions: &'a [SemAct]) -> Self {
+        self.extern_start_acts = actions;
+        self
+    }
+}
+
 impl core::fmt::Debug for ValidationOptions<'_> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ValidationOptions")
             .field("external_resolver", &self.external_resolver.map(|_| "<fn>"))
             .field("sem_acts", &self.sem_acts)
+            .field("matcher_limits", &self.matcher_limits)
             .field("extern_start_acts", &self.extern_start_acts.len())
             .finish()
     }
@@ -248,6 +318,9 @@ impl core::fmt::Debug for ValidationOptions<'_> {
 /// Each `(node, shape)` association is checked independently (memoized
 /// within the call); the result preserves association order. A focus node
 /// absent from the dataset is validated against an empty neighbourhood.
+///
+/// # Errors
+/// Returns a typed matcher or native pattern refusal, without a partial report.
 ///
 /// # Examples
 ///
@@ -273,27 +346,28 @@ impl core::fmt::Debug for ValidationOptions<'_> {
 ///     TermValue::Iri("http://example.org/alice".to_string()),
 ///     ShapeSelector::Label("http://example.org/UserShape".to_string()),
 /// )];
-/// let result = validate(&schema, &data, &map);
+/// let result = validate(&schema, &data, &map).expect("validation finishes");
 /// assert_eq!(result.entries.len(), 1);
 /// assert_eq!(result.entries[0].status, ConformanceStatus::Conformant);
 /// ```
-#[must_use]
 pub fn validate(
     schema: &Schema,
     data: &RdfDataset,
     map: &[(TermValue, ShapeSelector)],
-) -> ResultShapeMap {
+) -> Result<ResultShapeMap, ValidationError> {
     validate_with(schema, data, map, &ValidationOptions::default())
 }
 
 /// [`validate`] with explicit [`ValidationOptions`].
-#[must_use]
+///
+/// # Errors
+/// Returns a typed operational refusal when admitted work cannot finish.
 pub fn validate_with(
     schema: &Schema,
     data: &RdfDataset,
     map: &[(TermValue, ShapeSelector)],
     options: &ValidationOptions<'_>,
-) -> ResultShapeMap {
+) -> Result<ResultShapeMap, ValidationError> {
     validate_with_bounds(schema, data, map, options, None)
 }
 
@@ -310,7 +384,7 @@ pub(crate) fn validate_with_bounds(
     map: &[(TermValue, ShapeSelector)],
     options: &ValidationOptions<'_>,
     bounds: Option<&ExactBoundsMap>,
-) -> ResultShapeMap {
+) -> Result<ResultShapeMap, ValidationError> {
     validate_using(
         schema,
         data,
@@ -319,7 +393,6 @@ pub(crate) fn validate_with_bounds(
         &mut pattern::PatternCache::default(),
         bounds,
     )
-    .expect("compatibility validation cannot produce a native XPath refusal")
 }
 
 /// A reusable schema whose selected native patterns retain successful programs.
@@ -371,7 +444,7 @@ impl<'a> XPathValidator<'a> {
     /// can use another law or larger bounds without inheriting that refusal.
     ///
     /// # Errors
-    /// Returns the actual typed native XPath resource or allocation cause.
+    /// Returns typed matcher refusal or the original native XPath cause.
     pub fn validate(
         &mut self,
         data: &RdfDataset,
@@ -379,7 +452,7 @@ impl<'a> XPathValidator<'a> {
         options: &ValidationOptions<'_>,
         profile: xpath::Profile,
         limits: xpath::Limits,
-    ) -> Result<ResultShapeMap, xpath::Error> {
+    ) -> Result<ResultShapeMap, ValidationError> {
         self.patterns.select(profile, limits);
         validate_using(
             self.schema,
@@ -406,7 +479,7 @@ pub fn validate_with_xpath(
     options: &ValidationOptions<'_>,
     profile: xpath::Profile,
     limits: xpath::Limits,
-) -> Result<ResultShapeMap, xpath::Error> {
+) -> Result<ResultShapeMap, ValidationError> {
     XPathValidator::new(schema).validate(data, map, options, profile, limits)
 }
 
@@ -417,7 +490,7 @@ fn validate_using(
     options: &ValidationOptions<'_>,
     patterns: &mut pattern::PatternCache,
     bounds: Option<&ExactBoundsMap>,
-) -> Result<ResultShapeMap, xpath::Error> {
+) -> Result<ResultShapeMap, ValidationError> {
     // Resolve whole-declaration EXTERNALs up front so the resolved
     // expressions outlive the engine borrowing them.
     let externals: Vec<(String, ShapeExpr)> = match options.external_resolver {
@@ -462,6 +535,7 @@ fn validate_using(
         &options.sem_acts,
         std::mem::take(patterns),
         bounds,
+        options.matcher_limits,
     );
     let result = map
         .iter()
@@ -502,6 +576,7 @@ enum Focus<'a> {
 type Pair = (TermId, u32);
 
 struct Engine<'a> {
+    matcher_limits: MatcherLimits,
     data: &'a RdfDataset,
     sem_acts: &'a SemActRegistry<'a>,
     start: Option<&'a ShapeExpr>,
@@ -591,6 +666,7 @@ impl<'a> Engine<'a> {
         sem_acts: &'a SemActRegistry<'a>,
         patterns: pattern::PatternCache,
         bounds: Option<&'a ExactBoundsMap>,
+        matcher_limits: MatcherLimits,
     ) -> Self {
         let mut shape_map: FastMap<&'a str, &'a ShapeExpr> = schema
             .shapes
@@ -625,6 +701,7 @@ impl<'a> Engine<'a> {
                 .or_insert_with(|| prepare_shape(shape, &te_map).map(Arc::new));
         }
         Self {
+            matcher_limits,
             data,
             sem_acts,
             start: schema.start.as_deref(),
@@ -882,7 +959,7 @@ impl<'a> Engine<'a> {
             }
             (counts, assignment)
         } else {
-            match matcher::assignment_search(compiled, &options)? {
+            match matcher::assignment_search(compiled, &options, self.matcher_limits)? {
                 Some(found) => found,
                 None => return Err(cardinality_reason(compiled, &arcs, &value_failures).into()),
             }

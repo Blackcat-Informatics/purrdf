@@ -104,7 +104,8 @@ fn bench_prepared_validate(c: &mut Bench) {
     ));
     group.bench_function("single_engine_3000_focus_nodes", |b| {
         b.iter(|| {
-            let result = validate(black_box(&schema), black_box(&data), black_box(&map));
+            let result = validate(black_box(&schema), black_box(&data), black_box(&map))
+                .expect("validation finishes");
             assert_eq!(result.entries.len(), NODE_COUNT);
             assert!(result.all_conformant());
             black_box(result);
