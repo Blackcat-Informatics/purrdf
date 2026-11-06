@@ -86,6 +86,8 @@ purrdf-slice = { workspace = true }
 purrdf-stack = { workspace = true }
 
 [dev-dependencies]
+# Shared corpus readers and graders stay outside the shipping API.
+purrdf-shacl-conformance = { workspace = true }
 purrdf-gts = { workspace = true }
 # The workspace's shared counting allocator, for `benches/validate.rs`, which is
 # the one target here needing BOTH measurement modes in one process: per-thread

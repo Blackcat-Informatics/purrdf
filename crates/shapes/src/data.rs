@@ -33,7 +33,7 @@ use crate::term::{NamedNode, Term, term_id_to_native};
 /// A quoted triple is resolved over [`Term::fold_nested`]'s work list: its subject,
 /// predicate and object, each fully before the next, and the first component the
 /// dataset lacks ends the lookup.
-pub(crate) fn resolve_id(dataset: &impl ShaclRead, term: &Term) -> Option<TermId> {
+pub fn resolve_id(dataset: &impl ShaclRead, term: &Term) -> Option<TermId> {
     term.fold_nested(
         &mut (),
         |(), term| {
@@ -471,7 +471,7 @@ pub fn quads_for_pattern_ids(
 /// terms: [`DatasetView::objects`](::purrdf_rdf::DatasetView::objects), lifted from
 /// the native term and IRI a cold-path reader holds. Empty when `subject` or
 /// `predicate` is not interned, so neither can have a statement.
-pub(crate) fn objects_of(ds: &impl ShaclRead, subject: &Term, predicate: &str) -> Vec<Term> {
+pub fn objects_of(ds: &impl ShaclRead, subject: &Term, predicate: &str) -> Vec<Term> {
     let (Some(subject), Some(predicate)) = (resolve_id(ds, subject), ds.term_id_by_iri(predicate))
     else {
         return Vec::new();

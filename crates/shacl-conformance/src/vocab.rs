@@ -4,27 +4,27 @@
 //! What the vendored W3C SHACL 1.2 vocabularies DECLARE: every constraint
 //! component and every node-expression function, with its parameters.
 //!
-//! The files are the crate-local byte-exact copies under `crates/shapes/spec/`
-//! (written by the vendoring script and pinned by the frozen-corpus manifest), so
-//! they ship inside the published package. `shacl-shacl.ttl` is not read here: it
+//! The files are the byte-exact copies in the sibling `crates/shapes/spec/`
+//! (written by the vendoring script and pinned by the frozen-corpus manifest).
+//! This reader is unpublished test support. `shacl-shacl.ttl` is not read here: it
 //! is a shapes graph for validating shapes graphs, not a vocabulary declaration.
 
 use std::collections::BTreeMap;
 
 use ::purrdf_rdf::RdfDataset;
 
-use super::FunctionClass;
-use crate::data::{GraphFilter, native_quads, objects_of as objects};
-use crate::model::{rdf, sh};
-use crate::term::{NamedNode, Term};
+use purrdf_shapes::data::{GraphFilter, native_quads, objects_of as objects};
+use purrdf_shapes::model::{rdf, sh};
+use purrdf_shapes::spec::FunctionClass;
+use purrdf_shapes::term::{NamedNode, Term};
 
 /// The three vocabulary files, as `(file name, text)`.
 const VOCABULARIES: [(&str, &str); 3] = [
-    ("shacl.ttl", include_str!("../../spec/shacl.ttl")),
-    ("shnex.ttl", include_str!("../../spec/shnex.ttl")),
+    ("shacl.ttl", include_str!("../../shapes/spec/shacl.ttl")),
+    ("shnex.ttl", include_str!("../../shapes/spec/shnex.ttl")),
     (
         "shnex-sparql.ttl",
-        include_str!("../../spec/shnex-sparql.ttl"),
+        include_str!("../../shapes/spec/shnex-sparql.ttl"),
     ),
 ];
 
@@ -71,7 +71,7 @@ pub fn declared() -> Result<Vocabulary, String> {
     let mut out = Vocabulary::default();
     for (name, text) in VOCABULARIES {
         let dataset =
-            crate::text_ingest::parse_turtle_to_dataset(text, None).map_err(|errors| {
+            purrdf_shapes::text_ingest::parse_turtle_to_dataset(text, None).map_err(|errors| {
                 format!(
                     "{name} does not parse: {}",
                     errors
@@ -101,7 +101,7 @@ pub fn declared_terms() -> Result<std::collections::BTreeSet<String>, String> {
     let mut out = std::collections::BTreeSet::new();
     for (name, text) in &VOCABULARIES[..2] {
         let dataset =
-            crate::text_ingest::parse_turtle_to_dataset(text, None).map_err(|errors| {
+            purrdf_shapes::text_ingest::parse_turtle_to_dataset(text, None).map_err(|errors| {
                 format!(
                     "{name} does not parse: {}",
                     errors
@@ -116,7 +116,7 @@ pub fn declared_terms() -> Result<std::collections::BTreeSet<String>, String> {
                 continue;
             };
             let iri = iri.as_str();
-            let in_namespace = [sh::NS, crate::model::shnex::NS]
+            let in_namespace = [sh::NS, purrdf_shapes::model::shnex::NS]
                 .into_iter()
                 .any(|ns| iri.len() > ns.len() && iri.starts_with(ns));
             if !in_namespace {

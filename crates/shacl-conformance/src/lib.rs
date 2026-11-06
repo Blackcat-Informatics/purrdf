@@ -3,12 +3,9 @@
 
 //! **The one reader for the two SHACL corpora this crate is graded against.**
 //!
-//! This is test support, not API: it is hidden from the documentation, carries no
-//! stability promise, and reads the corpora from this crate's source checkout. It
-//! lives in the library so that every harness that grades these corpora — this
-//! crate's conformance tests and the command-line crate's tests that drive the
-//! built binary over the same entries — imports one reader instead of compiling
-//! a copy of it.
+//! Unpublished conformance support shared by the Shapes and CLI integration
+//! tests. It reads frozen corpora from the workspace checkout and keeps their
+//! discovery and grading in one implementation, outside the shipping SHACL API.
 //!
 //! Two corpora exist, with two different discovery rules, and more than one
 //! harness needs to walk each of them:
@@ -59,14 +56,15 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::data::{GraphFilter, native_quads, resolve_id};
 use purrdf_rdf::{DatasetView as _, GraphMatch, RdfDataset};
+use purrdf_shapes::data::{GraphFilter, native_quads, resolve_id};
 
 pub mod node_expr_grading;
 pub mod report_grading;
 pub mod shacl12;
-use crate::model::{BoxRoleVocab, rdf, sh};
-use crate::term::{NamedNode, Term, term_id_to_native};
+pub mod vocab;
+use purrdf_shapes::model::{BoxRoleVocab, rdf, sh};
+use purrdf_shapes::term::{NamedNode, Term, term_id_to_native};
 
 // ── Corpus locations ──────────────────────────────────────────────────────────
 
@@ -83,7 +81,7 @@ pub const W3C_SUITE_COMMIT: &str = "08adb3776709a014bc3062ede793c36275b22446";
 pub const W3C_SUBSET_CASES: usize = 120;
 
 /// The first-party numbered-case corpus.
-pub const CORPUS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/corpus");
+pub const CORPUS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../shapes/corpus");
 
 /// Exact number of `sht:Validate` entries the manifest tree must discover.
 /// Bump only when the vendored corpus itself changes (it is byte-frozen).
@@ -249,7 +247,7 @@ pub struct W3cCase {
     /// shacl-shacl differential lane deliberately does not: it judges structural
     /// validity once per shapes file, which a dated law's extra refusals would
     /// confound, so it runs the compatibility law.
-    pub profile: crate::profile::ShaclProfile,
+    pub profile: purrdf_shapes::profile::ShaclProfile,
     /// Whether the case belongs to the first-party `af/` seam rather than to the
     /// vendored W3C suite. Set by [`w3c_cases`]; every other discovery path leaves
     /// it `false`.
@@ -284,7 +282,7 @@ pub fn named(iri: &str) -> Term {
 /// The distinct objects of `(subject, predicate, ?)` in any graph:
 /// [`DatasetView::objects`](purrdf_rdf::DatasetView::objects), lifted to native terms.
 pub fn objects(g: &RdfDataset, subject: &Term, predicate: &str) -> Vec<Term> {
-    crate::data::objects_of(g, subject, predicate)
+    purrdf_shapes::data::objects_of(g, subject, predicate)
 }
 
 /// The first object of `(subject, predicate, ?)`, if any.
@@ -566,7 +564,7 @@ pub fn parse_entry(
         expected_messages,
         expected_annotations,
         expected_details,
-        profile: crate::profile::ShaclProfile::LEGACY,
+        profile: purrdf_shapes::profile::ShaclProfile::LEGACY,
         first_party: false,
     })
 }
@@ -626,7 +624,7 @@ fn expected_result_messages(g: &RdfDataset, report_node: &Term) -> Vec<(Tuple, B
 pub fn is_annotation_property(predicate: &str) -> bool {
     predicate != rdf::TYPE
         && !predicate.starts_with(sh::NS)
-        && !predicate.starts_with(crate::model::shnex::NS)
+        && !predicate.starts_with(purrdf_shapes::model::shnex::NS)
 }
 
 /// Every expected result carrying result annotations, with its `(property,

@@ -8,6 +8,11 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **SHACL conformance support (breaking Rust API):** Corpus readers and vendored
+  vocabulary fixture readers move from the published Shapes API into the
+  unpublished `purrdf-shacl-conformance` crate, shared by native integration
+  tests. Manifest discovery, grading and corpus counts are unchanged.
+
 - **Typed SHACL failures (breaking Rust API):** RDF text ingestion retains ordered
   native diagnostics and original source coordinates. Expression selectors, term
   parsing, namespace configuration, conformance configuration and SPARQL call

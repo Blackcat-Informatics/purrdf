@@ -12,7 +12,7 @@
 //! no other departure from exact equality: an approved entry is graded against its
 //! `mf:result` as written.
 
-use crate::term::Term;
+use purrdf_shapes::term::Term;
 
 /// Compare produced node-expression output against the expected list: exact RDF
 /// 1.2 term equality, in order, or as a multiset under `ignore_order`.

@@ -84,6 +84,8 @@ clap = { workspace = true }
 libc = { workspace = true }
 
 [dev-dependencies]
+# Shared corpus readers and graders stay outside the shipping API.
+purrdf-shacl-conformance = { workspace = true }
 # The workspace's shared counting allocator, for the `pack_input_alloc` bench
 # probe (which pairs its ledger with an OS resident-set reading the instrument
 # does not provide). Path-only and unpublished, and this crate is never
@@ -96,10 +98,7 @@ purrdf-testkit = { workspace = true }
 # product carrying a stage id no build wrote, by repacking a real product's
 # sections (the same technique `purrdf-shapes`' own refusal-matrix tests use) so
 # every digest still checks out. Test-only: the CLI never links the SHACL
-# product codec directly, it calls through `purrdf-validate`. It also carries the
-# shared W3C SHACL 1.2 corpus reader (`purrdf_shapes::shacl_corpora`) that
-# `w3c_node_expr_cli` and `w3c_srl_check_cli` walk to run every `sht:EvalNodeExpr`
-# entry and every SPARQL 1.2 RL entry through the built binary.
+# product codec directly, it calls through `purrdf-validate`.
 purrdf-shapes = { workspace = true }
 # Authors the `.gts` fixtures the GTS-ingestion integration tests feed to the binary.
 # Test-only: the CLI reads GTS through `purrdf_rdf::import_gts_events` and never links

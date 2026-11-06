@@ -37,6 +37,7 @@ members = [
     "crates/rdf-events",
     "crates/rdf-wasm",
     "crates/retrieval",
+    "crates/shacl-conformance",
     "crates/shapes",
     "crates/shex",
     "crates/slice",
@@ -90,6 +91,7 @@ purrdf-alloc-probe = { path = "crates/alloc-probe" }
 purrdf-cdt = { path = "crates/cdt", version = "3.0.1" }
 purrdf-columnar = { path = "crates/columnar", version = "3.0.1" }
 purrdf-conformance-kit = { path = "crates/conformance-kit" }
+purrdf-shacl-conformance = { path = "crates/shacl-conformance" }
 purrdf-core = { path = "crates/rdf-core", version = "3.0.1" }
 purrdf-datalog = { path = "crates/datalog", version = "3.0.1" }
 purrdf-deflate = { path = "crates/deflate", version = "3.0.1" }

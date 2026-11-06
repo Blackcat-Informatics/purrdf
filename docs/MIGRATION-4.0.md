@@ -28,6 +28,20 @@ cannot change the analyzed document. Attachment decoding, part covers and RDF
 projection reuse its established invariants. Unknown parts, transfer refusals,
 profile checks and strict verification of external RDF remain enforced.
 
+### Conformance fixtures leave the shipping API
+
+`purrdf_shapes::shacl_corpora` and the vocabulary fixture readers
+`purrdf_shapes::spec::{declared, declared_terms, Vocabulary, DeclaredFunction,
+DeclaredParam}` move to the unpublished `purrdf-shacl-conformance` support crate.
+Repository integration tests use it through a path-only dev dependency. Corpus
+readers are at its root and vocabulary readers are in `vocab`. Published runtime
+consumers must supply their own fixtures; these checkout-based readers no longer
+ship as part of the SHACL API.
+
+The existing resident lookup implementations are available as
+`purrdf_shapes::data::{resolve_id, objects_of}`. They preserve scope-qualified
+blank-node resolution, raw default-scope fallback and distinct object results.
+
 ### Other API migrations
 
 The USTAR reader, borrowed-member iterator and writer functions now return

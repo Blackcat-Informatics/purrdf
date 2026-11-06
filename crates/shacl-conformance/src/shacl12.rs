@@ -35,10 +35,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::data::{GraphFilter, native_quads};
-use crate::model::rdf;
-use crate::term::Term;
 use purrdf_rdf::RdfDataset;
+use purrdf_shapes::data::{GraphFilter, native_quads};
+use purrdf_shapes::model::rdf;
+use purrdf_shapes::term::Term;
 
 use super::{
     W3cCase, file_iri, iri_to_path, list_items, manifest_includes, mf, object, objects,
@@ -545,7 +545,7 @@ fn parse_case(
             .unwrap_or_else(|| panic!("{id}: sht:Validate entry was not parsed"));
         tc.id.clone_from(&id);
         tc.section.clone_from(&section);
-        tc.profile = crate::profile::ShaclProfile::ED_20261016;
+        tc.profile = purrdf_shapes::profile::ShaclProfile::ED_20261016;
         Body::Validate(tc)
     } else if ty == sht12::EVAL_NODE_EXPR {
         Body::NodeExpr(parse_node_expr_case(g, entry, manifest_path, &id))

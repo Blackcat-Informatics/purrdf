@@ -63,7 +63,7 @@ mod report;
 #[path = "support/w3c_earl.rs"]
 mod w3c_earl;
 
-use purrdf_shapes::shacl_corpora;
+use purrdf_shacl_conformance as shacl_corpora;
 use report::merge;
 
 use std::collections::BTreeMap;

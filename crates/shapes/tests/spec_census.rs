@@ -6,7 +6,7 @@
 //! themselves — never out of a second, hand-maintained list.
 //!
 //! * The vocabulary half: every term the vendored `shacl.ttl` and `shnex.ttl`
-//!   define ([`purrdf_shapes::spec::declared_terms`] reads the RDF).
+//!   define ([`purrdf_shacl_conformance::vocab::declared_terms`] reads the RDF).
 //! * The engine half: every `sh::` / `shnex::` string constant
 //!   `crates/iri/src/vocab.rs` declares (the modules `purrdf_shapes::model`
 //!   re-exports) — every term PurRDF reads anywhere, SHACL Advanced Features
@@ -19,8 +19,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use purrdf_shacl_conformance::vocab::declared_terms;
 use purrdf_shapes::spec::census::{Role, Site, TermClass, census, classify};
-use purrdf_shapes::spec::declared_terms;
 
 /// Every string constant declared in `mod {module}` of the shared W3C
 /// vocabulary (`crates/iri/src/vocab.rs`), as `(name, value)`, excluding the

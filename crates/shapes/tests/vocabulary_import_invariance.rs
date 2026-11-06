@@ -32,7 +32,7 @@
 //! it names normalized ([`normalize_offsets`]): the merge lengthens the prologue before a
 //! SPARQL body, which moves the offset of a syntax error and nothing else.
 
-use purrdf_shapes::shacl_corpora;
+use purrdf_shacl_conformance as shacl_corpora;
 
 use std::fs;
 use std::sync::Arc;

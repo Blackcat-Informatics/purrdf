@@ -58,8 +58,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use purrdf_rdf::{RdfDataset, try_canonicalize};
+use purrdf_shacl_conformance::file_iri;
 use purrdf_shapes::data::ShaclData;
-use purrdf_shapes::shacl_corpora::file_iri;
 use purrdf_shapes::shapes::from_dataset_with_prefixes;
 use purrdf_shapes::{apply_rules, engine, text_ingest};
 

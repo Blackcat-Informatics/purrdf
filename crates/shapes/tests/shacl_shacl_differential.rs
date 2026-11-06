@@ -34,7 +34,7 @@
 //! sentence that makes the graph well-formed.
 //! Nothing else may appear there.
 
-use purrdf_shapes::shacl_corpora;
+use purrdf_shacl_conformance as shacl_corpora;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;

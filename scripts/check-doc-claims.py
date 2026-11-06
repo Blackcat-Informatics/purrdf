@@ -3163,7 +3163,7 @@ def jsonld_lens_claims() -> list[Claim]:
 
 
 _SHACL12_ROW = "SHACL 1.2 (Core, SPARQL, node expressions, rules, SPARQL RL)"
-_SHACL12_CORPUS = _REPO / "crates" / "shapes" / "src" / "shacl_corpora" / "shacl12.rs"
+_SHACL12_CORPUS = _REPO / "crates" / "shacl-conformance" / "src" / "shacl12.rs"
 _SHAPES_README = _REPO / "crates" / "shapes" / "README.md"
 _BOOK_SHACL = _REPO / "docs" / "book" / "src" / "validation" / "shacl.md"
 
@@ -3260,7 +3260,7 @@ def shacl12_claims(matrix: dict[str, tuple[int, int]]) -> list[Claim]:
     mat = "the generated conformance-matrix block in docs/CONFORMANCE.md"
     pins = (
         "W3C12_TOTAL_CASES / W3C12_CASES_BY_TYPE in "
-        "crates/shapes/src/shacl_corpora/shacl12.rs"
+        "crates/shacl-conformance/src/shacl12.rs"
     )
     catsrc = f"the category pins in {_SHACL12_HARNESS.relative_to(_REPO)}"
     if counts["total"] != listed + cats["unlisted"]:
