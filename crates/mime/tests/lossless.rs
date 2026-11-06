@@ -27,7 +27,7 @@ fn round_trip(bytes: &[u8]) -> Document<'_> {
         &profile,
     )
     .unwrap();
-    assert_eq!(model.cover.reconstruct().unwrap(), bytes);
+    assert_eq!(model.cover().reconstruct().unwrap(), bytes);
     let dataset = project(&model, &profile).unwrap();
     assert_eq!(
         decode_document(&dataset, model.id(), &profile).unwrap(),
@@ -53,10 +53,10 @@ fn identity_transfer_defects_are_observed_in_leaves_and_containers() {
         bytes.extend_from_slice(b"\r\n\r\n");
         bytes.extend_from_slice(body);
         let model = round_trip(&bytes);
-        assert!(model.problems.iter().any(|problem| problem.kind == kind));
+        assert!(model.problems().iter().any(|problem| problem.kind == kind));
         assert!(
             model
-                .problems
+                .problems()
                 .iter()
                 .any(|problem| problem.kind == ProblemKind::InvalidTransferEncoding)
         );
@@ -70,22 +70,22 @@ fn identity_transfer_defects_are_observed_in_leaves_and_containers() {
         b"Content-Type: message/rfc822\r\n\r\nContent-Transfer-Encoding: 8bit\r\n\r\n\xff\r\n".as_slice(),
     ] {
         let model = round_trip(bytes);
-        assert_eq!(model.parts.len(), 2);
-        assert!(model.problems.iter().any(|problem| problem.part == 0 && problem.kind == ProblemKind::InvalidTransferEncoding));
+        assert_eq!(model.parts().len(), 2);
+        assert!(model.problems().iter().any(|problem| problem.part == 0 && problem.kind == ProblemKind::InvalidTransferEncoding));
         assert!(matches!(model.decoded_attachment(0), Err(MimeError::Transfer { .. })));
         assert_eq!(model.decoded_attachment(1).unwrap().bytes[0], 255);
     }
     let binary = round_trip(b"Content-Transfer-Encoding: binary\r\n\r\n\0\xff\n\r");
-    assert_eq!(binary.problems, [] as [purrdf_mime::Problem; 0]);
+    assert_eq!(binary.problems(), [] as [purrdf_mime::Problem; 0]);
     assert_eq!(binary.decoded_attachment(0).unwrap().bytes, b"\0\xff\n\r");
     let eight = round_trip(b"Content-Transfer-Encoding: 8bit\r\n\r\n\xff\r\n");
-    assert_eq!(eight.problems, [] as [purrdf_mime::Problem; 0]);
+    assert_eq!(eight.problems(), [] as [purrdf_mime::Problem; 0]);
     assert_eq!(eight.decoded_attachment(0).unwrap().bytes, b"\xff\r\n");
     for length in [998, 999] {
         let mut bytes = b"\r\n".to_vec();
         bytes.extend(std::iter::repeat_n(b'a', length));
         let model = round_trip(&bytes);
-        assert_eq!(model.problems.is_empty(), length == 998);
+        assert_eq!(model.problems().is_empty(), length == 998);
         assert_eq!(model.decoded_attachment(0).is_ok(), length == 998);
     }
 }
@@ -102,10 +102,10 @@ fn multipart_syntax_defects_preserve_every_original_byte() {
         bytes.extend_from_slice(&boundary);
         bytes.extend_from_slice(b"\"\r\n\r\noriginal");
         let model = round_trip(&bytes);
-        assert_eq!(model.parts.len(), 1);
+        assert_eq!(model.parts().len(), 1);
         assert!(
             model
-                .problems
+                .problems()
                 .iter()
                 .any(|problem| problem.kind == ProblemKind::InvalidContentType)
         );
@@ -119,8 +119,8 @@ fn multipart_syntax_defects_preserve_every_original_byte() {
         bytes.extend_from_slice(&boundary);
         bytes.extend_from_slice(b"--\r\n");
         let model = round_trip(&bytes);
-        assert_eq!(model.parts.len(), 2);
-        assert_eq!(model.problems, [] as [purrdf_mime::Problem; 0]);
+        assert_eq!(model.parts().len(), 2);
+        assert_eq!(model.problems(), [] as [purrdf_mime::Problem; 0]);
         assert_eq!(model.decoded_attachment(1).unwrap().bytes, b"payload");
     }
     for (bytes, kind) in [
@@ -128,13 +128,13 @@ fn multipart_syntax_defects_preserve_every_original_byte() {
         (b"Content-Type: multipart/mixed; boundary=x\r\n\r\n--x\r\n\r\nbody\r\n--x-oops\r\n--x--\r\n".as_slice(), ProblemKind::UnexpectedBoundary),
     ] {
         let model = round_trip(bytes);
-        assert!(model.problems.iter().any(|problem| problem.kind == kind));
+        assert!(model.problems().iter().any(|problem| problem.kind == kind));
     }
     let model = round_trip(
         b"Content-Type: multipart/mixed; boundary=x\r\n\r\n--other\r\n--x\r\n\r\nbody\r\n--x--\r\n",
     );
-    assert_eq!(model.problems, [] as [purrdf_mime::Problem; 0]);
-    assert_eq!(model.parts.len(), 2);
+    assert_eq!(model.problems(), [] as [purrdf_mime::Problem; 0]);
+    assert_eq!(model.parts().len(), 2);
     assert_eq!(model.decoded_attachment(1).unwrap().bytes, b"body");
 }
 
@@ -151,7 +151,7 @@ fn encoded_words_are_checked_only_in_their_actual_header_positions() {
         let model = round_trip(bytes);
         assert!(
             model
-                .problems
+                .problems()
                 .iter()
                 .any(|problem| problem.kind == ProblemKind::InvalidEncodedWord)
         );
@@ -169,7 +169,7 @@ fn encoded_words_are_checked_only_in_their_actual_header_positions() {
         let model = round_trip(bytes);
         assert!(
             !model
-                .problems
+                .problems()
                 .iter()
                 .any(|problem| problem.kind == ProblemKind::InvalidEncodedWord)
         );
@@ -182,7 +182,7 @@ fn encoded_words_are_checked_only_in_their_actual_header_positions() {
         let model = round_trip(&bytes);
         assert_eq!(
             model
-                .problems
+                .problems()
                 .iter()
                 .any(|problem| problem.kind == ProblemKind::InvalidEncodedWord),
             length == 64
@@ -201,11 +201,11 @@ fn original_octets_and_repeated_folded_headers_survive() {
         &profile,
     )
     .unwrap();
-    assert_eq!(model.headers.len(), 4);
-    assert_eq!(model.headers[0].ordinal, 0);
-    assert_eq!(model.headers[1].ordinal, 1);
-    assert_eq!(model.headers[2].unfolded(bytes), b" fold\t retained");
-    assert_eq!(model.headers[2].segments.len(), 2);
+    assert_eq!(model.headers().len(), 4);
+    assert_eq!(model.headers()[0].ordinal, 0);
+    assert_eq!(model.headers()[1].ordinal, 1);
+    assert_eq!(model.headers()[2].unfolded(bytes), b" fold\t retained");
+    assert_eq!(model.headers()[2].segments.len(), 2);
     assert_eq!(
         model.decoded_attachment(0).unwrap().bytes,
         b"\0\xff\x80\r\n"
@@ -228,7 +228,7 @@ fn malformed_source_is_typed_without_a_repair() {
             &profile,
         )
         .unwrap();
-        assert_ne!(model.problems, [] as [purrdf_mime::Problem; 0]);
+        assert_ne!(model.problems(), [] as [purrdf_mime::Problem; 0]);
         round_trip(bytes);
     }
 }
@@ -286,7 +286,7 @@ fn broken_transfers_refuse_payload_but_preserve_original_cover() {
             model.decoded_attachment(0),
             Err(MimeError::Transfer { .. })
         ));
-        assert_ne!(model.problems, [] as [purrdf_mime::Problem; 0]);
+        assert_ne!(model.problems(), [] as [purrdf_mime::Problem; 0]);
         round_trip(bytes);
     }
 }
@@ -302,26 +302,29 @@ fn nested_multipart_keeps_parent_crlf_and_original_structure() {
         &profile,
     )
     .unwrap();
-    assert_eq!(model.parts.len(), 4);
-    assert_eq!(model.parts[2].media_type.as_ref().unwrap().main, b"message");
-    assert_eq!(model.parts[3].parent, Some(2));
+    assert_eq!(model.parts().len(), 4);
+    assert_eq!(
+        model.parts()[2].media_type.as_ref().unwrap().main,
+        b"message"
+    );
+    assert_eq!(model.parts()[3].parent, Some(2));
     assert_eq!(
         model.part_cover(2).unwrap().reconstruct().unwrap(),
-        &bytes[model.parts[2].span.clone()]
+        &bytes[model.parts()[2].span.clone()]
     );
     assert!(
         model
-            .structures
+            .structures()
             .iter()
             .any(|item| item.kind == purrdf_mime::StructureKind::Preamble)
     );
     assert!(
         model
-            .structures
+            .structures()
             .iter()
             .any(|item| item.kind == purrdf_mime::StructureKind::Epilogue)
     );
-    assert!(model.problems.is_empty(), "{:?}", model.problems);
+    assert!(model.problems().is_empty(), "{:?}", model.problems());
     round_trip(bytes);
 }
 
@@ -342,7 +345,7 @@ fn adjacent_delimiters_and_missing_closures_preserve_ranges() {
         .unwrap();
         assert!(
             model
-                .parts
+                .parts()
                 .iter()
                 .all(|part| part.span.start <= part.span.end)
         );
@@ -361,16 +364,16 @@ fn conflicting_headers_and_encoded_words_are_explicit() {
         &profile,
     )
     .unwrap();
-    assert!(model.parts[0].media_type.is_none());
+    assert!(model.parts()[0].media_type.is_none());
     assert!(
         model
-            .problems
+            .problems()
             .iter()
             .any(|problem| problem.kind == ProblemKind::ConflictingStructuralHeaders)
     );
     assert!(
         model
-            .problems
+            .problems()
             .iter()
             .any(|problem| problem.kind == ProblemKind::InvalidEncodedWord)
     );
@@ -393,8 +396,8 @@ fn caller_limits_are_exact_neighbors_and_no_depth_cap_is_inserted() {
         &unbounded,
     )
     .unwrap();
-    assert_eq!(model.parts.len(), 258);
-    assert_eq!(model.parts.last().unwrap().depth, 257);
+    assert_eq!(model.parts().len(), 258);
+    assert_eq!(model.parts().last().unwrap().depth, 257);
     let mut limits = Limits::unbounded();
     limits.depth = Some(257);
     let admitted = Profile::new("bounded", vocabulary.clone(), limits).unwrap();
@@ -425,9 +428,9 @@ fn caller_limits_are_exact_neighbors_and_no_depth_cap_is_inserted() {
     ));
 }
 
-fn altered_model_and_different_profile_refuse_publication() {
+fn different_profile_and_unknown_parts_refuse_publication() {
     let profile = profile();
-    let mut model = analyze(
+    let model = analyze(
         SourceDocument {
             id: "urn:example:message",
             bytes: b"X: y\r\n\r\nz",
@@ -435,10 +438,14 @@ fn altered_model_and_different_profile_refuse_publication() {
         &profile,
     )
     .unwrap();
-    model.headers[0].ordinal = 2;
+    assert!(project(&model, &profile).is_ok());
     assert!(matches!(
-        project(&model, &profile),
-        Err(MimeError::Metadata { .. })
+        model.decoded_attachment(1),
+        Err(MimeError::UnknownPart(1))
+    ));
+    assert!(matches!(
+        model.part_cover(1),
+        Err(MimeError::UnknownPart(1))
     ));
     let other = Profile::new("other", profile.vocabulary().clone(), Limits::unbounded()).unwrap();
     assert!(matches!(
@@ -562,7 +569,7 @@ fn large_original_source_and_header_multiset_have_only_caller_limits() {
         &profile,
     )
     .unwrap();
-    assert_eq!(model.cover.reconstruct().unwrap(), bytes);
+    assert_eq!(model.cover().reconstruct().unwrap(), bytes);
     let mut limits = Limits::unbounded();
     limits.source_bytes = Some(bytes.len() as u64 - 1);
     let bounded = Profile::new("size", profile.vocabulary().clone(), limits).unwrap();
@@ -609,8 +616,8 @@ fn large_original_source_and_header_multiset_have_only_caller_limits() {
         &profile,
     )
     .unwrap();
-    assert_eq!(model.headers.len(), 65_537);
-    assert_eq!(model.headers.last().unwrap().ordinal, 65_536);
+    assert_eq!(model.headers().len(), 65_537);
+    assert_eq!(model.headers().last().unwrap().ordinal, 65_536);
     let mut limits = Limits::unbounded();
     limits.headers = Some(65_536);
     let bounded = Profile::new("headers", profile.vocabulary().clone(), limits).unwrap();
@@ -641,7 +648,7 @@ purrdf_testkit::harness_main!(
     adjacent_delimiters_and_missing_closures_preserve_ranges,
     conflicting_headers_and_encoded_words_are_explicit,
     caller_limits_are_exact_neighbors_and_no_depth_cap_is_inserted,
-    altered_model_and_different_profile_refuse_publication,
+    different_profile_and_unknown_parts_refuse_publication,
     graph_mutations_refuse_before_source_bytes_escape,
     real_sparql_sees_repeated_occurrences_in_original_order,
     production_rdf_round_trip_is_deterministic_for_original_and_broken_messages,

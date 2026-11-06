@@ -8,6 +8,28 @@ the PurRDF crates together when adopting them.
 
 ## At a glance
 
+### Immutable MIME documents
+
+`purrdf::mime::Document` keeps its analyzed source and occurrence tables private.
+Replace direct field reads with these read-only methods:
+
+| Previous field | Method | Returned view |
+| --- | --- | --- |
+| `source` | `source()` | `SourceDocument<'a>` |
+| `cover` | `cover()` | `&ByteCover<'a>` |
+| `parts` | `parts()` | `&[Part]` |
+| `headers` | `headers()` | `&[Header]` |
+| `structures` | `structures()` | `&[Structure]` |
+| `problems` | `problems()` | `&[Problem]` |
+
+Construct documents through `analyze`; edited bytes require a new analysis.
+Standalone part and header values can still be edited as snapshots, but they
+cannot change the analyzed document. Attachment decoding, part covers and RDF
+projection reuse its established invariants. Unknown parts, transfer refusals,
+profile checks and strict verification of external RDF remain enforced.
+
+### Other API migrations
+
 The USTAR reader, borrowed-member iterator and writer functions now return
 `purrdf::ustar::UstarError` instead of `String`. Match its non-exhaustive variants
 with a wildcard or inspect the borrowed structured fields. Refusals retain their

@@ -33,8 +33,8 @@ pub(crate) fn serialization_transcript() -> String {
         )
         .unwrap();
         if index == 5 {
-            assert_eq!(model.parts.len(), 15);
-            assert_eq!(model.parts[0].children.len(), 4);
+            assert_eq!(model.parts().len(), 15);
+            assert_eq!(model.parts()[0].children.len(), 4);
         }
         let dataset = project(&model, &profile).unwrap();
         for format in [
