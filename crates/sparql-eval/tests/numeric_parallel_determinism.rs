@@ -265,7 +265,8 @@ fn observe(
     Observation {
         tripped: outcome.tripped().map(|governor| format!("{governor:?}")),
         consumed: ResourceDimension::ALL
-            .into_iter()
+            .iter()
+            .copied()
             .map(|dimension| {
                 (
                     dimension.label().to_owned(),

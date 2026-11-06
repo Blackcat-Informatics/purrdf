@@ -92,6 +92,14 @@ pub struct Span {
     /// Exclusive end byte.
     pub end: usize,
 }
+impl purrdf_hash::error::StructuredError for Span {
+    purrdf_hash::error_visit! {
+        @record self { start, end } => "yaml-source-span" {
+            "start" => ByteCount(self.start as u128),
+            "end" => ByteCount(self.end as u128),
+        }
+    }
+}
 impl Span {
     pub(super) const fn new(start: usize, end: usize) -> Self {
         Self { start, end }
@@ -729,7 +737,8 @@ impl Builder for SyntaxBuilder<'_> {
             .map_err(|cause| self.refuse(cause, at))?;
         let source = self.source;
         let nodes = &self.nodes;
-        self.allocations
+        let duplicate = self
+            .allocations
             .memory(|memory| {
                 map.keys
                     .prepare_insert(key, memory, |a, b| {
@@ -739,8 +748,42 @@ impl Builder for SyntaxBuilder<'_> {
                     })
                     .map(|entry| entry.publish(()).1)
             })
-            .map_err(|cause| self.refuse(cause, at))?
-            .map_or(Ok(()), |()| Err((ErrorKind::DuplicateKey, at)))?;
+            .map_err(|cause| self.refuse(cause, at))?;
+        if duplicate.is_some() {
+            let first = map
+                .entries
+                .iter()
+                .find(|entry| Self::key_cmp(source, nodes, entry.key, key) == Ordering::Equal)
+                .expect("an indexed earlier key")
+                .key;
+            let first_span = nodes[first.0].span;
+            let repeated = nodes[key.0].span;
+            let first = first_span.start;
+            let mut target = key;
+            while let NodeKind::Alias { target: next, .. } = self.nodes[target.0].kind {
+                target = next;
+            }
+            let text = match &mut self.nodes[target.0].kind {
+                NodeKind::Scalar(scalar) => core::mem::take(&mut scalar.text),
+                _ => {
+                    return Err((
+                        ErrorKind::DuplicateCollectionKey {
+                            first: first_span,
+                            repeated,
+                        },
+                        at,
+                    ));
+                }
+            };
+            return Err((
+                ErrorKind::DuplicateKey {
+                    key: text,
+                    first,
+                    repeated: at,
+                },
+                at,
+            ));
+        }
         self.allocations
             .push(&mut map.entries, SyntaxEntry { key, value })
             .map_err(|cause| self.refuse(cause, at))

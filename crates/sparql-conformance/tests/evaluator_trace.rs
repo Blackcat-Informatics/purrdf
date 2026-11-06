@@ -216,7 +216,7 @@ fn margin(text: &str, out: &mut String) {
 /// evaluation minted, and a random double or a clock reading has no fixed length.
 fn render_consumption(evidence: &GovernorEvidence, volatile: bool) -> String {
     let mut parts = Vec::new();
-    for dimension in ResourceDimension::ALL {
+    for &dimension in ResourceDimension::ALL {
         if volatile && dimension == ResourceDimension::ScratchBytes {
             continue;
         }

@@ -47,15 +47,17 @@ fn consuming_projection_checks_the_whole_stream_and_materializes_only_the_select
     }
     for (source, kind) in [
         ("--- {}\n--- {1: value}", ErrorKind::NonStringKey),
-        (
-            "--- {}\n--- {a: value, !!str a: other}",
-            ErrorKind::DuplicateKey,
-        ),
         ("--- {}\n--- string", ErrorKind::InvalidRoot),
         ("--- {}\n--- !!str null", ErrorKind::InvalidRoot),
     ] {
-        assert_eq!(first(source).unwrap_err().kind(), kind);
+        assert_eq!(first(source).unwrap_err().into_kind(), kind);
     }
+    assert!(matches!(
+        first("--- {}\n--- {a: value, !!str a: other}")
+            .unwrap_err()
+            .kind(),
+        ErrorKind::DuplicateKey { .. }
+    ));
     let source = "{number: &n 0x100000000000000000000000000000001, copy: *n, date: 2026-11-04}";
     let bound = Bound {
         max_numeric_bytes: 39,
@@ -82,7 +84,7 @@ fn consuming_projection_checks_the_whole_stream_and_materializes_only_the_select
         ingest(source)
             .into_core(Select::All, Root::CollectionsOrNull, work)
             .unwrap_err()
-            .kind(),
+            .into_kind(),
         ErrorKind::NumericWork { limit: 9 }
     );
     let large = format!("--- {{}}\n--- {{n: +1{}}}", "0".repeat(4000));
@@ -122,7 +124,7 @@ fn consuming_projection_checks_the_whole_stream_and_materializes_only_the_select
                 }
             )
             .unwrap_err()
-            .kind(),
+            .into_kind(),
         ErrorKind::NumericOutput { limit: 2 }
     );
     let mut later = "--- {}\n---\na0: &a0 [x]\n".to_owned();
@@ -153,7 +155,7 @@ fn consuming_projection_checks_the_whole_stream_and_materializes_only_the_select
                 }
             )
             .unwrap_err()
-            .kind(),
+            .into_kind(),
         ErrorKind::Nodes { limit: 16 }
     );
     assert_eq!(
@@ -167,7 +169,7 @@ fn consuming_projection_checks_the_whole_stream_and_materializes_only_the_select
                 }
             )
             .unwrap_err()
-            .kind(),
+            .into_kind(),
         ErrorKind::Depth { limit: 2 }
     );
     assert_eq!(
@@ -181,7 +183,7 @@ fn consuming_projection_checks_the_whole_stream_and_materializes_only_the_select
                 }
             )
             .unwrap_err()
-            .kind(),
+            .into_kind(),
         ErrorKind::Nodes { limit: 4 }
     );
     // A lower ceiling refuses the original retained account before key validation.
@@ -196,7 +198,7 @@ fn consuming_projection_checks_the_whole_stream_and_materializes_only_the_select
                 }
             )
             .unwrap_err()
-            .kind(),
+            .into_kind(),
         ErrorKind::Allocation { limit: 1 }
     );
     let source = format!("'{}'", "x".repeat(24 << 10));
@@ -223,7 +225,7 @@ fn consuming_projection_checks_the_whole_stream_and_materializes_only_the_select
                 }
             )
             .unwrap_err()
-            .kind(),
+            .into_kind(),
         ErrorKind::Allocation { limit: 48 << 10 }
     );
 }
@@ -290,7 +292,7 @@ fn lexical_sample_retains_spelling_comments_styles_and_original_coordinates() {
     assert_eq!(
         doc.to_core(yaml::ProjectionLimits::DEFAULT)
             .unwrap_err()
-            .kind(),
+            .into_kind(),
         ErrorKind::NonFinite
     );
     assert_eq!(yaml::read("é: x\rb: [").unwrap_err().line(), 2);
@@ -431,7 +433,7 @@ fn syntax_stream_retains_absolute_envelopes_and_one_aggregate_arena() {
     let source =
         "\u{feff}# prologue\r\n%TAG !e! tag:example.org,2026:\r\n--- !e!record &a [é, *a]\r\n";
     let error = yaml::read_syntax_stream(source, limits).unwrap_err();
-    assert_eq!(error.kind(), ErrorKind::CyclicAlias);
+    assert!(matches!(*error.kind(), ErrorKind::CyclicAlias { .. }));
     assert_eq!(error.offset(), source.find("*a").unwrap());
 
     let source = "\u{feff}# prologue\r\n%TAG !e! tag:example.org,2026:\r\n--- !e!record &a [é]\r\n... # end\r\n---\r\n--- [last]\r\n";
@@ -483,20 +485,20 @@ fn syntax_stream_retains_absolute_envelopes_and_one_aggregate_arena() {
     assert_eq!(
         yaml::read_syntax_stream(source, bounded)
             .unwrap_err()
-            .kind(),
+            .into_kind(),
         ErrorKind::Nodes { limit: count - 1 }
     );
     bounded = limits;
     bounded.max_documents = 2;
     let error = yaml::read_syntax_stream(source, bounded).unwrap_err();
-    assert_eq!(error.kind(), ErrorKind::Documents { limit: 2 });
+    assert_eq!(*error.kind(), ErrorKind::Documents { limit: 2 });
     assert_eq!(error.offset(), documents[2].start_marker.unwrap().start);
     bounded = limits;
     bounded.syntax.max_input_bytes = source.len() - 1;
     assert!(matches!(
         yaml::read_syntax_stream(source, bounded)
             .unwrap_err()
-            .kind(),
+            .into_kind(),
         ErrorKind::Input { .. }
     ));
     bounded = limits;
@@ -504,7 +506,7 @@ fn syntax_stream_retains_absolute_envelopes_and_one_aggregate_arena() {
     assert_eq!(
         yaml::read_syntax_stream(source, bounded)
             .unwrap_err()
-            .kind(),
+            .into_kind(),
         ErrorKind::Depth { limit: 0 }
     );
     bounded = limits;
@@ -512,7 +514,7 @@ fn syntax_stream_retains_absolute_envelopes_and_one_aggregate_arena() {
     assert_eq!(
         yaml::read_syntax_stream(source, bounded)
             .unwrap_err()
-            .kind(),
+            .into_kind(),
         ErrorKind::Allocation { limit: 0 }
     );
     // Each document fits alone; retaining decoded scalar bytes and metadata
@@ -525,7 +527,7 @@ fn syntax_stream_retains_absolute_envelopes_and_one_aggregate_arena() {
     assert_eq!(
         yaml::read_syntax_stream(&one.repeat(32), bounded)
             .unwrap_err()
-            .kind(),
+            .into_kind(),
         ErrorKind::Allocation { limit: 16 << 10 }
     );
     assert_eq!(
@@ -537,7 +539,7 @@ fn syntax_stream_retains_absolute_envelopes_and_one_aggregate_arena() {
     assert_eq!(
         yaml::read_syntax("--- first\n--- second", SyntaxLimits::DEFAULT)
             .unwrap_err()
-            .kind(),
+            .into_kind(),
         ErrorKind::MultipleDocuments
     );
 }
@@ -563,23 +565,23 @@ fn lexical_anchor_shadowing_and_explicit_tags_are_document_local() {
     );
     for source in ["&a [*a]", "[&a old, &a [*a]]"] {
         let error = yaml::read_syntax(source, SyntaxLimits::DEFAULT).unwrap_err();
-        assert_eq!(error.kind(), ErrorKind::CyclicAlias);
+        assert!(matches!(*error.kind(), ErrorKind::CyclicAlias { .. }));
         assert_eq!(error.offset(), source.find("*a").unwrap());
-        assert_eq!(
-            yaml::read(source).unwrap_err().kind(),
-            ErrorKind::CyclicAlias
-        );
+        assert!(matches!(
+            yaml::read(source).unwrap_err().into_kind(),
+            ErrorKind::CyclicAlias { .. }
+        ));
     }
     let limits = yaml::SyntaxStreamLimits {
         syntax: SyntaxLimits::DEFAULT,
         max_documents: 4,
     };
-    assert_eq!(
+    assert!(matches!(
         yaml::read_syntax_stream("--- &a old\n--- *a", limits)
             .unwrap_err()
-            .kind(),
-        ErrorKind::UnknownAlias
-    );
+            .into_kind(),
+        ErrorKind::UnknownAlias { .. }
+    ));
     for (directive, spelling, expected) in [
         (
             "%TAG !e! tag:yaml.org,2002:",
@@ -622,13 +624,13 @@ fn lexical_anchor_shadowing_and_explicit_tags_are_document_local() {
     assert_eq!(
         yaml::read_syntax("!<tag:example.org,%FF> value", SyntaxLimits::DEFAULT)
             .unwrap_err()
-            .kind(),
+            .into_kind(),
         ErrorKind::Tag
     );
     assert_eq!(
         yaml::read("%TAG !! tag:example.org,2026:\n--- !!str value")
             .unwrap_err()
-            .kind(),
+            .into_kind(),
         ErrorKind::Tag
     );
     assert_eq!(
@@ -637,7 +639,7 @@ fn lexical_anchor_shadowing_and_explicit_tags_are_document_local() {
             limits
         )
         .unwrap_err()
-        .kind(),
+        .into_kind(),
         ErrorKind::UnknownTagHandle
     );
     let doc = yaml::read_syntax(
@@ -682,13 +684,72 @@ fn malformed_duplicate_alias_and_resource_refusals_have_valid_neighbors() {
             "{valid}"
         );
     }
-    assert_eq!(
+    assert!(matches!(
         yaml::read_syntax("a: x\n'a': y\n", SyntaxLimits::DEFAULT)
             .unwrap_err()
-            .kind(),
-        ErrorKind::DuplicateKey
-    );
+            .into_kind(),
+        ErrorKind::DuplicateKey { .. }
+    ));
     assert!(yaml::read_syntax("a: x\nb: y\n", SyntaxLimits::DEFAULT).is_ok());
+    // Both grammar products transfer the original admitted scalar text, while
+    // coordinates identify key aliases rather than their earlier anchor target.
+    for deferred in [false, true] {
+        let source = String::from("base: &a key\n*a : first\n*a : second\n");
+        let first = source.find("*a").unwrap();
+        let repeated = source.rfind("*a").unwrap();
+        let refusal = if deferred {
+            yaml::read_syntax_stream_with(
+                &source,
+                yaml::SyntaxStreamLimits {
+                    syntax: SyntaxLimits::DEFAULT,
+                    max_documents: 1,
+                },
+                yaml::SyntaxKeyPolicy::Deferred,
+            )
+            .unwrap()
+            .into_core(
+                yaml::SyntaxSelection::First,
+                yaml::SyntaxRootPolicy::Any,
+                yaml::SyntaxProjectionLimits::DEFAULT,
+            )
+            .unwrap_err()
+        } else {
+            yaml::read_syntax(&source, SyntaxLimits::DEFAULT).unwrap_err()
+        };
+        drop(source);
+        let ErrorKind::DuplicateKey {
+            key,
+            first: original,
+            repeated: again,
+        } = refusal.kind()
+        else {
+            panic!("an aliased scalar key repeats its decoded identity");
+        };
+        assert_eq!(
+            (key.as_str(), *original, *again, refusal.offset()),
+            ("key", first, repeated, repeated)
+        );
+    }
+    let source = "base: &a [item]\n? *a\n: first\n? *a\n: second\n";
+    let refusal = yaml::read_syntax(source, SyntaxLimits::DEFAULT).unwrap_err();
+    let ErrorKind::DuplicateCollectionKey { first, repeated } = refusal.kind() else {
+        panic!("a repeated collection alias retains occurrences without dummy scalar text");
+    };
+    assert_eq!(
+        (first.start, first.end),
+        (source.find("*a").unwrap(), source.find("*a").unwrap() + 2)
+    );
+    assert_eq!(
+        (repeated.start, repeated.end),
+        (source.rfind("*a").unwrap(), source.rfind("*a").unwrap() + 2)
+    );
+    assert!(
+        yaml::read_syntax(
+            "base: &a [item]\n? *a\n: first\n? [other]\n: second\n",
+            SyntaxLimits::DEFAULT
+        )
+        .is_ok()
+    );
     let source = "a: &a key\n*a : value\nempty:\n";
     let doc = yaml::read_syntax(source, SyntaxLimits::DEFAULT).unwrap();
     let count = doc.nodes().count() as u64;
@@ -711,10 +772,10 @@ fn malformed_duplicate_alias_and_resource_refusals_have_valid_neighbors() {
             }
         )
         .unwrap_err()
-        .kind(),
+        .into_kind(),
         ErrorKind::Nodes { limit: count - 1 }
     );
-    assert_eq!(
+    assert!(matches!(
         yaml::read_syntax(
             source,
             SyntaxLimits {
@@ -723,9 +784,9 @@ fn malformed_duplicate_alias_and_resource_refusals_have_valid_neighbors() {
             }
         )
         .unwrap_err()
-        .kind(),
-        ErrorKind::Alias
-    );
+        .into_kind(),
+        ErrorKind::Alias { .. }
+    ));
     assert!(
         yaml::read_syntax(
             "a: x",
@@ -745,7 +806,7 @@ fn malformed_duplicate_alias_and_resource_refusals_have_valid_neighbors() {
             }
         )
         .unwrap_err()
-        .kind(),
+        .into_kind(),
         ErrorKind::Input { .. }
     ));
     assert!(
@@ -767,7 +828,7 @@ fn malformed_duplicate_alias_and_resource_refusals_have_valid_neighbors() {
             }
         )
         .unwrap_err()
-        .kind(),
+        .into_kind(),
         ErrorKind::Allocation { .. }
     ));
     assert!(yaml::read_syntax("x", SyntaxLimits::DEFAULT).is_ok());
@@ -780,7 +841,7 @@ fn malformed_duplicate_alias_and_resource_refusals_have_valid_neighbors() {
             }
         )
         .unwrap_err()
-        .kind(),
+        .into_kind(),
         ErrorKind::Depth { limit: 1 }
     );
     assert!(
@@ -993,20 +1054,20 @@ fn scalar_edits_share_native_escaping_report_fallback_and_preadmit_output() {
 #[test]
 fn core_projection_retains_eager_refusal_order_and_scalar_key_law() {
     assert_eq!(
-        yaml::read("a: 1\na: .inf\n").unwrap_err().kind(),
+        yaml::read("a: 1\na: .inf\n").unwrap_err().into_kind(),
         ErrorKind::NonFinite
     );
-    assert_eq!(
-        yaml::read("a: 1\na: 2\n").unwrap_err().kind(),
-        ErrorKind::DuplicateKey
-    );
+    assert!(matches!(
+        yaml::read("a: 1\na: 2\n").unwrap_err().into_kind(),
+        ErrorKind::DuplicateKey { .. }
+    ));
     let source = "0x1F: yes\ntrue: no\n";
     let lexical = yaml::read_syntax(source, SyntaxLimits::DEFAULT).unwrap();
     assert_eq!(
         lexical
             .to_core(yaml::ProjectionLimits::DEFAULT)
             .unwrap_err()
-            .kind(),
+            .into_kind(),
         ErrorKind::NonStringKey
     );
     let core = lexical
@@ -1033,7 +1094,7 @@ fn core_projection_retains_eager_refusal_order_and_scalar_key_law() {
             ..limits
         })
         .unwrap_err();
-    assert!(matches!(refused.kind(), ErrorKind::Allocation { .. }));
+    assert!(matches!(*refused.kind(), ErrorKind::Allocation { .. }));
     assert!(refused.offset() >= expanded_source.find("copy:").unwrap());
     let node_limit = yaml::ProjectionLimits {
         core: yaml::Limits {
@@ -1043,7 +1104,7 @@ fn core_projection_retains_eager_refusal_order_and_scalar_key_law() {
         ..limits
     };
     let refused = expanded.to_core(node_limit).unwrap_err();
-    assert_eq!(refused.kind(), ErrorKind::Nodes { limit: 10 });
+    assert_eq!(*refused.kind(), ErrorKind::Nodes { limit: 10 });
     assert_eq!(refused.offset(), expanded_source.rfind("*a").unwrap());
     assert!(
         expanded
@@ -1063,7 +1124,7 @@ fn core_projection_retains_eager_refusal_order_and_scalar_key_law() {
                 ..limits
             })
             .unwrap_err()
-            .kind(),
+            .into_kind(),
         ErrorKind::Input { .. }
     ));
 }

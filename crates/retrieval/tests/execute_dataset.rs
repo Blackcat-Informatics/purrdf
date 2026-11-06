@@ -1485,7 +1485,8 @@ fn a_relation_whose_index_moved_mid_run_refuses_the_whole_run() {
 #[test]
 fn the_unbounded_lane_has_no_ceiling_and_unknown_functions_fail_their_stratum() {
     let engaged: Vec<ResourceDimension> = ResourceDimension::ALL
-        .into_iter()
+        .iter()
+        .copied()
         .filter(|dimension| QueryGovernors::UNBOUNDED.is_engaged_in(*dimension))
         .collect();
     assert!(

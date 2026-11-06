@@ -107,7 +107,7 @@ fn linked_typed_endpoints_complete_under_a_linear_cell_ceiling() {
             estimate,
         } if estimate > CELL_CEILING
     ));
-    for dimension in ResourceDimension::ALL {
+    for &dimension in ResourceDimension::ALL {
         assert_eq!(exhausted.evidence.consumed_in(dimension), 0);
     }
 

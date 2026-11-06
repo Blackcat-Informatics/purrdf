@@ -38,6 +38,7 @@ use crate::{QuadIds, RdfDataset, RdfTextDirection, TermRef, TermValue};
 mod error;
 mod json;
 mod layout;
+mod layout_error;
 mod predicate_error;
 mod presentation;
 mod scene;
@@ -47,6 +48,7 @@ mod svg;
 
 pub use error::{VizError, VizFocusAmbiguity, VizIdentityCollision};
 pub use layout::*;
+pub use layout_error::{VizLayoutArithmetic, VizLayoutError};
 pub use predicate_error::{VizPredicateError, VizResolvedPredicate};
 pub use presentation::*;
 pub use scene::*;

@@ -1558,16 +1558,15 @@ impl GovernorArgs {
         cancel: Option<&PyCancellationToken>,
     ) -> PyResult<(QueryGovernors, Arc<PyStopWatch>)> {
         let watch = Arc::new(PyStopWatch::new(self.deadline_ms, cancel));
-        let parts = purrdf_validate::governors::GovernorParts {
-            fuel: self.fuel,
-            max_answers: self.max_answers,
-            max_intermediate_cells: self.max_intermediate_cells,
-            max_scratch_bytes: self.max_scratch_bytes,
-            max_remote_requests: self.max_remote_requests,
-            max_udf_depth: self.max_udf_depth,
-            unlimited_udf_depth: self.unlimited_udf_depth,
-            no_ceiling: self.no_ceiling,
-        };
+        let mut parts = purrdf_validate::governors::GovernorParts::new();
+        parts.fuel = self.fuel;
+        parts.max_answers = self.max_answers;
+        parts.max_intermediate_cells = self.max_intermediate_cells;
+        parts.max_scratch_bytes = self.max_scratch_bytes;
+        parts.max_remote_requests = self.max_remote_requests;
+        parts.max_udf_depth = self.max_udf_depth;
+        parts.unlimited_udf_depth = self.unlimited_udf_depth;
+        parts.no_ceiling = self.no_ceiling;
         let signal: Arc<dyn StopSignal> = Arc::<PyStopWatch>::clone(&watch);
         let governors = purrdf_validate::governors::from_parts(&parts, Some(signal))
             .map_err(|error| PyValueError::new_err(error.to_string()))?;
@@ -2085,13 +2084,17 @@ fn outcome_repr(kind: &str, finished: &str, tripped: Option<&Py<PyTrippedGoverno
 /// The kernel dimension named by its stable kebab-case label.
 fn dimension_from_label(label: &str) -> PyResult<ResourceDimension> {
     ResourceDimension::ALL
-        .into_iter()
+        .iter()
+        .copied()
         .find(|dimension| dimension.label() == label)
         .ok_or_else(|| {
             PyValueError::new_err(format!(
                 "unknown resource dimension `{label}`; expected one of {}",
                 ResourceDimension::ALL
+                    .iter()
+                    .copied()
                     .map(ResourceDimension::label)
+                    .collect::<Vec<_>>()
                     .join(", ")
             ))
         })
@@ -2150,7 +2153,7 @@ fn witness_to_dict<'py>(
 /// declaration order so the mapping is deterministic across calls and builds.
 fn vector_to_dict(py: Python<'_>, vector: ResourceVector) -> PyResult<Bound<'_, PyDict>> {
     let dict = PyDict::new(py);
-    for dimension in ResourceDimension::ALL {
+    for &dimension in ResourceDimension::ALL {
         dict.set_item(dimension.label(), vector.get(dimension))?;
     }
     Ok(dict)

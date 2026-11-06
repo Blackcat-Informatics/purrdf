@@ -51,7 +51,7 @@ impl Admission for Account {
 #[test]
 fn native_record_diagnostic_retains_only_original_admitted_storage_and_refunds_failures() {
     use purrdf_lex::allocation::Memory;
-    use purrdf_lex::json::record::{DecodeError, RecordAllocation, RecordMemory};
+    use purrdf_lex::json::record::{DecodeError, RecordAllocation, RecordMemory, Within};
     use purrdf_testkit::error_capture::Capture;
     use std::cell::RefCell;
 
@@ -95,6 +95,65 @@ fn native_record_diagnostic_retains_only_original_admitted_storage_and_refunds_f
         assert!(account.refused.unwrap() > limit);
         assert!(usize::try_from(measured.peak_working_bytes).unwrap() <= account.peak);
     }
+
+    // A native validation failure shares its independently admitted cause. The
+    // original record account still admits and refunds only presentation/pointer.
+    let original = purrdf_lex::json::read_slice(b"[", purrdf_lex::json::Limits::DEFAULT)
+        .expect_err("a real truncated document");
+    let original_offset = original.offset();
+    let mut account = Account::new(1_000_000);
+    let memory = RefCell::new(Memory::new(&mut account));
+    let allocation = RecordMemory::new(&memory);
+    let authored = DecodeError::custom_native(original, Some(&allocation));
+    let presentation_bytes = memory.borrow().admitted_bytes();
+    allocation.release_diagnostic(authored).unwrap();
+    let error = DecodeError::native_with_allocation(original, Some(&allocation));
+    assert_eq!(memory.borrow().admitted_bytes(), presentation_bytes);
+    let error = error
+        .within_index_native(2, Some(&allocation))
+        .within_native("a/b~c", Some(&allocation));
+    let clone = error.clone();
+    assert_eq!(
+        error,
+        DecodeError::custom(original).within("2").within("a/b~c")
+    );
+    let source = std::error::Error::source(&error).unwrap();
+    assert!(core::ptr::eq(
+        source,
+        std::error::Error::source(&clone).unwrap()
+    ));
+    allocation.release_diagnostic(error).unwrap();
+    assert_eq!(memory.borrow().admitted_bytes(), 0);
+    let events = Vec::with_capacity(8);
+    let window = CurrentThreadWindow::open();
+    let captured = Capture::read_with_buffer(&clone, events);
+    let measured = window.close();
+    assert_eq!(measured.allocations, 0);
+    assert!(matches!(
+        captured.field("external_message"),
+        purrdf_hash::error::ErrorValue::Absent
+    ));
+    assert!(matches!(
+        captured.field("pointer"),
+        purrdf_hash::error::ErrorValue::Text("/a~1b~0c/2")
+    ));
+    let original = std::error::Error::source(&clone)
+        .unwrap()
+        .downcast_ref::<purrdf_lex::json::Error>()
+        .unwrap();
+    assert_eq!(original.offset(), original_offset);
+    drop(captured);
+    drop(clone);
+
+    // Failure to admit the original record presentation remains a hard storage
+    // refusal, even though the independent native owner was already admitted.
+    let mut account = Account::new(0);
+    let memory = RefCell::new(Memory::new(&mut account));
+    let allocation = RecordMemory::new(&memory);
+    let error = DecodeError::native_with_allocation(StorageError::SizeOverflow, Some(&allocation));
+    assert_eq!(error.storage_error(), Some(StorageError::AdmissionFailed));
+    assert_eq!(memory.borrow().admitted_bytes(), 0);
+    assert!(error.native_cause().is_none());
 }
 
 #[test]
@@ -103,13 +162,23 @@ fn native_record_pointer_refusal_disposes_the_replaced_diagnostic_before_refund(
     use purrdf_lex::json::record::{DecodeError, RecordMemory, Within};
     use std::cell::RefCell;
 
-    for mode in 0..3 {
+    for (mode, native) in [
+        (0, false),
+        (1, false),
+        (2, false),
+        (0, true),
+        (1, true),
+        (2, true),
+    ] {
         let mut account = Account::new(1_000_000);
         let memory = RefCell::new(Memory::new(&mut account));
         let allocation = RecordMemory::new(&memory);
-        let error =
+        let error = if native {
+            DecodeError::native_with_allocation(StorageError::SizeOverflow, Some(&allocation))
+        } else {
             DecodeError::unknown_variant_native("offered", &["declared"], Some(&allocation))
-                .within_native("already", Some(&allocation));
+        }
+        .within_native("already", Some(&allocation));
         assert_eq!(error.storage_error(), None);
         let live = memory.borrow().admitted_bytes();
         memory.borrow_mut().admission_mut().limit = live + if mode == 2 { 8 } else { 0 };

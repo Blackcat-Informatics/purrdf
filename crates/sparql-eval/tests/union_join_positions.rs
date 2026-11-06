@@ -173,7 +173,7 @@ fn a_genuinely_disconnected_product_is_still_refused_before_work() {
         .expect("the query has an outcome");
     assert!(matches!(outcome.exhausted().expect("refusal").tripped,
         TrippedGovernor::Refused { dimension: ResourceDimension::IntermediateCells, limit: CELLS, estimate } if estimate > CELLS));
-    for dimension in ResourceDimension::ALL {
+    for &dimension in ResourceDimension::ALL {
         assert_eq!(outcome.evidence().consumed_in(dimension), 0);
     }
 }
@@ -265,7 +265,7 @@ fn independent_union_factors_run_once_and_preserve_cartesian_bags_and_cuts() {
             estimate: 120,
         }
     ));
-    for dimension in ResourceDimension::ALL {
+    for &dimension in ResourceDimension::ALL {
         assert_eq!(refused.evidence().consumed_in(dimension), 0);
     }
     for ceiling in 0..=fuel {
@@ -1007,7 +1007,7 @@ fn local_blank_working_width_is_refused_before_work_without_exposing_the_slot() 
             estimate: 2
         }
     ));
-    for dimension in ResourceDimension::ALL {
+    for &dimension in ResourceDimension::ALL {
         assert_eq!(refused.evidence().consumed_in(dimension), 0);
     }
     let result = engine

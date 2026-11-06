@@ -365,15 +365,18 @@ fn finish_graph_layout(
         .collect::<BTreeMap<_, _>>();
     let mut nodes = Vec::new();
     for (id, node) in &scene_nodes {
-        let rect = *all_rects
-            .get(*id)
-            .ok_or_else(|| VizError::Layout(format!("layout omitted scene node {id}")))?;
+        let rect = *all_rects.get(*id).ok_or_else(|| {
+            VizError::Layout(VizLayoutError::MissingSceneNode {
+                node: (*id).to_owned(),
+            })
+        })?;
         let padding = self_padding.get(*id).copied().unwrap_or_default();
         let rect = inset_routing_padding(rect, padding)?;
-        let (component, rank) = all_ranks
-            .get(*id)
-            .copied()
-            .ok_or_else(|| VizError::Layout(format!("layout omitted rank for scene node {id}")))?;
+        let (component, rank) = all_ranks.get(*id).copied().ok_or_else(|| {
+            VizError::Layout(VizLayoutError::MissingRank {
+                node: (*id).to_owned(),
+            })
+        })?;
         nodes.push(place_scene_node(node, rect, component, rank));
     }
     nodes.sort_by(|left, right| left.id.cmp(&right.id));
@@ -650,10 +653,11 @@ fn build_work_graph(
         let source = endpoint_work_id(&edge.source);
         let target = endpoint_work_id(&edge.target);
         if !nodes.contains_key(&source) || !nodes.contains_key(&target) {
-            return Err(VizError::Layout(format!(
-                "scene edge {} has an endpoint absent from the work graph",
-                edge.id
-            )));
+            return Err(VizError::Layout(VizLayoutError::MissingWorkEndpoint {
+                edge: edge.id.clone(),
+                source,
+                target,
+            }));
         }
         if let Some(anchor) = &edge.anchor {
             let anchor_id = anchor_work_id(&edge.id, &anchor.id);
@@ -882,9 +886,10 @@ fn assign_ranks(
         }
     }
     if visited != component.len() {
-        return Err(VizError::Layout(
-            "deterministic cycle breaking did not produce a DAG".to_owned(),
-        ));
+        return Err(VizError::Layout(VizLayoutError::Cycle {
+            visited,
+            expected: component.len(),
+        }));
     }
     Ok(ranks)
 }
@@ -1229,10 +1234,13 @@ fn build_anchor_lookup<'a>(
     for edge in &scene.edges {
         if let Some(anchor) = &edge.anchor {
             let work_id = anchor_work_id(&edge.id, &anchor.id);
-            let rect = rects
-                .get(&work_id)
-                .copied()
-                .ok_or_else(|| VizError::Layout(format!("layout omitted edge anchor {work_id}")))?;
+            let rect = rects.get(&work_id).copied().ok_or_else(|| {
+                VizError::Layout(VizLayoutError::MissingAnchor {
+                    work_id: work_id.clone(),
+                    edge: edge.id.clone(),
+                    anchor: anchor.id.clone(),
+                })
+            })?;
             let rect =
                 inset_routing_padding(rect, padding.get(&work_id).copied().unwrap_or_default())?;
             anchors.insert((edge.id.as_str(), anchor.id.as_str()), rect);
@@ -1251,12 +1259,22 @@ fn endpoint_point(
             .get(node.as_str())
             .and_then(|value| value.ports.iter().find(|candidate| candidate.id == *port))
             .map(|value| value.point)
-            .ok_or_else(|| VizError::Layout(format!("missing layout endpoint {node}.{port}"))),
+            .ok_or_else(|| {
+                VizError::Layout(VizLayoutError::MissingEndpoint {
+                    node: node.clone(),
+                    port: port.clone(),
+                })
+            }),
         VizEndpoint::EdgeAnchor { edge, anchor } => anchors
             .get(&(edge.as_str(), anchor.as_str()))
             .copied()
             .map(VizRect::center)
-            .ok_or_else(|| VizError::Layout(format!("missing layout edge anchor {edge}.{anchor}"))),
+            .ok_or_else(|| {
+                VizError::Layout(VizLayoutError::MissingEdgeAnchor {
+                    edge: edge.clone(),
+                    anchor: anchor.clone(),
+                })
+            }),
     }
 }
 
@@ -1434,42 +1452,76 @@ fn self_edge_anchor(edge: &VizSceneEdge) -> Option<(&str, &str)> {
 }
 
 fn routing_dimensions((width, height): (i32, i32), padding: i32) -> Result<(i32, i32), VizError> {
-    let extra = padding
-        .checked_mul(2)
-        .ok_or_else(|| VizError::Layout("self-edge padding overflow".to_owned()))?;
+    let extra = padding.checked_mul(2).ok_or_else(|| {
+        VizError::Layout(VizLayoutError::Arithmetic {
+            operation: VizLayoutArithmetic::Padding,
+            left: padding,
+            right: 2,
+        })
+    })?;
     Ok((
-        width
-            .checked_add(extra)
-            .ok_or_else(|| VizError::Layout("self-edge width overflow".to_owned()))?,
-        height
-            .checked_add(extra)
-            .ok_or_else(|| VizError::Layout("self-edge height overflow".to_owned()))?,
+        width.checked_add(extra).ok_or_else(|| {
+            VizError::Layout(VizLayoutError::Arithmetic {
+                operation: VizLayoutArithmetic::Width,
+                left: width,
+                right: extra,
+            })
+        })?,
+        height.checked_add(extra).ok_or_else(|| {
+            VizError::Layout(VizLayoutError::Arithmetic {
+                operation: VizLayoutArithmetic::Height,
+                left: height,
+                right: extra,
+            })
+        })?,
     ))
 }
 
 fn inset_routing_padding(rect: VizRect, padding: i32) -> Result<VizRect, VizError> {
-    let extra = padding
-        .checked_mul(2)
-        .ok_or_else(|| VizError::Layout("self-edge padding overflow".to_owned()))?;
+    let extra = padding.checked_mul(2).ok_or_else(|| {
+        VizError::Layout(VizLayoutError::Arithmetic {
+            operation: VizLayoutArithmetic::Padding,
+            left: padding,
+            right: 2,
+        })
+    })?;
     let width = rect
         .width
         .checked_sub(extra)
         .filter(|v| *v > 0)
-        .ok_or_else(|| VizError::Layout("self-edge padding consumed its width".to_owned()))?;
+        .ok_or_else(|| {
+            VizError::Layout(VizLayoutError::Arithmetic {
+                operation: VizLayoutArithmetic::InsetWidth,
+                left: rect.width,
+                right: extra,
+            })
+        })?;
     let height = rect
         .height
         .checked_sub(extra)
         .filter(|v| *v > 0)
-        .ok_or_else(|| VizError::Layout("self-edge padding consumed its height".to_owned()))?;
+        .ok_or_else(|| {
+            VizError::Layout(VizLayoutError::Arithmetic {
+                operation: VizLayoutArithmetic::InsetHeight,
+                left: rect.height,
+                right: extra,
+            })
+        })?;
     Ok(VizRect {
-        x: rect
-            .x
-            .checked_add(padding)
-            .ok_or_else(|| VizError::Layout("self-edge x overflow".to_owned()))?,
-        y: rect
-            .y
-            .checked_add(padding)
-            .ok_or_else(|| VizError::Layout("self-edge y overflow".to_owned()))?,
+        x: rect.x.checked_add(padding).ok_or_else(|| {
+            VizError::Layout(VizLayoutError::Arithmetic {
+                operation: VizLayoutArithmetic::X,
+                left: rect.x,
+                right: padding,
+            })
+        })?,
+        y: rect.y.checked_add(padding).ok_or_else(|| {
+            VizError::Layout(VizLayoutError::Arithmetic {
+                operation: VizLayoutArithmetic::Y,
+                left: rect.y,
+                right: padding,
+            })
+        })?,
         width,
         height,
     })
@@ -1998,7 +2050,7 @@ fn layout_table_scene(scene: &VizScene, options: &VizLayoutOptions) -> Result<Vi
     let table = scene
         .table
         .as_ref()
-        .ok_or_else(|| VizError::Layout("table scene is missing table records".to_owned()))?;
+        .ok_or(VizError::Layout(VizLayoutError::MissingTableRecords))?;
     let column_count = table.fields.len();
     let mut widths = vec![96; column_count];
     for (column, field) in table.fields.iter().enumerate() {
@@ -2123,20 +2175,20 @@ fn table_cell(row: usize, column: usize, rect: VizRect, text: &str) -> VizLayout
 /// Validate geometry and scene-to-layout completeness.
 pub fn validate_layout(scene: &VizScene, layout: &VizLayout) -> Result<(), VizError> {
     if layout.width <= 0 || layout.height <= 0 {
-        return Err(VizError::Layout(
-            "visualization layout has non-positive canvas bounds".to_owned(),
-        ));
+        return Err(VizError::Layout(VizLayoutError::CanvasBounds {
+            width: layout.width,
+            height: layout.height,
+        }));
     }
     if layout.legend.len() != scene.legend.len() {
-        return Err(VizError::Layout(
-            "layout does not cover every legend entry".to_owned(),
-        ));
+        return Err(VizError::Layout(VizLayoutError::LegendCoverage {
+            actual: layout.legend.len(),
+            expected: scene.legend.len(),
+        }));
     }
     if scene.mode == VizMode::Table {
         let Some(table) = &layout.table else {
-            return Err(VizError::Layout(
-                "table scene has no table geometry".to_owned(),
-            ));
+            return Err(VizError::Layout(VizLayoutError::MissingTableGeometry));
         };
         if table.cells.len()
             != scene
@@ -2144,9 +2196,13 @@ pub fn validate_layout(scene: &VizScene, layout: &VizLayout) -> Result<(), VizEr
                 .as_ref()
                 .map_or(0, |value| value.fields.len() * (value.rows.len() + 1))
         {
-            return Err(VizError::Layout(
-                "table geometry does not cover every scene cell".to_owned(),
-            ));
+            return Err(VizError::Layout(VizLayoutError::TableCoverage {
+                actual: table.cells.len(),
+                expected: scene
+                    .table
+                    .as_ref()
+                    .map_or(0, |value| value.fields.len() * (value.rows.len() + 1)),
+            }));
         }
         return validate_label_bounds(table.cells.iter().map(|cell| (&cell.label, cell.rect)));
     }
@@ -2156,45 +2212,49 @@ pub fn validate_layout(scene: &VizScene, layout: &VizLayout) -> Result<(), VizEr
         .map(|node| (node.id.as_str(), node))
         .collect::<BTreeMap<_, _>>();
     if nodes.len() != scene.nodes.len() || layout.edges.len() != scene.edges.len() {
-        return Err(VizError::Layout(
-            "graph layout does not cover every scene node and edge".to_owned(),
-        ));
+        return Err(VizError::Layout(VizLayoutError::GraphCoverage {
+            nodes: nodes.len(),
+            expected_nodes: scene.nodes.len(),
+            edges: layout.edges.len(),
+            expected_edges: scene.edges.len(),
+        }));
     }
     for scene_node in &scene.nodes {
         if !nodes.contains_key(scene_node.id.as_str()) {
-            return Err(VizError::Layout(format!(
-                "graph layout omitted scene node {}",
-                scene_node.id
-            )));
+            return Err(VizError::Layout(VizLayoutError::GraphNodeMissing {
+                node: scene_node.id.clone(),
+            }));
         }
     }
     for (index, left) in layout.nodes.iter().enumerate() {
         for right in layout.nodes.iter().skip(index + 1) {
             if left.rect.intersects(right.rect) {
-                return Err(VizError::Layout(format!(
-                    "layout nodes {} and {} overlap",
-                    left.id, right.id
-                )));
+                return Err(VizError::Layout(VizLayoutError::NodeOverlap {
+                    left: left.id.clone(),
+                    right: right.id.clone(),
+                    left_rect: left.rect,
+                    right_rect: right.rect,
+                }));
             }
         }
     }
     validate_label_bounds(layout.nodes.iter().map(|node| (&node.label, node.rect)))?;
     for edge in &layout.edges {
         if edge.points.len() < 2 {
-            return Err(VizError::Layout(format!(
-                "layout edge {} has fewer than two route points",
-                edge.id
-            )));
+            return Err(VizError::Layout(VizLayoutError::RoutePoints {
+                edge: edge.id.clone(),
+                points: edge.points.clone(),
+            }));
         }
         if edge
             .points
             .windows(2)
             .any(|pair| pair[0].x != pair[1].x && pair[0].y != pair[1].y)
         {
-            return Err(VizError::Layout(format!(
-                "layout edge {} contains a non-orthogonal segment",
-                edge.id
-            )));
+            return Err(VizError::Layout(VizLayoutError::RouteOrthogonality {
+                edge: edge.id.clone(),
+                points: edge.points.clone(),
+            }));
         }
     }
     Ok(())
@@ -2209,18 +2269,20 @@ fn validate_label_bounds<'a>(
             || label.rect.right() > parent.right()
             || label.rect.bottom() > parent.bottom()
         {
-            return Err(VizError::Layout(
-                "layout label lies outside its containing box".to_owned(),
-            ));
+            return Err(VizError::Layout(VizLayoutError::LabelBounds {
+                rect: label.rect,
+                parent,
+            }));
         }
         if label
             .lines
             .iter()
             .any(|line| text_line_width(line) > label.rect.width)
         {
-            return Err(VizError::Layout(
-                "layout label text exceeds its assigned box".to_owned(),
-            ));
+            return Err(VizError::Layout(VizLayoutError::LabelWidth {
+                rect: label.rect,
+                lines: label.lines.clone(),
+            }));
         }
     }
     Ok(())
@@ -2235,9 +2297,9 @@ fn validate_options(options: &VizLayoutOptions) -> Result<(), VizError> {
         || options.crossing_sweeps == 0
         || options.max_node_width < 160
     {
-        return Err(VizError::Layout(
-            "visualization layout options violate deterministic geometry bounds".to_owned(),
-        ));
+        return Err(VizError::Layout(VizLayoutError::Options {
+            options: options.clone(),
+        }));
     }
     Ok(())
 }
@@ -2406,8 +2468,39 @@ mod tests {
         };
         assert!(matches!(
             layout_scene(&scene, &options),
-            Err(VizError::Layout(_))
+            Err(VizError::Layout(VizLayoutError::Options { options: original })) if original == options
         ));
+        let mut valid_options = options;
+        valid_options.crossing_sweeps = 1;
+        let valid = layout_scene(&scene, &valid_options).expect("minimum valid sweep count");
+        validate_layout(&scene, &valid).expect("valid neighbor");
+
+        let mut changed = valid.clone();
+        changed.nodes.pop();
+        assert!(
+            matches!(validate_layout(&scene, &changed), Err(VizError::Layout(VizLayoutError::GraphCoverage { nodes, expected_nodes, .. })) if nodes + 1 == expected_nodes && expected_nodes == scene.nodes.len())
+        );
+        let mut changed = valid.clone();
+        let missing = changed.nodes[0].id.clone();
+        changed.nodes[0].id = "absent-layout-node".to_owned();
+        assert!(
+            matches!(validate_layout(&scene, &changed), Err(VizError::Layout(VizLayoutError::GraphNodeMissing { node })) if node == missing)
+        );
+        let mut changed = valid.clone();
+        changed.nodes[1].rect = changed.nodes[0].rect;
+        assert!(
+            matches!(validate_layout(&scene, &changed), Err(VizError::Layout(VizLayoutError::NodeOverlap { left, right, left_rect, right_rect })) if left == changed.nodes[0].id && right == changed.nodes[1].id && left_rect == right_rect)
+        );
+        let mut changed = valid.clone();
+        changed.edges[0].points.truncate(1);
+        assert!(
+            matches!(validate_layout(&scene, &changed), Err(VizError::Layout(VizLayoutError::RoutePoints { edge, points })) if edge == changed.edges[0].id && points == changed.edges[0].points)
+        );
+        let mut changed = valid;
+        changed.edges[0].points = vec![VizPoint { x: 0, y: 0 }, VizPoint { x: 1, y: 1 }];
+        assert!(
+            matches!(validate_layout(&scene, &changed), Err(VizError::Layout(VizLayoutError::RouteOrthogonality { edge, points })) if edge == changed.edges[0].id && points == changed.edges[0].points)
+        );
     }
 
     #[test]

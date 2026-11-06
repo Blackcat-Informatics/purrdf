@@ -7,11 +7,15 @@ use super::{DecodeError, Error, OneOf, RecordAllocation, Unexpected, Value, fmt}
 use crate::allocation::{Admission, Memory, Resident, StorageError};
 
 /// Borrowed native inputs to a record diagnostic, before any owned copy.
-/// The original record account admits both retained fields and human presentation.
+/// The original record account admits retained record fields and presentation;
+/// a supplemental native cause keeps its independent original owner.
 #[derive(Clone, Copy)]
+#[non_exhaustive]
 pub enum DecodeReason<'a> {
     /// A genuine caller-supplied message, rather than a native shape failure.
     Message(&'a dyn fmt::Display),
+    /// An independently admitted original cause; record capture shares its owner.
+    Native(&'a crate::allocation::NativeCause),
     /// A value has a different JSON kind from the required kind.
     InvalidType {
         /// The original offered value.
@@ -53,6 +57,7 @@ impl fmt::Display for DecodeReason<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Message(message) => message.fmt(formatter),
+            Self::Native(cause) => fmt::Display::fmt(&***cause, formatter),
             Self::InvalidType { found, expected } => write!(
                 formatter,
                 "invalid type: {}, expected {expected}",
@@ -234,6 +239,14 @@ impl purrdf_hash::error::StructuredError for Failure {
 }
 
 impl DecodeError {
+    // A native cause supplements the same Message failure without increasing
+    // every record result beyond its existing inline error-size budget.
+    pub(super) const fn failure(&self) -> &Failure {
+        match &self.details {
+            Details::Plain(failure) => failure,
+            Details::Native(_) => &Failure::Message,
+        }
+    }
     /// Destroy this diagnostic, then refund its originally admitted buffers.
     /// The diagnostic must belong to this same memory account.
     ///
@@ -243,7 +256,7 @@ impl DecodeError {
         self,
         memory: &mut Memory<'_, S>,
     ) -> Result<(), StorageError> {
-        let fields = self.failure.owned_bytes()?;
+        let fields = self.failure().owned_bytes()?;
         let bytes = self
             .pointer
             .capacity()
@@ -264,7 +277,8 @@ impl DecodeError {
         result.unwrap_or_else(Self::from_storage)
     }
 
-    /// Retain native reason fields and their presentation under one original account.
+    /// Retain record reason fields and presentation under one original account.
+    /// A supplemental native cause shares its independent existing owner.
     /// Partial buffers die before their grant is refunded on failure. A JSON
     /// storage cause stays inline with its original byte offset and needs no copy.
     ///
@@ -280,7 +294,7 @@ impl DecodeError {
                 return Ok(Self {
                     pointer: String::new(),
                     message: String::new(),
-                    failure,
+                    details: Details::Plain(failure),
                 });
             }
         }
@@ -289,7 +303,7 @@ impl DecodeError {
             // A later typed-field refusal drops this text before refunding it.
             let message = memory.format(&reason)?;
             let failure = match reason {
-                DecodeReason::Message(_) => Failure::Message,
+                DecodeReason::Message(_) | DecodeReason::Native(_) => Failure::Message,
                 DecodeReason::InvalidType { found, expected } => Failure::InvalidType {
                     found: Found::capture(found, memory)?,
                     expected: memory.string(expected)?,
@@ -315,7 +329,10 @@ impl DecodeError {
             Ok(Self {
                 pointer: String::new(),
                 message,
-                failure,
+                details: match reason {
+                    DecodeReason::Native(cause) => Details::Native(cause.clone()),
+                    _ => Details::Plain(failure),
+                },
             })
         })
     }
@@ -323,12 +340,20 @@ impl DecodeError {
 
 impl purrdf_hash::error::StructuredError for DecodeError {
     purrdf_hash::error_visit! {
-        @record self { pointer, message, failure } => "json-record-decode" {
-            "pointer" => Text(&self.pointer), "cause" => Cause(&self.failure),
+        @record self { pointer, message, details } => "json-record-decode" {
+            "pointer" => Text(&self.pointer), "cause" => Cause(self.failure()),
+            "native_cause" => Value(self.native_cause().map_or(purrdf_hash::error::ErrorValue::Absent, |cause| purrdf_hash::error::ErrorValue::Cause(cause))),
             // Native presentation is a cache, not a second semantic cause.
-            "external_message" => Value(if matches!(self.failure, Failure::Message) {
+            "external_message" => Value(if matches!(self.failure(), Failure::Message) && self.native_cause().is_none() {
                 purrdf_hash::error::ErrorValue::Message(&self.message)
             } else { purrdf_hash::error::ErrorValue::Absent }),
         }
     }
+}
+
+/// Supplemental provenance shares the existing error's inline discriminant space.
+#[derive(Debug, Clone)]
+pub(super) enum Details {
+    Plain(Failure),
+    Native(crate::allocation::NativeCause),
 }
