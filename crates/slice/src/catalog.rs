@@ -266,10 +266,12 @@ impl SliceInventory {
     pub fn from_slice_dir(dir: &Path, vocab: &SliceVocab) -> Result<SliceInput, SliceError> {
         let manifest_path = dir.join("manifest.ttl");
         let manifest_bytes = std::fs::read(&manifest_path).map_err(SliceError::from)?;
-        let dataset = Dataset::parse_file(&manifest_bytes, &manifest_path)?;
+        let manifest_base = crate::retrieval::retrieval_base_iri(&manifest_path)?;
+        let dataset =
+            Dataset::parse_with_retained_base(&manifest_bytes, &manifest_path, &manifest_base)?;
         let manifest = extract_manifest_view(&dataset, vocab)?;
         let manifest_graph = Arc::new(dataset.into_inner());
-        let artifacts = discover_artifacts(dir)?;
+        let artifacts = discover_artifacts(dir, &manifest_bytes, &manifest_base)?;
         Ok(SliceInput {
             manifest,
             manifest_graph,
@@ -519,9 +521,13 @@ fn literal_value(term: &Object) -> String {
 
 // ── Artifact discovery ────────────────────────────────────────────────────────
 
-fn discover_artifacts(dir: &Path) -> Result<Vec<ArtifactInput>, SliceError> {
+fn discover_artifacts(
+    dir: &Path,
+    manifest_bytes: &[u8],
+    manifest_base: &purrdf_iri::BaseIri,
+) -> Result<Vec<ArtifactInput>, SliceError> {
     let mut artifacts = Vec::new();
-    collect_artifacts(dir, dir, &mut artifacts)?;
+    collect_artifacts(dir, dir, &mut artifacts, manifest_bytes, manifest_base)?;
     artifacts.sort_by(|a, b| a.logical_path.cmp(&b.logical_path));
     Ok(artifacts)
 }
@@ -530,6 +536,8 @@ fn collect_artifacts(
     root: &Path,
     current: &Path,
     out: &mut Vec<ArtifactInput>,
+    manifest_bytes: &[u8],
+    manifest_base: &purrdf_iri::BaseIri,
 ) -> Result<(), SliceError> {
     for entry in std::fs::read_dir(current).map_err(SliceError::from)? {
         let entry = entry.map_err(SliceError::from)?;
@@ -537,7 +545,7 @@ fn collect_artifacts(
         let file_type = entry.file_type().map_err(SliceError::from)?;
 
         if file_type.is_dir() {
-            collect_artifacts(root, &path, out)?;
+            collect_artifacts(root, &path, out, manifest_bytes, manifest_base)?;
             continue;
         }
 
@@ -571,18 +579,24 @@ fn collect_artifacts(
         }
 
         let logical_path = rel.to_string_lossy().to_string();
-        let content = std::fs::read(&path).map_err(SliceError::from)?;
+        // The owner view and root manifest artifact must describe the same original
+        // bytes and retrieval identity, even if the file changes during discovery.
+        let (content, rdf_base) = if rel == Path::new("manifest.ttl") {
+            (manifest_bytes.to_vec(), Some(manifest_base.clone()))
+        } else {
+            let content = std::fs::read(&path).map_err(SliceError::from)?;
+            let base = if is_rdf_file(&logical_path) {
+                Some(crate::retrieval::retrieval_base_iri(&path)?)
+            } else {
+                None
+            };
+            (content, base)
+        };
         let raw_digest = hex_sha256(&content);
 
         let role = classify_role(&logical_path);
         let media_type =
             purrdf_gts::files::media_type_for_path(Path::new(&logical_path)).to_string();
-        let rdf_base = if is_rdf_file(&logical_path) {
-            Some(crate::retrieval::retrieval_base_iri(&path)?)
-        } else {
-            None
-        };
-
         out.push(ArtifactInput {
             role,
             logical_path,
