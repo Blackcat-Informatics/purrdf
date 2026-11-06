@@ -11,14 +11,16 @@ use purrdf_lex::json::{self, Object, Value};
 use purrdf_lex::walk::WorkList;
 use purrdf_rdf::native_codecs::jsonld::{
     CompiledJsonLdContext, JsonLdCompactionLimits, JsonLdCompactionPolicy, JsonLdContextLimits,
-    JsonLdContextRegistry, JsonLdExpansionLimits, JsonLdFlattenLimits, YamlLdOptions,
+    JsonLdContextRegistry, JsonLdEmbed, JsonLdExpansionLimits, JsonLdFlattenLimits,
+    JsonLdFramingBase, JsonLdFramingLimits, JsonLdFramingPolicy, YamlLdOptions,
     compact_expanded_with_context, expand_jsonld_document_with_context,
-    expand_yamlld_document_with_context, flatten_expanded, jsonld_document_max_bytes,
+    expand_yamlld_document_with_context, flatten_expanded, frame_jsonld_with_context,
+    frame_yamlld_with_context, jsonld_document_max_bytes,
 };
 use purrdf_rdf::native_codecs::{NativeRdfFormat, classify};
 use std::cell::RefCell;
 
-/// The three concrete structural source/request operations exposed by the hosts.
+/// Concrete structural document operations exposed by the hosts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Operation {
     /// Expand without node-map construction.
@@ -27,46 +29,69 @@ pub enum Operation {
     Compact,
     /// Expand and flatten, then compact only under a non-null output context.
     Flatten,
+    /// Frame source and frame bytes through the original native two-document adapter.
+    Frame,
 }
+
+struct OperationMetadata {
+    name: &'static str,
+    request_code: &'static str,
+    output_code: &'static str,
+    byte_length_code: &'static str,
+    input_limit_code: &'static str,
+}
+
 impl Operation {
-    /// Operation noun used in host-facing diagnostics.
-    pub const fn name(self) -> &'static str {
+    const fn metadata(self) -> &'static OperationMetadata {
         match self {
-            Self::Expand => "expansion",
-            Self::Compact => "compaction",
-            Self::Flatten => "flattening",
+            Self::Expand => &OperationMetadata {
+                name: "expansion",
+                request_code: "document-expansion-request",
+                output_code: "document-expansion-output",
+                byte_length_code: "document-expansion-byte-length",
+                input_limit_code: "document-expansion-input-limit",
+            },
+            Self::Compact => &OperationMetadata {
+                name: "compaction",
+                request_code: "document-compaction-request",
+                output_code: "document-compaction-output",
+                byte_length_code: "document-compaction-byte-length",
+                input_limit_code: "document-compaction-input-limit",
+            },
+            Self::Flatten => &OperationMetadata {
+                name: "flattening",
+                request_code: "document-flattening-request",
+                output_code: "document-flattening-output",
+                byte_length_code: "document-flattening-byte-length",
+                input_limit_code: "document-flattening-input-limit",
+            },
+            Self::Frame => &OperationMetadata {
+                name: "framing",
+                request_code: "document-framing-request",
+                output_code: "document-framing-output",
+                byte_length_code: "document-framing-byte-length",
+                input_limit_code: "document-framing-input-limit",
+            },
         }
     }
+    /// Operation noun used in host-facing diagnostics.
+    pub const fn name(self) -> &'static str {
+        self.metadata().name
+    }
     const fn request_code(self) -> &'static str {
-        match self {
-            Self::Expand => "document-expansion-request",
-            Self::Compact => "document-compaction-request",
-            Self::Flatten => "document-flattening-request",
-        }
+        self.metadata().request_code
     }
     /// Bounded serialized-output refusal code, for host status classification.
     pub const fn output_code(self) -> &'static str {
-        match self {
-            Self::Expand => "document-expansion-output",
-            Self::Compact => "document-compaction-output",
-            Self::Flatten => "document-flattening-output",
-        }
+        self.metadata().output_code
     }
     /// Portable byte-buffer length refusal code used by the WASM bridge.
     pub const fn byte_length_code(self) -> &'static str {
-        match self {
-            Self::Expand => "document-expansion-byte-length",
-            Self::Compact => "document-compaction-byte-length",
-            Self::Flatten => "document-flattening-byte-length",
-        }
+        self.metadata().byte_length_code
     }
     /// Source-capture limit refusal code used by the WASM bridge.
     pub const fn input_limit_code(self) -> &'static str {
-        match self {
-            Self::Expand => "document-expansion-input-limit",
-            Self::Compact => "document-compaction-input-limit",
-            Self::Flatten => "document-flattening-input-limit",
-        }
+        self.metadata().input_limit_code
     }
 }
 
@@ -98,6 +123,7 @@ pub struct Request {
     operation: Operation,
     format: NativeRdfFormat,
     context: CompiledJsonLdContext,
+    frame_context: Option<CompiledJsonLdContext>,
     context_supplied: bool,
     yaml_ld: YamlLdOptions,
     expansion: JsonLdExpansionLimits,
@@ -129,6 +155,7 @@ struct Decoded {
     format: String,
     base: Option<String>,
     context: Option<Value>,
+    frame_context: Option<Value>,
     registry: Vec<rdf_input::Registration>,
     yaml_ld: Option<YamlLdOptions>,
     expansion: JsonLdExpansionLimits,
@@ -164,13 +191,22 @@ enum Action {
     Expand,
     Compact(Compaction),
     Flatten(Compaction, JsonLdFlattenLimits),
+    Frame(Framing),
+}
+
+#[derive(Debug)]
+struct Framing {
+    retrieval_base: Option<String>,
+    base: OutputBase,
+    policy: JsonLdFramingPolicy,
+    limits: JsonLdFramingLimits,
 }
 
 fn bare_context(
     value: &Value,
     allocation: &dyn RecordAllocation,
     memory: &RefCell<Memory<'_, Ceiling>>,
-    check_kinds: bool,
+    kind_error: Option<&'static str>,
 ) -> Result<(), DecodeError> {
     let mut pending: WorkList<_, 8> = WorkList::new();
     pending
@@ -178,11 +214,10 @@ fn bare_context(
         .map_err(DecodeError::from_storage)?;
     while let Some(value) = pending.pop() {
         match value {
-            Value::Bool(_) | Value::Number(_) if check_kinds => {
-                return Err(DecodeError::custom_native(
-                    "output context expressions require null, a string, an object or an array",
-                    Some(allocation),
-                ));
+            Value::Bool(_) | Value::Number(_) => {
+                if let Some(message) = kind_error {
+                    return Err(DecodeError::custom_native(message, Some(allocation)));
+                }
             }
             Value::Array(values) => {
                 for value in values {
@@ -207,41 +242,11 @@ fn bare_context(
         .map_err(DecodeError::from_storage)
 }
 
-fn compaction(
+fn output_base(
     fields: &mut Record<'_>,
     allocation: &dyn RecordAllocation,
-    memory: &RefCell<Memory<'_, Ceiling>>,
-    required: bool,
-) -> Result<Compaction, DecodeError> {
-    let context = fields.raw("output_context")?;
-    if required && context.is_none() {
-        return Err(DecodeError::missing_field_native(
-            "output_context",
-            Some(allocation),
-        ));
-    }
-    let context = context
-        .map(|value| {
-            bare_context(value, allocation, memory, true)?;
-            value
-                .clone_with_memory(&mut memory.borrow_mut())
-                .map_err(DecodeError::from_storage)
-        })
-        .transpose()
-        .map_err(|error| error.within_native("output_context", Some(allocation)))?;
-    let retrieval_base = fields
-        .raw("output_context_base")?
-        .map(|value| {
-            if value.is_null() {
-                Ok(RetrievalBase::None)
-            } else {
-                String::from_json_native(value, Some(allocation)).map(RetrievalBase::Iri)
-            }
-        })
-        .transpose()
-        .map_err(|error| error.within_native("output_context_base", Some(allocation)))?
-        .unwrap_or(RetrievalBase::Original);
-    let base = fields
+) -> Result<OutputBase, DecodeError> {
+    fields
         .raw("output_base")?
         .map(|value| {
             let mut fields = Record::new_native(value, "output base object", Some(allocation))?;
@@ -263,9 +268,15 @@ fn compaction(
             Ok::<_, DecodeError>(base)
         })
         .transpose()
-        .map_err(|error| error.within_native("output_base", Some(allocation)))?
-        .unwrap_or(OutputBase::Input);
-    let (policy, limits) = fields
+        .map_err(|error| error.within_native("output_base", Some(allocation)))
+        .map(|base| base.unwrap_or(OutputBase::Input))
+}
+
+fn compaction_controls(
+    fields: &mut Record<'_>,
+    allocation: &dyn RecordAllocation,
+) -> Result<(JsonLdCompactionPolicy, JsonLdCompactionLimits), DecodeError> {
+    fields
         .raw("compaction")?
         .map(|value| {
             let mut fields =
@@ -296,11 +307,56 @@ fn compaction(
             Ok::<_, DecodeError>((policy, limits))
         })
         .transpose()
-        .map_err(|error| error.within_native("compaction", Some(allocation)))?
-        .unwrap_or((
-            JsonLdCompactionPolicy::DEFAULT,
-            JsonLdCompactionLimits::DEFAULT,
+        .map_err(|error| error.within_native("compaction", Some(allocation)))
+        .map(|controls| {
+            controls.unwrap_or((
+                JsonLdCompactionPolicy::DEFAULT,
+                JsonLdCompactionLimits::DEFAULT,
+            ))
+        })
+}
+
+fn compaction(
+    fields: &mut Record<'_>,
+    allocation: &dyn RecordAllocation,
+    memory: &RefCell<Memory<'_, Ceiling>>,
+    required: bool,
+) -> Result<Compaction, DecodeError> {
+    let context = fields.raw("output_context")?;
+    if required && context.is_none() {
+        return Err(DecodeError::missing_field_native(
+            "output_context",
+            Some(allocation),
         ));
+    }
+    let context = context
+        .map(|value| {
+            bare_context(
+                value,
+                allocation,
+                memory,
+                Some("output context expressions require null, a string, an object or an array"),
+            )?;
+            value
+                .clone_with_memory(&mut memory.borrow_mut())
+                .map_err(DecodeError::from_storage)
+        })
+        .transpose()
+        .map_err(|error| error.within_native("output_context", Some(allocation)))?;
+    let retrieval_base = fields
+        .raw("output_context_base")?
+        .map(|value| {
+            if value.is_null() {
+                Ok(RetrievalBase::None)
+            } else {
+                String::from_json_native(value, Some(allocation)).map(RetrievalBase::Iri)
+            }
+        })
+        .transpose()
+        .map_err(|error| error.within_native("output_context_base", Some(allocation)))?
+        .unwrap_or(RetrievalBase::Original);
+    let base = output_base(fields, allocation)?;
+    let (policy, limits) = compaction_controls(fields, allocation)?;
     Ok(Compaction {
         context,
         retrieval_base,
@@ -311,23 +367,161 @@ fn compaction(
 }
 
 fn validate_output_bases(action: &Action, operation: Operation) -> Result<(), RdfDiagnostic> {
-    let compaction = match action {
+    let (base, retrieval_base) = match action {
         Action::Expand => return Ok(()),
-        Action::Compact(compaction) | Action::Flatten(compaction, _) => compaction,
+        Action::Compact(compaction) | Action::Flatten(compaction, _) => (
+            &compaction.base,
+            match &compaction.retrieval_base {
+                RetrievalBase::Iri(iri) => Some(iri.as_str()),
+                RetrievalBase::Original | RetrievalBase::None => None,
+            },
+        ),
+        Action::Frame(framing) => (&framing.base, framing.retrieval_base.as_deref()),
     };
-    let explicit_base = match &compaction.base {
+    let explicit_base = match base {
         OutputBase::Iri(iri) => Some(iri.as_str()),
         OutputBase::Input | OutputBase::None => None,
-    };
-    let retrieval_base = match &compaction.retrieval_base {
-        RetrievalBase::Iri(iri) => Some(iri.as_str()),
-        RetrievalBase::Original | RetrievalBase::None => None,
     };
     for iri in [retrieval_base, explicit_base].into_iter().flatten() {
         purrdf_iri::BaseIri::parse(iri)
             .map_err(|cause| json_config::failure(operation.request_code(), cause, None))?;
     }
     Ok(())
+}
+
+fn framing(
+    fields: &mut Record<'_>,
+    allocation: &dyn RecordAllocation,
+    memory: &RefCell<Memory<'_, Ceiling>>,
+    expansion: JsonLdExpansionLimits,
+) -> Result<(Framing, Value), DecodeError> {
+    let context = fields
+        .raw("frame_context")?
+        .map(|value| {
+            bare_context(
+                value,
+                allocation,
+                memory,
+                Some("frame context expressions require null, a string, an object or an array"),
+            )?;
+            value
+                .clone_with_memory(&mut memory.borrow_mut())
+                .map_err(DecodeError::from_storage)
+        })
+        .transpose()
+        .map_err(|error| error.within_native("frame_context", Some(allocation)))?
+        .unwrap_or_else(|| Value::Object(Object::new()));
+    let retrieval_base = fields
+        .raw("frame_retrieval_base")?
+        .map(|value| {
+            if value.is_null() {
+                Ok(None)
+            } else {
+                String::from_json_native(value, Some(allocation)).map(Some)
+            }
+        })
+        .transpose()
+        .map_err(|error| error.within_native("frame_retrieval_base", Some(allocation)))?
+        .flatten();
+    let base = output_base(fields, allocation)?;
+    let (compaction, compaction_limits) = compaction_controls(fields, allocation)?;
+    let node_map = fields
+        .raw("node_map")?
+        .map(|value| {
+            let mut fields = Record::new_native(value, "node-map limits object", Some(allocation))?;
+            let limits = JsonLdFlattenLimits {
+                max_allocation_bytes: json_config::field(
+                    &mut fields,
+                    "max_allocation_bytes",
+                    JsonLdFlattenLimits::DEFAULT.max_allocation_bytes,
+                    allocation,
+                )?,
+            };
+            fields.deny_unknown()?;
+            Ok::<_, DecodeError>(limits)
+        })
+        .transpose()
+        .map_err(|error| error.within_native("node_map", Some(allocation)))?
+        .unwrap_or(JsonLdFlattenLimits::DEFAULT);
+    let defaults = (
+        JsonLdFramingPolicy {
+            compaction,
+            ..JsonLdFramingPolicy::DEFAULT
+        },
+        JsonLdFramingLimits {
+            expansion,
+            node_map,
+            compaction: compaction_limits,
+            ..JsonLdFramingLimits::DEFAULT
+        },
+    );
+    let (policy, limits) = fields
+        .raw("framing")?
+        .map(|value| {
+            let mut fields =
+                Record::new_native(value, "framing controls object", Some(allocation))?;
+            let (mut policy, mut limits) = defaults;
+            policy.embed = fields
+                .raw("embed")?
+                .map(|value| {
+                    let value = String::from_json_native(value, Some(allocation))?;
+                    match value.as_str() {
+                        "@once" => Ok(JsonLdEmbed::Once),
+                        "@always" => Ok(JsonLdEmbed::Always),
+                        "@never" => Ok(JsonLdEmbed::Never),
+                        _ => Err(DecodeError::unknown_variant_native(
+                            &value,
+                            &["@once", "@always", "@never"],
+                            Some(allocation),
+                        )),
+                    }
+                })
+                .transpose()
+                .map_err(|error| error.within_native("embed", Some(allocation)))?
+                .unwrap_or(policy.embed);
+            policy.explicit =
+                json_config::field(&mut fields, "explicit", policy.explicit, allocation)?;
+            policy.require_all =
+                json_config::field(&mut fields, "require_all", policy.require_all, allocation)?;
+            policy.omit_default =
+                json_config::field(&mut fields, "omit_default", policy.omit_default, allocation)?;
+            policy.omit_graph =
+                json_config::field(&mut fields, "omit_graph", policy.omit_graph, allocation)?;
+            policy.frame_default = json_config::field(
+                &mut fields,
+                "frame_default",
+                policy.frame_default,
+                allocation,
+            )?;
+            limits.max_allocation_bytes = json_config::field(
+                &mut fields,
+                "max_allocation_bytes",
+                limits.max_allocation_bytes,
+                allocation,
+            )?;
+            limits.max_work =
+                json_config::field(&mut fields, "max_work", limits.max_work, allocation)?;
+            limits.max_emitted_nodes = json_config::field(
+                &mut fields,
+                "max_emitted_nodes",
+                limits.max_emitted_nodes,
+                allocation,
+            )?;
+            fields.deny_unknown()?;
+            Ok::<_, DecodeError>((policy, limits))
+        })
+        .transpose()
+        .map_err(|error| error.within_native("framing", Some(allocation)))?
+        .unwrap_or(defaults);
+    Ok((
+        Framing {
+            retrieval_base,
+            base,
+            policy,
+            limits,
+        },
+        context,
+    ))
 }
 
 fn compact(
@@ -368,6 +562,7 @@ fn decode(
         Operation::Expand => "document expansion request",
         Operation::Compact => "document compaction request",
         Operation::Flatten => "document flattening request",
+        Operation::Frame => "document framing request",
     };
     let mut fields = Record::new_native(value, description, Some(allocation))?;
     let version: u32 = fields.required_native("version")?;
@@ -388,7 +583,7 @@ fn decode(
     let context = fields
         .raw("context")?
         .map(|value| {
-            bare_context(value, allocation, memory, false)
+            bare_context(value, allocation, memory, None)
                 .map_err(|error| error.within_native("context", Some(allocation)))?;
             value
                 .clone_with_memory(&mut memory.borrow_mut())
@@ -456,6 +651,7 @@ fn decode(
         .transpose()
         .map_err(|error| error.within_native("output", Some(allocation)))?
         .unwrap_or(OutputLimits::DEFAULT);
+    let mut frame_context = None;
     let action = match operation {
         Operation::Expand => Action::Expand,
         Operation::Compact => Action::Compact(compaction(&mut fields, allocation, memory, true)?),
@@ -482,12 +678,18 @@ fn decode(
                 .unwrap_or(JsonLdFlattenLimits::DEFAULT);
             Action::Flatten(compaction, flattening)
         }
+        Operation::Frame => {
+            let (framing, context) = framing(&mut fields, allocation, memory, expansion)?;
+            frame_context = Some(context);
+            Action::Frame(framing)
+        }
     };
     fields.deny_unknown()?;
     Ok(Decoded {
         format,
         base,
         context,
+        frame_context,
         registry,
         yaml_ld,
         expansion,
@@ -519,6 +721,7 @@ pub fn request(bytes: &[u8], operation: Operation) -> Result<Request, RdfDiagnos
             Operation::Expand => "expansion request exceeds the native options byte limit",
             Operation::Compact => "compaction request exceeds the native options byte limit",
             Operation::Flatten => "flattening request exceeds the native options byte limit",
+            Operation::Frame => "framing request exceeds the native options byte limit",
         },
         |value, allocation, memory| decode(value, allocation, memory, operation),
     )?;
@@ -529,6 +732,7 @@ pub fn request(bytes: &[u8], operation: Operation) -> Result<Request, RdfDiagnos
                 Operation::Expand => "document-expansion-format",
                 Operation::Compact => "document-compaction-format",
                 Operation::Flatten => "document-flattening-format",
+                Operation::Frame => "document-framing-format",
             },
             format!(
                 "document {} requires JSON-LD or YAML-LD input",
@@ -542,6 +746,7 @@ pub fn request(bytes: &[u8], operation: Operation) -> Result<Request, RdfDiagnos
                 Operation::Expand => "document-expansion-options",
                 Operation::Compact => "document-compaction-options",
                 Operation::Flatten => "document-flattening-options",
+                Operation::Frame => "document-framing-options",
             },
             "yaml_ld controls require YAML-LD source input",
         ));
@@ -555,10 +760,23 @@ pub fn request(bytes: &[u8], operation: Operation) -> Result<Request, RdfDiagnos
         &registry,
     )?;
     validate_output_bases(&decoded.action, operation)?;
+    let frame_context = if let Action::Frame(framing) = &decoded.action {
+        Some(CompiledJsonLdContext::compile_with_registry(
+            decoded
+                .frame_context
+                .as_ref()
+                .expect("framing decoding supplies the initial frame expression"),
+            framing.retrieval_base.as_deref(),
+            &registry,
+        )?)
+    } else {
+        None
+    };
     Ok(Request {
         operation,
         format,
         context,
+        frame_context,
         context_supplied,
         yaml_ld: decoded.yaml_ld.unwrap_or_default(),
         expansion: decoded.expansion,
@@ -575,6 +793,12 @@ pub fn request(bytes: &[u8], operation: Operation) -> Result<Request, RdfDiagnos
 /// Preserves native source/phase diagnostics and original storage causes;
 /// refuses serialized bytes before the append that would exceed the ceiling.
 pub fn execute_decoded(source: &[u8], request: &Request) -> Result<String, RdfDiagnostic> {
+    if matches!(&request.action, Action::Frame(_)) {
+        return Err(RdfDiagnostic::error(
+            "document-framing-inputs",
+            "framing requires separate source and frame bytes; use frame_decoded",
+        ));
+    }
     let expanded = match request.format {
         NativeRdfFormat::JsonLd => {
             expand_jsonld_document_with_context(source, &request.context, &request.expansion)?
@@ -612,13 +836,17 @@ pub fn execute_decoded(source: &[u8], request: &Request) -> Result<String, RdfDi
                 flattened
             }
         }
+        Action::Frame(_) => unreachable!("framing is dispatched before single-source expansion"),
     };
-    let mut ceiling =
-        Ceiling(usize::try_from(request.output.max_allocation_bytes).unwrap_or(usize::MAX));
+    render(&value, &request.output, request.operation.output_code())
+}
+
+fn render(value: &Value, output: &OutputLimits, code: &str) -> Result<String, RdfDiagnostic> {
+    let mut ceiling = Ceiling(usize::try_from(output.max_allocation_bytes).unwrap_or(usize::MAX));
     json::write_bounded_with_memory(
-        &value,
+        value,
         json::Format::COMPACT,
-        request.output.max_bytes,
+        output.max_bytes,
         &mut Memory::new(&mut ceiling),
     )
     .map_err(|error| {
@@ -626,8 +854,67 @@ pub fn execute_decoded(source: &[u8], request: &Request) -> Result<String, RdfDi
             json::WriteError::Storage(cause) => Some(cause),
             json::WriteError::Bytes { .. } => None,
         };
-        json_config::failure(request.operation.output_code(), error, storage)
+        json_config::failure(code, error, storage)
     })
+}
+
+/// Frame separate original documents using a decoded framing request.
+/// The native byte adapter owns both expansions, node-map construction, framing,
+/// compaction and root finishing. Each phase retains its existing authority.
+/// # Errors
+/// Preserves native input, frame, context, construction and bounded-output causes.
+pub fn frame_decoded(
+    source: &[u8],
+    frame: &[u8],
+    request: &Request,
+) -> Result<String, RdfDiagnostic> {
+    let Action::Frame(framing) = &request.action else {
+        return Err(RdfDiagnostic::error(
+            "document-framing-request",
+            "frame_decoded requires an admitted framing request",
+        ));
+    };
+    let frame_context = request
+        .frame_context
+        .as_ref()
+        .expect("admitted framing requests compile their initial frame context");
+    let base = match &framing.base {
+        OutputBase::Input => JsonLdFramingBase::Input,
+        OutputBase::None => JsonLdFramingBase::None,
+        OutputBase::Iri(iri) => JsonLdFramingBase::Iri(iri),
+    };
+    let value = match request.format {
+        NativeRdfFormat::JsonLd => frame_jsonld_with_context(
+            source,
+            frame,
+            &request.context,
+            frame_context,
+            framing.retrieval_base.as_deref(),
+            base,
+            &framing.policy,
+            &framing.limits,
+        )?,
+        NativeRdfFormat::YamlLd => frame_yamlld_with_context(
+            source,
+            frame,
+            &request.context,
+            frame_context,
+            framing.retrieval_base.as_deref(),
+            base,
+            &request.yaml_ld,
+            &framing.policy,
+            &framing.limits,
+        )?,
+        _ => unreachable!("only request() constructs the admitted source/frame format"),
+    };
+    render(&value, &request.output, Operation::Frame.output_code())
+}
+
+/// Decode a framing request before parsing either original document.
+/// # Errors
+/// Preserves original request, native framing and bounded-output diagnostics.
+pub fn frame(source: &[u8], frame: &[u8], request_json: &[u8]) -> Result<String, RdfDiagnostic> {
+    frame_decoded(source, frame, &request(request_json, Operation::Frame)?)
 }
 
 /// Decode the operation's closed request before parsing and transforming source.

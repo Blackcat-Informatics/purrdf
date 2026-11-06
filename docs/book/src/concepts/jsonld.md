@@ -337,6 +337,98 @@ than earlier carrier output. Frozen no-base, no-options expanded bytes are retai
 and RDF JSON literals keep typed lexical forms whenever raw JSON coercion would
 change their spelling, collection shape or annotation identity.
 
+## Document framing across hosts
+
+Framing accepts original source bytes, original frame bytes and separate
+version-one request JSON. It calls the native two-document byte adapter directly;
+that adapter owns both expansions, the node map, framing, compaction and root
+finishing. No RDF dataset or additional expansion is introduced.
+
+```json
+{
+  "version": 1,
+  "format": "jsonld",
+  "base": "https://example.org/source/document",
+  "context": {"label": "https://example.org/label"},
+  "frame_context": {"id": "@id"},
+  "frame_retrieval_base": "https://example.org/frames/frame",
+  "output_base": {"mode": "input"},
+  "framing": {"embed": "@once", "omit_graph": true}
+}
+```
+
+The closed request reuses `version`, `format`, `base`, `context`, `registry`,
+`yaml_ld`, `expansion` and `output` from document expansion. One format governs
+both documents: JSON-LD or YAML-LD, including the native classifier's aliases.
+One Basic `yaml_ld` selection/syntax/projection record governs both YAML
+documents; each parse has its own account. There are no `frame_format` or
+`frame_yaml_ld` fields and no mixed-format projection.
+
+| Framing field | Accepted value and default |
+| --- | --- |
+| `frame_context` | Initial bare frame context expression. Omission means `{}`; explicit null remains null. Expression-position wrappers and scalar booleans/numbers refuse; legitimate scoped term definitions remain valid. |
+| `frame_retrieval_base` | Absolute frame retrieval IRI string, or null. Omission and null both select no retrieval URL. The source base is never substituted. |
+| `output_base` | The existing closed `mode: input`, `mode: none` or `mode: iri` record, defaulting to input. Only iri mode accepts and requires an absolute `iri`. |
+| `compaction` | The existing closed compaction controls, with `compact_arrays` and `compact_to_relative` true and `max_allocation_bytes` 32 GiB by default. |
+| `node_map` | Closed object accepting only `max_allocation_bytes`, default 32 GiB. |
+| `framing` | Closed native policy and construction controls in the table below. |
+
+`frame_context` compiles against exactly `frame_retrieval_base` and the shared
+immutable offline registry. Its terms interpret the pattern but are not
+implicitly emitted. The native fallback fills only an absent, non-explicit frame
+base; an explicit frame-context `@base`, including null, survives.
+
+Output context comes exclusively from the frame document's own `@context`:
+missing emits `{}`, and explicit null remains null. Standalone `output_context`
+and `output_context_base` request fields refuse. Native framing's base law is
+preserved: output-base input selects the effective expanded source base only
+when relative compaction is enabled; its false case selects none. Explicit none
+and IRI modes keep their native meanings. The frame's own output context then
+compiles over that initial semantic base with the independent frame retrieval
+URL. This does not change standalone compaction or flattening base selection.
+
+| `framing` control | Default |
+| --- | --- |
+| `embed` | `"@once"`; only `"@once"`, `"@always"` and `"@never"` are accepted. |
+| `explicit`, `require_all`, `omit_default`, `frame_default` | `false` |
+| `omit_graph` | `true` |
+| `max_allocation_bytes` | 32 GiB |
+| `max_work` | 1,073,741,824 deterministic native work units |
+| `max_emitted_nodes` | 16,777,216 native subject occurrences |
+
+Boolean aliases and local overrides in the frame document remain the native
+engine's responsibility; the request's embed control requires one of the three
+strings. Numeric phase controls accept the full `u64` range. Expansion's allowance
+applies independently to source and frame expansion. Node-map, framing,
+compaction and serialized output keep separate authorities; output still defaults
+to 4 GiB of bytes and 32 GiB of construction. Context/registry storage, lexical
+decoding, bridges and handles retain their existing accounts. These controls do
+not claim an aggregate operation-memory bound.
+
+Rust callers use `purrdf_validate::document::frame(source, frame, request_json)`.
+For reuse, decode with `document::request(request_json, document::Operation::Frame)`
+and call `document::frame_decoded(source, frame, &request)`. Decidable closed-record,
+range, IRI and context checks finish before either document is acquired by a host.
+
+```sh
+purrdf document-frame --request framing.json source.yamlld frame.yamlld framed.jsonld
+```
+
+The CLI permits at most one stdin reader across request, source and frame, and
+applies the existing path/global-option protections. C exposes
+`purrdf_document_frame(source, source_len, frame, frame_len, request_json, request_len, out_buffer, out_error)`.
+All three borrowed pointer/length pairs receive the existing null/addressable
+length checks, and each document receives its native byte bound. Valid output
+slots are cleared before work; aliased slots refuse. Success publishes one buffer
+with the existing buffer/error free functions and original native causes.
+
+Python exposes `frame_document(source: bytes, frame: bytes, *, request_json: bytes) -> str`;
+all immutable owners remain borrowed while native work runs outside the GIL.
+JavaScript exposes `frameDocument(source: Uint8Array, frame: Uint8Array, requestJson: Uint8Array): string`.
+Request capture and compilation precede separately admitted source/frame captures.
+Returned JSON text and retained native-cause ownership, including `free()`, follow
+the other document operations.
+
 ## Native document framing
 
 `native_codecs::jsonld::frame_value_with_context` frames a lexical JSON document;

@@ -847,6 +847,10 @@ def flatten_document(source: bytes, *, request_json: bytes) -> str:
     """Flatten source bytes, optionally compacting under an output context."""
     ...
 
+def frame_document(source: bytes, frame: bytes, *, request_json: bytes) -> str:
+    """Frame separate source and frame bytes under a closed version-one request."""
+    ...
+
 def serialize_jsonld(data: bytes, *, format: RdfFormat, output_format: str, options_json: str | None=..., context: CompiledJsonLdContext | None=..., yaml_schema_url: str | None=...) -> str:
     ...
 

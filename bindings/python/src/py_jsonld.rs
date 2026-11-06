@@ -64,6 +64,22 @@ fn flatten_document(
     )
 }
 
+/// Frame two immutable original documents under an independent framing request.
+#[pyfunction]
+#[pyo3(signature = (source, frame, *, request_json))]
+fn frame_document(
+    py: Python<'_>,
+    source: &Bound<'_, PyBytes>,
+    frame: &Bound<'_, PyBytes>,
+    request_json: &Bound<'_, PyBytes>,
+) -> PyResult<String> {
+    let source = source.as_bytes();
+    let frame = frame.as_bytes();
+    let request = request_json.as_bytes();
+    py.detach(|| purrdf_validate::document::frame(source, frame, request))
+        .map_err(|diagnostic| crate::py_store::presentation::native_error(py, &diagnostic))
+}
+
 fn document(
     py: Python<'_>,
     source: &Bound<'_, PyBytes>,
@@ -196,5 +212,6 @@ pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(expand_document, module)?)?;
     module.add_function(wrap_pyfunction!(compact_document, module)?)?;
     module.add_function(wrap_pyfunction!(flatten_document, module)?)?;
+    module.add_function(wrap_pyfunction!(frame_document, module)?)?;
     Ok(())
 }

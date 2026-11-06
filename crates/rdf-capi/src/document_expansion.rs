@@ -12,6 +12,12 @@ use purrdf_validate::{
     rdf_input::MAX_OPTIONS_BYTES,
 };
 
+#[derive(Clone, Copy)]
+struct InputBytes {
+    data: *const u8,
+    len: usize,
+}
+
 /// Expand original JSON-LD/YAML-LD source bytes into owned expanded JSON bytes.
 /// Source/request pointers are borrowed only during this synchronous call.
 /// Success publishes one buffer, without an added newline or NUL. Release it
@@ -33,10 +39,15 @@ pub unsafe extern "C" fn purrdf_document_expand(
     unsafe {
         invoke(
             Operation::Expand,
-            source,
-            source_len,
-            request_json,
-            request_len,
+            InputBytes {
+                data: source,
+                len: source_len,
+            },
+            None,
+            InputBytes {
+                data: request_json,
+                len: request_len,
+            },
             out_buffer,
             out_error,
         )
@@ -60,10 +71,15 @@ pub unsafe extern "C" fn purrdf_document_compact(
     unsafe {
         invoke(
             Operation::Compact,
-            source,
-            source_len,
-            request_json,
-            request_len,
+            InputBytes {
+                data: source,
+                len: source_len,
+            },
+            None,
+            InputBytes {
+                data: request_json,
+                len: request_len,
+            },
             out_buffer,
             out_error,
         )
@@ -87,10 +103,54 @@ pub unsafe extern "C" fn purrdf_document_flatten(
     unsafe {
         invoke(
             Operation::Flatten,
-            source,
-            source_len,
-            request_json,
-            request_len,
+            InputBytes {
+                data: source,
+                len: source_len,
+            },
+            None,
+            InputBytes {
+                data: request_json,
+                len: request_len,
+            },
+            out_buffer,
+            out_error,
+        )
+    }
+}
+
+/// Frame separate source/frame bytes through the native two-document operation.
+/// Success publishes one owned UTF-8 JSON buffer without a newline or NUL.
+/// Release the buffer with `purrdf_buffer_free` and errors with `purrdf_error_free`.
+/// # Safety
+/// All three inputs must be non-null and readable for their addressable lengths.
+/// Output/error slots must be writable, initially empty and independent of input
+/// storage. Aliased slots are refused without writing through either.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_document_frame(
+    source: *const u8,
+    source_len: usize,
+    frame: *const u8,
+    frame_len: usize,
+    request_json: *const u8,
+    request_len: usize,
+    out_buffer: *mut *mut PurrdfBuffer,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        invoke(
+            Operation::Frame,
+            InputBytes {
+                data: source,
+                len: source_len,
+            },
+            Some(InputBytes {
+                data: frame,
+                len: frame_len,
+            }),
+            InputBytes {
+                data: request_json,
+                len: request_len,
+            },
             out_buffer,
             out_error,
         )
@@ -99,10 +159,9 @@ pub unsafe extern "C" fn purrdf_document_flatten(
 
 unsafe fn invoke(
     operation: Operation,
-    source: *const u8,
-    source_len: usize,
-    request_json: *const u8,
-    request_len: usize,
+    source: InputBytes,
+    frame: Option<InputBytes>,
+    request_json: InputBytes,
     out_buffer: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
@@ -121,19 +180,32 @@ unsafe fn invoke(
                 ));
             }
             *out_buffer = std::ptr::null_mut();
-            if source.is_null() || request_json.is_null() {
+            let inputs = [Some(source), frame, Some(request_json)];
+            if inputs.iter().flatten().any(|input| input.data.is_null()) {
                 return Err(PurrdfError::new(
                     PurrdfStatus::NullPointer,
-                    "document source and request bytes are required",
+                    if frame.is_some() {
+                        "document source, frame and request bytes are required"
+                    } else {
+                        "document source and request bytes are required"
+                    },
                 ));
             }
-            if source_len > isize::MAX as usize || request_len > isize::MAX as usize {
+            if inputs
+                .iter()
+                .flatten()
+                .any(|input| input.len > isize::MAX as usize)
+            {
                 return Err(PurrdfError::new(
                     PurrdfStatus::InvalidArgument,
-                    "document source/request length exceeds the addressable slice range",
+                    if frame.is_some() {
+                        "document source/frame/request length exceeds the addressable slice range"
+                    } else {
+                        "document source/request length exceeds the addressable slice range"
+                    },
                 ));
             }
-            if request_len > MAX_OPTIONS_BYTES {
+            if request_json.len > MAX_OPTIONS_BYTES {
                 return Err(PurrdfError::new(
                     PurrdfStatus::InvalidArgument,
                     format!(
@@ -143,28 +215,41 @@ unsafe fn invoke(
                 ));
             }
             let request = document::request(
-                std::slice::from_raw_parts(request_json, request_len),
+                std::slice::from_raw_parts(request_json.data, request_json.len),
                 operation,
             )
             .map_err(|diagnostic| {
                 PurrdfError::from_owned_diagnostic(PurrdfStatus::InvalidArgument, diagnostic)
             })?;
-            if source_len > request.max_input_bytes() {
+            if source.len > request.max_input_bytes() {
                 return Err(PurrdfError::new(
                     PurrdfStatus::InvalidArgument,
                     "document source exceeds its native input byte limit",
                 ));
             }
-            let text =
-                document::execute_decoded(std::slice::from_raw_parts(source, source_len), &request)
-                    .map_err(|diagnostic| {
-                        let status = if diagnostic.code == operation.output_code() {
-                            PurrdfStatus::SerializeError
-                        } else {
-                            PurrdfStatus::ParseError
-                        };
-                        PurrdfError::from_owned_diagnostic(status, diagnostic)
-                    })?;
+            if frame.is_some_and(|frame| frame.len > request.max_input_bytes()) {
+                return Err(PurrdfError::new(
+                    PurrdfStatus::InvalidArgument,
+                    "document frame exceeds its native input byte limit",
+                ));
+            }
+            let source = std::slice::from_raw_parts(source.data, source.len);
+            let text = match frame {
+                Some(frame) => document::frame_decoded(
+                    source,
+                    std::slice::from_raw_parts(frame.data, frame.len),
+                    &request,
+                ),
+                None => document::execute_decoded(source, &request),
+            }
+            .map_err(|diagnostic| {
+                let status = if diagnostic.code == operation.output_code() {
+                    PurrdfStatus::SerializeError
+                } else {
+                    PurrdfStatus::ParseError
+                };
+                PurrdfError::from_owned_diagnostic(status, diagnostic)
+            })?;
             let mut resident = Resident;
             let buffer = Memory::new(&mut resident)
                 .boxed(PurrdfBuffer::from(text))

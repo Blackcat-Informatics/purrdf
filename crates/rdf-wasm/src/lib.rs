@@ -130,7 +130,9 @@ pub use dataset::__purrdf_test_large_dataset_identity;
 pub use dataset::Dataset;
 pub use entail::RegimeClosure;
 pub use factory::DataFactory;
-pub use jsonld::{CompiledJsonLdContext, compact_document, expand_document, flatten_document};
+pub use jsonld::{
+    CompiledJsonLdContext, compact_document, expand_document, flatten_document, frame_document,
+};
 pub use projection::{ProjectionLift, ProjectionPackage, lift_projection};
 pub use protocol::SparqlProtocolRequest;
 pub use query::{

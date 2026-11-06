@@ -1024,6 +1024,16 @@ export function compactDocument(source: Uint8Array, requestJson: Uint8Array): st
 export function flattenDocument(source: Uint8Array, requestJson: Uint8Array): string;
 
 /**
+ * Frame separate source/frame bytes under a closed version-one request. The one
+ * format and Basic YAML profile govern both documents with separate native parses.
+ * Request checks/context compilation precede either admitted document capture.
+ * Output context comes only from the frame's own @context. Buffers, returned text
+ * and retained native-cause ownership follow expandDocument.
+ * @throws {NativeDiagnosticFailure | TypeError} Original native and host refusals.
+ */
+export function frameDocument(source: Uint8Array, frame: Uint8Array, requestJson: Uint8Array): string;
+
+/**
  * Export original YAML bytes under an explicit absolute source IRI and a closed
  * version-one native profile encoded as UTF-8 JSON bytes. The profile requires
  * version, name, profile_version and vocabulary; bounds are optional.

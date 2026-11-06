@@ -122,6 +122,45 @@ fn document_operations_cli_decode_requests_before_source_and_publish_bytes() {
         assert!(stderr(&refused).contains("output_context"));
         assert_eq!(std::fs::read(&output).unwrap(), expected);
     }
+    let frame = write_file(dir.path(), "frame.jsonld", r#"{"@id":"urn:s"}"#);
+    std::fs::write(&config, r#"{"version":1,"format":"jsonld"}"#).unwrap();
+    let framed = run(&["document-frame", "--request", &config, &input, &frame, "-"]);
+    assert!(framed.status.success(), "{}", stderr(&framed));
+    assert_eq!(
+        framed.stdout,
+        br#"{"@context":{},"@id":"urn:s","urn:p":"cli"}"#
+    );
+    let piped = run_with_stdin(
+        &["document-frame", "--request", &config, &input, "-", "-"],
+        br#"{"@id":"urn:s"}"#,
+    );
+    assert!(piped.status.success(), "{}", stderr(&piped));
+    assert_eq!(piped.stdout, framed.stdout);
+    for (request, source, frame) in [
+        ("-", "-", frame.as_str()),
+        ("-", input.as_str(), "-"),
+        (config.as_str(), "-", "-"),
+    ] {
+        let refused = run(&["document-frame", "--request", request, source, frame, "-"]);
+        assert_eq!(refused.status.code(), Some(2));
+        assert!(stderr(&refused).contains("single stdin"));
+    }
+    std::fs::write(
+        &config,
+        r#"{"version":1,"format":"jsonld","frame_context":false}"#,
+    )
+    .unwrap();
+    let refused = run(&[
+        "document-frame",
+        "--request",
+        &config,
+        &missing,
+        &missing,
+        &output,
+    ]);
+    assert!(!refused.status.success());
+    assert!(stderr(&refused).contains("frame_context"));
+    assert_eq!(std::fs::read(&output).unwrap(), expected);
 }
 
 #[test]

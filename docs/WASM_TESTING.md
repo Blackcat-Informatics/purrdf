@@ -5,8 +5,8 @@
 
 The exact package case `document operation exports preserve byte transport and native error ownership`
 in `document-expansion-interface.test.mjs` exercises the shipped expansion,
-compaction and flattening exports
-and actual wasm-bindgen byte-buffer imports, request-before-source capture,
+compaction, flattening and two-document framing exports
+and actual wasm-bindgen byte-buffer imports, request-before-source/frame capture,
 JSON string return transport and the existing retained native-cause owner.
 Run only this named case with `node --test --test-name-pattern` against the built
 package. Native Rust owns document semantics, request grammar and limit behavior;
