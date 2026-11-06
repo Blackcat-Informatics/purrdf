@@ -80,6 +80,18 @@ pub struct DateTime {
     tz: Option<i32>,
 }
 
+impl purrdf_hash::error::StructuredError for DateTime {
+    purrdf_hash::error_visit! {
+        @record self { year, month, day, hour, minute, second, tz } => "xsd-date-time" {
+            "year" => Signed(i128::from(self.year)), "month" => Unsigned(u128::from(self.month)),
+            "day" => Unsigned(u128::from(self.day)), "hour" => Unsigned(u128::from(self.hour)),
+            "minute" => Unsigned(u128::from(self.minute)), "second" => Record(&self.second),
+            "timezone_minutes" => Value(self.tz.map_or(purrdf_hash::error::ErrorValue::Absent,
+                |value| purrdf_hash::error::ErrorValue::Signed(i128::from(value)))),
+        }
+    }
+}
+
 /// `xsd:date`.
 #[derive(Debug, Clone)]
 pub struct Date {

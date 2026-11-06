@@ -42,6 +42,27 @@ pub struct SuppliedQueryCoordinates {
     snapshot: Option<purrdf_hash::hex::Digest32>,
     execution: Option<purrdf_hash::hex::Digest32>,
 }
+
+impl purrdf_hash::error::StructuredError for QueryCoordinates {
+    purrdf_hash::error_visit! {
+        NotStarted => "query-coordinates-not-started" {},
+        Started(value) => "query-coordinates-started" { "value" => Record(value) },
+    }
+}
+
+impl purrdf_hash::error::StructuredError for SuppliedQueryCoordinates {
+    purrdf_hash::error_visit! {
+        @record self { now, entropy_seed, supplied_now, supplied_seed, snapshot, execution }
+        => "query-coordinates" {
+            "now" => Record(&self.now), "entropy_seed" => Unsigned(u128::from(self.entropy_seed)),
+            "supplied_now" => Boolean(self.supplied_now), "supplied_seed" => Boolean(self.supplied_seed),
+            "snapshot" => Value(self.snapshot.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent,
+                |value| purrdf_hash::error::ErrorValue::Record(value))),
+            "execution" => Value(self.execution.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent,
+                |value| purrdf_hash::error::ErrorValue::Record(value))),
+        }
+    }
+}
 impl SuppliedQueryCoordinates {
     /// Effective supplied time, including exact seconds and declared timezone.
     #[must_use]

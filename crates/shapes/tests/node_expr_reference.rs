@@ -1009,9 +1009,9 @@ fn production(world: &World) -> Result<Output, String> {
         .map_err(|e| format!("the generated shapes graph did not load: {e}\n{shapes_ttl}"))?;
     let expr = holder_expression(&shapes)?;
     let data: Arc<_> = parse_turtle_to_dataset(&world.data_turtle(), None)
-        .map_err(|e| format!("the generated data graph did not load: {}", e.join("; ")))?;
+        .map_err(|e| format!("the generated data graph did not load: {}", e))?;
     let shapes_ds: Arc<_> = parse_turtle_to_dataset(&shapes_ttl, None)
-        .map_err(|e| format!("the generated shapes graph did not parse: {}", e.join("; ")))?;
+        .map_err(|e| format!("the generated shapes graph did not parse: {}", e))?;
     let store = ShaclData::new(Arc::clone(&data), shapes_ds, None);
     let focus = iri(&format!("n{}", world.focus));
     let first = eval_node_expr(&store, &focus, &expr, &mut RecursionGuard::default())

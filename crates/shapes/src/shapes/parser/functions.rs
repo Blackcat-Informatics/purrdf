@@ -780,7 +780,7 @@ pub(crate) enum NativeListCallee {
     /// A `sparql:<NAME>` function: its SPARQL call form, or why the IRI resolves
     /// to none — kept, not dropped, so every call answers with that error exactly
     /// as an unresolved call always has.
-    Sparql(Result<SparqlCallForm, String>),
+    Sparql(Result<SparqlCallForm, crate::expression::SparqlCallError>),
 }
 
 impl NativeListCallee {
@@ -791,10 +791,11 @@ impl NativeListCallee {
         }
         Self::Sparql(match iri.strip_prefix(sparql_ns::NS) {
             Some(local) => sparql_ns_lowering(local),
-            None => Err(format!(
-                "<{iri}> is registered as a built-in list-parameter function but is neither \
-                 shnex:conformsToShape nor a sparql: function"
-            )),
+            None => Err(crate::expression::SparqlCallError::Unsupported {
+                iri: iri.to_owned(),
+                local: None,
+                reason: crate::expression::SparqlUnsupported::Namespace,
+            }),
         })
     }
 }
@@ -843,7 +844,11 @@ pub(crate) fn invoke_native_list_function(
         let rendered = form
             .clone()
             .and_then(|form| form.render(iri, args.len()))
-            .map_err(EvalError::function)?;
+            .map_err(|cause| {
+                EvalError::FunctionOperationalNative(purrdf_sparql_eval::UserFunctionRefusal::new(
+                    cause,
+                ))
+            })?;
         NodeExpr::Call(FnCall::Sparql {
             iri: NamedNode::from(iri),
             expr: rendered,
@@ -996,27 +1001,37 @@ mod tests {
                 limit: 256,
             },
             ProcessorFailure::ValidationDepth {
-                shape: "s".to_owned(),
+                shape: Term::BlankNode("s".to_owned()),
                 depth: 65,
                 limit: 64,
             },
             ProcessorFailure::ReentryCycle {
-                shape: "s".to_owned(),
-                focus: "f".to_owned(),
+                shape: Term::BlankNode("s".to_owned()),
+                focus: Box::new(Term::BlankNode("f".to_owned())),
             },
             ProcessorFailure::Stopped(purrdf_core::governor::StopCause::Cancelled),
             ProcessorFailure::IncompleteRelation {
-                relations: vec!["r".to_owned()],
+                relations: vec![crate::error::IncompleteRelation {
+                    iri: "r".to_owned(),
+                    reason: purrdf_lex::allocation::SharedText::from_static("incomplete"),
+                }],
             },
             ProcessorFailure::Internal {
                 what: "internal validation-plan defect".to_owned(),
             },
             ProcessorFailure::Admission {
-                message: "query refused by the law".to_owned(),
+                cause: Arc::new(crate::profile::AdmissionRefusal::new(
+                    crate::profile::ShaclProfile::WD_20260918,
+                    crate::profile::QueryPurpose::Function,
+                    crate::profile::AdmissionReason::Service,
+                    None,
+                )),
             },
             ProcessorFailure::Query {
-                code: "native-sparql-function-operational".to_owned(),
-                message: "host".to_owned(),
+                cause: Arc::new(purrdf_core::RdfDiagnostic::error(
+                    "native-sparql-function-operational",
+                    "host",
+                )),
             },
         ];
         for failure in processor {

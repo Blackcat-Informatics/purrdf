@@ -179,7 +179,13 @@ pub struct ImportedShapes {
 #[derive(Debug, Clone)]
 pub struct SchemaImportError {
     detail: String,
-    cause: Option<Box<::purrdf_rdf::LossSoundnessError>>,
+    cause: Option<Box<SchemaImportCause>>,
+}
+
+#[derive(Debug, Clone)]
+enum SchemaImportCause {
+    Loss(::purrdf_rdf::LossSoundnessError),
+    Namespace(crate::NamespaceError),
 }
 
 purrdf_lex::constructors! {
@@ -197,7 +203,17 @@ impl SchemaImportError {
     }
 
     fn native_cause(&self) -> Option<&(dyn purrdf_lex::error::NativeError + 'static)> {
-        self.cause.as_deref().map(|cause| cause as _)
+        self.cause.as_deref().map(|cause| match cause {
+            SchemaImportCause::Loss(cause) => cause as _,
+            SchemaImportCause::Namespace(cause) => cause as _,
+        })
+    }
+
+    fn with_namespace(detail: String, cause: crate::NamespaceError) -> Self {
+        Self {
+            detail,
+            cause: Some(Box::new(SchemaImportCause::Namespace(cause))),
+        }
     }
 }
 
@@ -205,7 +221,7 @@ impl From<::purrdf_rdf::LossSoundnessError<&str>> for SchemaImportError {
     fn from(cause: ::purrdf_rdf::LossSoundnessError<&str>) -> Self {
         Self {
             detail: cause.to_string(),
-            cause: Some(Box::new(cause.into_owned())),
+            cause: Some(Box::new(SchemaImportCause::Loss(cause.into_owned()))),
         }
     }
 }
@@ -561,7 +577,9 @@ impl ImportContext<'_> {
                 .config
                 .namespaces
                 .class_iri_for_def_key(key)
-                .map_err(|error| SchemaImportError::new(format!("{path}: {error}")))?;
+                .map_err(|error| {
+                    SchemaImportError::with_namespace(format!("{path}: {error}"), error)
+                })?;
             let id = Term::NamedNode(NamedNode::new_unchecked(iri));
             return self.import_value_shape(id, schema, path).map(Some);
         }
@@ -574,7 +592,9 @@ impl ImportContext<'_> {
             .config
             .namespaces
             .class_iri_for_def_key(key)
-            .map_err(|error| SchemaImportError::new(format!("{path}: {error}")))?;
+            .map_err(|error| {
+                SchemaImportError::with_namespace(format!("{path}: {error}"), error)
+            })?;
         let id = Term::NamedNode(NamedNode::new_unchecked(class_iri));
         let target = Target::ImplicitClass(id.clone());
         self.import_object_shape(object, path, id, vec![target])
@@ -643,11 +663,9 @@ impl ImportContext<'_> {
             }
             imported_property_names.insert(key.clone());
             let property_path = format!("{path}/properties/{}", json_pointer::escape_token(key));
-            let predicate_iri = self
-                .config
-                .namespaces
-                .expand_iri(key)
-                .map_err(|error| SchemaImportError::new(format!("{property_path}: {error}")))?;
+            let predicate_iri = self.config.namespaces.expand_iri(key).map_err(|error| {
+                SchemaImportError::with_namespace(format!("{property_path}: {error}"), error)
+            })?;
             if let Some(previous) =
                 property_identities.insert(predicate_iri.clone(), property_path.clone())
             {
@@ -692,11 +710,9 @@ impl ImportContext<'_> {
                 }
                 continue;
             }
-            let predicate_iri = self
-                .config
-                .namespaces
-                .expand_iri(key)
-                .map_err(|error| SchemaImportError::new(format!("{path}/required: {error}")))?;
+            let predicate_iri = self.config.namespaces.expand_iri(key).map_err(|error| {
+                SchemaImportError::with_namespace(format!("{path}/required: {error}"), error)
+            })?;
             let required_path = format!("{path}/required");
             if let Some(previous) =
                 property_identities.insert(predicate_iri.clone(), required_path.clone())
@@ -1363,7 +1379,12 @@ impl ImportContext<'_> {
             .namespaces
             .expand_iri(curie)
             .map(NamedNode::new_unchecked)
-            .map_err(|error| SchemaImportError::new(format!("{path} datatype {curie:?}: {error}")))
+            .map_err(|error| {
+                SchemaImportError::with_namespace(
+                    format!("{path} datatype {curie:?}: {error}"),
+                    error,
+                )
+            })
     }
 
     /// Import a value schema's `not`: the projected values some constraint
@@ -1653,7 +1674,9 @@ impl ImportContext<'_> {
                 .config
                 .namespaces
                 .class_iri_for_def_key(&key)
-                .map_err(|error| SchemaImportError::new(format!("{path}: {error}")))?;
+                .map_err(|error| {
+                    SchemaImportError::with_namespace(format!("{path}: {error}"), error)
+                })?;
             constraints.push(Constraint::Class(vec![NamedNode::new_unchecked(iri)]));
             return Ok(());
         }
@@ -2175,11 +2198,9 @@ impl ImportContext<'_> {
                 }
                 return Ok(Some(Term::blank(label)));
             }
-            let iri = self
-                .config
-                .namespaces
-                .expand_iri(id)
-                .map_err(|error| SchemaImportError::new(format!("{path}/@id: {error}")))?;
+            let iri = self.config.namespaces.expand_iri(id).map_err(|error| {
+                SchemaImportError::with_namespace(format!("{path}/@id: {error}"), error)
+            })?;
             return Ok(Some(Term::NamedNode(NamedNode::new_unchecked(iri))));
         }
         let Some(raw) = object.get("@value") else {
@@ -2219,7 +2240,9 @@ impl ImportContext<'_> {
             .config
             .namespaces
             .expand_iri(datatype)
-            .map_err(|error| SchemaImportError::new(format!("{path}/@type: {error}")))?;
+            .map_err(|error| {
+                SchemaImportError::with_namespace(format!("{path}/@type: {error}"), error)
+            })?;
         let lexical = json_scalar_lexical(raw).ok_or_else(|| {
             SchemaImportError::new(format!("{path}/@value must be a JSON scalar"))
         })?;
@@ -2262,7 +2285,9 @@ impl ImportContext<'_> {
             .config
             .namespaces
             .expand_iri(predicate)
-            .map_err(|error| SchemaImportError::new(format!("{path} predicate: {error}")))?;
+            .map_err(|error| {
+                SchemaImportError::with_namespace(format!("{path} predicate: {error}"), error)
+            })?;
         let object_path = format!("{path}/{}", json_pointer::escape_token(predicate.as_str()));
         let Some(object) = self.import_term(object, &object_path)? else {
             return Ok(None);
@@ -3388,7 +3413,10 @@ fn node_ref_class(
         return Ok(None);
     };
     let iri = namespaces.expand_iri(identity).map_err(|error| {
-        SchemaImportError::new(format!("node-reference class {identity:?}: {error}"))
+        SchemaImportError::with_namespace(
+            format!("node-reference class {identity:?}: {error}"),
+            error,
+        )
     })?;
     Ok(Some(NamedNode::new_unchecked(iri)))
 }
@@ -3427,7 +3455,10 @@ fn type_discriminator_class(
         .as_str()
         .ok_or_else(|| SchemaImportError::new("@type discriminator constant must be a string"))?;
     let iri = namespaces.expand_iri(identity).map_err(|error| {
-        SchemaImportError::new(format!("@type discriminator {identity:?}: {error}"))
+        SchemaImportError::with_namespace(
+            format!("@type discriminator {identity:?}: {error}"),
+            error,
+        )
     })?;
     Ok(Some(NamedNode::new_unchecked(iri)))
 }

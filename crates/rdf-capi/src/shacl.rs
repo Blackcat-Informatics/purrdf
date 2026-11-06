@@ -502,7 +502,7 @@ fn validate_changes_to_sarif_bytes(
     conformance_disallows: &[&str],
     imports: &[(&str, &str)],
     subclass_of_in_shapes_graph: bool,
-) -> Result<(Vec<u8>, ChangeScope), ShapesError> {
+) -> Result<(Vec<u8>, ChangeScope), purrdf_rs::shapes::report::CompleteValidationError> {
     let (sarif, scope) = validate_changes_to_sarif_string_with_shapes_graph(
         shapes_ttl,
         shapes_base,
@@ -751,7 +751,7 @@ unsafe fn validate_changes_entry(
                 &imports,
                 subclass_of_in_shapes_graph,
             )
-            .map_err(PurrdfError::shapes)?,
+            .map_err(PurrdfError::complete)?,
             Some(profile) => {
                 let (sarif, scope) = validate_changes_to_sarif_string_with_xpath_regex(
                     shapes,
@@ -5266,6 +5266,9 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                 purrdf_shapes_import_error_iri(error, usize::MAX).is_null(),
                 "an out-of-range index reads NULL"
             );
+            let native = text(crate::error::purrdf_error_native_cause_json(error))
+                .expect("specialized import errors retain native fields");
+            assert!(native.contains(&kind), "{native}");
             purrdf_error_free(error);
             (status, kind, iris)
         }

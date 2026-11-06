@@ -8146,7 +8146,8 @@ mod tests {
         else {
             panic!("the closure's refusal is a shapes error");
         };
-        let expected = ShaclImportError::from(refused.as_imports().expect("an import refusal"));
+        let expected = ShaclImportError::capture(refused.as_imports().expect("an import refusal"))
+            .expect("native capture");
         let (job, status) = run_shacl(validate(&shapes, PEOPLE_NT), options());
         assert_eq!(status, RunStatus::Error);
         assert_eq!(job.error_kind().as_deref(), Some("error"));

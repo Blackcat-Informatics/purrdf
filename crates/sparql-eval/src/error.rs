@@ -535,6 +535,8 @@ pub enum EvalError {
     /// Distinct from [`Self::Function`]'s request refusal so consumers cannot
     /// discard an execution failure when another validation alternative conforms.
     FunctionOperational(String),
+    /// An original typed operational function cause, retained without rendering.
+    FunctionOperationalNative(crate::user_fn::UserFunctionRefusal),
 
     /// An `EXISTS`/`NOT EXISTS` body contains a `BIND`/`(expr AS ?v)` target or
     /// a `VALUES` column that collides with a variable already bound on the
@@ -701,6 +703,7 @@ impl purrdf_hash::error::StructuredError for EvalError {
         Data(message) => "sparql-eval-data" { "message" => Text(message) },
         Function(message) => "sparql-eval-function" { "message" => Message(message) },
         FunctionAdmission(error) => "sparql-eval-function-admission" { "cause" => Cause(error) },
+        FunctionOperationalNative(cause) => "sparql-eval-function-operational-native" { "cause" => Cause(cause) },
         FunctionOperational(message) => "sparql-eval-function-operational" { "message" => Message(message) },
         ExistsScopeCollision { variable, intro } => "sparql-eval-exists-scope-collision" {
             "variable" => Text(variable.as_str()), "intro" => Code(intro),
@@ -844,7 +847,9 @@ impl EvalError {
             Self::Internal(_) | Self::Invariant(_) => Some(Self::INTERNAL_CODE),
             Self::CompositeBound(_) => Some(Self::COMPOSITE_BOUND_CODE),
             Self::FloatEnvironment(_) => Some(Self::FLOAT_ENVIRONMENT_CODE),
-            Self::FunctionOperational(_) => Some(Self::FUNCTION_OPERATIONAL_CODE),
+            Self::FunctionOperational(_) | Self::FunctionOperationalNative(_) => {
+                Some(Self::FUNCTION_OPERATIONAL_CODE)
+            }
             Self::Unsupported { kind, .. } => kind.map(UnsupportedKind::code),
             Self::Parse(_)
             | Self::Dataset(_)
@@ -1083,7 +1088,9 @@ impl core::fmt::Display for EvalError {
             Self::Function(msg) | Self::FunctionOperational(msg) => {
                 write!(f, "host function error: {msg}")
             }
-            Self::FunctionAdmission(error) => write!(f, "host function error: {error}"),
+            Self::FunctionAdmission(error) | Self::FunctionOperationalNative(error) => {
+                write!(f, "host function error: {error}")
+            }
             Self::Config(msg) => write!(f, "invalid evaluation configuration: {msg}"),
             Self::CompositeBound(msg) => write!(
                 f,
@@ -1143,7 +1150,9 @@ impl std::error::Error for EvalError {
             Self::ServiceDenied(error) => Some(error),
             Self::FloatEnvironment(error) => Some(error),
             Self::XPathRegex(error) => Some(error),
-            Self::FunctionAdmission(error) => Some(error.cause()),
+            Self::FunctionAdmission(error) | Self::FunctionOperationalNative(error) => {
+                Some(error.cause())
+            }
             _ => None,
         }
     }

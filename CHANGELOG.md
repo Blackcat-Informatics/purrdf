@@ -8,6 +8,14 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Typed SHACL failures (breaking Rust API):** RDF text ingestion retains ordered
+  native diagnostics and original source coordinates. Expression selectors, term
+  parsing, namespace configuration, conformance configuration and SPARQL call
+  lowering return typed errors. Prepared and incremental validation preserve
+  complete validation refusals. Processor errors retain native terms, admission
+  and query causes; stack refusals name their construct. Host errors expose the
+  retained native fields.
+
 - **Bound structured proofs (breaking Rust API):** `FolProof` is opaque and
   retains native conclusions with original source/program/sort/contract/run
   evidence. `check_fol_proof` accepts that typed owner instead of freely supplied

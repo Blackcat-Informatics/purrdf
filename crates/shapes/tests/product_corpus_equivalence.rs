@@ -338,7 +338,7 @@ fn load_w3c(case: &shacl_corpora::W3cCase) -> Result<Loaded, String> {
         &shapes_text,
         Some(&file_iri(&case.shapes_path)),
     )
-    .map_err(|errors| format!("shapes graph parse error: {}", errors.join("; ")))?;
+    .map_err(|errors| format!("shapes graph parse error: {}", errors))?;
     // Under the case's own law, as the grading harness loads it: the 2017 entries
     // under the Recommendation, the SHACL 1.2 entries under the editor's draft.
     let shapes = purrdf_shapes::shapes::from_dataset_with_options(
@@ -386,7 +386,7 @@ fn load_first_party(case: &shacl_corpora::FirstPartyCase) -> Result<Loaded, Stri
     )
     .map_err(|e| format!("shapes parse error: {e}"))?;
     let data = purrdf_shapes::text_ingest::parse_ntriples_to_dataset(&data_nt)
-        .map_err(|errors| format!("data graph parse error: {}", errors.join("; ")))?;
+        .map_err(|errors| format!("data graph parse error: {}", errors))?;
 
     Ok(Loaded {
         shapes: Arc::new(shapes),

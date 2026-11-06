@@ -282,6 +282,14 @@ pub struct Decimal {
     scale: u32,
 }
 
+impl purrdf_hash::error::StructuredError for Decimal {
+    purrdf_hash::error_visit! {
+        @record self { unscaled, scale } => "xsd-exact-decimal" {
+            "unscaled" => Record(&self.unscaled), "scale" => Unsigned(u128::from(self.scale)),
+        }
+    }
+}
+
 impl Decimal {
     /// Zero.
     pub const ZERO: Self = Self {

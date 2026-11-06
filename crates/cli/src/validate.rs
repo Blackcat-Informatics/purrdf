@@ -840,8 +840,8 @@ fn validate_change(
     )?;
 
     if !options.governors.is_engaged() {
-        let validation =
-            engine::validate_change(&validator, snapshot).map_err(CliError::Runtime)?;
+        let validation = engine::validate_change(&validator, snapshot)
+            .map_err(|error| CliError::Runtime(error.to_string()))?;
         render_expansion(validation.scope);
         return Ok(Some(validation.report));
     }
@@ -851,7 +851,7 @@ fn validate_change(
         snapshot,
         &options.governors.to_governors()?,
     )
-    .map_err(CliError::Runtime)?;
+    .map_err(|error| CliError::Runtime(error.to_string()))?;
     // Before the trip or the report, so an operator reading a run that stopped still
     // learns the scope the verdict was about to describe.
     render_expansion(governed.scope);

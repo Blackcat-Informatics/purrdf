@@ -7,6 +7,9 @@
 //! non-deactivated node shape, runs all constraints, and assembles a
 //! deterministically-sorted [`ValidationReport`].
 
+mod binding_error;
+pub use binding_error::BindingRefusal;
+
 use crate::data_view::{ShaclDatasetView, ShaclRead};
 use crate::footprint::Endpoint;
 use std::sync::{Arc, OnceLock};
@@ -1153,16 +1156,11 @@ impl FocusSet {
     ///
     /// # Errors
     /// Refuses a set whose ids address a different dataset.
-    fn nodes_of(&self, data: &ShaclData) -> Result<&[FocusNode], String> {
+    fn nodes_of(&self, data: &ShaclData) -> Result<&[FocusNode], ShapesError> {
         if self.dataset == data.identity() {
             return Ok(&self.nodes);
         }
-        Err(
-            "focus node TermIds were resolved against a different dataset than the one this \
-             validator is bound to; TermIds are dataset-local and an in-range id from another \
-             dataset addresses a different term"
-                .to_owned(),
-        )
+        Err(BindingRefusal::ForeignFocusSet.into())
     }
 }
 
@@ -2711,9 +2709,8 @@ impl PreparedValidator {
     /// # Errors
     ///
     /// Returns an error when a constraint evaluation hard-fails.
-    pub fn validate(&self) -> Result<ValidationReport, String> {
+    pub fn validate(&self) -> Result<ValidationReport, crate::report::CompleteValidationError> {
         self.validate_request(None::<fn(&Shape, &Term) -> bool>)
-            .map_err(|error| error.to_string())
     }
 
     pub(crate) fn validate_request<F: FnMut(&Shape, &Term) -> bool>(
@@ -2997,12 +2994,7 @@ impl PreparedValidator {
         let mut focus_nodes = FocusSet::with_capacity(&self.data, focus_node_ids.len());
         for &focus in focus_node_ids {
             if focus.dataset != dataset {
-                return Err(ShapesError::Invalid(format!(
-                    "focus node TermId {} was minted against a different dataset binding than the \
-                     one this validator is bound to; TermIds are dataset-local, so an in-range id \
-                     from another binding resolves to a different term",
-                    focus.id.index()
-                )));
+                return Err(BindingRefusal::ForeignFocus { id: focus.id }.into());
             }
             // Unreachable through the public surface — an id minted by this
             // binding indexes this binding's table — and kept because the mint is
@@ -3012,11 +3004,11 @@ impl PreparedValidator {
             if u64::try_from(focus.id.index()).expect("local id fits u64")
                 >= self.data.core_view().term_count()
             {
-                return Err(ShapesError::Invalid(format!(
-                    "focus node TermId {} is outside the prepared dataset's {}-term table",
-                    focus.id.index(),
-                    self.data.core_view().term_count()
-                )));
+                return Err(BindingRefusal::FocusOutOfRange {
+                    id: focus.id,
+                    terms: self.data.core_view().term_count(),
+                }
+                .into());
             }
             if seen.insert(focus.id) {
                 focus_nodes.push(FocusNode::Interned(focus.id));
@@ -3109,25 +3101,21 @@ impl PreparedValidator {
     pub fn affected_focus_node_ids(
         &self,
         delta: &::purrdf_rdf::ir::DeltaDatasetView,
-    ) -> Result<FocusExpansion, String> {
+    ) -> Result<FocusExpansion, crate::report::CompleteValidationError> {
         self.affected_focus_request(delta)
-            .map_err(|error| error.to_string())
     }
 
     pub(crate) fn affected_focus_request(
         &self,
         delta: &::purrdf_rdf::ir::DeltaDatasetView,
     ) -> Result<FocusExpansion, crate::report::CompleteValidationError> {
-        self.run_request(|| {
-            self.affected_focus_raw(delta)
-                .map_err(crate::report::CompleteValidationError::Execution)
-        })
+        self.run_request(|| self.affected_focus_raw(delta))
     }
 
     fn affected_focus_raw(
         &self,
         delta: &::purrdf_rdf::ir::DeltaDatasetView,
-    ) -> Result<FocusExpansion, String> {
+    ) -> Result<FocusExpansion, crate::report::CompleteValidationError> {
         // The rules entailment regime replaces the bound data with the entailed dataset
         // (`entailed_for_validation`), which carries no mutation snapshot, and a rule
         // derives triples from any read the rules make, so no bounded superset exists:
@@ -3139,9 +3127,9 @@ impl PreparedValidator {
         }
         let core = self.data.core_view();
         let bound = core.delta_source().ok_or_else(|| {
-            "affected_focus_node_ids: this validator is not bound to a mutation snapshot, so it \
-             has no change to expand; bind through PreparedShapes::bind_delta_with_shapes_graph"
-                .to_owned()
+            crate::report::CompleteValidationError::Shapes(
+                BindingRefusal::MissingMutationBinding.into(),
+            )
         })?;
         // The third precondition, and the one that is a property of the BINDING
         // rather than of the argument: the change set names every row that joins
@@ -3154,23 +3142,10 @@ impl PreparedValidator {
         // no suppressed stream. The expansion would be short by exactly it, and a
         // short answer here is indistinguishable from "nothing changed".
         if !core.statements_projected() {
-            return Err(
-                "affected_focus_node_ids: this validator is bound to a mutation snapshot through a \
-                 view that does not project the RDF 1.2 statement layer, so it reads the plain \
-                 table alone; a row the overlay demotes onto the annotation table would leave that \
-                 read surface without appearing in the change set, and the expansion would silently \
-                 omit the focus nodes it moves; bind through \
-                 PreparedShapes::bind_delta_with_shapes_graph, which projects statements"
-                    .to_owned(),
-            );
+            return Err(ShapesError::from(BindingRefusal::UnprojectedStatements).into());
         }
         if !std::ptr::eq(Arc::as_ptr(bound), std::ptr::from_ref(delta)) {
-            return Err(
-                "affected_focus_node_ids: the supplied mutation snapshot is not the one this \
-                 validator was bound to, and the ids it would produce would index this \
-                 validator's term table while naming the other snapshot's terms"
-                    .to_owned(),
-            );
+            return Err(ShapesError::from(BindingRefusal::WrongSnapshot).into());
         }
         if let Some(reason) = self.bound.footprint().opaque() {
             return Ok(FocusExpansion::Everything { reason });
@@ -3189,11 +3164,11 @@ impl PreparedValidator {
         for quad in delta.changed_quads() {
             let ids = [quad.s, quad.p, quad.o].map(|id| core.local_delta_id(id));
             let [Some(s), Some(p), Some(o)] = ids else {
-                return Err(format!(
-                    "internal change-path defect: a changed row of the bound mutation snapshot \
-                     names a term the binding's own {}-term view does not map",
-                    core.term_count()
-                ));
+                return Err(ShapesError::from(BindingRefusal::UnmappedChangedRow {
+                    row: quad,
+                    terms: core.term_count(),
+                })
+                .into());
             };
             changed.push(::purrdf_rdf::QuadIds { s, p, o, g: None });
         }
@@ -3258,7 +3233,7 @@ impl PreparedValidator {
                             binding,
                             self.bound.footprint().paths(),
                         )
-                        .map_err(|error| error.to_string())?
+                        .map_err(crate::report::CompleteValidationError::Shapes)?
                         {
                             if seen.insert(id) {
                                 affected.push(FocusId::new(dataset, id));
@@ -3288,11 +3263,12 @@ impl PreparedValidator {
             }
             broadcast_shapes.push(broadcast.shape);
             let targets = self.bound.targets.get(broadcast.shape).ok_or_else(|| {
-                format!(
-                    "internal change-path defect: a cross-focus read names top-level shape {} of \
-                     a binding indexing {}",
-                    broadcast.shape,
-                    self.bound.targets.len()
+                crate::report::CompleteValidationError::Shapes(
+                    BindingRefusal::UnknownBroadcast {
+                        shape: broadcast.shape,
+                        shapes: self.bound.targets.len(),
+                    }
+                    .into(),
                 )
             })?;
             for focus in targets.resolve_all(&self.data) {
@@ -3733,7 +3709,7 @@ pub struct GovernedChangeValidation {
 pub fn validate_change(
     validator: &PreparedValidator,
     delta: &::purrdf_rdf::ir::DeltaDatasetView,
-) -> Result<ChangeValidation, String> {
+) -> Result<ChangeValidation, crate::report::CompleteValidationError> {
     let (scope, report) = change_pass(validator, delta)?;
     report.map(|report| ChangeValidation { report, scope })
 }
@@ -3763,7 +3739,7 @@ pub fn validate_change_with_governors(
     validator: &PreparedValidator,
     delta: &::purrdf_rdf::ir::DeltaDatasetView,
     governors: &QueryGovernors,
-) -> Result<GovernedChangeValidation, String> {
+) -> Result<GovernedChangeValidation, crate::report::CompleteValidationError> {
     let state = Arc::new(GovernorState::new(governors));
     let pass = {
         let _governor_scope = crate::sparql::enter_governor_scope(Arc::clone(&state));
@@ -3786,7 +3762,13 @@ pub fn validate_change_with_governors(
 fn change_pass(
     validator: &PreparedValidator,
     delta: &::purrdf_rdf::ir::DeltaDatasetView,
-) -> Result<(ChangeScope, Result<ValidationReport, String>), String> {
+) -> Result<
+    (
+        ChangeScope,
+        Result<ValidationReport, crate::report::CompleteValidationError>,
+    ),
+    crate::report::CompleteValidationError,
+> {
     let expansion = validator.affected_focus_node_ids(delta)?;
     Ok(match &expansion {
         FocusExpansion::Bounded(ids) => (
@@ -3798,7 +3780,7 @@ fn change_pass(
             // reach this call; its refusals are the binding's and the constraints'.
             validator
                 .validate_focus_node_ids(ids)
-                .map_err(|error| error.to_string()),
+                .map_err(crate::report::CompleteValidationError::Shapes),
         ),
         FocusExpansion::Everything { reason } => {
             (ChangeScope::Everything { reason }, validator.validate())
@@ -4680,7 +4662,7 @@ pub fn parse_shapes_with_options(
         prefixes: doc_prefixes,
         base: document_base,
     } = crate::text_ingest::parse_turtle_document(shapes_ttl, base).map_err(|errors| {
-        crate::report::CompleteValidationError::Shapes(ShapesError::Invalid(errors.join("\n")))
+        crate::report::CompleteValidationError::Shapes(ShapesError::Text(errors))
     })?;
 
     // `base` and `doc_prefixes` are handed on rather than consumed and dropped:
@@ -4816,8 +4798,7 @@ pub(crate) fn parse_graphs_with_shapes_graph(
     options: &ValidationOptions,
     imports: &ShapesImports,
 ) -> Result<(Arc<RdfDataset>, Shapes), ShapesError> {
-    let data = crate::text_ingest::parse_ntriples_to_dataset(data_nt)
-        .map_err(|errors| errors.join("\n"))?;
+    let data = crate::text_ingest::parse_ntriples_to_dataset(data_nt).map_err(ShapesError::Text)?;
     let imports = linked_imports(data.as_ref(), imports)?;
     let shapes = parse_shapes_with_options(
         shapes_ttl,
@@ -4867,8 +4848,7 @@ pub fn validate_graphs_with_config(
     // Parse the data graph via the native codecs. Every independently malformed
     // N-Triples line is reported in one pass, matching `parse_shapes`' complete
     // syntax-diagnostic contract.
-    let data = crate::text_ingest::parse_ntriples_to_dataset(data_nt)
-        .map_err(|errors| errors.join("\n"))?;
+    let data = crate::text_ingest::parse_ntriples_to_dataset(data_nt).map_err(ShapesError::Text)?;
 
     let imports = linked_imports(data.as_ref(), imports)?;
     let shapes = parse_shapes_with_config(shapes_ttl, shapes_base, box_role_vocab, &imports)?;
@@ -4939,8 +4919,7 @@ pub fn entail_graphs_with_shapes_graph(
     shapes_graph: Option<&str>,
     imports: &ShapesImports,
 ) -> Result<Arc<RdfDataset>, ShapesError> {
-    let data = crate::text_ingest::parse_ntriples_to_dataset(data_nt)
-        .map_err(|errors| errors.join("\n"))?;
+    let data = crate::text_ingest::parse_ntriples_to_dataset(data_nt).map_err(ShapesError::Text)?;
     let shapes = parse_shapes_with_graph(shapes_ttl, shapes_base, None, shapes_graph, imports)?;
     crate::rules::entail_dataset(data.as_ref(), &shapes)
 }
@@ -7708,10 +7687,10 @@ mod tests {
                 })
                 .expect_err("an unregistered IRI under a declared namespace is refused");
             assert!(
-                error.contains("neverRegistered"),
+                error.to_string().contains("neverRegistered"),
                 "{label}: the refusal names the offending IRI: {error}"
             );
-            messages.push(error);
+            messages.push(error.to_string());
         }
         assert_eq!(
             messages[0], messages[1],

@@ -168,8 +168,7 @@ fn entail_with<E: From<ShapesError>>(
     ) -> Result<purrdf_shapes::Inference, E>,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<EntailOutcome, E> {
-    let data = parse_ntriples_to_dataset(request.data_nt)
-        .map_err(|errors| ShapesError::from(errors.join("\n")))?;
+    let data = parse_ntriples_to_dataset(request.data_nt).map_err(ShapesError::Text)?;
     let shapes = engine::parse_shapes_with_graph(
         request.shapes_ttl,
         request.shapes_base,

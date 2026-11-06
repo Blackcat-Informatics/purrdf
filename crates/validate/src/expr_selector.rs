@@ -33,11 +33,9 @@
 //! read — a malformed term is the caller's argument's fault — and
 //! [`ParsedExprSelector::select`] resolves it against the shapes graph.
 
-use std::fmt;
 use std::sync::Arc;
 
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfQuad, RdfTerm, RdfTriple};
-use purrdf_shapes::ShapesError;
 use purrdf_shapes::data::{GraphFilter, native_quads};
 use purrdf_shapes::free_expression;
 use purrdf_shapes::term::{NamedNode, Term};
@@ -85,133 +83,7 @@ pub struct SelectedExpression {
     pub root: Term,
 }
 
-/// Why a selector names no single expression.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum ExprSelectorError {
-    /// The native expression graph could not admit its original storage.
-    Storage(purrdf_lex::allocation::StorageError),
-    /// A term the selector spells is not one: `role` names it (`expr`, `expr-at`,
-    /// `expr-via 2`), `message` says why.
-    Term {
-        /// Which of the selector's terms.
-        role: String,
-        /// Why it is not a term.
-        message: String,
-    },
-    /// The walk's start node is a literal or a triple term, which is the subject of no
-    /// triple, so no predicate can reach anything from it.
-    StartNotANode {
-        /// The start node, as N-Triples.
-        node: String,
-    },
-    /// A walk with no predicate, which would select the start node itself — name that
-    /// with [`ExprSelector::Node`].
-    EmptyPath,
-    /// A walk predicate that is not an IRI.
-    PredicateNotIri {
-        /// The step, counted from 1.
-        step: usize,
-        /// The term given, as N-Triples.
-        predicate: String,
-    },
-    /// A step reached no value or several.
-    NotOneValue {
-        /// The step, counted from 1.
-        step: usize,
-        /// The node the step started from, as N-Triples.
-        subject: String,
-        /// The step's predicate IRI.
-        predicate: String,
-        /// How many values the step reached.
-        count: usize,
-    },
-    /// The inline expression is not a Turtle document.
-    Turtle {
-        /// The Turtle codec's diagnostics, one per malformed statement.
-        errors: Vec<String>,
-    },
-    /// The inline expression has no root blank node, or several.
-    NotOneRoot {
-        /// How many roots the fragment has.
-        count: usize,
-    },
-    /// A host named no selector, or several: [`ExprSelector::from_parts`] takes exactly
-    /// one of the node, the walk and the inline expression.
-    NotOneSelector {
-        /// How many of the three were given.
-        count: usize,
-    },
-    /// Walk predicates given with no walk start.
-    ViaWithoutAt,
-}
-
-impl fmt::Display for ExprSelectorError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Storage(error) => error.fmt(f),
-            Self::Term { role, message } => write!(f, "{role}: {message}"),
-            Self::StartNotANode { node } => write!(
-                f,
-                "expression selector: the walk starts from {node}, which is not an IRI or a \
-                 blank node and is the subject of no triple; start from the node that \
-                 carries the expression"
-            ),
-            Self::EmptyPath => f.write_str(
-                "expression selector: a walk from a node names no predicate to follow; name \
-                 the node itself as the expression instead",
-            ),
-            Self::PredicateNotIri { step, predicate } => write!(
-                f,
-                "expression selector: step {step}'s predicate {predicate} is not an IRI"
-            ),
-            Self::NotOneValue {
-                step,
-                subject,
-                predicate,
-                count,
-            } => write!(
-                f,
-                "expression selector: step {step}, {subject} <{predicate}>, reaches {count} \
-                 values in the shapes graph; each step must reach exactly one"
-            ),
-            Self::Turtle { errors } => write!(
-                f,
-                "expression selector: the inline expression is not a Turtle document: {}",
-                errors.join("; ")
-            ),
-            Self::NotOneRoot { count } => write!(
-                f,
-                "expression selector: the inline expression has {count} root blank nodes \
-                 (blank nodes that are the subject of a triple and the object of none); it \
-                 must have exactly one, the expression. Name an IRI expression, or a \
-                 constant, as the expression node itself"
-            ),
-            Self::NotOneSelector { count } => write!(
-                f,
-                "expression selector: {count} of the expression node, the walk start and the \
-                 inline expression were given; name the expression exactly one way"
-            ),
-            Self::ViaWithoutAt => f.write_str(
-                "expression selector: walk predicates were given with no walk start; name \
-                 the node the walk starts from",
-            ),
-        }
-    }
-}
-
-purrdf_lex::error_source!(ExprSelectorError { Storage });
-
-purrdf_lex::variant_from!(ExprSelectorError { Storage(purrdf_lex::allocation::StorageError) });
-
-impl From<ExprSelectorError> for ShapesError {
-    fn from(error: ExprSelectorError) -> Self {
-        match error {
-            ExprSelectorError::Storage(error) => Self::Storage(error),
-            error => Self::Invalid(error.to_string()),
-        }
-    }
-}
+pub use purrdf_shapes::free_expression::ExprSelectorError;
 
 impl<'a> ExprSelector<'a> {
     /// The selector a host's optional arguments name: exactly one of `expr` (the node),
@@ -257,9 +129,7 @@ impl<'a> ExprSelector<'a> {
             Self::At { node, via } => {
                 let start = term("expr-at", node)?;
                 if !matches!(start, Term::NamedNode(_) | Term::BlankNode(_)) {
-                    return Err(ExprSelectorError::StartNotANode {
-                        node: start.to_string(),
-                    });
+                    return Err(ExprSelectorError::StartNotANode { node: start });
                 }
                 if via.is_empty() {
                     return Err(ExprSelectorError::EmptyPath);
@@ -273,7 +143,7 @@ impl<'a> ExprSelector<'a> {
                             Term::NamedNode(predicate) => Ok(predicate),
                             other => Err(ExprSelectorError::PredicateNotIri {
                                 step,
-                                predicate: other.to_string(),
+                                predicate: other,
                             }),
                         }
                     })
@@ -287,9 +157,9 @@ impl<'a> ExprSelector<'a> {
 }
 
 fn term(role: &str, text: &str) -> Result<Term, ExprSelectorError> {
-    free_expression::parse_term(text).map_err(|message| ExprSelectorError::Term {
+    free_expression::parse_term(text).map_err(|cause| ExprSelectorError::Term {
         role: role.to_owned(),
-        message,
+        cause,
     })
 }
 
@@ -327,8 +197,8 @@ impl ParsedExprSelector {
                     let [(_, _, value)] = values.as_slice() else {
                         return Err(ExprSelectorError::NotOneValue {
                             step: index + 1,
-                            subject: current.to_string(),
-                            predicate: predicate.as_str().to_owned(),
+                            subject: current,
+                            predicate: predicate.clone(),
                             count: values.len(),
                         });
                     };
@@ -362,10 +232,16 @@ fn inline(
         document.push_str(namespace);
         document.push_str("> .\n");
     }
+    let fragment_offset = document.len();
     document.push_str(text);
     document.push('\n');
     let fragment = parse_turtle_document(&document, base)
-        .map_err(|errors| ExprSelectorError::Turtle { errors })?
+        .map_err(|errors| ExprSelectorError::Turtle {
+            input: text.to_owned(),
+            carrier: document,
+            fragment_offset,
+            errors,
+        })?
         .dataset;
 
     let quads: Vec<RdfQuad> = fragment.owned_quads().collect();
@@ -466,9 +342,7 @@ fn inline(
     }
     let merged = builder.freeze().map_err(|error| {
         error.storage_error().map_or_else(
-            || ExprSelectorError::Turtle {
-                errors: vec![error.to_string()],
-            },
+            || ExprSelectorError::Construction(error.clone()),
             ExprSelectorError::Storage,
         )
     })?;

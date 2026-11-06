@@ -21,6 +21,9 @@
 //!   one line (N-Triples) at a time so each independently-malformed statement
 //!   yields its own error.
 
+mod diagnostic;
+pub use diagnostic::{TextDiagnostic, TextErrors, TextFormat};
+
 use std::sync::Arc;
 
 use ::purrdf_rdf::RdfDataset;
@@ -40,17 +43,17 @@ use purrdf_iri::terminals;
 /// On a clean parse the dataset is returned. On a syntax error the document is
 /// re-parsed one top-level statement at a time so EVERY independently-malformed
 /// statement is reported; the returned `Err` is the list of per-statement error
-/// strings.
+/// records, retaining native causes and original document coordinates.
 pub fn parse_turtle_to_dataset(
     ttl: &str,
     base: Option<&str>,
-) -> Result<Arc<RdfDataset>, Vec<String>> {
+) -> Result<Arc<RdfDataset>, TextErrors> {
     if ttl.is_empty() {
         return Ok(empty_dataset());
     }
     match parse_dataset(ttl.as_bytes(), "text/turtle", base) {
         Ok(dataset) => Ok(dataset),
-        Err(_) => Err(turtle_statement_errors(ttl, base)),
+        Err(cause) => Err(turtle_statement_errors(ttl, base, cause)),
     }
 }
 
@@ -92,7 +95,7 @@ pub struct TurtleDocument {
 /// # Errors
 ///
 /// Exactly [`parse_turtle_to_dataset`]'s.
-pub fn parse_turtle_document(ttl: &str, base: Option<&str>) -> Result<TurtleDocument, Vec<String>> {
+pub fn parse_turtle_document(ttl: &str, base: Option<&str>) -> Result<TurtleDocument, TextErrors> {
     if ttl.is_empty() {
         return Ok(TurtleDocument {
             dataset: empty_dataset(),
@@ -111,7 +114,7 @@ pub fn parse_turtle_document(ttl: &str, base: Option<&str>) -> Result<TurtleDocu
             dataset: outcome.dataset,
             prefixes: outcome.document_prefixes,
         }),
-        Err(_) => Err(turtle_statement_errors(ttl, base)),
+        Err(cause) => Err(turtle_statement_errors(ttl, base, cause)),
     }
 }
 
@@ -122,13 +125,13 @@ pub fn parse_turtle_document(ttl: &str, base: Option<&str>) -> Result<TurtleDocu
 /// so this ingress takes no base: there is nothing a base could resolve, and accepting
 /// one would imply it might rescue a document the grammar rejects. A relative reference
 /// here is `iri-not-absolute-by-grammar`, which no base can fix.
-pub fn parse_ntriples_to_dataset(data_nt: &str) -> Result<Arc<RdfDataset>, Vec<String>> {
+pub fn parse_ntriples_to_dataset(data_nt: &str) -> Result<Arc<RdfDataset>, TextErrors> {
     if data_nt.is_empty() {
         return Ok(empty_dataset());
     }
     match parse_dataset(data_nt.as_bytes(), "application/n-triples", None) {
         Ok(dataset) => Ok(dataset),
-        Err(_) => Err(ntriples_line_errors(data_nt)),
+        Err(cause) => Err(ntriples_line_errors(data_nt, cause)),
     }
 }
 
@@ -172,14 +175,25 @@ fn empty_dataset() -> Arc<RdfDataset> {
 /// reported string is a diagnostic the codec itself produced for a chunk of the
 /// document. Blank chunks — only `WS` (RDF 1.2 Turtle §6.5), never the Unicode
 /// `White_Space` property — are skipped; any other chunk is the codec's to judge.
-fn turtle_statement_errors(ttl: &str, base: Option<&str>) -> Vec<String> {
+fn turtle_statement_errors(
+    ttl: &str,
+    base: Option<&str>,
+    original: purrdf_core::RdfDiagnostic,
+) -> TextErrors {
     use std::fmt::Write as _;
 
     let mut prefixes: Vec<(String, String)> = Vec::new();
     let mut state_base: Option<String> = base.map(str::to_owned);
-    let mut errors: Vec<String> = Vec::new();
-    for statement in split_turtle_statements(ttl) {
-        let trimmed = terminals::trim_ws(&statement);
+    if original.storage_error().is_some() {
+        return diagnostic::whole(TextFormat::Turtle, original, ttl);
+    }
+    let mut errors = Vec::new();
+    let mut cursor = purrdf_iri::PositionCursor::new(ttl);
+    for range in split_turtle_statements(ttl) {
+        let statement = &ttl[range.clone()];
+        let trimmed = terminals::trim_ws(statement);
+        let start = range.start + terminals::skip_ws(statement.as_bytes(), 0);
+        let source_range = start..start + trimmed.len();
         if trimmed.is_empty() {
             continue;
         }
@@ -187,6 +201,7 @@ fn turtle_statement_errors(ttl: &str, base: Option<&str>) -> Vec<String> {
         for (prefix, namespace) in &prefixes {
             let _ = writeln!(candidate, "@prefix {prefix}: <{namespace}> .");
         }
+        let replay_bytes = candidate.len();
         candidate.push_str(trimmed);
         candidate.push('\n');
         match ::purrdf_rdf::parse_dataset_reporting_failure(
@@ -200,21 +215,27 @@ fn turtle_statement_errors(ttl: &str, base: Option<&str>) -> Vec<String> {
                 prefixes = outcome.document_prefixes;
             }
             Err(failure) => {
-                errors.push(format!("Turtle parse error: {}", failure.diagnostic));
+                let operational = failure.diagnostic.storage_error().is_some();
                 state_base = failure.document_base_iri().map(str::to_owned);
+                errors.push(diagnostic::mapped(
+                    TextFormat::Turtle,
+                    failure.diagnostic,
+                    source_range,
+                    replay_bytes,
+                    &candidate,
+                    &mut cursor,
+                ));
+                if operational {
+                    return TextErrors { entries: errors };
+                }
                 prefixes = failure.document_prefixes;
             }
         }
     }
     if errors.is_empty() {
-        // The whole-document parse failed but no individual statement did (e.g. a
-        // lexer-level break that consumes to EOF): re-surface the document error
-        // as a single entry rather than swallowing it.
-        if let Err(e) = parse_dataset(ttl.as_bytes(), "text/turtle", base) {
-            errors.push(format!("Turtle parse error: {e}"));
-        }
+        return diagnostic::whole(TextFormat::Turtle, original, ttl);
     }
-    errors
+    TextErrors { entries: errors }
 }
 
 /// Split Turtle source into top-level statements on the `.` terminator, ignoring
@@ -227,21 +248,18 @@ fn turtle_statement_errors(ttl: &str, base: Option<&str>) -> Vec<String> {
 /// half a sentence of English and report an invented syntax error, burying the actual
 /// one. `#` is only a comment outside an IRI and outside a string, since it is also the
 /// fragment delimiter of every `<http://…#…>` IRI in a SHACL document.
-fn split_turtle_statements(ttl: &str) -> Vec<String> {
-    let mut statements: Vec<String> = Vec::new();
-    let mut current = String::new();
-    let mut chars = ttl.chars().peekable();
+fn split_turtle_statements(ttl: &str) -> Vec<std::ops::Range<usize>> {
+    let mut statements = Vec::new();
+    let mut start = 0;
+    let mut chars = ttl.char_indices().peekable();
     let mut in_iri = false;
     let mut string_delim: Option<char> = None;
-    while let Some(c) = chars.next() {
-        current.push(c);
+    while let Some((offset, c)) = chars.next() {
         match string_delim {
             Some(delim) => {
                 if c == '\\' {
                     // Escaped char inside a string: consume the next char verbatim.
-                    if let Some(next) = chars.next() {
-                        current.push(next);
-                    }
+                    let _ = chars.next();
                 } else if c == delim {
                     string_delim = None;
                 }
@@ -253,8 +271,7 @@ fn split_turtle_statements(ttl: &str) -> Vec<String> {
                 // A comment: copy it through verbatim to end of line so the statement
                 // keeps its original text, but let none of its bytes be interpreted.
                 '#' if !in_iri => {
-                    for next in chars.by_ref() {
-                        current.push(next);
+                    for (_, next) in chars.by_ref() {
                         if next == '\n' {
                             break;
                         }
@@ -267,9 +284,11 @@ fn split_turtle_statements(ttl: &str) -> Vec<String> {
                 '.' if !in_iri
                     && !chars
                         .peek()
-                        .is_some_and(|&next| terminals::is_pn_chars(next)) =>
+                        .is_some_and(|&(_, next)| terminals::is_pn_chars(next)) =>
                 {
-                    statements.push(std::mem::take(&mut current));
+                    let end = offset + c.len_utf8();
+                    statements.push(start..end);
+                    start = end;
                 }
                 _ => {}
             },
@@ -278,8 +297,8 @@ fn split_turtle_statements(ttl: &str) -> Vec<String> {
     // `WS`-exact (§6.5): a trailing chunk made only of U+00A0 is not blank Turtle,
     // so it is kept as a statement and offered to the codec rather than discarded
     // here as if it were layout.
-    if !terminals::trim_ws(&current).is_empty() {
-        statements.push(current);
+    if !terminals::trim_ws(&ttl[start..]).is_empty() {
+        statements.push(start..ttl.len());
     }
     statements
 }
@@ -296,24 +315,40 @@ fn split_turtle_statements(ttl: &str) -> Vec<String> {
 /// only after the document has already failed and every message is one
 /// `parse_dataset` produced for that exact line, so narrowing can surface a real
 /// defect but cannot invent one.
-fn ntriples_line_errors(data_nt: &str) -> Vec<String> {
-    let mut errors: Vec<String> = Vec::new();
-    for line in data_nt.lines() {
+fn ntriples_line_errors(data_nt: &str, original: purrdf_core::RdfDiagnostic) -> TextErrors {
+    if original.storage_error().is_some() {
+        return diagnostic::whole(TextFormat::NTriples, original, data_nt);
+    }
+    let mut errors = Vec::new();
+    let mut cursor = purrdf_iri::PositionCursor::new(data_nt);
+    let mut start = 0;
+    for line in data_nt.split_inclusive('\n') {
         let trimmed = terminals::trim_ws(line);
+        let source_start = start + terminals::skip_ws(line.as_bytes(), 0);
+        start += line.len();
         if trimmed.is_empty() || trimmed.starts_with('#') {
             continue;
         }
         let candidate = format!("{trimmed}\n");
-        if let Err(e) = parse_dataset(candidate.as_bytes(), "application/n-triples", None) {
-            errors.push(format!("N-Triples parse error: {e}"));
+        if let Err(cause) = parse_dataset(candidate.as_bytes(), "application/n-triples", None) {
+            let operational = cause.storage_error().is_some();
+            errors.push(diagnostic::mapped(
+                TextFormat::NTriples,
+                cause,
+                source_start..source_start + trimmed.len(),
+                0,
+                &candidate,
+                &mut cursor,
+            ));
+            if operational {
+                return TextErrors { entries: errors };
+            }
         }
     }
-    if errors.is_empty()
-        && let Err(e) = parse_dataset(data_nt.as_bytes(), "application/n-triples", None)
-    {
-        errors.push(format!("N-Triples parse error: {e}"));
+    if errors.is_empty() {
+        return diagnostic::whole(TextFormat::NTriples, original, data_nt);
     }
-    errors
+    TextErrors { entries: errors }
 }
 
 #[cfg(test)]
@@ -454,7 +489,10 @@ mod tests {
     fn split_turtle_ignores_dots_in_iris_and_strings() {
         let ttl = "ex:a ex:p \"a. b. c\" . ex:d ex:e <http://x.y/z> .";
         let statements = split_turtle_statements(ttl);
-        let non_empty = statements.iter().filter(|s| !s.trim().is_empty()).count();
+        let non_empty = statements
+            .iter()
+            .filter(|range| !ttl[(*range).clone()].trim().is_empty())
+            .count();
         assert_eq!(non_empty, 2, "two statements: {statements:?}");
     }
 
@@ -468,7 +506,10 @@ mod tests {
             "ex:a ex:p ex:b .\n",
         );
         let statements = split_turtle_statements(ttl);
-        let non_empty = statements.iter().filter(|s| !s.trim().is_empty()).count();
+        let non_empty = statements
+            .iter()
+            .filter(|range| !ttl[(*range).clone()].trim().is_empty())
+            .count();
         assert_eq!(
             non_empty, 1,
             "the comment is not a statement boundary: {statements:?}"
@@ -481,7 +522,10 @@ mod tests {
         // document uses, so it only starts a comment OUTSIDE an IRI.
         let ttl = "<http://example.org/ns#a> <http://example.org/ns#p> \"v\" .";
         let statements = split_turtle_statements(ttl);
-        let non_empty = statements.iter().filter(|s| !s.trim().is_empty()).count();
+        let non_empty = statements
+            .iter()
+            .filter(|range| !ttl[(*range).clone()].trim().is_empty())
+            .count();
         assert_eq!(non_empty, 1, "one statement: {statements:?}");
     }
 
@@ -515,18 +559,40 @@ mod tests {
         let bad = concat!(
             "  @prefix ex: <http://example.org/ns#> .\n",
             "\t@base <http://example.org/> .\n",
+            "# é\n",
             "\n",
             "   \t \n",
             "ex:a ex:p ex:b .\n",
-            "ex:c ex:q .\n", // the only real defect: missing object
-        );
-        let Err(errors) = parse_turtle_to_dataset(bad, None) else {
+            "\t ex:c ex:q .\n", // the only real defect: missing object
+        )
+        .replace('\n', "\r\n");
+        let expected = bad.find("ex:c").expect("malformed statement");
+        let Err(errors) = parse_turtle_to_dataset(&bad, None) else {
             panic!("the malformed statement must error")
         };
         assert_eq!(
             errors.len(),
             1,
             "only the genuinely malformed statement is reported: {errors:?}"
+        );
+        drop(bad);
+        assert_eq!(errors[0].source_range(), expected..expected + 11);
+        let position = errors[0]
+            .source_position()
+            .expect("position fits")
+            .expect("native location");
+        assert_eq!(
+            (position.line, position.column, position.byte_offset),
+            (7, 13, expected + 10)
+        );
+        assert!(errors[0].replay_bytes() > 0);
+        assert_eq!(
+            errors[0]
+                .cause()
+                .location
+                .as_ref()
+                .and_then(|location| location.line),
+            Some(2)
         );
     }
 
@@ -577,7 +643,9 @@ mod tests {
             panic!("a relative IRI with no base must be refused")
         };
         assert!(
-            errors.iter().any(|e| e.contains("iri-relative-no-base")),
+            errors
+                .iter()
+                .any(|e| e.cause().code == "iri-relative-no-base"),
             "the refusal must name the actionable condition: {errors:?}"
         );
     }
@@ -598,7 +666,9 @@ mod tests {
             panic!("the malformed statement must error")
         };
         assert!(
-            !errors.iter().any(|e| e.contains("iri-relative-no-base")),
+            !errors
+                .iter()
+                .any(|e| e.cause().code == "iri-relative-no-base"),
             "no base error may be fabricated during recovery: {errors:?}"
         );
         assert_eq!(
@@ -629,7 +699,7 @@ mod tests {
             panic!("malformed Turtle must error")
         };
         assert_eq!(errors.len(), 2, "{errors:?}");
-        assert!(errors[0].contains("\"lit\""), "{errors:?}");
+        assert!(errors[0].to_string().contains("\"lit\""), "{errors:?}");
 
         // The control: `lit:` really declared — only the missing object is reported.
         let control = bad.replace("@prefix ex:", "@prefix lit: <urn:lit:> .\n@prefix ex:");
@@ -637,7 +707,7 @@ mod tests {
             panic!("malformed Turtle must error")
         };
         assert_eq!(errors.len(), 1, "{errors:?}");
-        assert!(!errors[0].contains("\"lit\""), "{errors:?}");
+        assert!(!errors[0].to_string().contains("\"lit\""), "{errors:?}");
     }
 
     /// A directive applies to the statements after it, and a SPARQL-form `PREFIX`
@@ -655,8 +725,8 @@ mod tests {
             panic!("malformed Turtle must error")
         };
         assert_eq!(errors.len(), 2, "{errors:?}");
-        assert!(errors[0].contains("\"ex\""), "{errors:?}");
-        assert!(!errors[1].contains("\"ex\""), "{errors:?}");
+        assert!(errors[0].to_string().contains("\"ex\""), "{errors:?}");
+        assert!(!errors[1].to_string().contains("\"ex\""), "{errors:?}");
     }
 
     /// A decimal's `.` ends no statement: the only defect reported is the real one.

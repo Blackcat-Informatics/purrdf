@@ -1256,14 +1256,16 @@ fn certify_governed<R>(
             // was not whole is not a verdict, for exactly the reason the truncated arm
             // below is not one, so the incompleteness is refused here by name rather
             // than discarded along with the receipt it rode in on.
-            let incomplete: Vec<String> = relations
+            let incomplete: Vec<crate::error::IncompleteRelation> = relations
                 .witness
                 .iter()
                 .flat_map(|(iri, attested)| {
-                    attested
-                        .incompleteness
-                        .iter()
-                        .map(move |reason| format!("<{iri}>: {reason}"))
+                    attested.incompleteness.iter().map(move |reason| {
+                        crate::error::IncompleteRelation {
+                            iri: iri.to_owned(),
+                            reason: reason.clone(),
+                        }
+                    })
                 })
                 .collect();
             if !incomplete.is_empty() {

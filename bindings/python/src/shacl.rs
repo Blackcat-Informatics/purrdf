@@ -175,7 +175,7 @@ fn validate(
         None => base_options,
         Some(iris) => base_options.with_conformance_disallows(
             purrdf_shapes::report::ConformanceDisallows::from_iris(&iris)
-                .map_err(pyo3::exceptions::PyValueError::new_err)?,
+                .map_err(|error| shapes_error(py, error.into()))?,
         ),
     };
     // Parse + validation run detached (GIL released); the result dicts are
@@ -319,12 +319,14 @@ fn xpath_error(py: Python<'_>, error: XPathValidationError) -> PyErr {
             )
         }
         XPathValidationError::Shapes(error) => shapes_error(py, error),
-        other => match purrdf_validate::xpath_regex::validation_refusal_code(&other) {
-            Some(code) => {
-                crate::py_store::presentation::refusal_value_error(other.to_string(), code)
-            }
-            None => pyo3::exceptions::PyValueError::new_err(other.to_string()),
-        },
+        XPathValidationError::Complete(error) => complete_error(py, *error),
+        other => {
+            let code = purrdf_validate::xpath_regex::validation_refusal_code(&other)
+                .unwrap_or("shapes-refused");
+            let diagnostic = purrdf_validate::native_error::diagnostic(code, other, None);
+            let message = diagnostic.message.clone();
+            crate::py_store::presentation::native_error_with_message(py, message, &diagnostic)
+        }
     }
 }
 
@@ -960,7 +962,7 @@ fn validate_nt_against(
 /// private-use language tags, every malformed line reported in one pass.
 fn parse_data_nt(data_nt: &str) -> Result<Arc<RdfDataset>, purrdf_validate::ShapesError> {
     purrdf_shapes::text_ingest::parse_ntriples_to_dataset(data_nt)
-        .map_err(|errors| purrdf_validate::ShapesError::from(errors.join("\n")))
+        .map_err(purrdf_validate::ShapesError::from)
 }
 
 #[pymethods]
@@ -1015,7 +1017,8 @@ impl PyShapes {
         // Shapes-graph parsing runs detached (GIL released).
         let inner = py
             .detach(|| {
-                let table = purrdf_shapes::ShapesImports::from_turtle(&pairs)?;
+                let table = purrdf_shapes::ShapesImports::from_turtle(&pairs)
+                    .map_err(purrdf_validate::ShapesError::from)?;
                 engine::parse_shapes_with_options(
                     shapes_ttl,
                     base,
@@ -1024,12 +1027,8 @@ impl PyShapes {
                     &table,
                     &options,
                 )
-                .map_err(|error| match error {
-                    purrdf_shapes::report::CompleteValidationError::Shapes(error) => error,
-                    other => purrdf_validate::ShapesError::Invalid(other.to_string()),
-                })
             })
-            .map_err(|error| shapes_error(py, error))?;
+            .map_err(|error| complete_error(py, error))?;
         Ok(Self {
             inner: Arc::new(inner),
         })
@@ -1527,15 +1526,17 @@ impl PyPreparedShapes {
         // would not. A selected law runs that same loop inside its selection.
         let validation = match selection {
             None => py
-                .detach(|| -> Result<_, purrdf_validate::ShapesError> {
-                    let validator = prepared.bind_delta_with_shapes_graph(
-                        Arc::clone(&snapshot),
-                        None,
-                        ::purrdf::ir::ViewLimits::default(),
-                    )?;
-                    Ok(engine::validate_change(&validator, &snapshot)?)
-                })
-                .map_err(|error| shapes_error(py, error))?,
+                .detach(
+                    || -> Result<_, purrdf_shapes::report::CompleteValidationError> {
+                        let validator = prepared.bind_delta_with_shapes_graph(
+                            Arc::clone(&snapshot),
+                            None,
+                            ::purrdf::ir::ViewLimits::default(),
+                        )?;
+                        engine::validate_change(&validator, &snapshot)
+                    },
+                )
+                .map_err(|error| complete_error(py, error))?,
             Some((profile, limits)) => py
                 .detach(|| {
                     prepared
@@ -2120,50 +2121,56 @@ fn shapes_error(py: Python<'_>, error: purrdf_validate::ShapesError) -> PyErr {
             let receipt = purrdf_validate::query::rule_execution_receipt_json(&error.coordinates);
             let raised = match error.into_cause() {
                 purrdf_shapes::rules::RulesError::Shapes(error) => shapes_error(py, error),
-                other => pyo3::exceptions::PyValueError::new_err(other.to_string()),
+                other => native_shacl_error(py, other),
             };
             crate::py_store::presentation::with_execution_receipt(py, raised, receipt)
         }
         purrdf_validate::ShapesError::Storage(error) => crate::py_store::storage_value_error(error),
         purrdf_validate::ShapesError::Imports(error) => import_error(py, &error),
-        purrdf_validate::ShapesError::Recursion(refusal) => {
-            pyo3::exceptions::PyValueError::new_err(refusal.to_string())
+        other => native_shacl_error(py, other),
+    }
+}
+
+fn native_shacl_error(
+    py: Python<'_>,
+    error: impl purrdf_lex::error::NativeError + 'static,
+) -> PyErr {
+    let diagnostic = purrdf_validate::native_error::diagnostic("shapes-refused", error, None);
+    let message = diagnostic.message.clone();
+    crate::py_store::presentation::native_error_with_message(py, message, &diagnostic)
+}
+
+fn complete_error(py: Python<'_>, error: purrdf_shapes::report::CompleteValidationError) -> PyErr {
+    match error {
+        purrdf_shapes::report::CompleteValidationError::Shapes(error) => shapes_error(py, error),
+        purrdf_shapes::report::CompleteValidationError::RuleExecution { cause, coordinates } => {
+            crate::py_store::presentation::with_execution_receipt(
+                py,
+                complete_error(py, *cause),
+                purrdf_validate::query::rule_execution_receipt_json(&coordinates),
+            )
         }
-        purrdf_validate::ShapesError::Preparation(refusal) => {
-            pyo3::exceptions::PyValueError::new_err(refusal.to_string())
-        }
-        purrdf_validate::ShapesError::Invalid(message) => {
-            pyo3::exceptions::PyValueError::new_err(message)
-        }
-        purrdf_validate::ShapesError::Processor(failure) => {
-            pyo3::exceptions::PyValueError::new_err(failure.to_string())
-        }
-        purrdf_validate::ShapesError::ShaclJs(refusal) => {
-            pyo3::exceptions::PyValueError::new_err(refusal.to_string())
-        }
-        purrdf_validate::ShapesError::IllFormed(refusal) => {
-            pyo3::exceptions::PyValueError::new_err(refusal.to_string())
-        }
-        purrdf_validate::ShapesError::Prebinding(violation) => {
-            pyo3::exceptions::PyValueError::new_err(violation.to_string())
-        }
-        purrdf_validate::ShapesError::UnsupportedTarget(refusal) => {
-            pyo3::exceptions::PyValueError::new_err(refusal.to_string())
-        }
-        purrdf_validate::ShapesError::SparqlTargetDisagreement(refusal) => {
-            pyo3::exceptions::PyValueError::new_err(refusal.to_string())
-        }
+        other => native_shacl_error(py, other),
     }
 }
 
 /// Raise `error` as [`ShapesImportError`].
 fn import_error(py: Python<'_>, error: &purrdf_validate::ShapesImportError) -> PyErr {
     let raised = ShapesImportError::new_err(error.to_string());
-    // Setting an attribute on a Python-level exception instance cannot fail; a failure
-    // is ignored rather than replacing a precise refusal with a vaguer one.
-    let _ = raised.value(py).setattr("kind", error.kind());
-    let _ = raised.value(py).setattr("iris", error.iris());
-    raised
+    let attach = || -> PyResult<()> {
+        raised.value(py).setattr("kind", error.kind())?;
+        raised.value(py).setattr("iris", error.iris())?;
+        Ok(())
+    };
+    if let Err(failure) = attach() {
+        return failure;
+    }
+    let diagnostic =
+        purrdf_validate::native_error::diagnostic("shapes-import-refused", error.clone(), None);
+    if diagnostic.storage_error().is_some() {
+        return crate::py_store::presentation::native_error(py, &diagnostic);
+    }
+    crate::py_store::presentation::with_native_cause(py, raised, &diagnostic)
 }
 
 /// Register the `purrdf-shapes` surface on a Python module.

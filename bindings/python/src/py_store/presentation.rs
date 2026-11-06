@@ -102,6 +102,15 @@ pub(crate) fn native_error_with_message(
     diagnostic: &RdfDiagnostic,
 ) -> PyErr {
     let refused = value_error(message, diagnostic);
+    with_native_cause(py, refused, diagnostic)
+}
+
+/// Attach the shared native fields to an existing specialized exception.
+pub(crate) fn with_native_cause(
+    py: Python<'_>,
+    refused: PyErr,
+    diagnostic: &RdfDiagnostic,
+) -> PyErr {
     let attach = || -> PyResult<()> {
         if let Some(cause) = diagnostic.native_cause() {
             let fields = crate::py_native_fields::inspect(py, cause)?;

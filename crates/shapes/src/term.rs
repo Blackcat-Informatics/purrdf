@@ -246,6 +246,37 @@ pub enum Term {
     Triple(Box<Triple>),
 }
 
+impl purrdf_hash::error::StructuredError for Term {
+    purrdf_hash::error_visit! {
+        NamedNode(value) => "shacl-term-iri" { "iri" => Iri(value.as_str()) },
+        BlankNode(label) => "shacl-term-blank" { "label" => Text(label) },
+        Literal(value) => "shacl-term-literal" { "value" => Record(value) },
+        Triple(value) => "shacl-term-triple" { "value" => Record(value.as_ref()) },
+    }
+}
+
+impl purrdf_hash::error::StructuredError for Literal {
+    purrdf_hash::error_visit! {
+        @record self { lexical, datatype, language, direction } => "shacl-literal" {
+            "lexical_form" => Text(&self.lexical), "datatype" => Iri(&self.datatype),
+            "language" => Value(self.language.as_deref().map_or(
+                purrdf_hash::error::ErrorValue::Absent, purrdf_hash::error::ErrorValue::Text)),
+            "direction" => Value(self.direction.map_or(
+                purrdf_hash::error::ErrorValue::Absent,
+                |value| purrdf_hash::error::ErrorValue::Code(value.as_str()))),
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for Triple {
+    purrdf_hash::error_visit! {
+        @record self { subject, predicate, object } => "shacl-triple" {
+            "subject" => Term(&self.subject), "predicate" => Iri(self.predicate.as_str()),
+            "object" => Term(&self.object),
+        }
+    }
+}
+
 /// Resolve an interned id to its borrowed IR payload.
 ///
 /// Object-safe on purpose. [`CanonicalBytes`] has to stream a dataset term

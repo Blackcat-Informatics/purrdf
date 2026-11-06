@@ -46,7 +46,18 @@ use crate::imports::ShapesImportError;
 
 /// Why a shapes-graph entry point refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ShapesError {
+    /// Original SPARQL namespace lowering, arity or rendered-query refusal.
+    SparqlCall(Box<crate::expression::SparqlCallError>),
+    /// Original prepared binding or changed-row refusal.
+    Binding(crate::engine::BindingRefusal),
+    /// Original expression selector refusal, retaining role and native operands.
+    Selector(Box<crate::free_expression::ExprSelectorError>),
+    /// Original ordered RDF text-ingress diagnostics and recovery coordinates.
+    Text(crate::text_ingest::TextErrors),
+    /// Original invalid conformance-disallow configuration.
+    Conformance(crate::report::ConformanceError),
     /// Original shared import-array boundary failure.
     ImportArrays(purrdf_core::imports::ImportArrayError),
     /// Original explicit scope binding without its required equals sign.
@@ -89,6 +100,31 @@ pub enum ShapesError {
     Invalid(String),
 }
 
+impl purrdf_hash::error::StructuredError for ShapesError {
+    purrdf_hash::error_visit! {
+        SparqlCall(cause) => "shapes-sparql-call" { "cause" => Cause(cause.as_ref()) },
+        Binding(cause) => "shapes-binding" { "cause" => Cause(cause) },
+        Selector(cause) => "shapes-selector" { "cause" => Cause(cause.as_ref()) },
+        Text(cause) => "shapes-text" { "cause" => Cause(cause) },
+        Conformance(cause) => "shapes-conformance" { "cause" => Cause(cause) },
+        ImportArrays(cause) => "shapes-import-arrays" { "cause" => Cause(cause) },
+        ScopeBinding(cause) => "shapes-scope-binding" { "cause" => Cause(cause) },
+        Canonical(cause) => "shapes-canonical" { "cause" => Cause(cause) },
+        RuleExecution(cause) => "shapes-rule-execution" { "cause" => Cause(cause.as_ref()) },
+        Recursion(cause) => "shapes-recursion" { "cause" => Cause(cause) },
+        Preparation(cause) => "shapes-preparation" { "cause" => Cause(cause) },
+        Storage(cause) => "shapes-storage" { "cause" => Cause(cause) },
+        Imports(cause) => "shapes-imports" { "cause" => Cause(cause) },
+        ShaclJs(cause) => "shapes-shacl-js" { "cause" => Cause(cause) },
+        IllFormed(cause) => "shapes-ill-formed" { "cause" => Cause(cause) },
+        Prebinding(cause) => "shapes-prebinding" { "cause" => Cause(cause) },
+        UnsupportedTarget(cause) => "shapes-unsupported-target" { "cause" => Cause(cause) },
+        SparqlTargetDisagreement(cause) => "shapes-sparql-target-disagreement" { "cause" => Cause(cause) },
+        Processor(cause) => "shapes-processor" { "cause" => Cause(cause) },
+        Invalid(message) => "shapes-invalid" { "message" => Text(message) },
+    }
+}
+
 impl ShapesError {
     /// Actual contexts retained by a failed rule execution.
     #[must_use]
@@ -127,6 +163,11 @@ impl ShapesError {
             | Self::Processor(_)
             | Self::ScopeBinding(_)
             | Self::ImportArrays(_)
+            | Self::Conformance(_)
+            | Self::Text(_)
+            | Self::Selector(_)
+            | Self::Binding(_)
+            | Self::SparqlCall(_)
             | Self::Invalid(_) => None,
         }
     }
@@ -152,6 +193,11 @@ impl ShapesError {
             | Self::Processor(_)
             | Self::ScopeBinding(_)
             | Self::ImportArrays(_)
+            | Self::Conformance(_)
+            | Self::Text(_)
+            | Self::Selector(_)
+            | Self::Binding(_)
+            | Self::SparqlCall(_)
             | Self::Invalid(_) => None,
         }
     }
@@ -177,6 +223,11 @@ impl ShapesError {
             | Self::Processor(_)
             | Self::ScopeBinding(_)
             | Self::ImportArrays(_)
+            | Self::Conformance(_)
+            | Self::Text(_)
+            | Self::Selector(_)
+            | Self::Binding(_)
+            | Self::SparqlCall(_)
             | Self::Invalid(_) => None,
         }
     }
@@ -202,6 +253,11 @@ impl ShapesError {
             | Self::Processor(_)
             | Self::ScopeBinding(_)
             | Self::ImportArrays(_)
+            | Self::Conformance(_)
+            | Self::Text(_)
+            | Self::Selector(_)
+            | Self::Binding(_)
+            | Self::SparqlCall(_)
             | Self::Invalid(_) => None,
         }
     }
@@ -227,6 +283,11 @@ impl ShapesError {
             | Self::Processor(_)
             | Self::ScopeBinding(_)
             | Self::ImportArrays(_)
+            | Self::Conformance(_)
+            | Self::Text(_)
+            | Self::Selector(_)
+            | Self::Binding(_)
+            | Self::SparqlCall(_)
             | Self::Invalid(_) => None,
         }
     }
@@ -252,6 +313,11 @@ impl ShapesError {
             | Self::Processor(_)
             | Self::ScopeBinding(_)
             | Self::ImportArrays(_)
+            | Self::Conformance(_)
+            | Self::Text(_)
+            | Self::Selector(_)
+            | Self::Binding(_)
+            | Self::SparqlCall(_)
             | Self::Invalid(_) => None,
         }
     }
@@ -291,7 +357,13 @@ impl ShapesError {
     #[must_use]
     pub const fn failure_class(&self) -> FailureClass {
         match self {
-            Self::Invalid(_) | Self::ScopeBinding(_) => FailureClass::Evaluation,
+            Self::Invalid(_)
+            | Self::ScopeBinding(_)
+            | Self::Conformance(_)
+            | Self::Text(_)
+            | Self::Selector(_)
+            | Self::Binding(_)
+            | Self::SparqlCall(_) => FailureClass::Evaluation,
             Self::ImportArrays(error) => {
                 if error.storage_error().is_some() {
                     FailureClass::Processor
@@ -341,6 +413,11 @@ impl ShapesError {
             | Self::Canonical(_)
             | Self::ScopeBinding(_)
             | Self::ImportArrays(_)
+            | Self::Conformance(_)
+            | Self::Text(_)
+            | Self::Selector(_)
+            | Self::Binding(_)
+            | Self::SparqlCall(_)
             | Self::Invalid(_) => None,
         }
     }
@@ -352,6 +429,7 @@ impl ShapesError {
 /// evaluation means, so none of them may be folded into a SPARQL error value or an
 /// unbound variable.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ProcessorFailure {
     /// Evaluating a node expression would enter the physical stack margin.
     ExpressionStackMargin,
@@ -362,8 +440,8 @@ pub enum ProcessorFailure {
     },
     /// A shape re-entry would enter the physical stack margin.
     ReentryStackMargin {
-        /// Original shape identity in RDF term spelling.
-        shape: String,
+        /// Original native shape identity.
+        shape: Box<crate::term::Term>,
     },
     /// Validating an original shape would enter the physical stack margin.
     ValidationStackMargin {
@@ -378,7 +456,7 @@ pub enum ProcessorFailure {
     /// A relation the query invoked declared its index was not whole.
     IncompleteRelation {
         /// Each relation IRI with the reason it gave.
-        relations: Vec<String>,
+        relations: Vec<IncompleteRelation>,
     },
     /// A custom function's re-entry depth bound was reached.
     CallDepth {
@@ -396,8 +474,8 @@ pub enum ProcessorFailure {
     },
     /// Nested filter/exists validation crossed the processor's recursion bound.
     ValidationDepth {
-        /// The shape at the refused re-entry.
-        shape: String,
+        /// The original shape at the refused re-entry.
+        shape: crate::term::Term,
         /// The depth that was refused.
         depth: u32,
         /// The bound.
@@ -405,10 +483,10 @@ pub enum ProcessorFailure {
     },
     /// A `(shape, focus)` pair re-entered itself.
     ReentryCycle {
-        /// The shape, as the engine renders its id.
-        shape: String,
-        /// The focus node, as the engine renders a term.
-        focus: String,
+        /// The original shape identity.
+        shape: crate::term::Term,
+        /// The original focus node.
+        focus: Box<crate::term::Term>,
     },
     /// An invariant of the processor itself was violated: a validation-plan lowering that
     /// does not describe the expression beside it, or a custom function whose body was never
@@ -422,18 +500,63 @@ pub enum ProcessorFailure {
     /// law runtime, which the dated entry re-reports as the typed cause; the call that met it
     /// has no SPARQL-error reading, because the query was never admitted to run.
     Admission {
-        /// The rendered refusal.
-        message: String,
+        /// The original dated-law refusal, shared by retained failures.
+        cause: std::sync::Arc<crate::profile::AdmissionRefusal>,
     },
     /// The query engine failed with a diagnostic whose stable code requires
     /// propagation (execution, storage, resource and invariant failures; see
     /// `EvalError::diagnostic_requires_propagation`).
     Query {
-        /// The diagnostic's stable code.
-        code: String,
-        /// The rendered diagnostic.
-        message: String,
+        /// The original diagnostic, including native cause and source location.
+        cause: std::sync::Arc<purrdf_core::RdfDiagnostic>,
     },
+}
+
+/// A relation's original incompleteness declaration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IncompleteRelation {
+    /// The registered relation IRI.
+    pub iri: String,
+    /// The verbatim reason declared by the relation cursor.
+    pub reason: purrdf_lex::allocation::SharedText,
+}
+
+impl purrdf_hash::error::StructuredError for IncompleteRelation {
+    purrdf_hash::error_visit! {
+        @record self { iri, reason } => "shapes-incomplete-relation" {
+            "iri" => Iri(&self.iri), "reason" => Message(&self.reason),
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for ProcessorFailure {
+    purrdf_hash::error_visit! {
+        ExpressionStackMargin => "shapes-processor-expression-stack" {},
+        CallStackMargin { iri } => "shapes-processor-call-stack" { "iri" => Iri(iri) },
+        ReentryStackMargin { shape } => "shapes-processor-reentry-stack" { "shape" => Term(shape.as_ref()) },
+        ValidationStackMargin { shape } => "shapes-processor-validation-stack" { "shape" => Term(shape.as_ref()) },
+        Governor(cause) => "shapes-processor-governor" { "cause" => Cause(cause) },
+        Stopped(cause) => "shapes-processor-stopped" { "cause" => Cause(cause) },
+        IncompleteRelation { relations } => "shapes-processor-incomplete-relation" {
+            "relations" => List(relations.iter().map(|value| purrdf_hash::error::ErrorValue::Record(value))),
+        },
+        CallDepth { iri, limit } => "shapes-processor-call-depth" {
+            "iri" => Iri(iri), "limit" => Unsigned(u128::from(*limit)),
+        },
+        ExpressionDepth { depth, limit } => "shapes-processor-expression-depth" {
+            "depth" => Unsigned(u128::from(*depth)), "limit" => Unsigned(u128::from(*limit)),
+        },
+        ValidationDepth { shape, depth, limit } => "shapes-processor-validation-depth" {
+            "shape" => Term(shape), "depth" => Unsigned(u128::from(*depth)),
+            "limit" => Unsigned(u128::from(*limit)),
+        },
+        ReentryCycle { shape, focus } => "shapes-processor-reentry-cycle" {
+            "shape" => Term(shape), "focus" => Term(focus.as_ref()),
+        },
+        Internal { what } => "shapes-processor-internal" { "what" => Text(what) },
+        Admission { cause } => "shapes-processor-admission" { "cause" => Cause(cause.as_ref()) },
+        Query { cause } => "shapes-processor-query" { "cause" => Cause(cause.as_ref()) },
+    }
 }
 
 impl fmt::Display for ProcessorFailure {
@@ -464,12 +587,18 @@ impl fmt::Display for ProcessorFailure {
                 "validation stopped between evaluations ({cause:?}); a conformance verdict \
                  cannot be computed from a validation that did not finish"
             ),
-            Self::IncompleteRelation { relations } => write!(
-                f,
-                "a relation this query invoked declares its index was not whole ({}); a \
-                 conformance verdict cannot be computed over an index that was not whole",
-                relations.join("; ")
-            ),
+            Self::IncompleteRelation { relations } => {
+                f.write_str("a relation this query invoked declares its index was not whole (")?;
+                for (index, relation) in relations.iter().enumerate() {
+                    if index != 0 {
+                        f.write_str("; ")?;
+                    }
+                    write!(f, "<{}>: {}", relation.iri, relation.reason)?;
+                }
+                f.write_str(
+                    "); a conformance verdict cannot be computed over an index that was not whole",
+                )
+            }
             Self::CallDepth { iri, limit } => write!(
                 f,
                 "custom node-expression function <{iri}> re-entry depth exceeded ({limit}): \
@@ -495,13 +624,21 @@ impl fmt::Display for ProcessorFailure {
                 "recursive node expression detected: shape {shape} re-entered for focus {focus}"
             ),
             Self::Internal { what } => f.write_str(what),
-            Self::Admission { message } => f.write_str(message),
-            Self::Query { message, .. } => f.write_str(message),
+            Self::Admission { cause } => cause.fmt(f),
+            Self::Query { cause } => write!(f, "query evaluation error: {cause}"),
         }
     }
 }
 
-impl std::error::Error for ProcessorFailure {}
+impl std::error::Error for ProcessorFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Admission { cause } => Some(cause.as_ref()),
+            Self::Query { cause } => Some(cause.as_ref()),
+            _ => None,
+        }
+    }
+}
 
 impl fmt::Display for ShapesError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -521,6 +658,11 @@ impl fmt::Display for ShapesError {
             Self::SparqlTargetDisagreement(refusal) => refusal.fmt(f),
             Self::Processor(failure) => failure.fmt(f),
             Self::Invalid(message) => f.write_str(message),
+            Self::Conformance(error) => error.fmt(f),
+            Self::Text(error) => error.fmt(f),
+            Self::Binding(error) => error.fmt(f),
+            Self::SparqlCall(error) => error.fmt(f),
+            Self::Selector(error) => error.fmt(f),
         }
     }
 }
@@ -543,12 +685,18 @@ impl std::error::Error for ShapesError {
             Self::SparqlTargetDisagreement(refusal) => Some(refusal),
             Self::Processor(failure) => Some(failure),
             Self::Invalid(_) => None,
+            Self::Conformance(error) => Some(error),
+            Self::Text(error) => Some(error),
+            Self::Binding(error) => Some(error),
+            Self::SparqlCall(error) => Some(error.as_ref()),
+            Self::Selector(error) => Some(error.as_ref()),
         }
     }
 }
 
 /// A preparation refusal, distinct from malformed shapes and nonconformance.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PreparationRefusal {
     /// A selected recursive execution lacks a proved original dependency scope.
     UnqualifiedRecursion(crate::recursion::ClosedRecursionRefusal),
@@ -567,7 +715,10 @@ pub enum PreparationRefusal {
     /// A computed shape reference names another model's definition table.
     ForeignIndex,
     /// A recursive lowering or model-codec frame would enter the stack margin.
-    StackMargin,
+    StackMargin {
+        /// Original construct the walk refused to enter.
+        construct: &'static str,
+    },
     /// Two catalog definitions declare the same identity.
     DuplicateDefinition(std::sync::Arc<crate::term::Term>),
     /// A definition owns a catalog instead of being a bare catalog member.
@@ -589,7 +740,9 @@ impl PreparationRefusal {
             return false;
         }
         if purrdf_stack::is_low() {
-            *refusal = Some(Self::StackMargin);
+            *refusal = Some(Self::StackMargin {
+                construct: "SHACL model inspection",
+            });
             return false;
         }
         true
@@ -607,7 +760,7 @@ impl fmt::Display for PreparationRefusal {
             Self::UnboundModel => out.write_str("computed shape reference has no retained model; keep its exported owning root"),
             Self::ExpiredIndex => out.write_str("computed shape reference outlived its definition table; keep its exported owning root"),
             Self::ForeignIndex => out.write_str("computed shape reference names a different model's definition table"),
-            Self::StackMargin => out.write_str("SHACL preparation exhausted its stack margin; flatten the model or prepare it on a larger stack"),
+            Self::StackMargin { .. } => out.write_str("SHACL preparation exhausted its stack margin; flatten the model or prepare it on a larger stack"),
             Self::DuplicateDefinition(id) => write!(out, "duplicate shape definition {id}; provide one definition per RDF identity"),
             Self::OwningDefinition(id) => write!(out, "catalog definition {id} already owns a catalog; provide bare definitions"),
             Self::UnboundReference => out.write_str("a shape identity reference has no catalog; obtain an owning root through ModelOwner::root"),
@@ -615,6 +768,26 @@ impl fmt::Display for PreparationRefusal {
             Self::ExpectedProperty(id) => write!(out, "property reference {id} does not name a property-shape definition; provide a shape with its own sh:path"),
             Self::InitializedIndex => out.write_str("model definitions were already installed; link the original model exactly once"),
         }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for PreparationRefusal {
+    purrdf_hash::error_visit! {
+        UnqualifiedRecursion(cause) => "shapes-preparation-unqualified-recursion" { "cause" => Cause(cause) },
+        Storage(cause) => "shapes-preparation-storage" { "cause" => Cause(cause) },
+        UnknownFunction(iri) => "shapes-preparation-unknown-function" { "iri" => Iri(iri.as_str()) },
+        DuplicateFunction(iri) => "shapes-preparation-duplicate-function" { "iri" => Iri(iri.as_str()) },
+        MissingFunctionBody(iri) => "shapes-preparation-missing-function-body" { "iri" => Iri(iri.as_str()) },
+        UnboundModel => "shapes-preparation-unbound-model" {},
+        ExpiredIndex => "shapes-preparation-expired-index" {},
+        ForeignIndex => "shapes-preparation-foreign-index" {},
+        StackMargin { construct } => "shapes-preparation-stack-margin" { "construct" => Text(construct) },
+        DuplicateDefinition(term) => "shapes-preparation-duplicate-definition" { "term" => Term(term.as_ref()) },
+        OwningDefinition(term) => "shapes-preparation-owning-definition" { "term" => Term(term.as_ref()) },
+        UnboundReference => "shapes-preparation-unbound-reference" {},
+        UnknownReference(term) => "shapes-preparation-unknown-reference" { "term" => Term(term.as_ref()) },
+        ExpectedProperty(term) => "shapes-preparation-expected-property" { "term" => Term(term.as_ref()) },
+        InitializedIndex => "shapes-preparation-initialized-index" {},
     }
 }
 
@@ -660,6 +833,7 @@ pub struct RecursionDependency {
 
 /// Why an original recursive component cannot use the requested semantics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum RecursionRefusalReason {
     /// The request supplied no fixed-point selection.
     MissingSelection,
@@ -824,6 +998,58 @@ impl fmt::Display for RecursionRefusal {
 }
 
 impl std::error::Error for RecursionRefusal {}
+
+impl purrdf_hash::error::StructuredError for RecursionPolarity {
+    purrdf_hash::error_visit! {
+        Positive => "shacl-recursion-positive" {},
+        Negative => "shacl-recursion-negative" {},
+        Both => "shacl-recursion-both" {},
+        Target => "shacl-recursion-target" {},
+    }
+}
+
+impl purrdf_hash::error::StructuredError for RecursionDependency {
+    purrdf_hash::error_visit! {
+        @record self { source, target, parameter, polarity } => "shacl-recursion-dependency" {
+            "source" => Text(&self.source), "target" => Text(&self.target),
+            "parameter" => Text(&self.parameter), "polarity" => Record(&self.polarity),
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for ScopedRecursionDependency {
+    purrdf_hash::error_visit! {
+        @record self { source, target, parameter, polarity } => "shacl-scoped-recursion-dependency" {
+            "source" => Unsigned(self.source as u128), "target" => Unsigned(self.target as u128),
+            "parameter" => Text(self.parameter), "polarity" => Record(&self.polarity),
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for RecursionRefusalReason {
+    purrdf_hash::error_visit! {
+        MissingSelection => "shacl-recursion-missing-selection" {},
+        NonStratified { semantics } => "shacl-recursion-non-stratified" { "semantics" => Record(semantics) },
+        PairLimit { limit, consumed } => "shacl-recursion-pair-limit" {
+            "limit" => Unsigned(u128::from(*limit)), "consumed" => Unsigned(u128::from(*consumed)),
+        },
+        IterationLimit { limit, consumed } => "shacl-recursion-iteration-limit" {
+            "limit" => Unsigned(u128::from(*limit)), "consumed" => Unsigned(u128::from(*consumed)),
+        },
+    }
+}
+
+impl purrdf_hash::error::StructuredError for RecursionRefusal {
+    purrdf_hash::error_visit! {
+        @record self { reason, component } => "shacl-recursion-refused" {
+            "reason" => Record(&self.reason), "has_component" => Boolean(self.component.is_some()),
+            "members" => List(self.members().iter().map(|value| purrdf_hash::error::ErrorValue::Text(value))),
+            "definitions" => List(self.definitions().iter().map(|value| purrdf_hash::error::ErrorValue::Record(value))),
+            "edges" => List(self.edges().iter().map(|value| purrdf_hash::error::ErrorValue::Record(value))),
+            "scoped_edges" => List(self.scoped_edges().iter().map(|value| purrdf_hash::error::ErrorValue::Record(value))),
+        }
+    }
+}
 
 purrdf_lex::variant_from!(ShapesError {
     ImportArrays(purrdf_core::imports::ImportArrayError),
@@ -1250,5 +1476,77 @@ impl From<String> for ShapesError {
 impl From<&str> for ShapesError {
     fn from(message: &str) -> Self {
         Self::Invalid(message.to_owned())
+    }
+}
+
+purrdf_lex::variant_from!(ShapesError { Conformance(crate::report::ConformanceError) });
+
+purrdf_lex::variant_from!(ShapesError { Text(crate::text_ingest::TextErrors) });
+
+impl From<crate::free_expression::ExprSelectorError> for ShapesError {
+    fn from(error: crate::free_expression::ExprSelectorError) -> Self {
+        match error {
+            crate::free_expression::ExprSelectorError::Storage(cause) => Self::Storage(cause),
+            error => Self::Selector(Box::new(error)),
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for ShaclJsRefusal {
+    purrdf_hash::error_visit! {
+        @record self { node, term, message } => "shacl-js-refusal" {
+            "node" => Text(&self.node), "term" => Text(&self.term), "message" => Text(&self.message),
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for UnsupportedTargetRefusal {
+    purrdf_hash::error_visit! {
+        @record self { shape, target, message } => "shacl-unsupported-target" {
+            "shape" => Text(&self.shape), "target" => Text(&self.target), "message" => Text(&self.message),
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for SparqlTargetDisagreement {
+    purrdf_hash::error_visit! {
+        @record self { shape, ask, select, node, asked } => "shacl-sparql-target-disagreement" {
+            "shape" => Text(&self.shape), "ask" => Text(&self.ask), "select" => Text(&self.select),
+            "node" => Text(&self.node), "asked" => Boolean(self.asked),
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for IllFormedDeclaration {
+    purrdf_hash::error_visit! {
+        @record self { declaration, rule, message } => "shacl-ill-formed-declaration" {
+            "declaration" => Text(&self.declaration),
+            "rule" => Value(self.rule.map_or(purrdf_hash::error::ErrorValue::Absent, purrdf_hash::error::ErrorValue::Code)),
+            "message" => Text(&self.message),
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for IllFormedShapesGraph {
+    purrdf_hash::error_visit! {
+        @record self { violations } => "shacl-ill-formed-shapes-graph" {
+            "violations" => List(self.violations.iter().map(|value| purrdf_hash::error::ErrorValue::Record(value))),
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for PrebindingViolation {
+    purrdf_hash::error_visit! {
+        @record self { declaration, message } => "shacl-prebinding-violation" {
+            "declaration" => Text(&self.declaration), "message" => Text(&self.message),
+        }
+    }
+}
+
+purrdf_lex::variant_from!(ShapesError { Binding(crate::engine::BindingRefusal) });
+
+impl From<crate::expression::SparqlCallError> for ShapesError {
+    fn from(error: crate::expression::SparqlCallError) -> Self {
+        Self::SparqlCall(Box::new(error))
     }
 }

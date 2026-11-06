@@ -225,6 +225,18 @@ impl std::fmt::Display for ResourceDimension {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResourceVector([u64; ResourceDimension::COUNT]);
 
+impl purrdf_hash::error::StructuredError for ResourceVector {
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        visitor.variant("governor-resource-vector");
+        for &dimension in ResourceDimension::ALL {
+            visitor.value(
+                Some(dimension.label()),
+                purrdf_hash::error::ErrorValue::Unsigned(u128::from(self.get(dimension))),
+            );
+        }
+    }
+}
+
 impl ResourceVector {
     /// Zero on every dimension. As a consumption vector this is "nothing spent yet"; as
     /// a ceiling vector it is a valid hard limit that admits no charged work at all.
@@ -599,6 +611,22 @@ pub struct SilencedInvocation {
     pub message: String,
 }
 
+impl purrdf_hash::error::StructuredError for SilencedInvocation {
+    purrdf_hash::error_visit! {
+        @record self { target, kind, message } => "governor-silenced-invocation" {
+            "target" => Record(&self.target), "kind" => Code(self.kind.label()),
+            "message" => Message(&self.message),
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for SilencedTarget {
+    purrdf_hash::error_visit! {
+        Service { endpoint } => "silenced-service" { "endpoint" => Text(endpoint) },
+        Load { iri } => "silenced-load" { "iri" => Iri(iri) },
+    }
+}
+
 impl SilencedInvocation {
     /// A record of `target` failing with `kind`, described by `message`.
     #[must_use]
@@ -627,6 +655,14 @@ struct SilencedPayload {
 #[derive(Debug, Clone, Default)]
 pub struct SilencedEvidence {
     payload: Option<crate::small::Shared<SilencedPayload>>,
+}
+
+impl purrdf_hash::error::StructuredError for SilencedEvidence {
+    purrdf_hash::error_visit! {
+        @record self { payload } => "governor-silenced-evidence" {
+            "invocations" => List(self.iter().map(|value| purrdf_hash::error::ErrorValue::Record(value))),
+        }
+    }
 }
 
 /// Actual allocation failure while freezing immutable invocation evidence.
@@ -900,6 +936,37 @@ pub struct GovernorEvidence {
     /// cast of `NaN` to a decimal `err:FOCA0002`. A code that never occurred is
     /// absent, so the complete path of an error-free query reports an empty list.
     pub expression_errors: ExpressionErrorEvidence,
+}
+
+impl purrdf_hash::error::StructuredError for GovernorEvidence {
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        use purrdf_hash::error::ErrorValue;
+        let Self {
+            consumed,
+            limits,
+            tripped,
+            silenced,
+            expression_errors,
+        } = self;
+        visitor.variant("governor-evidence");
+        visitor.value(Some("consumed"), ErrorValue::Record(consumed));
+        visitor.value(Some("limits"), ErrorValue::Record(limits));
+        visitor.value(
+            Some("tripped"),
+            tripped
+                .as_ref()
+                .map_or(ErrorValue::Absent, |value| ErrorValue::Record(value)),
+        );
+        visitor.value(Some("silenced"), ErrorValue::Record(silenced));
+        visitor.begin_list(Some("expression_errors"), expression_errors.len());
+        for (code, count) in expression_errors {
+            visitor.begin_record(None, "governor-expression-error");
+            visitor.value(Some("code"), ErrorValue::Code(code.qname()));
+            visitor.value(Some("count"), ErrorValue::Unsigned(u128::from(*count)));
+            visitor.end_record();
+        }
+        visitor.end_list();
+    }
 }
 
 impl GovernorEvidence {

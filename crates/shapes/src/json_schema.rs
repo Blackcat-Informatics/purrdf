@@ -168,6 +168,8 @@ use crate::shapes::{
 };
 use crate::term::{NamedNode, Term};
 
+mod namespace_error;
+pub use namespace_error::{NamespaceContext, NamespaceError};
 mod numeric_order;
 mod temporal_order;
 
@@ -285,7 +287,10 @@ impl Namespaces {
     ///
     /// Returns `Err` when `primary_prefix` resolves in neither `doc_prefixes`
     /// nor the builtins.
-    pub fn new(primary_prefix: &str, doc_prefixes: &[(String, String)]) -> Result<Self, String> {
+    pub fn new(
+        primary_prefix: &str,
+        doc_prefixes: &[(String, String)],
+    ) -> Result<Self, NamespaceError> {
         let declared: BTreeMap<String, String> = doc_prefixes.iter().cloned().collect();
         let mut merged: BTreeMap<String, String> = BUILTIN_PREFIXES
             .iter()
@@ -295,10 +300,9 @@ impl Namespaces {
             merged.insert(prefix.clone(), ns.clone());
         }
         let Some(primary_ns) = merged.get(primary_prefix).cloned() else {
-            return Err(format!(
-                "Namespaces: primary prefix {primary_prefix:?} is not declared — pass it in \
-                 doc_prefixes (the shapes document's @prefix declarations) or use a W3C builtin"
-            ));
+            return Err(NamespaceError::UndeclaredPrimary {
+                prefix: primary_prefix.to_owned(),
+            });
         };
         let curies = merged.iter().collect();
         Ok(Self {
@@ -386,7 +390,7 @@ impl Namespaces {
     ///
     /// Returns an error when the value is neither an absolute IRI nor a valid
     /// CURIE using the caller's prefix table.
-    pub fn expand_iri(&self, value: &str) -> Result<String, String> {
+    pub fn expand_iri(&self, value: &str) -> Result<String, NamespaceError> {
         if let Some((prefix, local)) = value.split_once(':')
             && let Some(namespace) = self
                 .prefixes
@@ -394,26 +398,17 @@ impl Namespaces {
                 .find_map(|(candidate, namespace)| (candidate == prefix).then_some(namespace))
         {
             if local.is_empty() {
-                return Err(format!("CURIE {value:?} must have a non-empty local part"));
+                return Err(NamespaceError::EmptyLocal {
+                    input: value.to_owned(),
+                });
             }
-            let expanded = format!("{namespace}{local}");
-            let parsed = purrdf_iri::parse(&expanded).map_err(|error| {
-                format!("expanded CURIE {value:?} is not an absolute IRI: {error}")
-            })?;
-            if !parsed.has_scheme() {
-                return Err(format!("expanded CURIE {value:?} is not an absolute IRI"));
-            }
-            return Ok(expanded);
+            return namespace_error::absolute(
+                value,
+                format!("{namespace}{local}"),
+                NamespaceContext::Curie,
+            );
         }
-        let parsed = purrdf_iri::parse(value).map_err(|error| {
-            format!("IRI value {value:?} is neither absolute nor a caller-declared CURIE: {error}")
-        })?;
-        if !parsed.has_scheme() {
-            return Err(format!(
-                "IRI value {value:?} is neither absolute nor a caller-declared CURIE"
-            ));
-        }
-        Ok(value.to_owned())
+        namespace_error::absolute(value, value.to_owned(), NamespaceContext::IriValue)
     }
 
     /// Recover the caller-owned class IRI represented by one compiled `$defs`
@@ -423,20 +418,18 @@ impl Namespaces {
     /// # Errors
     ///
     /// Returns an error for an empty key or an invalid/unknown qualified key.
-    pub fn class_iri_for_def_key(&self, key: &str) -> Result<String, String> {
+    pub fn class_iri_for_def_key(&self, key: &str) -> Result<String, NamespaceError> {
         if key.is_empty() {
-            return Err("JSON Schema $defs key cannot be empty when used as a class".to_owned());
+            return Err(NamespaceError::EmptyClassKey);
         }
         if key.contains(':') {
             self.expand_iri(key)
         } else {
-            let iri = format!("{}{key}", self.primary_ns);
-            let parsed = purrdf_iri::parse(&iri)
-                .map_err(|error| format!("class key {key:?} does not form a valid IRI: {error}"))?;
-            if !parsed.has_scheme() {
-                return Err(format!("class key {key:?} does not form an absolute IRI"));
-            }
-            Ok(iri)
+            namespace_error::absolute(
+                key,
+                format!("{}{key}", self.primary_ns),
+                NamespaceContext::ClassKey,
+            )
         }
     }
 
@@ -4745,7 +4738,12 @@ fn compile_negand_guarded(
 ) -> Option<Vec<Value>> {
     if purrdf_stack::is_low() {
         ctx.pattern_error.get_or_insert_with(|| {
-            SchemaCompileError::Materialization(crate::PreparationRefusal::StackMargin.into())
+            SchemaCompileError::Materialization(
+                crate::PreparationRefusal::StackMargin {
+                    construct: "JSON Schema negated shape compilation",
+                }
+                .into(),
+            )
         });
         return None;
     }
@@ -5133,7 +5131,9 @@ fn member_excludes_xml(
     active: &mut ShapeProofStack,
 ) -> Result<bool, crate::PreparationRefusal> {
     if purrdf_stack::is_low() {
-        return Err(crate::PreparationRefusal::StackMargin);
+        return Err(crate::PreparationRefusal::StackMargin {
+            construct: "JSON Schema XML exclusion proof",
+        });
     }
     if shape.deactivated || !shape.deactivated_when.is_empty() {
         return Ok(false);
@@ -7828,7 +7828,9 @@ fn value_shape_exact(
         return Ok(false);
     }
     if purrdf_stack::is_low() {
-        return Err(crate::PreparationRefusal::StackMargin);
+        return Err(crate::PreparationRefusal::StackMargin {
+            construct: "JSON Schema exact value-shape proof",
+        });
     }
     if shape.deactivated {
         // Every node conforms, and the value schema is `{}`.
@@ -8836,9 +8838,43 @@ mod tests {
     #[test]
     fn test_namespaces_unresolved_primary_prefix_is_err() {
         let err = Namespaces::new("gmeow", &[]).expect_err("undeclared primary must fail");
+        assert!(matches!(
+            &err,
+            NamespaceError::UndeclaredPrimary { prefix } if prefix == "gmeow"
+        ));
         assert!(
-            err.contains("gmeow") && err.contains("doc_prefixes"),
+            err.to_string().contains("gmeow") && err.to_string().contains("doc_prefixes"),
             "error must name the prefix and the fix, got {err:?}"
+        );
+        let namespaces = Namespaces::new(
+            "ex",
+            &[("ex".to_owned(), "https://example.org/".to_owned())],
+        )
+        .unwrap();
+        let invalid = namespaces.expand_iri("ex:bad value").unwrap_err();
+        drop(namespaces);
+        let captured = purrdf_testkit::error_capture::Capture::read(&invalid);
+        assert_eq!(captured.code, "namespace-invalid-iri");
+        assert!(matches!(
+            captured.field("input"),
+            purrdf_hash::error::ErrorValue::Text("ex:bad value")
+        ));
+        assert!(matches!(
+            captured.field("expanded"),
+            purrdf_hash::error::ErrorValue::Text("https://example.org/bad value")
+        ));
+        assert!(
+            std::error::Error::source(&invalid)
+                .unwrap()
+                .downcast_ref::<purrdf_iri::IriError>()
+                .is_some()
+        );
+        assert_eq!(
+            Namespaces::new("xsd", &[])
+                .unwrap()
+                .expand_iri("xsd:string")
+                .unwrap(),
+            XSD_STRING
         );
     }
 

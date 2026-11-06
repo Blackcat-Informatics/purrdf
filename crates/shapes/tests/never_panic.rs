@@ -289,7 +289,7 @@ fn stack_refusal_is_not_a_conformance_or_validation_report() {
         purrdf_shapes::FailureClass::Processor
     );
     assert!(conformance.to_string().contains("stack margin"));
-    assert!(report.unwrap_err().contains("stack margin"));
+    assert!(report.unwrap_err().to_string().contains("stack margin"));
     assert!(
         complete_report
             .unwrap_err()
@@ -334,14 +334,16 @@ fn preparation_refusal_cannot_become_an_empty_path_or_product() {
 
     assert!(matches!(
         bound.unwrap(),
-        purrdf_shapes::ShapesError::Preparation(purrdf_shapes::PreparationRefusal::StackMargin)
+        purrdf_shapes::ShapesError::Preparation(
+            purrdf_shapes::PreparationRefusal::StackMargin { .. }
+        )
     ));
     let product_error = product.unwrap_err();
     assert_eq!(product_error.dimension(), ProductDimension::DepthLimit);
-    assert_eq!(
+    assert!(matches!(
         product_error.preparation_refusal(),
-        Some(&purrdf_shapes::PreparationRefusal::StackMargin)
-    );
+        Some(&purrdf_shapes::PreparationRefusal::StackMargin { .. })
+    ));
     assert!(
         std::error::Error::source(&product_error)
             .unwrap()
@@ -350,11 +352,15 @@ fn preparation_refusal_cannot_become_an_empty_path_or_product() {
     );
     assert!(matches!(
         terms.unwrap_err(),
-        purrdf_shapes::ShapesError::Preparation(purrdf_shapes::PreparationRefusal::StackMargin)
+        purrdf_shapes::ShapesError::Preparation(
+            purrdf_shapes::PreparationRefusal::StackMargin { .. }
+        )
     ));
     assert!(matches!(
         ids.unwrap_err(),
-        purrdf_shapes::ShapesError::Preparation(purrdf_shapes::PreparationRefusal::StackMargin)
+        purrdf_shapes::ShapesError::Preparation(
+            purrdf_shapes::PreparationRefusal::StackMargin { .. }
+        )
     ));
     // A refused preparation cannot later publish a made-up empty class catalog.
     assert!(

@@ -29,6 +29,17 @@ pub struct ClosedRecursionRefusal {
     fields: Shared<Fields>,
 }
 
+impl purrdf_hash::error::StructuredError for ClosedRecursionRefusal {
+    purrdf_hash::error_visit! {
+        @record self { fields } => "shapes-unqualified-recursion" {
+            "definition" => Term(self.definition()),
+            "parameter" => Text(self.parameter()),
+            "model_retained" => Boolean(self.model().is_some()),
+            "index_retained" => Boolean(self.index().is_some()),
+        }
+    }
+}
+
 impl ClosedRecursionRefusal {
     pub(crate) fn new(
         definition: &Term,
@@ -266,10 +277,28 @@ pub enum RecursionDefinitionKind {
     Function,
 }
 
+impl purrdf_hash::error::StructuredError for RecursionDefinitionKind {
+    purrdf_hash::error_visit! {
+        Shape => "shacl-recursion-shape" {},
+        Property => "shacl-recursion-property" {},
+        Function => "shacl-recursion-function" {},
+    }
+}
+
 /// An original definition retained by a published recursive-component refusal.
 #[derive(Clone)]
 pub struct RecursionDefinition {
     fields: Shared<DefinitionFields>,
+}
+
+impl purrdf_hash::error::StructuredError for RecursionDefinition {
+    purrdf_hash::error_visit! {
+        @record self { fields } => "shacl-recursion-definition" {
+            "definition" => Term(self.definition()), "kind" => Record(&self.fields.kind),
+            "occurrence" => Unsigned(self.occurrence() as u128),
+            "model_retained" => Boolean(self.model().is_some()),
+        }
+    }
 }
 struct DefinitionFields {
     definition: Shared<Term>,

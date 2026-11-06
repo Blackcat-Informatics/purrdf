@@ -12,7 +12,7 @@ use purrdf_core::RdfDataset;
 use purrdf_lex::json::{self, Object, Value};
 use purrdf_shapes::engine::{PreparedShapes, ValidationOptions};
 use purrdf_shapes::report::{CompleteValidationError, CompleteValidationReport};
-use purrdf_shapes::{ShaclProfile, ShapesImports, UnsupportedProfile};
+use purrdf_shapes::{ShaclProfile, ShapesError, ShapesImports, UnsupportedProfile};
 
 use crate::{SarifOptions, ShapesImportList};
 
@@ -180,7 +180,7 @@ pub fn validate_complete_documents(
         .resolve_xpath(options.xpath_regex)
         .map_err(CompleteValidationError::XPathProfile)?;
     let data = purrdf_shapes::text_ingest::parse_ntriples_to_dataset(data_nt)
-        .map_err(|errors| CompleteValidationError::Execution(errors.join("\n")))?;
+        .map_err(|errors| CompleteValidationError::Shapes(ShapesError::Text(errors)))?;
     let mut table = ShapesImports::from_turtle(imports)
         .map_err(|error| CompleteValidationError::Shapes(error.into()))?;
     table
@@ -216,7 +216,7 @@ pub fn validate_complete_product(
         rebuild,
     )?;
     let data = purrdf_shapes::text_ingest::parse_ntriples_to_dataset(data_nt)
-        .map_err(|errors| CompleteValidationError::Execution(errors.join("\n")))?;
+        .map_err(|errors| CompleteValidationError::Shapes(ShapesError::Text(errors)))?;
     prepared.bind_complete_shared_dataset(data)?.validate()
 }
 
@@ -229,7 +229,7 @@ pub fn complete_report_payload(
     report: &CompleteValidationReport,
 ) -> Result<Value, purrdf_core::RdfDiagnostic> {
     let graph = report.to_graph().map_err(|error| match error {
-        purrdf_shapes::ShapesError::Storage(error) => purrdf_core::RdfDiagnostic::from(error),
+        ShapesError::Storage(error) => purrdf_core::RdfDiagnostic::from(error),
         error => purrdf_core::RdfDiagnostic::error("shacl-report-emission", error.to_string()),
     })?;
     let context = graph.source_context();

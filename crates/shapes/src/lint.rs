@@ -764,8 +764,17 @@ pub(crate) fn mandatory_diagnostics(dataset: &RdfDataset) -> Vec<MandatoryDiagno
 /// vocabulary into a shapes graph adds no shape and changes no report
 /// (`tests/vocabulary_import_invariance.rs`).
 fn shacl_shacl() -> Result<Shapes, String> {
-    let document = crate::text_ingest::parse_turtle_document(SHACL_SHACL, None)
-        .map_err(|errors| format!("shacl-shacl.ttl does not parse: {}", errors.join("; ")))?;
+    let document =
+        crate::text_ingest::parse_turtle_document(SHACL_SHACL, None).map_err(|errors| {
+            format!(
+                "shacl-shacl.ttl does not parse: {}",
+                errors
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            )
+        })?;
     let mut imports = ShapesImports::new();
     imports
         .insert_turtle(sh::NS, SHACL_VOCABULARY)

@@ -118,6 +118,9 @@
 //! import the author forgot to write — those shapes would be read and silently never
 //! applied, which is the same silent omission from the other side.
 
+mod entry_error;
+pub use entry_error::ImportEntryError;
+
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
@@ -228,7 +231,7 @@ impl ShapesImports {
     ) -> Result<(), ShapesImportError> {
         self.map
             .try_insert(iri, dataset)
-            .map_err(|error| key_refusal(iri, &error))?;
+            .map_err(|error| key_refusal(iri, error))?;
         self.prefixes.insert(iri.to_owned(), prefixes);
         Ok(())
     }
@@ -247,15 +250,12 @@ impl ShapesImports {
     pub fn insert_turtle(&mut self, iri: &str, turtle: &str) -> Result<(), ShapesImportError> {
         self.map
             .check_key(iri)
-            .map_err(|error| key_refusal(iri, &error))?;
+            .map_err(|error| key_refusal(iri, error))?;
         let document =
             crate::text_ingest::parse_turtle_document(turtle, Some(iri)).map_err(|errors| {
                 ShapesImportError::InvalidEntry {
                     iri: iri.to_owned(),
-                    reason: format!(
-                        "the document does not parse as Turtle: {}",
-                        errors.join("; ")
-                    ),
+                    reason: Box::new(ImportEntryError::Turtle(errors)),
                 }
             })?;
         self.insert(iri, document.dataset, document.prefixes)?;
@@ -339,10 +339,10 @@ impl ShapesImports {
 }
 
 /// The core key policy's refusal of `iri` ([`ImportMap::try_insert`]) as this crate's typed error.
-fn key_refusal(iri: &str, error: &ImportKeyError) -> ShapesImportError {
+fn key_refusal(iri: &str, error: ImportKeyError) -> ShapesImportError {
     ShapesImportError::InvalidEntry {
         iri: iri.to_owned(),
-        reason: error.to_string(),
+        reason: Box::new(ImportEntryError::Key(error)),
     }
 }
 
@@ -352,6 +352,7 @@ fn key_refusal(iri: &str, error: &ImportKeyError) -> ShapesImportError {
 /// variant (or on [`kind`](Self::kind), the label that crosses a language boundary), never
 /// on the message.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ShapesImportError {
     /// The closure imports ontologies that nothing in hand resolves — no table entry, no
     /// loaded document, no `owl:Ontology` or `owl:versionIRI` declaration of the IRI in the
@@ -408,8 +409,35 @@ pub enum ShapesImportError {
         /// The entry's key, as the caller wrote it.
         iri: String,
         /// What is wrong with it.
-        reason: String,
+        reason: Box<ImportEntryError>,
     },
+}
+
+impl purrdf_hash::error::StructuredError for ShapesImportError {
+    purrdf_hash::error_visit! {
+        Unresolved { iris } => "unresolved-import" {
+            "iris" => List(iris.iter().map(|value| purrdf_hash::error::ErrorValue::Iri(value))),
+        },
+        Unreached { iris, unanchored } => "unreached-import" {
+            "iris" => List(iris.iter().map(|value| purrdf_hash::error::ErrorValue::Iri(value))),
+            "unanchored" => List(unanchored.iter().map(|value| purrdf_hash::error::ErrorValue::Iri(value))),
+        },
+        UnresolvedLink { iris } => "unresolved-shapes-graph-link" {
+            "iris" => List(iris.iter().map(|value| purrdf_hash::error::ErrorValue::Iri(value))),
+        },
+        UnheldLink { iris } => "unheld-shapes-graph-link" {
+            "iris" => List(iris.iter().map(|value| purrdf_hash::error::ErrorValue::Iri(value))),
+        },
+        InvalidLink { values } => "invalid-shapes-graph-link" {
+            "values" => List(values.iter().map(|value| purrdf_hash::error::ErrorValue::Text(value))),
+        },
+        IncompatibleVersions { conflicts } => "incompatible-import-versions" {
+            "conflicts" => List(conflicts.iter().map(|value| purrdf_hash::error::ErrorValue::Record(value))),
+        },
+        InvalidEntry { iri, reason } => "invalid-import" {
+            "iri" => Iri(iri), "reason" => Cause(reason.as_ref()),
+        },
+    }
 }
 
 impl ShapesImportError {
@@ -636,7 +664,14 @@ impl fmt::Display for ShapesImportError {
     }
 }
 
-impl std::error::Error for ShapesImportError {}
+impl std::error::Error for ShapesImportError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InvalidEntry { reason, .. } => Some(reason.as_ref()),
+            _ => None,
+        }
+    }
+}
 
 /// A shapes graph with its whole `owl:imports` closure folded in.
 #[derive(Debug, Clone)]
@@ -730,7 +765,7 @@ pub fn resolve_shapes_imports(
                 .documents()
                 .first()
                 .map_or_default(|(iri, _)| iri.clone()),
-            reason: format!("the merged shapes graph does not freeze: {error}"),
+            reason: Box::new(ImportEntryError::Merge(error)),
         })?;
     let Some(merged) = merged else {
         return Ok(ResolvedShapesGraph {
