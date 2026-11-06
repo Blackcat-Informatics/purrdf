@@ -766,7 +766,7 @@ pub(super) fn term(
             literal.language.as_deref(),
             direction,
         )
-        .map_err(|error| decode.custom(error))?;
+        .map_err(|error| decode.native(error))?;
         decode.literal(literal)?
     };
     fields.deny_unknown()?;

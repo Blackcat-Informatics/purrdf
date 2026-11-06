@@ -29,15 +29,16 @@ fn data() -> Arc<RdfDataset> {
 fn conformant_with_test(schema_src: &str) -> bool {
     let schema = parse_shexc(schema_src, Some("http://a.example/")).expect("schema parses");
     let data = data();
-    let options = ValidationOptions {
-        sem_acts: SemActRegistry::with_test(),
-        ..ValidationOptions::default()
-    };
+    let options = ValidationOptions::default().with_sem_acts(SemActRegistry::with_test());
     let map = [(
         TermValue::iri("http://a.example/s1"),
         ShapeSelector::Label("http://a.example/S1".to_owned()),
     )];
-    validate_with(&schema, &data, &map, &options).entries[0].status == ConformanceStatus::Conformant
+    validate_with(&schema, &data, &map, &options)
+        .expect("validation finishes")
+        .entries[0]
+        .status
+        == ConformanceStatus::Conformant
 }
 
 const TEST: &str = "http://shex.io/extensions/Test/";
@@ -74,15 +75,12 @@ fn start_action_fail_fails() {
     )
     .expect("schema parses");
     let data = data();
-    let options = ValidationOptions {
-        sem_acts: SemActRegistry::with_test(),
-        ..ValidationOptions::default()
-    };
+    let options = ValidationOptions::default().with_sem_acts(SemActRegistry::with_test());
     let map = [(
         TermValue::iri("http://a.example/s1"),
         ShapeSelector::Label("http://a.example/S1".to_owned()),
     )];
-    let out = validate_with(&schema, &data, &map, &options);
+    let out = validate_with(&schema, &data, &map, &options).expect("validation finishes");
     assert_eq!(out.entries[0].status, ConformanceStatus::Nonconformant);
     assert_eq!(
         out.entries[0].reason.as_deref(),
@@ -112,7 +110,10 @@ fn default_registry_ignores_actions() {
         ShapeSelector::Label("http://a.example/S1".to_owned()),
     )];
     assert_eq!(
-        validate(&schema, &data, &map).entries[0].status,
+        validate(&schema, &data, &map)
+            .expect("validation finishes")
+            .entries[0]
+            .status,
         ConformanceStatus::Conformant
     );
 }
@@ -177,16 +178,16 @@ fn custom_extension_can_veto() {
             },
         ),
     );
-    let options = ValidationOptions {
-        sem_acts: registry,
-        ..ValidationOptions::default()
-    };
+    let options = ValidationOptions::default().with_sem_acts(registry);
     let map = [(
         TermValue::iri("http://a.example/s1"),
         ShapeSelector::Label("http://a.example/S1".to_owned()),
     )];
     assert_eq!(
-        validate_with(&schema, &data, &map, &options).entries[0].status,
+        validate_with(&schema, &data, &map, &options)
+            .expect("validation finishes")
+            .entries[0]
+            .status,
         ConformanceStatus::Nonconformant
     );
 }
@@ -230,15 +231,12 @@ fn custom_extension_fires_once_per_matched_arc_with_value_and_predicate() {
             },
         ),
     );
-    let options = ValidationOptions {
-        sem_acts: registry,
-        ..ValidationOptions::default()
-    };
+    let options = ValidationOptions::default().with_sem_acts(registry);
     let map = [(
         TermValue::iri("http://a.example/s1"),
         ShapeSelector::Label("http://a.example/S1".to_owned()),
     )];
-    let out = validate_with(&schema, &data, &map, &options);
+    let out = validate_with(&schema, &data, &map, &options).expect("validation finishes");
     assert_eq!(out.entries[0].status, ConformanceStatus::Conformant);
     drop(options);
 

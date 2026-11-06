@@ -11,6 +11,13 @@ the engine and dataset are freed. Run only this named case with
 `node --test --test-name-pattern`; native Rust owns request grammar and reasoning
 semantics.
 
+The exact packaged case `literal_component_native_error_transport` in
+`roundtrip.test.mjs` exercises the checked and directional factory exports'
+wasm-bindgen exception transport: unchanged plain `Error.message`, native code
+and fields, and an independently retained cause after the throwing call ends.
+Run only this named case with `node --test --test-name-pattern`. Native Rust
+owns language grammar, component shape and their refusal/valid-neighbor cases.
+
 The exact package case `document operation exports preserve byte transport and native error ownership`
 in `document-expansion-interface.test.mjs` exercises the shipped expansion,
 compaction, flattening and two-document framing exports

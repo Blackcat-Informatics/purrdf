@@ -46,7 +46,7 @@ fn array_fields_and_status() {
             ShapeSelector::Label(S.to_owned()),
         ),
     ];
-    let result = validate(&schema, &data, &map);
+    let result = validate(&schema, &data, &map).expect("validation finishes");
     let json = purrdf_lex::json::read(&result.to_result_json()).expect("valid JSON");
     let rows = json.as_array().expect("array");
     assert_eq!(rows.len(), 2);
@@ -71,7 +71,7 @@ fn output_is_deterministic() {
         TermValue::iri("http://a.example/s1"),
         ShapeSelector::Label(S.to_owned()),
     )];
-    let result = validate(&schema, &data, &map);
+    let result = validate(&schema, &data, &map).expect("validation finishes");
     assert_eq!(result.to_result_json(), result.to_result_json());
 }
 
@@ -92,7 +92,7 @@ fn literal_and_start_term_syntax() {
         ),
         (TermValue::simple_literal("a\"b"), ShapeSelector::Start),
     ];
-    let result = validate(&schema, &data, &map);
+    let result = validate(&schema, &data, &map).expect("validation finishes");
     let json = purrdf_lex::json::read(&result.to_result_json()).expect("valid JSON");
     let rows = json.as_array().expect("array");
     assert_eq!(rows[0]["node"], "\"hi\"@en");
@@ -217,7 +217,7 @@ fn reason_strings_with_quotes_and_newlines_stay_valid_json() {
         TermValue::iri("http://a.example/s2"),
         ShapeSelector::Label(S.to_owned()),
     )];
-    let result = validate(&schema, &data, &map);
+    let result = validate(&schema, &data, &map).expect("validation finishes");
     let rendered = result.to_result_json();
     let json = purrdf_lex::json::read(&rendered).expect("valid JSON");
     let reason = json[0]["reason"].as_str().expect("reason present");

@@ -796,23 +796,53 @@ pub(super) fn refusal_admitted(
     invocation: &super::invocation::Invocation,
     decode: &Decode<'_, '_, '_, '_>,
 ) -> Result<Value, GeoCallError> {
-    invocation.admit_refusal(error)?;
-    refusal(error, decode)
+    invocation.admit_refusal(error, None)?;
+    let native = refusal_cause(error, Some(invocation), decode)?;
+    refusal_with_native(error, native, decode)
 }
 pub(super) fn refusal(
     error: &GeoCallError,
     decode: &Decode<'_, '_, '_, '_>,
 ) -> Result<Value, GeoCallError> {
+    let native = refusal_cause(error, None, decode)?;
+    refusal_with_native(error, native, decode)
+}
+fn refusal_cause(
+    failure: &GeoCallError,
+    invocation: Option<&super::invocation::Invocation>,
+    decode: &Decode<'_, '_, '_, '_>,
+) -> Result<Option<Value>, GeoCallError> {
+    let GeoCallError::Decode(error) = failure else {
+        return Ok(None);
+    };
+    error
+        .native_cause()
+        .map(|cause| {
+            decode.native_fields(cause, |layout| match invocation {
+                Some(invocation) => invocation.admit_refusal(failure, Some(layout)),
+                None => Ok(()),
+            })
+        })
+        .transpose()
+}
+fn refusal_with_native(
+    failure: &GeoCallError,
+    native: Option<Value>,
+    decode: &Decode<'_, '_, '_, '_>,
+) -> Result<Value, GeoCallError> {
     let mut fields = Object::new().with_memory_cell(
         "message",
-        decode.message(error)?,
+        decode.message(failure)?,
         decode.storage.memory(),
     )?;
-    match error {
+    match failure {
         GeoCallError::Decode(error) => {
             fields = fields
                 .with_memory_cell("code", "invalid-record", decode.storage.memory())?
                 .with_memory_cell("pointer", error.pointer(), decode.storage.memory())?;
+            if let Some(native) = native {
+                fields = fields.with_memory_cell("cause", native, decode.storage.memory())?;
+            }
         }
         GeoCallError::Engine(error) => {
             let error = error.original();

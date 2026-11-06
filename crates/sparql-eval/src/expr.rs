@@ -13369,7 +13369,10 @@ mod tests {
         for dt in TAG_REQUIRING_DATATYPES {
             let error = RdfLiteral::validate_components(dt, None, None)
                 .expect_err("the kernel must refuse a language-string datatype with no tag");
-            assert_eq!(error, "a language-string datatype requires a language tag");
+            assert_eq!(
+                error,
+                purrdf_core::LiteralComponentError::LanguageDatatypeWithoutLanguage
+            );
         }
     }
 

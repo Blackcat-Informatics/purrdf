@@ -8,7 +8,7 @@ use purrdf_core::term_fixture::empty_dataset;
 use purrdf_core::xsd_regex::xpath::{Error, Limits, Profile, Resource};
 use purrdf_core::{RdfDatasetBuilder, RdfLiteral, TermValue};
 use purrdf_shex::{
-    Schema, ShapeSelector, ValidationOptions, XPathValidationError, XPathValidator, parse_shexj,
+    Schema, ShapeSelector, ValidationError, ValidationOptions, XPathValidator, parse_shexj,
     validate, validate_shape_map_with_xpath, validate_with_xpath,
 };
 
@@ -43,7 +43,10 @@ fn association(text: &str) -> (TermValue, ShapeSelector) {
     (TermValue::simple_literal(text), ShapeSelector::Start)
 }
 
-fn refused(error: &Error, resource: Resource) {
+fn refused(error: &ValidationError, resource: Resource) {
+    let ValidationError::Regex(error) = error else {
+        panic!("expected native XPath cause: {error:?}")
+    };
     assert!(error.is_operational());
     assert!(matches!(error, Error::Resource(cause) if cause.resource == resource));
 }
@@ -65,7 +68,12 @@ fn reused_schema_selects_the_actual_dated_law_and_preserves_compatibility() {
         } else {
             "a"
         })];
-        assert_eq!(validate(&parsed, &data, &map).all_conformant(), legacy);
+        assert_eq!(
+            validate(&parsed, &data, &map)
+                .expect("validation finishes")
+                .all_conformant(),
+            legacy
+        );
         let mut validator = XPathValidator::new(&parsed);
         for (profile, expected) in [
             (Profile::Xpath31, expected31),
@@ -133,7 +141,7 @@ fn compilation_and_matching_refusals_remain_typed_with_valid_neighbors() {
     )
     .unwrap_err();
     assert!(
-        matches!(error, Error::Resource(cause) if cause.resource == Resource::PatternBytes && cause.required == 3 && cause.limit == 2)
+        matches!(error, ValidationError::Regex(Error::Resource(cause)) if cause.resource == Resource::PatternBytes && cause.required == 3 && cause.limit == 2)
     );
 }
 
@@ -332,7 +340,7 @@ fn textual_shape_map_door_preserves_both_parse_and_operational_causes() {
     )
     .unwrap_err();
     match error {
-        XPathValidationError::Regex(error) => refused(&error, Resource::PatternBytes),
+        error @ ValidationError::Regex(_) => refused(&error, Resource::PatternBytes),
         other => panic!("wrong channel: {other}"),
     }
     assert!(matches!(
@@ -345,7 +353,7 @@ fn textual_shape_map_door_preserves_both_parse_and_operational_causes() {
             Profile::Xpath31,
             Limits::new()
         ),
-        Err(XPathValidationError::ShapeMap(
+        Err(ValidationError::ShapeMap(
             purrdf_shex::ShexError::UnknownShape(_)
         ))
     ));
@@ -421,7 +429,9 @@ fn adversary_patterns_conform_at_the_production_defaults_like_the_compatibility_
         let parsed = schema(&node(pattern, ""));
         let map = [association(&value)];
         assert_eq!(
-            validate(&parsed, &data, &map).all_conformant(),
+            validate(&parsed, &data, &map)
+                .expect("validation finishes")
+                .all_conformant(),
             expected,
             "compatibility {pattern}"
         );
@@ -456,7 +466,7 @@ fn a_backreference_blowup_pattern_still_refuses_beside_a_conformant_neighbour() 
         assert!(
             matches!(
                 &error,
-                Error::Resource(cause) if matches!(
+                ValidationError::Regex(Error::Resource(cause)) if matches!(
                     cause.resource,
                     Resource::MatchSteps | Resource::MatchStates | Resource::MatchSlots
                 )
@@ -527,7 +537,9 @@ fn counted_repetition_patterns_conform_at_the_production_defaults_like_the_compa
         for (text, expected) in [(value, false), (completed.as_str(), !suffix.is_empty())] {
             let map = [association(text)];
             assert_eq!(
-                validate(&schema(&node(compatible, "")), &data, &map).all_conformant(),
+                validate(&schema(&node(compatible, "")), &data, &map)
+                    .expect("validation finishes")
+                    .all_conformant(),
                 expected,
                 "compatibility {compatible} over {}",
                 text.len()
@@ -598,4 +610,164 @@ fn large_finite_facets_keep_shex_verdicts_and_negative_neighbors() {
             assert_eq!(result.all_conformant(), expected, "{profile:?} {pattern}");
         }
     }
+}
+
+#[test]
+fn matcher_refusal_aborts_every_validation_path_and_cannot_be_negated() {
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_shex::{ExactSchema, MatcherLimits, parse_shexc};
+    use purrdf_testkit::error_capture::Capture;
+
+    let mut builder = RdfDatasetBuilder::new();
+    let subject = builder.intern_iri("https://example.org/focus").unwrap();
+    let predicate = builder.intern_iri("https://example.org/p").unwrap();
+    for value in 0..18 {
+        let object = builder
+            .intern_iri(&format!("https://example.org/v{value}"))
+            .unwrap();
+        builder.push_quad(subject, predicate, object, None).unwrap();
+    }
+    let data = builder.freeze().unwrap();
+    let source = "<https://example.org/S> { <https://example.org/p> . {0} ; <https://example.org/p> . {18} } \
+                  <https://example.org/N> NOT @<https://example.org/S> \
+                  <https://example.org/A> @<https://example.org/S> AND IRI \
+                  <https://example.org/O> @<https://example.org/S> OR . \
+                  <https://example.org/C> { <https://example.org/p> . {18} } \
+                  <https://example.org/V> { <https://example.org/p> . {19} }";
+    let parsed = parse_shexc(source, None).unwrap();
+    purrdf_shex::check_structure(&parsed).unwrap();
+    let exact = ExactSchema::parse_shexc(source, None).unwrap();
+    let association = |shape: &str| {
+        (
+            TermValue::iri("https://example.org/focus"),
+            ShapeSelector::Label(format!("https://example.org/{shape}")),
+        )
+    };
+    let limited = ValidationOptions::default().with_matcher_limits(MatcherLimits::new(0));
+    let expected = ValidationError::MatcherWork {
+        attempted: 1,
+        maximum: 0,
+    };
+    for shape in ["S", "N", "A", "O"] {
+        // A conformant neighbour must not escape as a partial result map.
+        let map = [association("C"), association(shape)];
+        let map_source = format!(
+            "<https://example.org/focus>@<https://example.org/C>, <https://example.org/focus>@<https://example.org/{shape}>"
+        );
+        assert_eq!(
+            purrdf_shex::validate_with(&parsed, &data, &map, &limited),
+            Err(expected.clone())
+        );
+        assert_eq!(
+            purrdf_shex::validate_exact(&exact, &data, &map, &limited),
+            Err(expected.clone())
+        );
+        assert_eq!(
+            purrdf_shex::validate_shape_map(&parsed, &data, &map_source, None, &limited),
+            Err(expected.clone())
+        );
+        assert_eq!(
+            purrdf_shex::validate_shape_map_exact(&exact, &data, &map_source, None, &limited),
+            Err(expected.clone())
+        );
+        assert_eq!(
+            validate_with_xpath(
+                &parsed,
+                &data,
+                &map,
+                &limited,
+                Profile::Xpath31,
+                Limits::new()
+            ),
+            Err(expected.clone())
+        );
+        assert_eq!(
+            purrdf_shex::validate_exact_with_xpath(
+                &exact,
+                &data,
+                &map,
+                &limited,
+                Profile::Xpath31,
+                Limits::new()
+            ),
+            Err(expected.clone())
+        );
+        assert_eq!(
+            validate_shape_map_with_xpath(
+                &parsed,
+                &data,
+                &map_source,
+                None,
+                &limited,
+                Profile::Xpath31,
+                Limits::new()
+            ),
+            Err(expected.clone())
+        );
+        assert_eq!(
+            purrdf_shex::validate_shape_map_exact_with_xpath(
+                &exact,
+                &data,
+                &map_source,
+                None,
+                &limited,
+                Profile::Xpath31,
+                Limits::new()
+            ),
+            Err(expected.clone())
+        );
+    }
+    let error = validate(&parsed, &data, &[association("S")]).unwrap_err();
+    assert_eq!(
+        error,
+        ValidationError::MatcherWork {
+            attempted: 200_001,
+            maximum: 200_000
+        }
+    );
+    let fields = Capture::read(&error);
+    assert_eq!(fields.code, "shex-matcher-work");
+    assert!(matches!(
+        fields.field("attempted"),
+        ErrorValue::Unsigned(200_001)
+    ));
+    assert!(matches!(
+        fields.field("maximum"),
+        ErrorValue::Unsigned(200_000)
+    ));
+
+    let admitted = ValidationOptions::default().with_matcher_limits(MatcherLimits::new(1_000_000));
+    // Repeat settled successes and failures to exercise their memoized verdicts.
+    let map = ["S", "N", "A", "O", "C", "V", "S", "N", "V"].map(association);
+    let mut validator = XPathValidator::exact(&exact);
+    assert_eq!(
+        validator.validate(&data, &map, &limited, Profile::Xpath31, Limits::new()),
+        Err(expected)
+    );
+    let result = validator
+        .validate(&data, &map, &admitted, Profile::Xpath31, Limits::new())
+        .unwrap();
+    let statuses: Vec<_> = result
+        .entries
+        .iter()
+        .map(|entry| entry.status == purrdf_shex::ConformanceStatus::Conformant)
+        .collect();
+    assert_eq!(
+        statuses,
+        [true, false, true, true, true, false, true, false, false]
+    );
+    assert_eq!(
+        purrdf_shex::validate_exact(&exact, &data, &map, &admitted).unwrap(),
+        result
+    );
+    // Unambiguous cardinality decisions need no assignment-search allowance.
+    let control = purrdf_shex::validate_with(
+        &parsed,
+        &data,
+        &[association("C"), association("V")],
+        &limited,
+    )
+    .unwrap();
+    assert!(control.entries[0].reason.is_none());
+    assert!(control.entries[1].reason.is_some());
 }

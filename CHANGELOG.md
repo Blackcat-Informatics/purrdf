@@ -16,6 +16,57 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   and query causes; stack refusals name their construct. Host errors expose the
   retained native fields.
 
+- **Bound structured proofs (breaking Rust API):** `FolProof` is opaque and
+  retains native conclusions with original source/program/sort/contract/run
+  evidence. `check_fol_proof` accepts that typed owner instead of freely supplied
+  records and a Boolean oracle. Negative checking validates demanded completion
+  with bounded replay; positive checking is iterative, memoized and admitted.
+  Scratch nodes and metavariables roll back. Real explanation confirmation checks
+  its native proof and preserves typed failures. Existing version 1 identity laws
+  retain their exact bytes.
+
+- **Owned structural answers (breaking Rust API):** `FolBinding` exposes native
+  term views and original scoped variables through one retained graph shared by
+  the complete answer set. Extracted rows survive source destruction; rendering
+  is explicit and canonical structural keys order answers. `resolve_fol` selects
+  and retains `FolAnswerContract::GroundOnly`. Native RDF constants preserve full
+  literal, blank-scope and quoted-term identity; the explanation adapter uses its
+  original dictionary and propagates missing operands as typed failures. Existing
+  opaque identity laws remain unchanged; the RDF adapter uses native RDF keys.
+
+- **Scoped structured truth (breaking Rust API):** `truth_of` distinguishes
+  established WFS values from unevaluated, incomplete and nonground probes.
+  Completion is read through `status()`; `confirms_not_false` is removed.
+  Negative dependencies now participate in budgeted demand discovery, fixing
+  incorrect successful answers when a negated fact was never visited. Internal
+  negative proofs require established absence in that same completed scope;
+  partial positive proofs and WFS negative cycles retain their meaning.
+
+- **Validated structured programs (breaking Rust API):** `FolClause` and
+  `FolProgram` use validated constructors and read-only inspection. Original
+  handles, projection names and positions survive typed construction failures;
+  clause positions replace the unused `FolClause::rule` field. The production
+  Datalog lowering path uses this API. `FolLit` is non-exhaustive and no longer
+  `Copy`; `FolUnsupported` and `FolError` are non-exhaustive. Current term,
+  clause and proof identity laws retain their meaning.
+
+- **JSON Schema evaluation policy (breaking Rust API):** reference-chain causes
+  retain attempted and selected maximum counts, and `EvaluationCause` is
+  non-exhaustive. Caller-selected policies share regex budgets and configure
+  consecutive references without disabling cycle detection or descent resets.
+  Existing convenience methods retain their defaults.
+
+- **Extensible Datalog terms (breaking Rust API):** `NodeData` is
+  non-exhaustive. External inspection must explicitly refuse unsupported forms
+  while retaining the source node and context. Current payloads, constructors,
+  term identities, binder behavior and artifacts retain their existing meaning.
+
+- **Immutable MIME documents (breaking Rust API):** analyzed source and occurrence
+  tables use read-only accessors. Attachment extraction, part covers and projection
+  reuse the trusted model without reanalyzing the complete message. Original
+  bytes, occurrence identities, transfer refusals and external RDF verification
+  are preserved.
+
 - **Typed reasoning requests (breaking Rust API):** regime, session, proof,
   profile, import and fixture operations retain owned native failures through
   non-exhaustive errors. Facade request parsing shares the typed boundary;
@@ -285,6 +336,14 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   pointer, message, compatibility equality or original record-account ownership;
   `DecodeReason` is non-exhaustive. Successful output and refusal order are
   unchanged.
+
+- **Typed literal component refusals:** `RdfLiteral::validate_components` returns
+  the non-exhaustive, allocation-free `LiteralComponentError`, retaining native
+  language grammar and distinct shape reasons. Builder/freeze, strict embedding,
+  pack dictionaries and direct geographic record decoding keep the original
+  cause. Python, C and JavaScript factories preserve plain messages and expose
+  retained native fields. Checked and directional WASM Rust factory methods
+  return `JsValue` errors; the explicitly unchecked constructor is unchanged.
 
 - **Canonical reserved-vocabulary refusals:** `ReservedVocabulary` lends its
   original IRI and position through `iri()` and `position()`; clones share the

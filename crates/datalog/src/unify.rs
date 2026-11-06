@@ -210,7 +210,7 @@ pub enum Unified {
 /// closure of "immediate supersort". [`Self::leq`] and [`Self::meet`] then answer
 /// against the closed order in O(1) amortised lookups rather than walking edges
 /// per query.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct SortOrder {
     /// `up[a]` is the set of `b` with `a <: b`, reflexive-transitively closed.
     up: BTreeMap<NodeId, BTreeSet<NodeId>>,
@@ -315,7 +315,7 @@ impl SortOrder {
 
 /// Sort information consulted by [`unify_sorted`]: the subsort order, each
 /// leaf/free term's own sort, and each function symbol's result sort.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct SortContext {
     /// The subsort order.
     order: SortOrder,
@@ -326,6 +326,23 @@ pub struct SortContext {
 }
 
 impl SortContext {
+    /// Every original node consulted by this immutable context.
+    pub(crate) fn nodes(&self) -> impl Iterator<Item = NodeId> + '_ {
+        self.order
+            .universe
+            .iter()
+            .copied()
+            .chain(
+                self.term_sorts
+                    .iter()
+                    .flat_map(|(&node, &sort)| [node, sort]),
+            )
+            .chain(
+                self.op_result_sort
+                    .iter()
+                    .flat_map(|(&node, &sort)| [node, sort]),
+            )
+    }
     /// A sort context from its three components.
     pub fn new(
         order: SortOrder,
@@ -356,7 +373,9 @@ impl SortContext {
     pub fn sort_of(&self, dag: &TermDag, node: NodeId, s: &Subst) -> Option<NodeId> {
         let resolved = s.resolve(dag, node);
         match dag.data(resolved) {
-            NodeData::Leaf(_) | NodeData::Free(_) => self.term_sorts.get(&resolved).copied(),
+            NodeData::Rdf(_) | NodeData::Leaf(_) | NodeData::Free(_) => {
+                self.term_sorts.get(&resolved).copied()
+            }
             NodeData::App { op, .. } => self.op_result_sort.get(op).copied(),
             NodeData::Meta(m) => s.meta_sort(*m),
             NodeData::Bound { .. } | NodeData::Binder { .. } => None,
@@ -620,7 +639,7 @@ fn occurs_through(s: &Subst, dag: &TermDag, m: MetaId, node: NodeId) -> bool {
                 || sorts.iter().any(|&sort| occurs_through(s, dag, m, sort))
                 || occurs_through(s, dag, m, *body)
         }
-        NodeData::Leaf(_) | NodeData::Free(_) | NodeData::Bound { .. } => false,
+        NodeData::Rdf(_) | NodeData::Leaf(_) | NodeData::Free(_) | NodeData::Bound { .. } => false,
     }
 }
 
@@ -650,7 +669,7 @@ fn apply_at(
         return Ok(cached);
     }
     let result = match dag.data(node).clone() {
-        NodeData::Leaf(_) | NodeData::Free(_) | NodeData::Bound { .. } => node,
+        NodeData::Rdf(_) | NodeData::Leaf(_) | NodeData::Free(_) | NodeData::Bound { .. } => node,
         NodeData::Meta(_) => {
             let resolved = s.resolve(dag, node);
             if resolved == node {
@@ -711,7 +730,7 @@ fn shift_at(
         return Ok(cached);
     }
     let result = match dag.data(node).clone() {
-        NodeData::Leaf(_) | NodeData::Free(_) | NodeData::Meta(_) => node,
+        NodeData::Rdf(_) | NodeData::Leaf(_) | NodeData::Free(_) | NodeData::Meta(_) => node,
         NodeData::Bound { debruijn, slot } => {
             if debruijn >= cutoff {
                 dag.intern_bound(
@@ -768,7 +787,7 @@ fn shift_down_at(
         return Ok(cached);
     }
     let result = match dag.data(node).clone() {
-        NodeData::Leaf(_) | NodeData::Free(_) | NodeData::Meta(_) => Some(node),
+        NodeData::Rdf(_) | NodeData::Leaf(_) | NodeData::Free(_) | NodeData::Meta(_) => Some(node),
         NodeData::Bound { debruijn, slot } => {
             if debruijn < cutoff {
                 Some(node)

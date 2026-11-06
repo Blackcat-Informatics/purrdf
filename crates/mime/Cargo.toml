@@ -27,6 +27,7 @@ purrdf-lex.workspace = true
 purrdf-xsd.workspace = true
 
 [dev-dependencies]
+purrdf-alloc-probe.workspace = true
 purrdf-rdf.workspace = true
 purrdf-sparql-algebra.workspace = true
 purrdf-sparql-eval.workspace = true

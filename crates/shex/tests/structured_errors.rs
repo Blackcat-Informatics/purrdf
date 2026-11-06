@@ -581,11 +581,11 @@ fn shape_map_positions_are_bytes_after_unicode() {
     let options = purrdf_shex::ValidationOptions::default();
     assert_eq!(
         purrdf_shex::validate_shape_map(&schema, &data, source, None, &options).unwrap_err(),
-        error
+        purrdf_shex::ValidationError::ShapeMap(error.clone())
     );
     assert_eq!(
         purrdf_shex::validate_shape_map_exact(&exact, &data, source, None, &options).unwrap_err(),
-        error
+        purrdf_shex::ValidationError::ShapeMap(error.clone())
     );
 }
 

@@ -266,8 +266,8 @@ pub use loss::{
     research_object_to_rdf_loss_ledger, schema_to_shacl_loss_ledger,
 };
 pub use model::{
-    RdfAnnotation, RdfLiteral, RdfQuad, RdfReifier, RdfTerm, RdfTermKind, RdfTextDirection,
-    RdfTriple,
+    LiteralComponentError, RdfAnnotation, RdfLiteral, RdfQuad, RdfReifier, RdfTerm, RdfTermKind,
+    RdfTextDirection, RdfTriple,
 };
 pub use named_graph::{NAMED_GRAPH_SAMPLE_LIMIT, distinct_graph_names, named_graph_refusal};
 pub use provenance::{
