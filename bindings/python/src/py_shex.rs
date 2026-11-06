@@ -147,8 +147,14 @@ fn shape_selector(shape: &str) -> ShapeSelector {
 /// nonconformant, as any failed facet does; a native resource refusal (an `xpath-*`
 /// code, under finite production bounds) raises `ValueError` for the whole map rather
 /// than reporting any entry.
+///
+/// `matcher_maximum_states` admits assignment-prefix states per ambiguous
+/// neighbourhood (default 200,000), including terminal cardinality checks. Zero
+/// refuses its first state. Exhaustion raises `ValueError` with message identity
+/// `shex-matcher-work` and exact unsigned `attempted`/`maximum` parameters;
+/// no partial report is returned.
 #[pyfunction]
-#[pyo3(signature = (schema, data, map, *, schema_format="shexc", data_format="turtle", base=None, xpath_regex=None))]
+#[pyo3(signature = (schema, data, map, *, schema_format="shexc", data_format="turtle", base=None, xpath_regex=None, matcher_maximum_states=200_000))]
 #[allow(
     clippy::needless_pass_by_value,
     reason = "the binding ABI receives owned values"
@@ -166,6 +172,7 @@ fn validate(
     data_format: &str,
     base: Option<&str>,
     xpath_regex: Option<&str>,
+    matcher_maximum_states: u64,
 ) -> PyResult<Py<PyAny>> {
     let selection = crate::xpath_regex::selection(xpath_regex)?;
     // Schema parse, data parse, and validation run detached (GIL released);
@@ -184,30 +191,20 @@ fn validate(
                 shape_selector(shape),
             ));
         }
+        let options = purrdf_shex::ValidationOptions::default()
+            .with_matcher_limits(purrdf_shex::MatcherLimits::new(matcher_maximum_states));
         match selection {
-            None => Ok(purrdf_shex::validate_exact(
-                &schema,
-                &dataset,
-                &associations,
-                &purrdf_shex::ValidationOptions::default(),
-            )),
+            None => purrdf_shex::validate_exact(&schema, &dataset, &associations, &options),
             Some((profile, limits)) => purrdf_shex::validate_exact_with_xpath(
                 &schema,
                 &dataset,
                 &associations,
-                &purrdf_shex::ValidationOptions::default(),
+                &options,
                 profile,
                 limits,
-            )
-            .map_err(|error| {
-                match purrdf_validate::xpath_regex::refusal_code(&error) {
-                    Some(code) => {
-                        crate::py_store::presentation::refusal_value_error(error.to_string(), code)
-                    }
-                    None => PyValueError::new_err(error.to_string()),
-                }
-            }),
+            ),
         }
+        .map_err(validation_error)
     })?;
 
     let out = PyList::empty(py);
@@ -220,6 +217,43 @@ fn validate(
         out.append(d)?;
     }
     Ok(out.into_any().unbind())
+}
+
+/// Preserve matcher counters and native XPath refusal identity at the Python boundary.
+fn validation_error(error: purrdf_shex::ValidationError) -> PyErr {
+    match error {
+        purrdf_shex::ValidationError::Regex(cause) => {
+            match purrdf_validate::xpath_regex::refusal_code(&cause) {
+                Some(code) => {
+                    crate::py_store::presentation::refusal_value_error(cause.to_string(), code)
+                }
+                None => PyValueError::new_err(cause.to_string()),
+            }
+        }
+        purrdf_shex::ValidationError::MatcherWork { attempted, maximum } => {
+            let error = crate::py_store::presentation::refusal_value_error(
+                error.to_string(),
+                "shex-matcher-work",
+            );
+            Python::attach(|py| {
+                let attached = (|| -> PyResult<()> {
+                    let record = error.value(py).getattr("presentation")?;
+                    let parameters = record.get_item("parameters")?;
+                    for (name, number) in
+                        [("attempted", attempted), ("maximum", u128::from(maximum))]
+                    {
+                        let typed = PyDict::new(py);
+                        typed.set_item("kind", "unsigned")?;
+                        typed.set_item("value", number)?;
+                        parameters.set_item(name, typed)?;
+                    }
+                    Ok(())
+                })();
+                attached.map_or_else(|failure| failure, |()| error)
+            })
+        }
+        other => PyValueError::new_err(other.to_string()),
+    }
 }
 
 /// Parse a ShEx schema (`format` is `"shexc"` or `"shexj"`) and return its

@@ -167,7 +167,7 @@ use std::collections::BTreeSet;
 
 use purrdf::shex::{
     ExactSchema, ResultShapeMap, Schema, SemAct, Shape, ShapeExpr, ShexError, TripleExpr,
-    TripleExprGroup, ValidationOptions, XPathValidationError, check_structure, parse_shape_map,
+    TripleExprGroup, ValidationError, ValidationOptions, check_structure, parse_shape_map,
     validate_shape_map_exact, validate_shape_map_exact_with_xpath,
 };
 use purrdf_core::xsd_regex::xpath::{Limits, Profile};
@@ -201,6 +201,8 @@ pub(crate) struct ShexOptions<'a> {
     /// is decided under. `None` keeps the compatibility pattern engine, exactly as before
     /// this flag existed.
     pub(crate) xpath_regex: Option<Profile>,
+    /// Maximum states admitted per ambiguous assignment search.
+    pub(crate) matcher_maximum_states: u64,
     /// The query shape map, verbatim from the command line.
     pub(crate) map: &'a str,
     /// The result-shape-map path `OUT`, or `-`.
@@ -278,10 +280,15 @@ pub(crate) fn run(
     })?;
     refuse_unavailable_semantics(schema, options.schema)?;
 
-    let validation = ValidationOptions::default();
+    let validation = ValidationOptions::default().with_matcher_limits(
+        purrdf::shex::MatcherLimits::new(options.matcher_maximum_states),
+    );
     let result = match options.xpath_regex {
         None => validate_shape_map_exact(&exact, &data, options.map, options.base, &validation)
-            .map_err(|error| map_error(error, options)),
+            .map_err(|error| match error {
+                ValidationError::ShapeMap(error) => map_error(error, options),
+                other => CliError::Runtime(other.to_string()),
+            }),
         // Under the production bounds, `Limits::new`. A pattern the selected law does not
         // define stays a facet finding inside the result shape map; only an operational
         // refusal — a source, compiler, storage or matching resource the law withheld —
@@ -297,12 +304,12 @@ pub(crate) fn run(
             Limits::new(),
         )
         .map_err(|error| match error {
-            XPathValidationError::ShapeMap(error) => map_error(error, options),
-            XPathValidationError::Regex(error) => CliError::Runtime(format!(
+            ValidationError::ShapeMap(error) => map_error(error, options),
+            ValidationError::Regex(error) => CliError::Runtime(format!(
                 "--xpath-regex {}: the native pattern law refused this shape map: {error}",
                 profile.name()
             )),
-            // `XPathValidationError` is `#[non_exhaustive]`: a cause added in its own crate
+            // `ValidationError` is `#[non_exhaustive]`: a cause added in its own crate
             // is reported with its own message rather than swallowed.
             other => CliError::Runtime(format!("--xpath-regex {}: {other}", profile.name())),
         }),

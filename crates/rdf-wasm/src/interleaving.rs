@@ -73,6 +73,12 @@ const TEST_ONLY: &str = "Declared under `#[cfg(test)]`, so it is not compiled in
 /// Every `thread_local!` static under `crates/`, with its reason.
 pub const LEDGER: &[ThreadLocal] = &[
     ThreadLocal {
+        file: "crates/mime/src/ownership_tests.rs",
+        name: "ANALYSIS_WORK",
+        safety: Safety::NotCompiledIn,
+        reason: TEST_ONLY,
+    },
+    ThreadLocal {
         file: "crates/rdf-core/src/ir/segmented/query/changes/directory.rs",
         name: "BUILDS",
         safety: Safety::NotCompiledIn,

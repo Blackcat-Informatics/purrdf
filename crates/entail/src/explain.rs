@@ -500,7 +500,7 @@ fn confirm_backward(
     if !outcome.answers.is_empty() {
         return Ok(BackwardCheck::Confirmed);
     }
-    if outcome.status == FolStatus::Complete {
+    if outcome.status() == FolStatus::Complete {
         return Err(ExplainError::BackwardDisagreement {
             conclusion: format!("{} {} {}", goal.subject, goal.predicate, goal.object),
         });

@@ -734,6 +734,7 @@ dependencies = [
 name = "purrdf-jsonschema"
 version = "3.0.1"
 dependencies = [
+ "purrdf-alloc-probe",
  "purrdf-hash",
  "purrdf-iri",
  "purrdf-lex",
@@ -769,6 +770,7 @@ dependencies = [
 name = "purrdf-mime"
 version = "3.0.1"
 dependencies = [
+ "purrdf-alloc-probe",
  "purrdf-core",
  "purrdf-hash",
  "purrdf-lex",
