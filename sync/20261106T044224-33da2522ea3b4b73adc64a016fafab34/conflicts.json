@@ -1,0 +1,22 @@
+{
+  "CHANGELOG.md": [
+    {
+      "mode": "100644",
+      "oid": "0d0f097e806774981b0f6370d9bb3490ee4a9bef",
+      "stage": 1,
+      "content": "inputs/0-1.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "d29a50b69bb58c7630f447fcd774356c44c36e62",
+      "stage": 2,
+      "content": "inputs/0-2.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "58daed2045974c8980b5692bac6a7b96933870a2",
+      "stage": 3,
+      "content": "inputs/0-3.bin"
+    }
+  ]
+}
