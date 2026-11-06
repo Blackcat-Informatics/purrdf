@@ -1095,7 +1095,6 @@ mod tests {
             next: u64::from(u32::MAX),
             semantic_index: false,
             issuance: Issuance::Rdf,
-            tasks: WorkList::new(),
             results: Vec::new(),
         };
         assert_eq!(walk.identifier(None).unwrap(), "_:jsonld4294967295");
