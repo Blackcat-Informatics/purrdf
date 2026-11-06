@@ -41,6 +41,9 @@ use crate::error::SliceError;
 use crate::rdf_query::{Dataset, NamedNode};
 use crate::vocab::SliceVocab;
 
+mod query_error;
+pub use query_error::QueryArtifactError;
+
 // ── Namespace constants ───────────────────────────────────────────────────────
 //
 // Only W3C terms are hardcoded; the slice-framework vocabulary (the ownership
@@ -156,6 +159,19 @@ pub enum EdgeKind {
     Generated,
 }
 
+impl purrdf_hash::error::StructuredError for EdgeKind {
+    purrdf_hash::error_visit! {
+        Ontology => "slice-edge-ontology" {},
+        Shape => "slice-edge-shape" {},
+        Mapping => "slice-edge-mapping" {},
+        Query => "slice-edge-query" {},
+        Test => "slice-edge-test" {},
+        Example => "slice-edge-example" {},
+        Documentation => "slice-edge-documentation" {},
+        Generated => "slice-edge-generated" {},
+    }
+}
+
 impl EdgeKind {
     /// Whether this edge kind reconciles against `<vocab>sliceDependsOn`
     /// (a documentation link must not become a build dependency — RFC §10).
@@ -218,6 +234,7 @@ pub struct DependencyEdge {
 /// A non-fatal observation produced during analysis (conflicts, mismatches,
 /// stale/undeclared dependencies, unparsable queries).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum OwnershipDiagnostic {
     /// A term is claimed by multiple slices.
     Conflict {
@@ -265,9 +282,68 @@ pub enum OwnershipDiagnostic {
         slice: SliceIri,
         /// The artifact's normalized logical path within its slice.
         logical_path: String,
-        /// The parser's error message.
-        message: String,
+        /// The original decoding or parsing refusal.
+        cause: QueryArtifactError,
     },
+}
+
+impl purrdf_hash::error::StructuredError for OwnershipDiagnostic {
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        use purrdf_hash::error::{ErrorValue, visit_list};
+        match self {
+            Self::Conflict { term, claimants } => {
+                visitor.variant("slice-ownership-conflict");
+                visitor.value(Some("term"), ErrorValue::Iri(term.as_str()));
+                visit_list(
+                    visitor,
+                    Some("claimants"),
+                    claimants.iter().map(|iri| ErrorValue::Iri(iri)),
+                );
+            }
+            Self::Mismatch {
+                term,
+                declared,
+                physical,
+            } => {
+                visitor.variant("slice-ownership-mismatch");
+                visitor.value(Some("term"), ErrorValue::Iri(term.as_str()));
+                visitor.value(Some("declared"), ErrorValue::Iri(declared));
+                visitor.value(Some("physical"), ErrorValue::Iri(physical));
+            }
+            Self::UndeclaredDependency {
+                from_slice,
+                to_slice,
+                edge_kind,
+            } => {
+                visitor.variant("slice-ownership-undeclared-dependency");
+                visitor.value(Some("from_slice"), ErrorValue::Iri(from_slice));
+                visitor.value(Some("to_slice"), ErrorValue::Iri(to_slice));
+                visitor.value(Some("edge_kind"), ErrorValue::Record(edge_kind));
+            }
+            Self::StaleDependency {
+                from_slice,
+                to_slice,
+            } => {
+                visitor.variant("slice-ownership-stale-dependency");
+                visitor.value(Some("from_slice"), ErrorValue::Iri(from_slice));
+                visitor.value(Some("to_slice"), ErrorValue::Iri(to_slice));
+            }
+            Self::Unowned { term } => {
+                visitor.variant("slice-ownership-unowned");
+                visitor.value(Some("term"), ErrorValue::Iri(term.as_str()));
+            }
+            Self::UnparseableQuery {
+                slice,
+                logical_path,
+                cause,
+            } => {
+                visitor.variant("slice-ownership-unparseable-query");
+                visitor.value(Some("slice"), ErrorValue::Iri(slice));
+                visitor.value(Some("logical_path"), ErrorValue::Text(logical_path));
+                visitor.value(Some("cause"), ErrorValue::Cause(cause));
+            }
+        }
+    }
 }
 
 /// The complete result of an ownership + dependency analysis.
@@ -507,11 +583,11 @@ impl<'a> OwnershipAnalyzer<'a> {
                 if kind == EdgeKind::Query {
                     let referenced = match extract_query_iris(artifact, &self.parser_options) {
                         Ok(set) => set,
-                        Err(message) => {
+                        Err(cause) => {
                             diagnostics.push(OwnershipDiagnostic::UnparseableQuery {
                                 slice: from.clone(),
                                 logical_path: artifact.logical_path.clone(),
-                                message,
+                                cause,
                             });
                             continue;
                         }
@@ -828,12 +904,11 @@ fn collect_term_iri_refs<'a>(store: &'a RdfDataset, term: TermId, out: &mut BTre
 fn extract_query_iris(
     artifact: &ArtifactRecord,
     options: &ParserOptions,
-) -> Result<BTreeSet<NamedNode>, String> {
-    let text = std::str::from_utf8(&artifact.content)
-        .map_err(|e| format!("query is not valid UTF-8: {e}"))?;
+) -> Result<BTreeSet<NamedNode>, QueryArtifactError> {
+    let text = std::str::from_utf8(&artifact.content).map_err(QueryArtifactError::Utf8)?;
     let query = SparqlParser::new()
         .parse_query_with(text, options)
-        .map_err(|e| e.to_string())?;
+        .map_err(QueryArtifactError::Sparql)?;
 
     let mut out: BTreeSet<NamedNode> = BTreeSet::new();
     match &query {

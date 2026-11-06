@@ -1227,3 +1227,16 @@ parameter slots are reset before applying its dictionary. No execution inputs
 are retained from a previous call. Ordinary, RDFLib, governed and entailment
 query methods accept the same coordinate keywords; parser/provider settings
 remain preparation-time configuration. See the [Python API reference](book/src/reference/python-api.md#supplied-query-time-and-entropy).
+
+## Slice ownership query diagnostics
+
+`OwnershipDiagnostic` is non-exhaustive. Its `UnparseableQuery` variant replaces
+`message: String` with `cause: QueryArtifactError`, retaining the original
+`Utf8Error` or SPARQL `ParseError`. Use `cause.to_string()` at the presentation
+boundary for the former message, or inspect the native cause through `source()`
+and `StructuredError`. External matches need an arm for unfamiliar diagnostics.
+
+The causes, owning slice and logical path remain available after the catalog is
+dropped, including in cloned reports. Malformed query artifacts are still skipped
+in artifact order; valid queries continue to contribute dependency evidence.
+Python's ownership lint and ownership-defect classification are unchanged.
