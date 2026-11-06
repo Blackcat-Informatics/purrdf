@@ -8,6 +8,14 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Validated structured programs (breaking Rust API):** `FolClause` and
+  `FolProgram` use validated constructors and read-only inspection. Original
+  handles, projection names and positions survive typed construction failures;
+  clause positions replace the unused `FolClause::rule` field. The production
+  Datalog lowering path uses this API. `FolLit` is non-exhaustive and no longer
+  `Copy`; `FolUnsupported` and `FolError` are non-exhaustive. Current term,
+  clause and proof identity laws retain their meaning.
+
 - **Typed reasoning requests (breaking Rust API):** regime, session, proof,
   profile, import and fixture operations retain owned native failures through
   non-exhaustive errors. Facade request parsing shares the typed boundary;

@@ -936,6 +936,37 @@ crosses its recursion bound now returns this typed processor failure instead
 of `ShapesError::Invalid`. Its human-readable message is unchanged. It remains
 a hard failure through SPARQL node-expression calls, including COALESCE and IF.
 
+## Structured Horn program construction
+
+Replace every `FolClause { head, body, rule }` literal with
+`FolClause::new(&dag, head, body)?`. The unused `rule` field is removed: a clause's
+position in `FolProgram::clauses()` is its authored rule index, as it already was
+for resolution and proof checking. Read a clause through `head()` and `body()`.
+
+Replace every `FolProgram { clauses, goal, goal_vars, meta_sorts }` literal with
+`FolProgram::new(&dag, clauses, goal, goal_vars, meta_sorts)?`. The corresponding
+read-only accessors are `clauses()`, `goal()`, `goal_vars()` and `meta_sorts()`.
+To edit a program, construct and validate its replacement. The program owns its
+records and names; its handles still refer to the caller's one term arena, which
+must remain available for inspection and execution. Validation checks resident
+addresses and does not authenticate overlapping local handles from another arena.
+
+Construction returns `FolConstructionError` with the original offending handles,
+names and authored positions. It refuses unaddressable terms, unminted sort
+metavariables, projected non-metavariables, variables outside the goal and duplicate
+projection names that would overwrite answers. A partial projection, distinct
+names for the same goal variable and unused minted sort declarations remain
+valid. Body width and floundering remain execution refusals. The flat Datalog
+adapter uses these constructors and retains failures through
+`FolError::Construction` and the standard error source chain.
+
+`FolLit`, `FolUnsupported` and `FolError` are non-exhaustive. External matches
+must explicitly return or propagate an unsupported-case error rather than omit a
+literal or treat an unknown refusal as success. `FolLit` is now `Clone` rather
+than `Copy`; borrow literals or clone when ownership is needed. The current
+`Pos(NodeId)` and `Neg(NodeId)` payloads retain their meaning. No term rendering,
+canonical key, rule identity, proof identity or admitted execution meaning changes.
+
 ## Datalog proofs and shared heads
 
 Ordinary head conjunctions now execute one shared body. Read `Derivation::head`

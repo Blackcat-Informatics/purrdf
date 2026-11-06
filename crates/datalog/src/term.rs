@@ -166,6 +166,11 @@ impl TermDag {
         self.nodes.is_empty()
     }
 
+    /// Whether this arena has minted the metavariable's local slot.
+    pub(crate) fn has_meta(&self, meta: MetaId) -> bool {
+        meta.index() < self.next_meta
+    }
+
     /// The node at `node`.
     ///
     /// # Panics

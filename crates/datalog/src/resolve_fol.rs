@@ -87,6 +87,9 @@ use crate::id::{MetaId, NodeId};
 use crate::term::{NodeData, TermDag};
 use crate::unify::{self, SortContext, Subst, Unified};
 
+mod program;
+pub use program::{FolConstructionError, FolPosition};
+
 /// A clause body literal cannot exceed this many atoms.
 ///
 /// [`solve_body`] recurses one native stack frame per body literal, so this
@@ -97,8 +100,15 @@ const MAX_BODY_LITERALS: usize = 64;
 
 // ── Public program IR ─────────────────────────────────────────────────────────────
 
-/// One body literal: a positive atom, or a negation-as-failure filter over one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// One owned body literal: a positive atom, or a negation-as-failure filter over one.
+///
+/// Current variants borrow their term identity from the program's arena. The
+/// enum is non-exhaustive and deliberately not `Copy`: additional literal forms
+/// may own their operands. External matches must explicitly refuse unsupported
+/// forms rather than silently omit a condition. Existing variant payloads keep
+/// their meaning.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum FolLit {
     /// An ordinary positive body atom.
     Pos(NodeId),
@@ -109,43 +119,46 @@ pub enum FolLit {
 
 impl FolLit {
     /// The atom this literal carries, regardless of polarity.
-    fn atom(self) -> NodeId {
+    fn atom(&self) -> NodeId {
         match self {
-            Self::Pos(atom) | Self::Neg(atom) => atom,
+            Self::Pos(atom) | Self::Neg(atom) => *atom,
         }
     }
 }
 
 /// One Horn(+negation) clause over compound terms: `head :- body`.
+///
+/// Construct through [`Self::new`]. All term handles belong to the same
+/// [`TermDag`], which must remain available for inspection and execution.
+/// A clause's authored rule index is its position in [`FolProgram::clauses`].
 #[derive(Debug, Clone)]
 pub struct FolClause {
     /// The clause head — a single atom (this module has no head disjunction or
     /// existential; those belong to [`crate::clause`]'s richer DL-clause shape).
-    pub head: NodeId,
+    head: NodeId,
     /// The body literals, in authored order.
-    pub body: Vec<FolLit>,
-    /// The clause's index in AUTHORED program order.
-    ///
-    /// A plain index, not a content-addressed identity — see the [module
-    /// docs](self) for why this deliberately differs from an upstream that
-    /// minted a digest-addressed rule-firing IRI.
-    pub rule: usize,
+    body: Vec<FolLit>,
 }
 
 /// A program: a clause set, a goal atom, the goal's own named variables, and each
 /// metavariable's declared sort for order-sorted resolution.
+///
+/// Construct through [`Self::new`]. This owns its records and names, while all
+/// term and metavariable handles refer to the same caller-owned [`TermDag`].
+/// Keep that arena for inspection and execution; an equal numeric handle from
+/// another arena is not the same term. Validation checks resident addresses,
+/// not provenance between arenas whose local handles happen to overlap.
 #[derive(Debug, Clone)]
 pub struct FolProgram {
-    /// The clause set, in authored order (an authored [`FolClause::rule`] index
-    /// addresses this order).
-    pub clauses: Vec<FolClause>,
+    /// The clause set, in authored order; proof rule indices address this order.
+    clauses: Vec<FolClause>,
     /// The atom [`resolve_fol`] is asked to decide.
-    pub goal: NodeId,
+    goal: NodeId,
     /// The goal's own metavariables, paired with the name they were authored
     /// under, in first-occurrence order — this is what lets an answer's
     /// substitution be projected back to named bindings rather than raw
     /// [`NodeId`]s.
-    pub goal_vars: Vec<(NodeId, String)>,
+    goal_vars: Vec<(NodeId, String)>,
     /// Each metavariable's declared sort, keyed by the AUTHORED [`MetaId`] it
     /// appears under in a clause or the goal, mapped to the [`NodeId`] naming its
     /// sort in the caller's [`crate::unify::SortContext`].
@@ -157,7 +170,7 @@ pub struct FolProgram {
     /// the order-sorted machinery no cost at all. A clause's authored metavariable
     /// is freshened per firing, and its declared sort travels to the fresh
     /// metavariable so the discipline follows the clause into every instantiation.
-    pub meta_sorts: BTreeMap<MetaId, NodeId>,
+    meta_sorts: BTreeMap<MetaId, NodeId>,
 }
 
 /// A three-valued well-founded-semantics verdict.
@@ -330,7 +343,11 @@ impl FolOutcome {
 }
 
 /// Why [`resolve_fol`] could not decide the program at all.
+///
+/// External matches must explicitly propagate or refuse unsupported reasons.
+/// Current reason payloads retain their meaning as further reasons are added.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum FolUnsupported {
     /// A negative body literal's instantiated atom is still non-ground under
     /// every selectable order — the safe-computation rule found no safe literal
@@ -731,7 +748,7 @@ fn freshen_clause(
     meta_sorts: &BTreeMap<MetaId, NodeId>,
 ) -> Result<FreshenedClause, StorageError> {
     let mut nodes: Vec<NodeId> = vec![clause.head];
-    nodes.extend(clause.body.iter().copied().map(FolLit::atom));
+    nodes.extend(clause.body.iter().map(FolLit::atom));
     let metas = distinct_metas(dag, &nodes);
     let mut renaming = Subst::default();
     let mut sort_decls = Vec::new();
@@ -1678,17 +1695,21 @@ pub fn flat_derivation_id(dag: &TermDag, proof: &FolProof) -> String {
 
 /// Refusal while lowering or executing a flat backward query.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum FolError {
     /// The original clause has no flat backward-resolution semantics.
     Clause(NonDatalogClause),
     /// Original native storage or logical capacity refusal.
     Storage(StorageError),
+    /// Original invalid structured-program construction.
+    Construction(FolConstructionError),
 }
 
 impl purrdf_hash::error::StructuredError for FolError {
     purrdf_hash::error_visit! {
         Clause(cause) => "fol-clause" { "cause" => Cause(cause) },
         Storage(cause) => "fol-storage" { "cause" => Cause(cause) },
+        Construction(cause) => "fol-construction" { "cause" => Cause(cause) },
     }
 }
 impl core::fmt::Display for FolError {
@@ -1696,6 +1717,7 @@ impl core::fmt::Display for FolError {
         match self {
             Self::Clause(e) => e.fmt(f),
             Self::Storage(e) => e.fmt(f),
+            Self::Construction(e) => e.fmt(f),
         }
     }
 }
@@ -1704,10 +1726,11 @@ impl std::error::Error for FolError {
         match self {
             Self::Clause(e) => Some(e),
             Self::Storage(e) => Some(e),
+            Self::Construction(e) => Some(e),
         }
     }
 }
-purrdf_lex::variant_from!(FolError { Clause(NonDatalogClause), Storage(StorageError) });
+purrdf_lex::variant_from!(FolError { Clause(NonDatalogClause), Storage(StorageError), Construction(FolConstructionError) });
 
 // ── The DlClause lowering adapter ───────────────────────────────────────────────
 
@@ -1792,11 +1815,7 @@ fn lower_datalog_clauses(
                 }
             })
             .collect::<Result<Vec<_>, StorageError>>()?;
-        out.push(FolClause {
-            head,
-            body,
-            rule: index,
-        });
+        out.push(FolClause::new(dag, head, body)?);
     }
     Ok(out)
 }
@@ -1867,15 +1886,8 @@ pub fn solve_datalog_goal(
     let fol_clauses = lower_datalog_clauses(&mut dag, triple_op, clauses)?;
     let (goal_node, goal_vars) = lower_goal(&mut dag, triple_op, goal)?;
 
-    let program = FolProgram {
-        clauses: fol_clauses,
-        goal: goal_node,
-        goal_vars,
-        // Datalog lowering has no sorts, so this bridge stays sort-blind: an empty
-        // `meta_sorts` with the default context makes the resolution byte-identical
-        // to the pre-order-sorted resolver over the same program.
-        meta_sorts: BTreeMap::new(),
-    };
+    // Datalog lowering has no sorts, so this bridge stays sort-blind.
+    let program = FolProgram::new(&dag, fol_clauses, goal_node, goal_vars, BTreeMap::new())?;
     let control = resolve_fol(&mut dag, &program, &SortContext::default(), budget)?;
     Ok((dag, control))
 }
@@ -1971,11 +1983,7 @@ mod tests {
         // add(z, Y, Y) :- .
         let (_, y0) = dag.fresh_meta().unwrap();
         let head0 = app(&mut dag, "add", vec![z, y0, y0]);
-        let clause0 = FolClause {
-            head: head0,
-            body: vec![],
-            rule: 0,
-        };
+        let clause0 = FolClause::new(&dag, head0, vec![]).unwrap();
 
         // add(s(X), Y, s(Z)) :- add(X, Y, Z).
         let (_, x1) = dag.fresh_meta().unwrap();
@@ -1985,11 +1993,7 @@ mod tests {
         let s_z = app(&mut dag, "s", vec![z1]);
         let head1 = app(&mut dag, "add", vec![s_x, y1, s_z]);
         let premise = app(&mut dag, "add", vec![x1, y1, z1]);
-        let clause1 = FolClause {
-            head: head1,
-            body: vec![FolLit::Pos(premise)],
-            rule: 1,
-        };
+        let clause1 = FolClause::new(&dag, head1, vec![FolLit::Pos(premise)]).unwrap();
 
         let clauses = vec![clause0, clause1];
 
@@ -1999,12 +2003,14 @@ mod tests {
         let three = peano(&mut dag, z, 3);
         let (_, r_meta) = dag.fresh_meta().unwrap();
         let goal = app(&mut dag, "add", vec![two, one, r_meta]);
-        let program = FolProgram {
-            clauses: clauses.clone(),
+        let program = FolProgram::new(
+            &dag,
+            clauses.clone(),
             goal,
-            goal_vars: vec![(r_meta, "R".to_owned())],
-            meta_sorts: BTreeMap::new(),
-        };
+            vec![(r_meta, "R".to_owned())],
+            BTreeMap::new(),
+        )
+        .unwrap();
 
         let budget = FolBudget { max_steps: 10_000 };
         let control = resolve_fol(&mut dag, &program, &SortContext::default(), &budget).unwrap();
@@ -2049,11 +2055,7 @@ mod tests {
         let (_, t0) = dag.fresh_meta().unwrap(); // the wildcard tail position
         let cons_x_t = app(&mut dag, "cons", vec![x0, t0]);
         let head0 = app(&mut dag, "member", vec![x0, cons_x_t]);
-        let clause0 = FolClause {
-            head: head0,
-            body: vec![],
-            rule: 0,
-        };
+        let clause0 = FolClause::new(&dag, head0, vec![]).unwrap();
 
         // member(X, cons(H, T)) :- member(X, T).
         let (_, x1) = dag.fresh_meta().unwrap();
@@ -2062,11 +2064,7 @@ mod tests {
         let cons_h_t = app(&mut dag, "cons", vec![h1, t1]);
         let head1 = app(&mut dag, "member", vec![x1, cons_h_t]);
         let premise = app(&mut dag, "member", vec![x1, t1]);
-        let clause1 = FolClause {
-            head: head1,
-            body: vec![FolLit::Pos(premise)],
-            rule: 1,
-        };
+        let clause1 = FolClause::new(&dag, head1, vec![FolLit::Pos(premise)]).unwrap();
         let clauses = vec![clause0, clause1];
 
         // The list cons(a, cons(b, cons(c, nil))).
@@ -2076,12 +2074,14 @@ mod tests {
 
         let (_, x_goal) = dag.fresh_meta().unwrap();
         let goal = app(&mut dag, "member", vec![x_goal, list]);
-        let program = FolProgram {
-            clauses: clauses.clone(),
+        let program = FolProgram::new(
+            &dag,
+            clauses.clone(),
             goal,
-            goal_vars: vec![(x_goal, "X".to_owned())],
-            meta_sorts: BTreeMap::new(),
-        };
+            vec![(x_goal, "X".to_owned())],
+            BTreeMap::new(),
+        )
+        .unwrap();
 
         let budget = FolBudget { max_steps: 10_000 };
         let control = resolve_fol(&mut dag, &program, &SortContext::default(), &budget).unwrap();
@@ -2123,31 +2123,19 @@ mod tests {
             let head = app(dag, "win", vec![x]);
             let move_xy = app(dag, "move", vec![x, y]);
             let win_y = app(dag, "win", vec![y]);
-            FolClause {
-                head,
-                body: vec![FolLit::Pos(move_xy), FolLit::Neg(win_y)],
-                rule: 1,
-            }
+            FolClause::new(dag, head, vec![FolLit::Pos(move_xy), FolLit::Neg(win_y)]).unwrap()
         }
 
         fn fact(dag: &mut TermDag, pred: &str, args: Vec<NodeId>) -> FolClause {
             let head = app(dag, pred, args);
-            FolClause {
-                head,
-                body: vec![],
-                rule: 0,
-            }
+            FolClause::new(dag, head, vec![]).unwrap()
         }
 
         fn resolve(dag: &mut TermDag, facts: Vec<FolClause>, goal_atom: NodeId) -> FolOutcome {
             let mut clauses = facts;
             clauses.push(win_rule(dag));
-            let program = FolProgram {
-                clauses,
-                goal: goal_atom,
-                goal_vars: vec![],
-                meta_sorts: BTreeMap::new(),
-            };
+            let program =
+                FolProgram::new(dag, clauses, goal_atom, vec![], BTreeMap::new()).unwrap();
             let budget = FolBudget { max_steps: 10_000 };
             match resolve_fol(dag, &program, &SortContext::default(), &budget).unwrap() {
                 FolControl::Decided(outcome) => *outcome,
@@ -2186,17 +2174,8 @@ mod tests {
     fn direct_negative_loop_is_undefined_not_true_or_false() {
         let mut dag = TermDag::default();
         let p = leaf(&mut dag, "p");
-        let clause = FolClause {
-            head: p,
-            body: vec![FolLit::Neg(p)],
-            rule: 0,
-        };
-        let program = FolProgram {
-            clauses: vec![clause],
-            goal: p,
-            goal_vars: vec![],
-            meta_sorts: BTreeMap::new(),
-        };
+        let clause = FolClause::new(&dag, p, vec![FolLit::Neg(p)]).unwrap();
+        let program = FolProgram::new(&dag, vec![clause], p, vec![], BTreeMap::new()).unwrap();
         let budget = FolBudget { max_steps: 10_000 };
         let FolControl::Decided(outcome) =
             resolve_fol(&mut dag, &program, &SortContext::default(), &budget).unwrap()
@@ -2221,16 +2200,9 @@ mod tests {
         let base = leaf(dag, "base");
         let other = leaf(dag, "other");
         let goal_atom = leaf(dag, "goal_atom");
-        let base_fact = FolClause {
-            head: base,
-            body: vec![],
-            rule: 0,
-        };
-        let goal_rule = FolClause {
-            head: goal_atom,
-            body: vec![FolLit::Pos(base), FolLit::Neg(other)],
-            rule: 1,
-        };
+        let base_fact = FolClause::new(dag, base, vec![]).unwrap();
+        let goal_rule =
+            FolClause::new(dag, goal_atom, vec![FolLit::Pos(base), FolLit::Neg(other)]).unwrap();
         (vec![base_fact, goal_rule], base, goal_atom)
     }
 
@@ -2238,12 +2210,7 @@ mod tests {
     fn budget_cut_demotes_dependent_atom_to_undefined_not_true() {
         let mut dag = TermDag::default();
         let (clauses, base, goal_atom) = budget_cut_program(&mut dag);
-        let program = FolProgram {
-            clauses,
-            goal: goal_atom,
-            goal_vars: vec![],
-            meta_sorts: BTreeMap::new(),
-        };
+        let program = FolProgram::new(&dag, clauses, goal_atom, vec![], BTreeMap::new()).unwrap();
         // 4 work units, not 1. `max_steps` now charges every newly demanded call as well
         // as every committed rule, so 1 unit is spent before the `base` FACT is committed
         // and the run truncates ahead of the state this test is about. 4 reaches the
@@ -2275,12 +2242,7 @@ mod tests {
     fn budget_partial_answer_set_is_deterministic_across_runs() {
         let mut dag = TermDag::default();
         let (clauses, _base, goal_atom) = budget_cut_program(&mut dag);
-        let program = FolProgram {
-            clauses,
-            goal: goal_atom,
-            goal_vars: vec![],
-            meta_sorts: BTreeMap::new(),
-        };
+        let program = FolProgram::new(&dag, clauses, goal_atom, vec![], BTreeMap::new()).unwrap();
         let budget = FolBudget { max_steps: 4 };
         let FolControl::Decided(first) =
             resolve_fol(&mut dag, &program, &SortContext::default(), &budget).unwrap()
@@ -2307,19 +2269,17 @@ mod tests {
         let (_, x) = dag.fresh_meta().unwrap();
         let head = app(&mut dag, "p", vec![x]);
         let q_x = app(&mut dag, "q", vec![x]);
-        let clause = FolClause {
-            head,
-            body: vec![FolLit::Neg(q_x)],
-            rule: 0,
-        };
+        let clause = FolClause::new(&dag, head, vec![FolLit::Neg(q_x)]).unwrap();
         let (_, goal_x) = dag.fresh_meta().unwrap();
         let goal = app(&mut dag, "p", vec![goal_x]);
-        let program = FolProgram {
-            clauses: vec![clause],
+        let program = FolProgram::new(
+            &dag,
+            vec![clause],
             goal,
-            goal_vars: vec![(goal_x, "X".to_owned())],
-            meta_sorts: BTreeMap::new(),
-        };
+            vec![(goal_x, "X".to_owned())],
+            BTreeMap::new(),
+        )
+        .unwrap();
         let budget = FolBudget { max_steps: 10_000 };
         match resolve_fol(&mut dag, &program, &SortContext::default(), &budget).unwrap() {
             FolControl::Unsupported(FolUnsupported::Floundering) => {}
@@ -2337,17 +2297,8 @@ mod tests {
             .map(|i| FolLit::Pos(leaf(&mut dag, &format!("lit{i}"))))
             .collect();
         let literal_count = body.len();
-        let clause = FolClause {
-            head,
-            body,
-            rule: 0,
-        };
-        let program = FolProgram {
-            clauses: vec![clause],
-            goal: head,
-            goal_vars: vec![],
-            meta_sorts: BTreeMap::new(),
-        };
+        let clause = FolClause::new(&dag, head, body).unwrap();
+        let program = FolProgram::new(&dag, vec![clause], head, vec![], BTreeMap::new()).unwrap();
         let budget = FolBudget { max_steps: 10_000 };
         match resolve_fol(&mut dag, &program, &SortContext::default(), &budget).unwrap() {
             FolControl::Unsupported(FolUnsupported::ClauseBodyTooWide { rule: 0, literals }) => {
@@ -2366,11 +2317,7 @@ mod tests {
         let mut dag = TermDag::default();
         let (_, x) = dag.fresh_meta().unwrap();
         let head = app(&mut dag, "p", vec![x]);
-        let clause = FolClause {
-            head,
-            body: vec![],
-            rule: 0,
-        };
+        let clause = FolClause::new(&dag, head, vec![]).unwrap();
         let wrong_goal = leaf(&mut dag, "not_p_of_anything");
         let forged = FolProof::ByRule {
             rule: 0,
@@ -2414,11 +2361,7 @@ mod tests {
         let mut dag = TermDag::default();
         let a = leaf(&mut dag, "a");
         let head = app(&mut dag, "p", vec![a]);
-        let clause = FolClause {
-            head,
-            body: vec![],
-            rule: 0,
-        };
+        let clause = FolClause::new(&dag, head, vec![]).unwrap();
         let clauses = vec![clause];
 
         let extra_premise = FolProof::ByRule {
@@ -2549,23 +2492,11 @@ mod tests {
         let (x_id, x) = dag.fresh_meta().unwrap();
         let ok_head = app(&mut dag, "ok", vec![x]);
         let has_x = app(&mut dag, "has", vec![x]);
-        let ok_clause = FolClause {
-            head: ok_head,
-            body: vec![FolLit::Pos(has_x)],
-            rule: 0,
-        };
+        let ok_clause = FolClause::new(&dag, ok_head, vec![FolLit::Pos(has_x)]).unwrap();
         let has_felix = app(&mut dag, "has", vec![felix]);
         let has_generic = app(&mut dag, "has", vec![generic]);
-        let fact_felix = FolClause {
-            head: has_felix,
-            body: vec![],
-            rule: 1,
-        };
-        let fact_generic = FolClause {
-            head: has_generic,
-            body: vec![],
-            rule: 2,
-        };
+        let fact_felix = FolClause::new(&dag, has_felix, vec![]).unwrap();
+        let fact_generic = FolClause::new(&dag, has_generic, vec![]).unwrap();
         let clauses = vec![ok_clause, fact_felix, fact_generic];
         let (_, r) = dag.fresh_meta().unwrap();
         let goal = app(&mut dag, "ok", vec![r]);
@@ -2573,12 +2504,14 @@ mod tests {
 
         let mut meta_sorts = BTreeMap::new();
         meta_sorts.insert(x_id, cat);
-        let sorted = FolProgram {
-            clauses: clauses.clone(),
+        let sorted = FolProgram::new(
+            &dag,
+            clauses.clone(),
             goal,
-            goal_vars: vec![(r, "R".to_owned())],
+            vec![(r, "R".to_owned())],
             meta_sorts,
-        };
+        )
+        .unwrap();
         let FolControl::Decided(sorted_outcome) =
             resolve_fol(&mut dag, &sorted, &ctx, &budget).unwrap()
         else {
@@ -2597,12 +2530,14 @@ mod tests {
 
         // The SAME program, sort-blind (empty meta_sorts, default context) — today's
         // resolver — wrongly admits the Animal-only value too.
-        let unsorted = FolProgram {
+        let unsorted = FolProgram::new(
+            &dag,
             clauses,
             goal,
-            goal_vars: vec![(r, "R".to_owned())],
-            meta_sorts: BTreeMap::new(),
-        };
+            vec![(r, "R".to_owned())],
+            BTreeMap::new(),
+        )
+        .unwrap();
         let FolControl::Decided(unsorted_outcome) =
             resolve_fol(&mut dag, &unsorted, &SortContext::default(), &budget).unwrap()
         else {
@@ -2625,11 +2560,7 @@ mod tests {
         let z = leaf(&mut dag, "z");
         let (_, y0) = dag.fresh_meta().unwrap();
         let head0 = app(&mut dag, "add", vec![z, y0, y0]);
-        let clause0 = FolClause {
-            head: head0,
-            body: vec![],
-            rule: 0,
-        };
+        let clause0 = FolClause::new(&dag, head0, vec![]).unwrap();
         let (_, x1) = dag.fresh_meta().unwrap();
         let (_, y1) = dag.fresh_meta().unwrap();
         let (_, z1) = dag.fresh_meta().unwrap();
@@ -2637,22 +2568,20 @@ mod tests {
         let s_z = app(&mut dag, "s", vec![z1]);
         let head1 = app(&mut dag, "add", vec![s_x, y1, s_z]);
         let premise = app(&mut dag, "add", vec![x1, y1, z1]);
-        let clause1 = FolClause {
-            head: head1,
-            body: vec![FolLit::Pos(premise)],
-            rule: 1,
-        };
+        let clause1 = FolClause::new(&dag, head1, vec![FolLit::Pos(premise)]).unwrap();
         let clauses = vec![clause0, clause1];
         let two = peano(&mut dag, z, 2);
         let one = peano(&mut dag, z, 1);
         let (_, r_meta) = dag.fresh_meta().unwrap();
         let goal = app(&mut dag, "add", vec![two, one, r_meta]);
-        let program = FolProgram {
-            clauses: clauses.clone(),
+        let program = FolProgram::new(
+            &dag,
+            clauses.clone(),
             goal,
-            goal_vars: vec![(r_meta, "R".to_owned())],
-            meta_sorts: BTreeMap::new(),
-        };
+            vec![(r_meta, "R".to_owned())],
+            BTreeMap::new(),
+        )
+        .unwrap();
         let budget = FolBudget { max_steps: 10_000 };
         let FolControl::Decided(outcome) =
             resolve_fol(&mut dag, &program, &SortContext::default(), &budget).unwrap()
@@ -2806,11 +2735,7 @@ mod tests {
         let dog = leaf(&mut dag, "Dog");
         let (x_id, x) = dag.fresh_meta().unwrap();
         let head = app(&mut dag, "p", vec![x]);
-        let clause = FolClause {
-            head,
-            body: vec![],
-            rule: 0,
-        };
+        let clause = FolClause::new(&dag, head, vec![]).unwrap();
         let mut cat_sorts = BTreeMap::new();
         cat_sorts.insert(x_id, cat);
         let mut dog_sorts = BTreeMap::new();
@@ -2835,18 +2760,10 @@ mod tests {
         let holds = leaf(&mut dag, "holds");
         let absent = leaf(&mut dag, "absent");
         // holds :- not absent.   (there is no `absent` fact, so the negation succeeds)
-        let clause = FolClause {
-            head: holds,
-            body: vec![FolLit::Neg(absent)],
-            rule: 0,
-        };
+        let clause = FolClause::new(&dag, holds, vec![FolLit::Neg(absent)]).unwrap();
         let clauses = vec![clause];
-        let program = FolProgram {
-            clauses: clauses.clone(),
-            goal: holds,
-            goal_vars: vec![],
-            meta_sorts: BTreeMap::new(),
-        };
+        let program =
+            FolProgram::new(&dag, clauses.clone(), holds, vec![], BTreeMap::new()).unwrap();
         let budget = FolBudget { max_steps: 10_000 };
         let FolControl::Decided(outcome) =
             resolve_fol(&mut dag, &program, &SortContext::default(), &budget).unwrap()
@@ -2884,11 +2801,7 @@ mod tests {
         let mut dag = TermDag::default();
         let holds = leaf(&mut dag, "holds");
         let absent = leaf(&mut dag, "absent");
-        let clause = FolClause {
-            head: holds,
-            body: vec![FolLit::Neg(absent)],
-            rule: 0,
-        };
+        let clause = FolClause::new(&dag, holds, vec![FolLit::Neg(absent)]).unwrap();
         let forged = FolProof::Assert {
             rule: 0,
             rule_identity: String::new(),
@@ -2926,28 +2839,27 @@ mod tests {
         let safe_head = app(&mut dag, "safe", vec![x]);
         let cat_x = app(&mut dag, "cat", vec![x]);
         let danger_x = app(&mut dag, "danger", vec![x]);
-        let safe_clause = FolClause {
-            head: safe_head,
-            body: vec![FolLit::Pos(cat_x), FolLit::Neg(danger_x)],
-            rule: 0,
-        };
+        let safe_clause = FolClause::new(
+            &dag,
+            safe_head,
+            vec![FolLit::Pos(cat_x), FolLit::Neg(danger_x)],
+        )
+        .unwrap();
         let cat_felix = app(&mut dag, "cat", vec![felix]);
-        let cat_fact = FolClause {
-            head: cat_felix,
-            body: vec![],
-            rule: 1,
-        };
+        let cat_fact = FolClause::new(&dag, cat_felix, vec![]).unwrap();
         let clauses = vec![safe_clause, cat_fact];
         let (_, r) = dag.fresh_meta().unwrap();
         let goal = app(&mut dag, "safe", vec![r]);
         let mut meta_sorts = BTreeMap::new();
         meta_sorts.insert(x_id, cat);
-        let program = FolProgram {
-            clauses: clauses.clone(),
+        let program = FolProgram::new(
+            &dag,
+            clauses.clone(),
             goal,
-            goal_vars: vec![(r, "R".to_owned())],
-            meta_sorts: meta_sorts.clone(),
-        };
+            vec![(r, "R".to_owned())],
+            meta_sorts.clone(),
+        )
+        .unwrap();
         let budget = FolBudget { max_steps: 10_000 };
         let FolControl::Decided(outcome) = resolve_fol(&mut dag, &program, &ctx, &budget).unwrap()
         else {
