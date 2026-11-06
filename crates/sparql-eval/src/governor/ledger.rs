@@ -759,7 +759,7 @@ impl QueryExplanation {
             }
         }
         let _ = writeln!(out, "consumed");
-        for dimension in purrdf_core::ResourceDimension::ALL {
+        for &dimension in purrdf_core::ResourceDimension::ALL {
             let _ = writeln!(
                 out,
                 "  {}\t{}",

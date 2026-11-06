@@ -43,7 +43,8 @@ use purrdf_sparql_eval::{QueryGovernors, ResourceDimension, StopSignal};
 /// [`QueryGovernors::METERED`]: a governed call that bounds nothing and reports
 /// everything while retaining the default logical UDF depth of 32.
 /// Only [`Self::no_ceiling`] reaches the ungoverned state.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct GovernorParts {
     /// Abstract execution steps ([`ResourceDimension::Fuel`]).
     pub fuel: Option<u64>,
@@ -72,6 +73,23 @@ pub struct GovernorParts {
 }
 
 impl GovernorParts {
+    /// Name no ceilings, retaining the metered base when decoded by [`from_parts`].
+    ///
+    /// Const construction also lets host carriers prepare their parts before execution.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            fuel: None,
+            max_answers: None,
+            max_intermediate_cells: None,
+            max_scratch_bytes: None,
+            max_remote_requests: None,
+            max_udf_depth: None,
+            unlimited_udf_depth: false,
+            no_ceiling: false,
+        }
+    }
+
     /// The dimensions this names a ceiling on, with the ceiling, in the order the
     /// fields are declared.
     #[must_use]
@@ -92,6 +110,8 @@ impl GovernorParts {
         .collect()
     }
 }
+
+purrdf_hash::default_from_new!(GovernorParts);
 
 /// Why a governed call's parts do not describe a configuration.
 ///

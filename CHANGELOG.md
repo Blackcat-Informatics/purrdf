@@ -8,6 +8,12 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Extensible governors (breaking Rust API):** `ResourceDimension` and
+  `GovernorParts` are non-exhaustive, dimension enumeration is a static slice,
+  and request parts use public const construction. The evaluator shares the
+  Core dimension index; current labels, defaults, accounting and the fixed C
+  projection remain unchanged.
+
 - **Fresh OWL refutation witnesses:** generated symbols are checked against the
   current term interner, including caller terms introduced after preparation.
   Repeated role-inclusion queries preserve distinct witness identities.

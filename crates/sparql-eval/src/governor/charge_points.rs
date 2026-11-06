@@ -595,7 +595,7 @@ fn ungoverned_evaluation_charges_nothing() {
 
     let evidence = state.evidence();
     assert!(evidence.is_complete());
-    for dimension in ResourceDimension::ALL {
+    for &dimension in ResourceDimension::ALL {
         assert_eq!(
             evidence.consumed_in(dimension),
             0,

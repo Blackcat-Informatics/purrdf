@@ -282,7 +282,7 @@ fn plain_bind_reuse_preserves_bound_unbound_rows_and_projected_multiplicity() {
                 )
                 .expect("metered BIND");
             let evidence = outcome.evidence();
-            let consumed = ResourceDimension::ALL.map(|dimension| evidence.consumed_in(dimension));
+            let consumed = evidence.consumed();
             let errors = evidence.expression_errors().to_vec();
             let GovernedOutcome::Complete { result, .. } = outcome else {
                 panic!("the BIND fixture must complete");
@@ -1872,7 +1872,7 @@ fn bookkeeping_cell_limit_retains_saturated_forecast_refusal() {
             estimate: u64::MAX,
         })
     );
-    for dimension in ResourceDimension::ALL {
+    for &dimension in ResourceDimension::ALL {
         assert_eq!(outcome.evidence().consumed_in(dimension), 0);
     }
     assert_eq!(
@@ -1938,7 +1938,7 @@ fn admission_refuses_an_estimated_ceiling_breach_before_evaluating() {
 
     // BEFORE evaluating. Every counter is engaged (METERED), so a single charge anywhere
     // would show up — and none did.
-    for dimension in ResourceDimension::ALL {
+    for &dimension in ResourceDimension::ALL {
         assert_eq!(
             exhausted.evidence.consumed_in(dimension),
             0,
