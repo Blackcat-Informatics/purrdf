@@ -123,7 +123,9 @@ pub enum RequestError {
     },
     /// A projected variable was supplied in a literal's datatype position.
     VariableDatatype {
-        /// Original variable name.
+        /// Original caller-supplied pattern, before stand-in rewriting.
+        pattern: String,
+        /// Normalized variable name, without its `?` or `$` marker.
         variable: String,
         /// Literal lexical form.
         lexical_form: String,
@@ -205,7 +207,7 @@ impl StructuredError for RequestError {
         ModuleArgument { argument } => "reasoning-module-argument" { "argument" => Text(argument) },
         UnrecordedSession { service, spelling } => "reasoning-unrecorded-session" { "service" => Code(service.as_str()), "spelling" => Text(spelling) },
         VariableMarker { pattern, marker } => "reasoning-variable-marker" { "pattern" => Text(pattern), "marker" => Character(*marker) },
-        VariableDatatype { variable, lexical_form, datatype } => "reasoning-variable-datatype" { "variable" => Text(variable), "lexical_form" => Text(lexical_form), "datatype" => Iri(datatype) },
+        VariableDatatype { pattern, variable, lexical_form, datatype } => "reasoning-variable-datatype" { "pattern" => Text(pattern), "variable" => Text(variable), "lexical_form" => Text(lexical_form), "datatype" => Iri(datatype) },
         ExplanationLock => "reasoning-explanation-lock" {},
     }
 }

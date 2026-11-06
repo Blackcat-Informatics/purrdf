@@ -3794,7 +3794,7 @@ fn parse_bgp(text: &str) -> Result<Vec<purrdf_entail::QTriple>, ReasoningError> 
     // total over the term, so no stand-in can survive into a returned pattern, and a nested
     // occurrence comes back as the SAME variable a top-level one does.
     let node = |term: TermValue| -> Result<purrdf_entail::QNode, ReasoningError> {
-        restore_query_vars(term, &slot, &names)
+        restore_query_vars(term, &slot, &names, text)
     };
     let mut bgp = Vec::new();
     // `quads()` yields interned ids in document order, so the pattern's own triple order —
@@ -3857,7 +3857,8 @@ fn parse_bgp(text: &str) -> Result<Vec<purrdf_entail::QTriple>, ReasoningError> 
 ///
 /// `slot` is [`parse_bgp`]'s own reader, so the two cannot disagree about which IRIs are
 /// stand-ins, and `names` is its variable table, so a variable comes back under the name the
-/// caller actually wrote and a refusal can say which one it means.
+/// caller actually wrote and a refusal can say which one it means. `pattern` retains the
+/// caller's original spelling when a datatype variable must be refused.
 ///
 /// # Errors
 ///
@@ -3868,6 +3869,7 @@ fn restore_query_vars(
     term: TermValue,
     slot: &impl Fn(&str) -> Option<usize>,
     names: &[String],
+    pattern: &str,
 ) -> Result<purrdf_entail::QNode, ReasoningError> {
     term.try_fold_owned(
         |term| match term {
@@ -3881,6 +3883,7 @@ fn restore_query_vars(
                 ..
             } => match slot(datatype) {
                 Some(index) => Err(RequestError::VariableDatatype {
+                    pattern: pattern.to_owned(),
                     variable: names[index].clone(),
                     lexical_form: lexical_form.clone(),
                     datatype: datatype.clone(),
@@ -8567,6 +8570,7 @@ _:facet <http://www.w3.org/2001/XMLSchema#pattern> "[0-9]+"^^<http://www.w3.org/
 
         for pattern in [
             "?s <http://example.org/p> \"5\"^^?d .\n",
+            "$s <http://example.org/p> \"5\"^^$d .\n",
             "?d <http://example.org/p> \"5\"^^?d .\n",
             "?s <http://example.org/p> \"5\"^^?d .\n?s <http://example.org/p> ?o .\n",
             "?a <http://example.org/q> \
@@ -8586,7 +8590,15 @@ _:facet <http://www.w3.org/2001/XMLSchema#pattern> "[0-9]+"^^<http://www.w3.org/
                          be refused rather than answered: {}",
                         answers.answer()
                     ),
-                    Err(refusal) => refusal.to_string(),
+                    Err(refusal) => {
+                        let fields =
+                            crate::native_error::to_json(&refusal).expect("native pattern refusal");
+                        let request = &fields["fields"]["cause"]["value"]["fields"];
+                        assert_eq!(request["pattern"]["kind"].as_str(), Some("text"));
+                        assert_eq!(request["pattern"]["value"].as_str(), Some(pattern));
+                        assert_eq!(request["variable"]["value"].as_str(), Some("d"));
+                        refusal.to_string()
+                    }
                 };
                 assert!(
                     refusal.contains("a variable is not a datatype IRI"),
@@ -10428,7 +10440,7 @@ mod term_walk_tests {
             );
             malformed += usize::from(value.to_rdf_term().is_err());
             assert_eq!(emit(&value), reference_emit(&value), "seed {seed}");
-            let restored = restore_query_vars(value.clone(), &slot, &names);
+            let restored = restore_query_vars(value.clone(), &slot, &names, "");
             refused += usize::from(restored.is_err());
             assert_eq!(
                 format!("{:?}", restored.map_err(|error| error.to_string())),
