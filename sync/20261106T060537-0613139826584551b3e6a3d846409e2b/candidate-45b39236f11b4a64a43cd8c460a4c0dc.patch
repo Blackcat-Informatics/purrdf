@@ -1,0 +1,355 @@
+diff --git CHANGELOG.md CHANGELOG.md
+index 77d2e8167..35d775784 100644
+--- CHANGELOG.md
++++ CHANGELOG.md
+@@ -13,6 +13,11 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
+   reader. This corrects the emitted type-entry bytes; the untyped expanded byte
+   baseline is unchanged.
+ 
++- **Typed skipped-query diagnostics (breaking Rust API):** slice ownership
++  diagnostics retain original UTF-8 and SPARQL errors through
++  `QueryArtifactError`. `OwnershipDiagnostic` is non-exhaustive; malformed query
++  artifacts remain nonfatal findings and valid artifacts still contribute edges.
++
+ - **General prepared chase certificates (breaking Rust API):** prepared admission
+   exposes an opaque, owned proof with its criterion, law version and program
+   identity. Explicit WA evidence remains available by borrowed view. Entailment
+diff --git crates/slice/src/lib.rs crates/slice/src/lib.rs
+index 78e734e39..b7631f664 100644
+--- crates/slice/src/lib.rs
++++ crates/slice/src/lib.rs
+@@ -49,8 +49,8 @@ pub use fix_deps::{ManifestPatch, compute_fix_deps};
+ pub use list_functions::emit_list_functions;
+ pub use ownership::{
+     ArtifactEvidence, DependencyEdge, EdgeEvidence, EdgeKind, OwnershipAnalyzer,
+-    OwnershipDiagnostic, OwnershipReport, OwnershipStatus, ReconciliationStatus, SliceIri,
+-    TermOwnership,
++    OwnershipDiagnostic, OwnershipReport, OwnershipStatus, QueryArtifactError,
++    ReconciliationStatus, SliceIri, TermOwnership,
+ };
+ pub use prefix_emit::{emit_core_prefixes, emit_jsonld_context};
+ pub use prefix_lint::lint_prefix_consistency;
+diff --git crates/slice/src/ownership.rs crates/slice/src/ownership.rs
+index cfce47214..1eeba8319 100644
+--- crates/slice/src/ownership.rs
++++ crates/slice/src/ownership.rs
+@@ -41,6 +41,9 @@ use crate::error::SliceError;
+ use crate::rdf_query::{Dataset, NamedNode};
+ use crate::vocab::SliceVocab;
+ 
++mod query_error;
++pub use query_error::QueryArtifactError;
++
+ // ── Namespace constants ───────────────────────────────────────────────────────
+ //
+ // Only W3C terms are hardcoded; the slice-framework vocabulary (the ownership
+@@ -156,6 +159,19 @@ pub enum EdgeKind {
+     Generated,
+ }
+ 
++impl purrdf_hash::error::StructuredError for EdgeKind {
++    purrdf_hash::error_visit! {
++        Ontology => "slice-edge-ontology" {},
++        Shape => "slice-edge-shape" {},
++        Mapping => "slice-edge-mapping" {},
++        Query => "slice-edge-query" {},
++        Test => "slice-edge-test" {},
++        Example => "slice-edge-example" {},
++        Documentation => "slice-edge-documentation" {},
++        Generated => "slice-edge-generated" {},
++    }
++}
++
+ impl EdgeKind {
+     /// Whether this edge kind reconciles against `<vocab>sliceDependsOn`
+     /// (a documentation link must not become a build dependency — RFC §10).
+@@ -218,6 +234,7 @@ pub struct DependencyEdge {
+ /// A non-fatal observation produced during analysis (conflicts, mismatches,
+ /// stale/undeclared dependencies, unparsable queries).
+ #[derive(Debug, Clone, PartialEq, Eq)]
++#[non_exhaustive]
+ pub enum OwnershipDiagnostic {
+     /// A term is claimed by multiple slices.
+     Conflict {
+@@ -265,11 +282,70 @@ pub enum OwnershipDiagnostic {
+         slice: SliceIri,
+         /// The artifact's normalized logical path within its slice.
+         logical_path: String,
+-        /// The parser's error message.
+-        message: String,
++        /// The original decoding or parsing refusal.
++        cause: QueryArtifactError,
+     },
+ }
+ 
++impl purrdf_hash::error::StructuredError for OwnershipDiagnostic {
++    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
++        use purrdf_hash::error::{ErrorValue, visit_list};
++        match self {
++            Self::Conflict { term, claimants } => {
++                visitor.variant("slice-ownership-conflict");
++                visitor.value(Some("term"), ErrorValue::Iri(term.as_str()));
++                visit_list(
++                    visitor,
++                    Some("claimants"),
++                    claimants.iter().map(|iri| ErrorValue::Iri(iri)),
++                );
++            }
++            Self::Mismatch {
++                term,
++                declared,
++                physical,
++            } => {
++                visitor.variant("slice-ownership-mismatch");
++                visitor.value(Some("term"), ErrorValue::Iri(term.as_str()));
++                visitor.value(Some("declared"), ErrorValue::Iri(declared));
++                visitor.value(Some("physical"), ErrorValue::Iri(physical));
++            }
++            Self::UndeclaredDependency {
++                from_slice,
++                to_slice,
++                edge_kind,
++            } => {
++                visitor.variant("slice-ownership-undeclared-dependency");
++                visitor.value(Some("from_slice"), ErrorValue::Iri(from_slice));
++                visitor.value(Some("to_slice"), ErrorValue::Iri(to_slice));
++                visitor.value(Some("edge_kind"), ErrorValue::Record(edge_kind));
++            }
++            Self::StaleDependency {
++                from_slice,
++                to_slice,
++            } => {
++                visitor.variant("slice-ownership-stale-dependency");
++                visitor.value(Some("from_slice"), ErrorValue::Iri(from_slice));
++                visitor.value(Some("to_slice"), ErrorValue::Iri(to_slice));
++            }
++            Self::Unowned { term } => {
++                visitor.variant("slice-ownership-unowned");
++                visitor.value(Some("term"), ErrorValue::Iri(term.as_str()));
++            }
++            Self::UnparseableQuery {
++                slice,
++                logical_path,
++                cause,
++            } => {
++                visitor.variant("slice-ownership-unparseable-query");
++                visitor.value(Some("slice"), ErrorValue::Iri(slice));
++                visitor.value(Some("logical_path"), ErrorValue::Text(logical_path));
++                visitor.value(Some("cause"), ErrorValue::Cause(cause));
++            }
++        }
++    }
++}
++
+ /// The complete result of an ownership + dependency analysis.
+ #[derive(Debug, Clone)]
+ pub struct OwnershipReport {
+@@ -507,11 +583,11 @@ impl<'a> OwnershipAnalyzer<'a> {
+                 if kind == EdgeKind::Query {
+                     let referenced = match extract_query_iris(artifact, &self.parser_options) {
+                         Ok(set) => set,
+-                        Err(message) => {
++                        Err(cause) => {
+                             diagnostics.push(OwnershipDiagnostic::UnparseableQuery {
+                                 slice: from.clone(),
+                                 logical_path: artifact.logical_path.clone(),
+-                                message,
++                                cause,
+                             });
+                             continue;
+                         }
+@@ -828,12 +904,11 @@ fn collect_term_iri_refs<'a>(store: &'a RdfDataset, term: TermId, out: &mut BTre
+ fn extract_query_iris(
+     artifact: &ArtifactRecord,
+     options: &ParserOptions,
+-) -> Result<BTreeSet<NamedNode>, String> {
+-    let text = std::str::from_utf8(&artifact.content)
+-        .map_err(|e| format!("query is not valid UTF-8: {e}"))?;
++) -> Result<BTreeSet<NamedNode>, QueryArtifactError> {
++    let text = std::str::from_utf8(&artifact.content).map_err(QueryArtifactError::Utf8)?;
+     let query = SparqlParser::new()
+         .parse_query_with(text, options)
+-        .map_err(|e| e.to_string())?;
++        .map_err(QueryArtifactError::Sparql)?;
+ 
+     let mut out: BTreeSet<NamedNode> = BTreeSet::new();
+     match &query {
+diff --git crates/slice/src/ownership/query_error.rs crates/slice/src/ownership/query_error.rs
+new file mode 100644
+index 000000000..e06140a8e
+--- /dev/null
++++ crates/slice/src/ownership/query_error.rs
+@@ -0,0 +1,35 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! Original nonfatal query-artifact refusals, independent of their source bytes.
++
++/// Why an ownership analyzer skipped a query artifact.
++///
++/// These causes retain their original fields after the catalog is dropped.
++/// A refusal remains a diagnostic; it does not fail the ownership analysis.
++#[derive(Debug, Clone, PartialEq, Eq)]
++#[non_exhaustive]
++pub enum QueryArtifactError {
++    /// The artifact was not UTF-8, before any SPARQL parsing was attempted.
++    Utf8(core::str::Utf8Error),
++    /// The native SPARQL parser refused the decoded artifact.
++    Sparql(purrdf_sparql_algebra::ParseError),
++}
++
++impl core::fmt::Display for QueryArtifactError {
++    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
++        match self {
++            Self::Utf8(cause) => write!(formatter, "query is not valid UTF-8: {cause}"),
++            Self::Sparql(cause) => cause.fmt(formatter),
++        }
++    }
++}
++
++purrdf_hash::error_sources!(QueryArtifactError, Utf8, Sparql);
++
++impl purrdf_hash::error::StructuredError for QueryArtifactError {
++    purrdf_hash::error_visit! {
++        Utf8(cause) => "slice-query-utf8" { "cause" => Cause(cause) },
++        Sparql(cause) => "slice-query-sparql" { "cause" => Cause(cause) },
++    }
++}
+diff --git crates/slice/tests/ownership_tests.rs crates/slice/tests/ownership_tests.rs
+index dda19c76e..5be34f530 100644
+--- crates/slice/tests/ownership_tests.rs
++++ crates/slice/tests/ownership_tests.rs
+@@ -12,7 +12,7 @@ use purrdf_testkit::temp_dir;
+ 
+ use purrdf_slice::{
+     EdgeKind, NamedNode, OwnershipAnalyzer, OwnershipDiagnostic, OwnershipStatus, ParserOptions,
+-    ReconciliationStatus, SliceCatalog, SliceVocab,
++    QueryArtifactError, ReconciliationStatus, SliceCatalog, SliceVocab,
+ };
+ 
+ /// Pure fixtures use a caller-supplied example.org vocabulary (the slice
+@@ -259,6 +259,9 @@ fn ownership_mismatch() {
+ 
+ #[test]
+ fn parsed_not_textual_edges() {
++    use purrdf_hash::error::ErrorValue;
++    use purrdf_testkit::error_capture::Capture;
++
+     let tmp = temp_dir!().unwrap();
+     let root = tmp.path();
+ 
+@@ -300,6 +303,23 @@ fn parsed_not_textual_edges() {
+         ),
+     );
+ 
++    let invalid_utf8 = vec![b'#', b' ', 255];
++    let expected_utf8 = std::str::from_utf8(&invalid_utf8).unwrap_err();
++    std::fs::write(
++        root.join("slices/grpB/sliceB/queries/competency/a-invalid-utf8.rq"),
++        &invalid_utf8,
++    )
++    .unwrap();
++    let invalid_sparql = "SELECT WHERE {".to_owned();
++    let expected_sparql = purrdf_sparql_algebra::SparqlParser::new()
++        .parse_query_with(&invalid_sparql, &ParserOptions::default())
++        .unwrap_err();
++    write(
++        root,
++        "slices/grpB/sliceB/queries/competency/b-invalid-sparql.rq",
++        &invalid_sparql,
++    );
++
+     let catalog = SliceCatalog::discover(
+         root,
+         test_vocab(),
+@@ -308,6 +328,69 @@ fn parsed_not_textual_edges() {
+     .unwrap();
+     let report = OwnershipAnalyzer::new(&catalog).analyze().unwrap();
+ 
++    drop(catalog);
++    drop(tmp);
++    drop(invalid_utf8);
++    drop(invalid_sparql);
++    assert!(!report.has_ownership_defect());
++    assert_eq!(report.clone().diagnostics, report.diagnostics);
++    let skipped: Vec<_> = report.diagnostics.iter().filter_map(|diagnostic| {
++        if let OwnershipDiagnostic::UnparseableQuery { slice, logical_path, cause } = diagnostic {
++            let captured = Capture::read(diagnostic);
++            assert_eq!(captured.code, "slice-ownership-unparseable-query");
++            assert!(matches!(captured.field("slice"), ErrorValue::Iri(value) if value == iri("sliceB")));
++            assert!(matches!(captured.field("logical_path"), ErrorValue::Text(value) if value == logical_path));
++            Some((slice, logical_path, cause, captured.child("cause")))
++        } else {
++            None
++        }
++    }).collect();
++    let [
++        (slice, path, utf8, captured_utf8),
++        (_, sparql_path, sparql, captured_sparql),
++    ] = skipped.as_slice()
++    else {
++        panic!("both malformed queries must remain nonfatal diagnostics");
++    };
++    assert_eq!(*slice, &iri("sliceB"));
++    assert_eq!(path.as_str(), "queries/competency/a-invalid-utf8.rq");
++    assert_eq!(
++        sparql_path.as_str(),
++        "queries/competency/b-invalid-sparql.rq"
++    );
++    assert_eq!(utf8, &&QueryArtifactError::Utf8(expected_utf8));
++    assert_eq!(
++        sparql,
++        &&QueryArtifactError::Sparql(expected_sparql.clone())
++    );
++    assert_eq!(
++        utf8.to_string(),
++        format!("query is not valid UTF-8: {expected_utf8}")
++    );
++    assert_eq!(sparql.to_string(), expected_sparql.to_string());
++    assert_eq!(captured_utf8.code, "slice-query-utf8");
++    assert!(matches!(
++        captured_utf8.child("cause").field("valid_up_to"),
++        ErrorValue::ByteCount(2)
++    ));
++    assert_eq!(captured_sparql.code, "slice-query-sparql");
++    assert_eq!(
++        captured_sparql.child("cause").code,
++        Capture::read(&expected_sparql).code
++    );
++    assert_eq!(
++        std::error::Error::source(*utf8)
++            .unwrap()
++            .downcast_ref::<std::str::Utf8Error>(),
++        Some(&expected_utf8)
++    );
++    assert_eq!(
++        std::error::Error::source(*sparql)
++            .unwrap()
++            .downcast_ref::<purrdf_sparql_algebra::ParseError>(),
++        Some(&expected_sparql)
++    );
++
+     // Exactly one B → A query edge, with termT as evidence.
+     let edge = report
+         .edges
+diff --git docs/MIGRATION-4.0.md docs/MIGRATION-4.0.md
+index 6b1a7d3bf..acc93189d 100644
+--- docs/MIGRATION-4.0.md
++++ docs/MIGRATION-4.0.md
+@@ -1227,3 +1227,16 @@ parameter slots are reset before applying its dictionary. No execution inputs
+ are retained from a previous call. Ordinary, RDFLib, governed and entailment
+ query methods accept the same coordinate keywords; parser/provider settings
+ remain preparation-time configuration. See the [Python API reference](book/src/reference/python-api.md#supplied-query-time-and-entropy).
++
++## Slice ownership query diagnostics
++
++`OwnershipDiagnostic` is non-exhaustive. Its `UnparseableQuery` variant replaces
++`message: String` with `cause: QueryArtifactError`, retaining the original
++`Utf8Error` or SPARQL `ParseError`. Use `cause.to_string()` at the presentation
++boundary for the former message, or inspect the native cause through `source()`
++and `StructuredError`. External matches need an arm for unfamiliar diagnostics.
++
++The causes, owning slice and logical path remain available after the catalog is
++dropped, including in cloned reports. Malformed query artifacts are still skipped
++in artifact order; valid queries continue to contribute dependency evidence.
++Python's ownership lint and ownership-defect classification are unchanged.

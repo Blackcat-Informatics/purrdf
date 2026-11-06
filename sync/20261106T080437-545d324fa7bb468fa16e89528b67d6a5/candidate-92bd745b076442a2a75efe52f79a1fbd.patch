@@ -1,0 +1,164 @@
+diff --git CHANGELOG.md CHANGELOG.md
+index b47e216cf..c5b3f848a 100644
+--- CHANGELOG.md
++++ CHANGELOG.md
+@@ -8,6 +8,12 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
+ 
+ ## [Unreleased]
+ 
++- **Native retrieval refusals (breaking Rust API):**
++  `purrdf_cli::file_retrieval_iri` returns the original `SliceError` instead of
++  `String`, retaining the path and filesystem or IRI cause. The CLI keeps its
++  existing path diagnostic and `--base` hint. `PremiseIriError` exposes its
++  original IRI condition through borrowed structured inspection.
++
+ - **Expanded JSON-LD and YAML-LD types:** node `@type` entries now use IRI strings,
+   so typed nodes and reifier annotations round-trip through the strict native
+   reader. This corrects the emitted type-entry bytes; the untyped expanded byte
+diff --git crates/cli/src/source.rs crates/cli/src/source.rs
+index 9d0f9634f..d2e447abd 100644
+--- crates/cli/src/source.rs
++++ crates/cli/src/source.rs
+@@ -321,29 +321,25 @@ pub(crate) fn read_raw_bytes_bounded(path: &str, maximum: usize) -> Result<Vec<u
+ /// the working directory or on `..` segments in the argument. A path that cannot be
+ /// expressed as a `file://` IRI is a hard error, never a silent fall back to "no base".
+ pub(crate) fn retrieval_base_iri(path: &str) -> Result<String, CliError> {
+-    purrdf::slice::retrieval_base_iri(std::path::Path::new(path))
+-        .map(|base| base.as_str().to_owned())
+-        .map_err(|error| {
+-            CliError::Runtime(format!(
+-                "{}: {error}; pass --base explicitly",
+-                display_path(path)
+-            ))
+-        })
++    file_retrieval_iri(path).map_err(|error| {
++        CliError::Runtime(format!(
++            "{}: {error}; pass --base explicitly",
++            display_path(path)
++        ))
++    })
+ }
+ 
+-/// The crate-internal `retrieval_base_iri`, for a consumer outside this crate — the
+-/// integration tests, which assert against the pipeline's OWN derivation rather than a
+-/// second transcription of it.
++/// Derive the same file retrieval IRI the CLI uses, retaining the native path refusal.
+ ///
+-/// A second implementation in the test harness is exactly how a platform divergence hides:
+-/// the tests agreed with themselves while the binary emitted something else. The error is
+-/// flattened to a `String` because `CliError` is crate-internal.
++/// The shared slice derivation owns the original path and filesystem or IRI cause.
++/// The CLI adds its path display and `--base` hint only when presenting the refusal.
+ ///
+ /// # Errors
+ ///
+ /// When `path` does not canonicalize, is not UTF-8, or has no usable `file://` IRI.
+-pub fn file_retrieval_iri(path: &str) -> Result<String, String> {
+-    retrieval_base_iri(path).map_err(|error| error.to_string())
++pub fn file_retrieval_iri(path: &str) -> Result<String, purrdf::slice::SliceError> {
++    purrdf::slice::retrieval_base_iri(std::path::Path::new(path))
++        .map(|base| base.as_str().to_owned())
+ }
+ 
+ /// The RFC-8089 `file://` IRI of an ALREADY-ABSOLUTE platform path, touching no filesystem.
+@@ -875,3 +871,37 @@ pub(crate) fn serialize_input_to_nquads(
+ 
+     run_over_input(path, format, base, input_options, NQuadsOp, canonical)
+ }
++
++#[cfg(test)]
++mod retrieval_tests {
++    use super::{display_path, file_retrieval_iri, retrieval_base_iri};
++
++    #[test]
++    fn retrieval_refusal_retains_the_path_and_native_io_cause_before_cli_presentation() {
++        let missing = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
++            .join("Cargo.toml")
++            .join("missing.ttl");
++        let path = missing.to_str().expect("manifest path is UTF-8");
++        let expected = std::fs::canonicalize(&missing)
++            .expect_err("a regular manifest file cannot contain a child path");
++        let error = file_retrieval_iri(path).expect_err("missing file cannot supply a base");
++        let purrdf::slice::SliceError::InvalidPath(
++            purrdf::slice::error::PathRefusal::Canonicalize {
++                path: offered,
++                cause,
++            },
++        ) = &error
++        else {
++            panic!("expected original path refusal, got {error:?}");
++        };
++        assert_eq!(offered, &missing);
++        assert_eq!(cause.original().kind(), expected.kind());
++        assert_eq!(cause.original().raw_os_error(), expected.raw_os_error());
++        assert_eq!(
++            retrieval_base_iri(path)
++                .expect_err("CLI must refuse the same missing file")
++                .to_string(),
++            format!("{}: {error}; pass --base explicitly", display_path(path))
++        );
++    }
++}
+diff --git crates/validate/src/regime.rs crates/validate/src/regime.rs
+index b601542a2..8300acd74 100644
+--- crates/validate/src/regime.rs
++++ crates/validate/src/regime.rs
+@@ -3940,6 +3940,15 @@ impl std::error::Error for PremiseIriError {
+     }
+ }
+ 
++impl purrdf_hash::error::StructuredError for PremiseIriError {
++    purrdf_hash::error_visit! {
++        @record self { iri, cause } => "premise-iri-not-absolute" {
++            "iri" => Text(&self.iri),
++            "cause" => Cause(&self.cause),
++        }
++    }
++}
++
+ /// Check that every premise IRI is an absolute IRI, in order, refusing the first that is not.
+ ///
+ /// The workspace IRI parser ([`purrdf_iri::is_absolute`]) judges each one. A string it refuses
+diff --git crates/validate/tests/premise_iri_policy.rs crates/validate/tests/premise_iri_policy.rs
+index 7518e6273..e967d1767 100644
+--- crates/validate/tests/premise_iri_policy.rs
++++ crates/validate/tests/premise_iri_policy.rs
+@@ -107,6 +107,15 @@ fn the_presentation_nests_the_iri_parser_condition() {
+     ] {
+         let error = check_premise_iris(&[ONTOLOGY, premise]).expect_err(premise);
+         assert_eq!(error.iri(), premise);
++        let original = purrdf_validate::native_error::to_json(&error)
++            .expect("the original premise refusal is inspectable");
++        assert_eq!(original["code"].as_str(), Some("premise-iri-not-absolute"));
++        assert_eq!(original["fields"]["iri"]["value"].as_str(), Some(premise));
++        assert_eq!(
++            original["fields"]["cause"]["value"],
++            purrdf_validate::native_error::to_json(error.cause())
++                .expect("the original IRI condition is inspectable")
++        );
+         let presentation = error.presentation();
+         assert_eq!(presentation.message_id(), "premise-iri-not-absolute");
+         // The message every host renders IS the presentation's English, and it is the
+diff --git docs/MIGRATION-4.0.md docs/MIGRATION-4.0.md
+index e52206d32..aa6c0a714 100644
+--- docs/MIGRATION-4.0.md
++++ docs/MIGRATION-4.0.md
+@@ -394,7 +394,17 @@ its `reason` field is a borrowed nested cause, and `at` retains the original byt
+ offset. Native Unicode-escape and language-tag causes are also available through
+ the standard error-source chain. Human messages and byte offsets are unchanged.
+ 
+-## Native import and proof refusals
++## Native retrieval, import and proof refusals
++
++`purrdf_cli::file_retrieval_iri` now returns
++`Result<String, purrdf::slice::SliceError>` instead of `Result<String, String>`.
++Match the native refusal or inspect its structured fields and standard source
++chain. Call `to_string()` when presenting it. The public helper renders the
++native slice error; the CLI adds its existing path display and `--base` hint
++at its presentation boundary. Successful file IRIs are unchanged.
++
++`PremiseIriError` supports borrowed structured inspection of its original `iri`
++and native IRI `cause`, alongside its existing accessors and source chain.
+ 
+ `purrdf_core::imports::ImportKeyError` is non-exhaustive. Include a wildcard
+ when matching it. `NotAbsolute.reason` now holds `Option<purrdf_iri::IriError>`

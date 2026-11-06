@@ -1,0 +1,943 @@
+diff --git CHANGELOG.md CHANGELOG.md
+index a56a6c604..fd2768aae 100644
+--- CHANGELOG.md
++++ CHANGELOG.md
+@@ -8,6 +8,18 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
+ 
+ ## [Unreleased]
+ 
++- **Typed skipped-query diagnostics (breaking Rust API):** slice ownership
++  diagnostics retain original UTF-8 and SPARQL errors through
++  `QueryArtifactError`. `OwnershipDiagnostic` is non-exhaustive; malformed query
++  artifacts remain nonfatal findings and valid artifacts still contribute edges.
++
++- **General prepared chase certificates (breaking Rust API):** prepared admission
++  exposes an opaque, owned proof with its criterion, law version and program
++  identity. Explicit WA evidence remains available by borrowed view. Entailment
++  borrows its retained native summary and exposes WA counts as optional values;
++  `TerminationCertificate` no longer implements `Copy`. Current WA proofs,
++  grants, witnesses and report bytes retain their existing behavior.
++
+ - **Typed USTAR refusals (breaking Rust API):** archive readers, member
+   iterators and writers return `UstarError` with original offsets, lengths,
+   size-field bytes and native UTF-8 causes. Projection packages preserve that
+diff --git crates/datalog/src/chase.rs crates/datalog/src/chase.rs
+index 264e6b5aa..ff7372576 100644
+--- crates/datalog/src/chase.rs
++++ crates/datalog/src/chase.rs
+@@ -134,8 +134,9 @@ use crate::store::{Arity, Bound, RelationStore, ShapeFact, StoreShape, TermInter
+ 
+ mod termination;
+ pub use termination::{
+-    AnalysisLimits, AnalysisReport, PreparedChase, SourcePosition, TerminationError,
+-    TerminationViolation, WA_LAW_VERSION, WaCertificate, certify, certify_with,
++    AnalysisLimits, AnalysisReport, ChaseCertificate, PreparedChase, SourcePosition,
++    TerminationCriterion, TerminationError, TerminationViolation, WA_LAW_VERSION, WaCertificate,
++    certify, certify_with,
+ };
+ 
+ /// What the termination analysis proved about a clause set.
+@@ -143,6 +144,7 @@ pub use termination::{
+ /// Computed by [`certify`] and carried on [`ChaseOutcome`] so a caller can put the
+ /// certificate in a report next to the facts it justifies.
+ #[derive(Debug, Clone, PartialEq, Eq)]
++#[non_exhaustive]
+ pub enum ChaseTermination {
+     /// No existential edge of the position dependency graph lies in a cycle.
+     ///
+@@ -168,8 +170,20 @@ pub enum ChaseTermination {
+ 
+ impl ChaseTermination {
+     /// Whether the analysis certified termination.
+-    pub fn is_certified(&self) -> bool {
+-        matches!(self, Self::WeaklyAcyclic { .. })
++    pub const fn is_certified(&self) -> bool {
++        match self {
++            Self::WeaklyAcyclic { .. } => true,
++            Self::Uncertified { .. } => false,
++        }
++    }
++
++    /// The sufficient criterion proved by this summary, absent for a refusal.
++    #[must_use]
++    pub const fn criterion(&self) -> Option<TerminationCriterion> {
++        match self {
++            Self::WeaklyAcyclic { .. } => Some(TerminationCriterion::WeaklyAcyclic),
++            Self::Uncertified { .. } => None,
++        }
+     }
+ }
+ 
+@@ -1047,10 +1061,10 @@ where
+ 
+     /// The termination certificate that admitted the program.
+     ///
+-    /// Always [`ChaseTermination::WeaklyAcyclic`] on a successful run — the
++    /// Its native criterion certified the program before execution. The
+     /// [`Uncertified`](ChaseTermination::Uncertified) case is returned as
+-    /// [`ChaseError::Termination`] instead — and carried here so a caller can report the
+-    /// proof alongside the facts it justifies.
++    /// [`ChaseError::Termination`] instead. The certified summary accompanies the facts
++    /// so a caller can report the proof alongside the conclusions it justifies.
+     pub fn termination(&self) -> &ChaseTermination {
+         &self.termination
+     }
+diff --git crates/datalog/src/chase/termination.rs crates/datalog/src/chase/termination.rs
+index c1555e509..2097c4142 100644
+--- crates/datalog/src/chase/termination.rs
++++ crates/datalog/src/chase/termination.rs
+@@ -18,6 +18,38 @@ use purrdf_lex::allocation::{Admission, Memory, Resident, StorageError};
+ /// Version of the refined, frontier-dependent WA proof law.
+ pub const WA_LAW_VERSION: u32 = 1;
+ 
++/// The sufficient termination criterion proved by native admission.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++#[non_exhaustive]
++pub enum TerminationCriterion {
++    /// Constant-refined, frontier-dependent weak acyclicity.
++    WeaklyAcyclic,
++}
++
++impl TerminationCriterion {
++    /// Stable name of the criterion, independent of human presentation.
++    #[must_use]
++    pub const fn label(self) -> &'static str {
++        match self {
++            Self::WeaklyAcyclic => "weakly-acyclic",
++        }
++    }
++
++    /// Version of the evidence law this criterion currently proves.
++    #[must_use]
++    pub const fn law_version(self) -> u32 {
++        match self {
++            Self::WeaklyAcyclic => WA_LAW_VERSION,
++        }
++    }
++}
++
++impl purrdf_hash::error::StructuredError for TerminationCriterion {
++    purrdf_hash::error_visit! {
++        WeaklyAcyclic => "chase-criterion-weakly-acyclic" {},
++    }
++}
++
+ /// Logical work ceiling for preparation or independent checking.
+ #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+ pub struct AnalysisLimits {
+@@ -86,6 +118,7 @@ impl core::fmt::Display for TerminationViolation {
+ 
+ /// No error variant is a termination certificate or a proof of nontermination.
+ #[derive(Clone, Copy, Debug, PartialEq, Eq)]
++#[non_exhaustive]
+ pub enum TerminationError {
+     /// The sufficient WA criterion did not hold.
+     Uncertified(TerminationViolation),
+@@ -249,7 +282,7 @@ impl<A: Admission> WaCertificate<A> {
+         match checked {
+             Ok(verification) => Ok(PreparedChase {
+                 program,
+-                certificate: self,
++                certificate: ChaseCertificate { evidence: self },
+                 verification,
+             }),
+             Err(original) => {
+@@ -320,19 +353,73 @@ impl<A: Admission> WaCertificate<A> {
+     }
+ }
+ 
++/// Verified native admission evidence with its original allocation owner.
++/// The representation is private so additional criteria can retain their own
++/// evidence without changing the prepared executor's public certificate type.
++/// This owner neither clones evidence nor allocates another copy of it.
++pub struct ChaseCertificate<A: Admission = Resident> {
++    evidence: WaCertificate<A>,
++}
++purrdf_hash::debug_non_exhaustive!([A: Admission] ChaseCertificate<A> { evidence });
++
++impl<A: Admission> ChaseCertificate<A> {
++    /// The criterion independently checked before this owner was constructed.
++    #[must_use]
++    pub const fn criterion(&self) -> TerminationCriterion {
++        TerminationCriterion::WeaklyAcyclic
++    }
++
++    /// Version retained in the original admitted evidence.
++    #[must_use]
++    pub const fn law_version(&self) -> u32 {
++        self.evidence.law
++    }
++
++    /// Identity of the complete authored program admitted by this evidence.
++    #[must_use]
++    pub const fn program_identity(&self) -> &[u8; 32] {
++        self.evidence.program_identity()
++    }
++
++    /// Original production work and retained evidence layouts.
++    #[must_use]
++    pub const fn report(&self) -> AnalysisReport {
++        self.evidence.report()
++    }
++
++    /// Native summary carried by an execution admitted under this certificate.
++    #[must_use]
++    pub fn summary(&self) -> ChaseTermination {
++        self.evidence.summary()
++    }
++
++    /// Original WA positions and ranks, when this is a WA proof.
++    #[must_use]
++    pub const fn weakly_acyclic(&self) -> Option<&WaCertificate<A>> {
++        Some(&self.evidence)
++    }
++
++    /// Destroy evidence before returning its original allocation grant.
++    /// # Errors
++    /// Preserves the original account's refund refusal.
++    pub fn close(self) -> Result<(), TerminationError> {
++        self.evidence.close()
++    }
++}
++
+ /// Immutable program and independently checked admission, reusable across source stores.
+ /// Execution has the existing chase allocation/interrupt contract. Call [`Self::close`]
+ /// when done to reclaim the original evidence grant with typed failure.
+ pub struct PreparedChase<'p, A: Admission, const N: usize = 4> {
+     program: &'p [DlClause<N>],
+-    certificate: WaCertificate<A>,
++    certificate: ChaseCertificate<A>,
+     verification: AnalysisReport,
+ }
+ purrdf_hash::debug_non_exhaustive!(['p, A: Admission, const N: usize] PreparedChase<'p, A, N> { certificate, verification });
+ impl<A: Admission, const N: usize> PreparedChase<'_, A, N> {
+     /// The original verified admission evidence.
+     #[must_use]
+-    pub const fn certificate(&self) -> &WaCertificate<A> {
++    pub const fn certificate(&self) -> &ChaseCertificate<A> {
+         &self.certificate
+     }
+     /// Work spent checking, separate from production and execution work.
+@@ -792,11 +879,23 @@ mod tests {
+     #[test]
+     fn prepared_admission_reuses_evidence_without_changing_chase_results() {
+         let program = [rule()];
+-        let prepared = certify(&program)
+-            .unwrap()
++        let evidence = certify(&program).unwrap();
++        let original_work = evidence.report();
++        let original_program = *evidence.program_identity();
++        let original_summary = evidence.summary();
++        let original_positions = evidence.positions().as_ptr();
++        let original_ranks = evidence.ranks().as_ptr();
++        let prepared = evidence
+             .prepare(&program, AnalysisLimits::default(), None)
+             .unwrap();
+-        let original_work = prepared.certificate().report();
++        let certificate = prepared.certificate();
++        assert_eq!(certificate.criterion(), TerminationCriterion::WeaklyAcyclic);
++        assert_eq!(certificate.law_version(), WA_LAW_VERSION);
++        assert_eq!(certificate.program_identity(), &original_program);
++        assert_eq!(certificate.summary(), original_summary);
++        let wa = certificate.weakly_acyclic().expect("prepared WA evidence");
++        assert_eq!(wa.positions().as_ptr(), original_positions);
++        assert_eq!(wa.ranks().as_ptr(), original_ranks);
+         let check_work = prepared.verification();
+         for _ in 0..2 {
+             let reference = super::super::chase(&program, edb()).unwrap();
+@@ -999,9 +1098,12 @@ mod tests {
+             None,
+         )
+         .unwrap();
++        let prepared = evidence
++            .prepare(&program, AnalysisLimits::default(), None)
++            .unwrap();
+         refuse.set(true);
+         assert_eq!(
+-            evidence.close(),
++            prepared.close(),
+             Err(TerminationError::Storage(StorageError::AdmissionFailed))
+         );
+         assert!(retained.get() > 0);
+diff --git crates/entail/src/lib.rs crates/entail/src/lib.rs
+index a3826e9bb..4172c9b79 100644
+--- crates/entail/src/lib.rs
++++ crates/entail/src/lib.rs
+@@ -2089,15 +2089,26 @@ mod tests {
+         let rdfs = materialize(&ds, Materialization::Rdfs).expect("closed").1;
+         let rdf_certificate = rdf.termination().expect("the RDF lane is chased");
+         let rdfs_certificate = rdfs.termination().expect("the RDFS lane is chased");
+-        assert!(rdf_certificate.existential_edges() > 0);
+-        assert!(rdf_certificate.positions() > 0);
++        assert_eq!(
++            rdf_certificate.criterion(),
++            purrdf_datalog::chase::TerminationCriterion::WeaklyAcyclic
++        );
++        assert_eq!(
++            rdf_certificate.law_version(),
++            purrdf_datalog::chase::WA_LAW_VERSION
++        );
++        assert!(rdf_certificate.summary().is_certified());
++        let rdf_edges = rdf_certificate.existential_edges().expect("WA statistics");
++        let rdf_positions = rdf_certificate.positions().expect("WA statistics");
++        assert!(rdf_edges > 0);
++        assert!(rdf_positions > 0);
+         assert_ne!(
+             rdf_certificate, rdfs_certificate,
+             "the certificate is a function of the CLAUSE SET, so two different rule tables \
+              must not prove the same thing"
+         );
+         assert!(
+-            rdfs_certificate.existential_edges() > rdf_certificate.existential_edges(),
++            rdfs_certificate.existential_edges().expect("WA statistics") > rdf_edges,
+             "RDFS states rdfs14/rdfs14a besides rdfD1/rdfD1a"
+         );
+         // It is `purrdf-datalog`'s own sentence, not a second spelling of it.
+@@ -2105,8 +2116,7 @@ mod tests {
+             rdf_certificate.to_string(),
+             format!(
+                 "weakly acyclic: {} refined position(s), {} existential edge(s), none in a cycle",
+-                rdf_certificate.positions(),
+-                rdf_certificate.existential_edges()
++                rdf_positions, rdf_edges
+             )
+         );
+         // It does NOT vary with the data — a certificate that moved per input would be
+diff --git crates/entail/src/report.rs crates/entail/src/report.rs
+index 5f1885cbb..ca36335d0 100644
+--- crates/entail/src/report.rs
++++ crates/entail/src/report.rs
+@@ -59,7 +59,7 @@ use core::fmt;
+ 
+ use purrdf_core::{DatasetView, TermRef, TermValue};
+ use purrdf_datalog::cache::ContractHash;
+-use purrdf_datalog::chase::ChaseTermination;
++use purrdf_datalog::chase::{ChaseTermination, TerminationCriterion};
+ use purrdf_datalog::seminaive::{BudgetReport, EvalOptions};
+ 
+ use crate::Regime;
+@@ -77,16 +77,10 @@ use crate::rules::{RuleId, extensions, implemented, rules};
+ /// existential edge lies in a cycle. This is the certificate that admitted the program
+ /// PurRDF actually ran, carried out to the caller instead of discarded.
+ ///
+-/// # It is a NEWTYPE, not `ChaseTermination` re-exported
+-///
+-/// `purrdf_datalog::chase::ChaseTermination` has two variants and only one of them can
+-/// reach a report: an uncertified program is
+-/// `ChaseError::Termination` and produces no run at all. Storing that enum here would
+-/// put a variant in a report that no run can carry — the same unrepresentable-state
+-/// question [`Completeness`] answers by deriving rather than storing — so the report
+-/// carries the certified case's two numbers and there is no `Uncertified` value to read. Its
+-/// fields are private and its one (crate-internal) constructor refuses the other variant,
+-/// so an uncertified verdict has no way in even from inside this crate.
++/// Its private state retains the original native summary and its criterion.
++/// The constructor accepts only a summary the native classification certifies;
++/// an uncertified program produces no completed run or report. WA-specific
++/// counts are optional so another criterion need not claim it proved WA.
+ ///
+ /// The sentence is still `purrdf-datalog`'s: [`fmt::Display`] delegates to
+ /// `ChaseTermination`'s, so the prose has one author and cannot drift.
+@@ -99,25 +93,24 @@ use crate::rules::{RuleId, extensions, implemented, rules};
+ /// // A chased lane carries its certificate.
+ /// let (_, rdfs) = materialize(&ds, Materialization::Rdfs).expect("closed");
+ /// let certificate = rdfs.termination().expect("the RDFS lane is chased");
+-/// assert!(certificate.existential_edges() > 0);
++/// assert!(certificate.existential_edges().expect("WA statistics") > 0);
+ /// assert!(certificate.to_string().starts_with("weakly acyclic: "));
+ /// // A lane that invents no term has no obligation to prove, and says so.
+ /// let (_, owl) = materialize(&ds, Materialization::OwlRl).expect("closed");
+ /// assert!(owl.termination().is_none());
+ /// ```
+-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++#[derive(Debug, Clone, PartialEq, Eq)]
+ pub struct TerminationCertificate {
+-    /// Distinct refined positions in the position dependency graph — the proof's size.
+-    positions: usize,
+-    /// Distinct existential edges checked, none of which lies in a cycle.
+-    existential_edges: usize,
++    summary: ChaseTermination,
++    criterion: TerminationCriterion,
+ }
+ 
+ impl purrdf_hash::error::StructuredError for TerminationCertificate {
+     purrdf_hash::error_visit! {
+-        @record self { positions, existential_edges } => "entailment-termination" {
+-            "positions" => Unsigned(self.positions as u128),
+-            "existential_edges" => Unsigned(self.existential_edges as u128),
++        @record self { summary, criterion } => "entailment-termination" {
++            "summary" => Record(&self.summary),
++            "criterion" => Record(&self.criterion),
++            "law_version" => Unsigned(u128::from(self.law_version())),
+         }
+     }
+ }
+@@ -129,40 +122,56 @@ impl TerminationCertificate {
+     /// `ChaseError::Termination` for it rather than an outcome — so this returning
+     /// `None` for `Uncertified` is what makes the type's invariant hold by construction
+     /// rather than by convention.
+-    pub(crate) const fn of_chase(termination: &ChaseTermination) -> Option<Self> {
+-        match termination {
+-            ChaseTermination::WeaklyAcyclic {
+-                positions,
+-                existential_edges,
+-            } => Some(Self {
+-                positions: *positions,
+-                existential_edges: *existential_edges,
+-            }),
+-            ChaseTermination::Uncertified { .. } => None,
++    pub(crate) fn of_chase(termination: &ChaseTermination) -> Option<Self> {
++        termination.criterion().map(|criterion| Self {
++            summary: termination.clone(),
++            criterion,
++        })
++    }
++
++    /// The native summary that admitted the completed run.
++    #[must_use]
++    pub const fn summary(&self) -> &ChaseTermination {
++        &self.summary
++    }
++
++    /// The sufficient criterion proved by the native admission.
++    #[must_use]
++    pub const fn criterion(&self) -> TerminationCriterion {
++        self.criterion
++    }
++
++    /// Version of the evidence law the native criterion proves.
++    #[must_use]
++    pub const fn law_version(&self) -> u32 {
++        self.criterion.law_version()
++    }
++
++    /// Distinct refined positions, when this summary proves weak acyclicity.
++    #[must_use]
++    pub const fn positions(&self) -> Option<usize> {
++        match &self.summary {
++            ChaseTermination::WeaklyAcyclic { positions, .. } => Some(*positions),
++            _ => None,
+         }
+     }
+ 
+-    /// How many distinct refined positions the dependency graph holds — the proof's size.
++    /// Checked existential edges, when this summary proves weak acyclicity.
+     #[must_use]
+-    pub const fn positions(&self) -> usize {
+-        self.positions
+-    }
+-
+-    /// How many distinct existential edges were checked, none of them in a cycle.
+-    #[must_use]
+-    pub const fn existential_edges(&self) -> usize {
+-        self.existential_edges
++    pub const fn existential_edges(&self) -> Option<usize> {
++        match &self.summary {
++            ChaseTermination::WeaklyAcyclic {
++                existential_edges, ..
++            } => Some(*existential_edges),
++            _ => None,
++        }
+     }
+ }
+ 
+ impl fmt::Display for TerminationCertificate {
+     /// `purrdf-datalog`'s own sentence, delegated rather than restated.
+     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+-        ChaseTermination::WeaklyAcyclic {
+-            positions: self.positions,
+-            existential_edges: self.existential_edges,
+-        }
+-        .fmt(f)
++        self.summary.fmt(f)
+     }
+ }
+ 
+@@ -1006,7 +1015,7 @@ impl InconsistentRun {
+ /// it by accident. What this crate adds is the two measurements the evaluator has no way
+ /// to make — which rule a committed derivation is attributed to under the active regime's
+ /// specification names, and how many conclusions the RDF 1.2 IR could not hold.
+-#[derive(Debug, Clone, Copy)]
++#[derive(Debug, Clone)]
+ pub(crate) struct RunStats {
+     /// Conclusions committed AND materialized, per [`ChaseRule`], indexed by
+     /// [`ChaseRule::index`].
+@@ -1097,7 +1106,7 @@ impl RunStats {
+     /// Assigned rather than folded: `certify` is a pure function of the clause set, so the
+     /// `1 + n` graph evaluations of one `materialize` call all compute the same
+     /// certificate, and combining `n` copies of one value would suggest they could differ.
+-    pub(crate) const fn certify(&mut self, certificate: Option<TerminationCertificate>) {
++    pub(crate) fn certify(&mut self, certificate: Option<TerminationCertificate>) {
+         if let Some(certificate) = certificate {
+             self.termination = Some(certificate);
+         }
+@@ -1404,7 +1413,7 @@ impl ReasoningReport {
+                 stats.budget,
+                 inconsistency,
+                 stats.surrogate_drops,
+-                stats.termination,
++                stats.termination.clone(),
+             )
+         })
+     }
+@@ -1725,13 +1734,13 @@ impl ReasoningReport {
+     ///
+     /// The uncertified verdict never reaches here — an existential edge in a cycle is
+     /// `ChaseError::Termination`, so the run produces no report to carry it — which is
+-    /// why [`TerminationCertificate`] holds the certified case's numbers and no variant
+-    /// for the other. What the numbers say still varies: the certificate is a function of
++    /// why [`TerminationCertificate`] retains only a certified native summary.
++    /// What the evidence says still varies: the certificate is a function of
+     /// the CLAUSE SET, so the `RDF` lane's differs from the `RDFS` lane's, and a rule
+     /// added to either moves that lane's. It does not vary with the data.
+     #[must_use]
+-    pub const fn termination(&self) -> Option<TerminationCertificate> {
+-        self.termination
++    pub const fn termination(&self) -> Option<&TerminationCertificate> {
++        self.termination.as_ref()
+     }
+ 
+     /// WHICH of the seven conclusion-directed mechanisms read an answer off this run.
+diff --git crates/entail/tests/oracle.rs crates/entail/tests/oracle.rs
+index 6bdcf0623..607e0cbba 100644
+--- crates/entail/tests/oracle.rs
++++ crates/entail/tests/oracle.rs
+@@ -5903,11 +5903,13 @@ fn render_report(out: &mut String, report: &ReasoningReport) {
+         "{indent}termination: {}",
+         report.termination().map_or_else(
+             || "none".to_owned(),
+-            |c| format!(
+-                "weakly-acyclic positions={} existential-edges={}",
+-                c.positions(),
+-                c.existential_edges()
+-            )
++            |c| match (c.positions(), c.existential_edges()) {
++                (Some(positions), Some(existential_edges)) => format!(
++                    "{} positions={positions} existential-edges={existential_edges}",
++                    c.criterion().label(),
++                ),
++                _ => format!("{} law={}", c.criterion().label(), c.law_version()),
++            }
+         )
+     );
+     let _ = writeln!(
+diff --git crates/slice/src/lib.rs crates/slice/src/lib.rs
+index 78e734e39..b7631f664 100644
+--- crates/slice/src/lib.rs
++++ crates/slice/src/lib.rs
+@@ -49,8 +49,8 @@ pub use fix_deps::{ManifestPatch, compute_fix_deps};
+ pub use list_functions::emit_list_functions;
+ pub use ownership::{
+     ArtifactEvidence, DependencyEdge, EdgeEvidence, EdgeKind, OwnershipAnalyzer,
+-    OwnershipDiagnostic, OwnershipReport, OwnershipStatus, ReconciliationStatus, SliceIri,
+-    TermOwnership,
++    OwnershipDiagnostic, OwnershipReport, OwnershipStatus, QueryArtifactError,
++    ReconciliationStatus, SliceIri, TermOwnership,
+ };
+ pub use prefix_emit::{emit_core_prefixes, emit_jsonld_context};
+ pub use prefix_lint::lint_prefix_consistency;
+diff --git crates/slice/src/ownership.rs crates/slice/src/ownership.rs
+index cfce47214..1eeba8319 100644
+--- crates/slice/src/ownership.rs
++++ crates/slice/src/ownership.rs
+@@ -41,6 +41,9 @@ use crate::error::SliceError;
+ use crate::rdf_query::{Dataset, NamedNode};
+ use crate::vocab::SliceVocab;
+ 
++mod query_error;
++pub use query_error::QueryArtifactError;
++
+ // ── Namespace constants ───────────────────────────────────────────────────────
+ //
+ // Only W3C terms are hardcoded; the slice-framework vocabulary (the ownership
+@@ -156,6 +159,19 @@ pub enum EdgeKind {
+     Generated,
+ }
+ 
++impl purrdf_hash::error::StructuredError for EdgeKind {
++    purrdf_hash::error_visit! {
++        Ontology => "slice-edge-ontology" {},
++        Shape => "slice-edge-shape" {},
++        Mapping => "slice-edge-mapping" {},
++        Query => "slice-edge-query" {},
++        Test => "slice-edge-test" {},
++        Example => "slice-edge-example" {},
++        Documentation => "slice-edge-documentation" {},
++        Generated => "slice-edge-generated" {},
++    }
++}
++
+ impl EdgeKind {
+     /// Whether this edge kind reconciles against `<vocab>sliceDependsOn`
+     /// (a documentation link must not become a build dependency — RFC §10).
+@@ -218,6 +234,7 @@ pub struct DependencyEdge {
+ /// A non-fatal observation produced during analysis (conflicts, mismatches,
+ /// stale/undeclared dependencies, unparsable queries).
+ #[derive(Debug, Clone, PartialEq, Eq)]
++#[non_exhaustive]
+ pub enum OwnershipDiagnostic {
+     /// A term is claimed by multiple slices.
+     Conflict {
+@@ -265,11 +282,70 @@ pub enum OwnershipDiagnostic {
+         slice: SliceIri,
+         /// The artifact's normalized logical path within its slice.
+         logical_path: String,
+-        /// The parser's error message.
+-        message: String,
++        /// The original decoding or parsing refusal.
++        cause: QueryArtifactError,
+     },
+ }
+ 
++impl purrdf_hash::error::StructuredError for OwnershipDiagnostic {
++    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
++        use purrdf_hash::error::{ErrorValue, visit_list};
++        match self {
++            Self::Conflict { term, claimants } => {
++                visitor.variant("slice-ownership-conflict");
++                visitor.value(Some("term"), ErrorValue::Iri(term.as_str()));
++                visit_list(
++                    visitor,
++                    Some("claimants"),
++                    claimants.iter().map(|iri| ErrorValue::Iri(iri)),
++                );
++            }
++            Self::Mismatch {
++                term,
++                declared,
++                physical,
++            } => {
++                visitor.variant("slice-ownership-mismatch");
++                visitor.value(Some("term"), ErrorValue::Iri(term.as_str()));
++                visitor.value(Some("declared"), ErrorValue::Iri(declared));
++                visitor.value(Some("physical"), ErrorValue::Iri(physical));
++            }
++            Self::UndeclaredDependency {
++                from_slice,
++                to_slice,
++                edge_kind,
++            } => {
++                visitor.variant("slice-ownership-undeclared-dependency");
++                visitor.value(Some("from_slice"), ErrorValue::Iri(from_slice));
++                visitor.value(Some("to_slice"), ErrorValue::Iri(to_slice));
++                visitor.value(Some("edge_kind"), ErrorValue::Record(edge_kind));
++            }
++            Self::StaleDependency {
++                from_slice,
++                to_slice,
++            } => {
++                visitor.variant("slice-ownership-stale-dependency");
++                visitor.value(Some("from_slice"), ErrorValue::Iri(from_slice));
++                visitor.value(Some("to_slice"), ErrorValue::Iri(to_slice));
++            }
++            Self::Unowned { term } => {
++                visitor.variant("slice-ownership-unowned");
++                visitor.value(Some("term"), ErrorValue::Iri(term.as_str()));
++            }
++            Self::UnparseableQuery {
++                slice,
++                logical_path,
++                cause,
++            } => {
++                visitor.variant("slice-ownership-unparseable-query");
++                visitor.value(Some("slice"), ErrorValue::Iri(slice));
++                visitor.value(Some("logical_path"), ErrorValue::Text(logical_path));
++                visitor.value(Some("cause"), ErrorValue::Cause(cause));
++            }
++        }
++    }
++}
++
+ /// The complete result of an ownership + dependency analysis.
+ #[derive(Debug, Clone)]
+ pub struct OwnershipReport {
+@@ -507,11 +583,11 @@ impl<'a> OwnershipAnalyzer<'a> {
+                 if kind == EdgeKind::Query {
+                     let referenced = match extract_query_iris(artifact, &self.parser_options) {
+                         Ok(set) => set,
+-                        Err(message) => {
++                        Err(cause) => {
+                             diagnostics.push(OwnershipDiagnostic::UnparseableQuery {
+                                 slice: from.clone(),
+                                 logical_path: artifact.logical_path.clone(),
+-                                message,
++                                cause,
+                             });
+                             continue;
+                         }
+@@ -828,12 +904,11 @@ fn collect_term_iri_refs<'a>(store: &'a RdfDataset, term: TermId, out: &mut BTre
+ fn extract_query_iris(
+     artifact: &ArtifactRecord,
+     options: &ParserOptions,
+-) -> Result<BTreeSet<NamedNode>, String> {
+-    let text = std::str::from_utf8(&artifact.content)
+-        .map_err(|e| format!("query is not valid UTF-8: {e}"))?;
++) -> Result<BTreeSet<NamedNode>, QueryArtifactError> {
++    let text = std::str::from_utf8(&artifact.content).map_err(QueryArtifactError::Utf8)?;
+     let query = SparqlParser::new()
+         .parse_query_with(text, options)
+-        .map_err(|e| e.to_string())?;
++        .map_err(QueryArtifactError::Sparql)?;
+ 
+     let mut out: BTreeSet<NamedNode> = BTreeSet::new();
+     match &query {
+diff --git crates/slice/src/ownership/query_error.rs crates/slice/src/ownership/query_error.rs
+new file mode 100644
+index 000000000..e06140a8e
+--- /dev/null
++++ crates/slice/src/ownership/query_error.rs
+@@ -0,0 +1,35 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! Original nonfatal query-artifact refusals, independent of their source bytes.
++
++/// Why an ownership analyzer skipped a query artifact.
++///
++/// These causes retain their original fields after the catalog is dropped.
++/// A refusal remains a diagnostic; it does not fail the ownership analysis.
++#[derive(Debug, Clone, PartialEq, Eq)]
++#[non_exhaustive]
++pub enum QueryArtifactError {
++    /// The artifact was not UTF-8, before any SPARQL parsing was attempted.
++    Utf8(core::str::Utf8Error),
++    /// The native SPARQL parser refused the decoded artifact.
++    Sparql(purrdf_sparql_algebra::ParseError),
++}
++
++impl core::fmt::Display for QueryArtifactError {
++    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
++        match self {
++            Self::Utf8(cause) => write!(formatter, "query is not valid UTF-8: {cause}"),
++            Self::Sparql(cause) => cause.fmt(formatter),
++        }
++    }
++}
++
++purrdf_hash::error_sources!(QueryArtifactError, Utf8, Sparql);
++
++impl purrdf_hash::error::StructuredError for QueryArtifactError {
++    purrdf_hash::error_visit! {
++        Utf8(cause) => "slice-query-utf8" { "cause" => Cause(cause) },
++        Sparql(cause) => "slice-query-sparql" { "cause" => Cause(cause) },
++    }
++}
+diff --git crates/slice/tests/ownership_tests.rs crates/slice/tests/ownership_tests.rs
+index dda19c76e..5be34f530 100644
+--- crates/slice/tests/ownership_tests.rs
++++ crates/slice/tests/ownership_tests.rs
+@@ -12,7 +12,7 @@ use purrdf_testkit::temp_dir;
+ 
+ use purrdf_slice::{
+     EdgeKind, NamedNode, OwnershipAnalyzer, OwnershipDiagnostic, OwnershipStatus, ParserOptions,
+-    ReconciliationStatus, SliceCatalog, SliceVocab,
++    QueryArtifactError, ReconciliationStatus, SliceCatalog, SliceVocab,
+ };
+ 
+ /// Pure fixtures use a caller-supplied example.org vocabulary (the slice
+@@ -259,6 +259,9 @@ fn ownership_mismatch() {
+ 
+ #[test]
+ fn parsed_not_textual_edges() {
++    use purrdf_hash::error::ErrorValue;
++    use purrdf_testkit::error_capture::Capture;
++
+     let tmp = temp_dir!().unwrap();
+     let root = tmp.path();
+ 
+@@ -300,6 +303,23 @@ fn parsed_not_textual_edges() {
+         ),
+     );
+ 
++    let invalid_utf8 = vec![b'#', b' ', 255];
++    let expected_utf8 = std::str::from_utf8(&invalid_utf8).unwrap_err();
++    std::fs::write(
++        root.join("slices/grpB/sliceB/queries/competency/a-invalid-utf8.rq"),
++        &invalid_utf8,
++    )
++    .unwrap();
++    let invalid_sparql = "SELECT WHERE {".to_owned();
++    let expected_sparql = purrdf_sparql_algebra::SparqlParser::new()
++        .parse_query_with(&invalid_sparql, &ParserOptions::default())
++        .unwrap_err();
++    write(
++        root,
++        "slices/grpB/sliceB/queries/competency/b-invalid-sparql.rq",
++        &invalid_sparql,
++    );
++
+     let catalog = SliceCatalog::discover(
+         root,
+         test_vocab(),
+@@ -308,6 +328,69 @@ fn parsed_not_textual_edges() {
+     .unwrap();
+     let report = OwnershipAnalyzer::new(&catalog).analyze().unwrap();
+ 
++    drop(catalog);
++    drop(tmp);
++    drop(invalid_utf8);
++    drop(invalid_sparql);
++    assert!(!report.has_ownership_defect());
++    assert_eq!(report.clone().diagnostics, report.diagnostics);
++    let skipped: Vec<_> = report.diagnostics.iter().filter_map(|diagnostic| {
++        if let OwnershipDiagnostic::UnparseableQuery { slice, logical_path, cause } = diagnostic {
++            let captured = Capture::read(diagnostic);
++            assert_eq!(captured.code, "slice-ownership-unparseable-query");
++            assert!(matches!(captured.field("slice"), ErrorValue::Iri(value) if value == iri("sliceB")));
++            assert!(matches!(captured.field("logical_path"), ErrorValue::Text(value) if value == logical_path));
++            Some((slice, logical_path, cause, captured.child("cause")))
++        } else {
++            None
++        }
++    }).collect();
++    let [
++        (slice, path, utf8, captured_utf8),
++        (_, sparql_path, sparql, captured_sparql),
++    ] = skipped.as_slice()
++    else {
++        panic!("both malformed queries must remain nonfatal diagnostics");
++    };
++    assert_eq!(*slice, &iri("sliceB"));
++    assert_eq!(path.as_str(), "queries/competency/a-invalid-utf8.rq");
++    assert_eq!(
++        sparql_path.as_str(),
++        "queries/competency/b-invalid-sparql.rq"
++    );
++    assert_eq!(utf8, &&QueryArtifactError::Utf8(expected_utf8));
++    assert_eq!(
++        sparql,
++        &&QueryArtifactError::Sparql(expected_sparql.clone())
++    );
++    assert_eq!(
++        utf8.to_string(),
++        format!("query is not valid UTF-8: {expected_utf8}")
++    );
++    assert_eq!(sparql.to_string(), expected_sparql.to_string());
++    assert_eq!(captured_utf8.code, "slice-query-utf8");
++    assert!(matches!(
++        captured_utf8.child("cause").field("valid_up_to"),
++        ErrorValue::ByteCount(2)
++    ));
++    assert_eq!(captured_sparql.code, "slice-query-sparql");
++    assert_eq!(
++        captured_sparql.child("cause").code,
++        Capture::read(&expected_sparql).code
++    );
++    assert_eq!(
++        std::error::Error::source(*utf8)
++            .unwrap()
++            .downcast_ref::<std::str::Utf8Error>(),
++        Some(&expected_utf8)
++    );
++    assert_eq!(
++        std::error::Error::source(*sparql)
++            .unwrap()
++            .downcast_ref::<purrdf_sparql_algebra::ParseError>(),
++        Some(&expected_sparql)
++    );
++
+     // Exactly one B → A query edge, with termT as evidence.
+     let edge = report
+         .edges
+diff --git crates/validate/src/regime.rs crates/validate/src/regime.rs
+index e15287291..b601542a2 100644
+--- crates/validate/src/regime.rs
++++ crates/validate/src/regime.rs
+@@ -835,6 +835,7 @@ fn rule_lines(rules: &[purrdf_entail::RuleId]) -> String {
+ /// contract-hash <64 lowercase hex>
+ /// withheld-surrogates <n>
+ /// termination none | termination weakly-acyclic positions <n> existential-edges <n>
++///   | termination <criterion> law <version>
+ /// inconsistency none | inconsistency <rule-id> premises <n>
+ /// inconsistency-graph default | inconsistency-graph <term>   (only after a witness)
+ /// inconsistency-premise <s> <p> <o>       (n of them, the rule's own premise order)
+@@ -852,6 +853,10 @@ fn rule_lines(rules: &[purrdf_entail::RuleId]) -> String {
+ /// they fired, because a caller choosing whether to trust a closure needs to know which
+ /// rule set produced it. Whether an extension actually contributed is the `fired` line.
+ ///
++/// Termination criterion labels are extensible. The WA form retains its original
++/// counts; another certified criterion carries its native label and law version.
++/// An unfamiliar criterion is not an absent certificate or a claim of WA.
++///
+ /// `termination` is the chase's own proof that the run had to stop. `rdf` and `rdfs` state
+ /// existentially quantified rules and are evaluated by `purrdf-datalog`'s restricted
+ /// chase, which INVENTS terms — so their programs are certified weakly acyclic before a
+@@ -1078,12 +1083,19 @@ impl fmt::Display for RenderedReport<'_> {
+         writeln!(f, "withheld-surrogates {}", report.withheld_surrogates())?;
+         match report.termination() {
+             None => writeln!(f, "termination none")?,
+-            Some(certificate) => writeln!(
+-                f,
+-                "termination weakly-acyclic positions {} existential-edges {}",
+-                certificate.positions(),
+-                certificate.existential_edges()
+-            )?,
++            Some(certificate) => match (certificate.positions(), certificate.existential_edges()) {
++                (Some(positions), Some(existential_edges)) => writeln!(
++                    f,
++                    "termination {} positions {positions} existential-edges {existential_edges}",
++                    certificate.criterion().label(),
++                )?,
++                _ => writeln!(
++                    f,
++                    "termination {} law {}",
++                    certificate.criterion().label(),
++                    certificate.law_version(),
++                )?,
++            },
+         }
+         let Some(witness) = report.inconsistency() else {
+             return writeln!(f, "inconsistency none");
+diff --git docs/MIGRATION-4.0.md docs/MIGRATION-4.0.md
+index d77adb4a0..acc93189d 100644
+--- docs/MIGRATION-4.0.md
++++ docs/MIGRATION-4.0.md
+@@ -673,6 +673,32 @@ Target-specific capacity default constants have been removed.
+ `EvalOptions::without_stored_fact_limit`,
+ `without_join_step_limit` and `without_term_arena_limit` remove selected ceilings.
+ 
++## Prepared chase certificates
++
++`PreparedChase::certificate()` now borrows an opaque `ChaseCertificate`, which
++retains the original verified evidence and its allocation owner. Inspect its
++`criterion()`, `law_version()`, `program_identity()`, `report()` and `summary()`
++without copying the proof. `weakly_acyclic()` returns an optional borrowed
++`WaCertificate` for WA-specific positions and ranks. The `certify` and
++`certify_with` functions still produce owned WA evidence with independent
++verification before preparation. Explicit
++`close()` still owns evidence destruction and the original fallible grant refund.
++
++`ChaseTermination`, `TerminationError` and `TerminationCriterion` are
++non-exhaustive. Match known variants with a future-case arm; use the native
++criterion classification rather than treating an unfamiliar certified summary
++as an absent certificate. The implemented criterion remains weak acyclicity
++under law version 1; the chase, witnesses and model identities are unchanged.
++
++Entailment's `TerminationCertificate` retains the native certified summary and
++criterion and implements `Clone` without `Copy`. `ReasoningReport::termination()`
++returns `Option<&TerminationCertificate>`. Borrow it for inspection or explicitly
++clone it when an owned value is required. `positions()` and `existential_edges()`
++return `Option<usize>` because these counts belong to WA evidence. Structured
++inspection exposes the original `summary` and `criterion` records with the law
++version. Display delegates to the original native summary, and current WA report
++bytes remain unchanged. A lane that invents no term still reports no certificate.
++
+ ## HNSW arithmetic refusals
+ 
+ Shared distance pair and batch APIs now return `Result<f64, NonFinite>` instead
+@@ -1201,3 +1227,16 @@ parameter slots are reset before applying its dictionary. No execution inputs
+ are retained from a previous call. Ordinary, RDFLib, governed and entailment
+ query methods accept the same coordinate keywords; parser/provider settings
+ remain preparation-time configuration. See the [Python API reference](book/src/reference/python-api.md#supplied-query-time-and-entropy).
++
++## Slice ownership query diagnostics
++
++`OwnershipDiagnostic` is non-exhaustive. Its `UnparseableQuery` variant replaces
++`message: String` with `cause: QueryArtifactError`, retaining the original
++`Utf8Error` or SPARQL `ParseError`. Use `cause.to_string()` at the presentation
++boundary for the former message, or inspect the native cause through `source()`
++and `StructuredError`. External matches need an arm for unfamiliar diagnostics.
++
++The causes, owning slice and logical path remain available after the catalog is
++dropped, including in cloned reports. Malformed query artifacts are still skipped
++in artifact order; valid queries continue to contribute dependency evidence.
++Python's ownership lint and ownership-defect classification are unchanged.

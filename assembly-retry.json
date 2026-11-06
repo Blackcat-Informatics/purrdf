@@ -1,0 +1,28 @@
+{
+  "source_commit": "0915856c24877a3e3feed2487149a442fc106a6f",
+  "run_id": 42199082509,
+  "first_attempt": {
+    "job_id": 127829933476,
+    "result": "Canceled at the existing 45-minute job deadline; no assembly-law or product failure reported.",
+    "cross_toolchain_install_started": "2026-11-06T09:59:56Z",
+    "measurement_started": "2026-11-06T10:21:59Z",
+    "cancelled": "2026-11-06T10:44:52Z"
+  },
+  "retry": {
+    "attempt": 2,
+    "job_id": 127851537366,
+    "result": "PASS: unchanged Neoverse configuration measured and checked successfully; checked report uploaded.",
+    "cross_toolchain_install_seconds": 28
+  },
+  "aggregate": {
+    "job_id": 127866569661,
+    "result": "PASS: complete assembly matrix and document parity."
+  },
+  "workflow_result": {
+    "attempt": 2,
+    "status": "completed",
+    "conclusion": "success",
+    "successful_jobs": 42,
+    "conditional_skips": 4
+  }
+}

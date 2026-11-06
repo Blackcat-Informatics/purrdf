@@ -1,0 +1,15 @@
+{
+  "source_commit": "e9d49bf1011d7174b3308fd33edbf9f1e405998b",
+  "run_id": 42190215444,
+  "job_id": 127800478732,
+  "case": "frozen_corpus_round_trips_through_real_rdf_serialization_and_reparse",
+  "old_digest": "580633f8ca53cbdca3045ec708a9b9acf9631ff007457fb8878ab93454eee0fc",
+  "observed_digest": "86ba6e23405fe3156b49624b8c77cd39c6bea2459f836dd2043122ac2135aeb2",
+  "result": "Twenty-two neighboring cases passed. All nineteen original corpus inputs completed production Turtle, relative Turtle, N-Triples and JSON-LD repeated-byte serialization and exact document reconstruction before only the final combined transcript digest differed. Test source and corpus were unchanged from main before this update; the production JSON-LD type carrier changes object-wrapped IRI entries to required strings. Hosted confirmation of the updated golden remains required.",
+  "confirmation": {
+    "source_commit": "0915856c24877a3e3feed2487149a442fc106a6f",
+    "run_id": 42199082509,
+    "job_id": 127829933407,
+    "result": "PASS: frozen_corpus_round_trips_through_real_rdf_serialization_and_reparse with corrected transcript golden; complete integration-3 job passed."
+  }
+}

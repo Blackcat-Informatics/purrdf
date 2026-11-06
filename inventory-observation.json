@@ -1,0 +1,13 @@
+{
+  "source_commit": "0915856c24877a3e3feed2487149a442fc106a6f",
+  "run_id": 42199082509,
+  "job_id": 127829933733,
+  "result": "PASS: complete integration-1 job; public discovery -> into_records -> into_record succeeds after source removal, preserving the original manifest and every artifact, and the same public ownership path retains invalid-RDF refusal.",
+  "cases": [
+    "retained_inventory_admits_original_relative_iris_after_removal",
+    "physical_inventory_defers_rdf_admission_and_preserves_reserved_roles",
+    "physical_inventory_requires_a_valid_manifest",
+    "retained_inventory_refuses_exhausted_semantic_control",
+    "corpus_cdt_literals_are_all_inside_sep0009"
+  ]
+}

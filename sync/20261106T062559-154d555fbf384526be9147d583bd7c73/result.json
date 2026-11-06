@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1119-fix-expanded-json-ld-type-entries-that",
+  "branch": "paudley/1119-fix-expanded-json-ld-type-entries-that",
+  "base_ref": "origin/main",
+  "head": "c6675c471aa07e7efa558ff0cd978ab5296257c4",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/1119-fix-expanded-json-ld-type-entries-that/.stage/fix-expanded-json-ld-type-entries-that/sync/20261106T062559-154d555fbf384526be9147d583bd7c73",
+  "conflicts": [
+    "CHANGELOG.md"
+  ],
+  "status": "completed",
+  "base": "9be0479391422f9aee9a2336ee2639f93442d480",
+  "merge_bases": [
+    "7de2439ef0024e999f61ee78989da44fc2db0311"
+  ],
+  "merge_index": "58003299eafdd139e010f0d4e84697ed7d19e8ff27e359e4d5942750f34b032d",
+  "reused_paths": [],
+  "rerere_output": "Recorded preimage for 'CHANGELOG.md'\n",
+  "candidate_tree": "68b063012ef068e600b1ca677e04e7aa322faf8c",
+  "candidate_patch": "candidate-7329b7b1eb084a8a9d3923a2c3210941.patch",
+  "validation_records": [],
+  "commit": "9493ce660085d9ceef953b91f10ef3cc9d05046c",
+  "tree": "68b063012ef068e600b1ca677e04e7aa322faf8c"
+}

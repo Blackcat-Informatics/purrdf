@@ -1,0 +1,19 @@
+{
+  "source_commit": "e9d49bf1011d7174b3308fd33edbf9f1e405998b",
+  "run_id": 42190215444,
+  "job_id": 127800478721,
+  "case": "native_codecs::jsonld::parse_residency::parsing_does_not_hold_the_tree_and_the_carrier_at_once",
+  "input_bytes": 3197818,
+  "peak_working_bytes": 26043772,
+  "strict_ceiling_bytes": 38373816,
+  "result": "PASS: measured peak is strictly below the original twelve-times-input ceiling; fixture, operation and row assertion retained. Complete library job passed, including native canonical source-identity and blank-sequence regressions. Later commits change only documentation and the observed JSON transcript expected digest/message, with no production-source delta.",
+  "confirmation": {
+    "source_commit": "0915856c24877a3e3feed2487149a442fc106a6f",
+    "run_id": 42199082509,
+    "job_id": 127829933557,
+    "input_bytes": 3197818,
+    "peak_working_bytes": 26043772,
+    "strict_ceiling_bytes": 38373816,
+    "result": "PASS: same unchanged case and exact measurement; complete library job passed, including canonical source identity, blank sequence and internal research-object round-trip."
+  }
+}

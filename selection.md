@@ -1,0 +1,9 @@
+This archive preserves all nine completed, failed and aborted synchronization attempts from the surviving producer delivery and its absorbed JSON-LD donor. The origins index maps each unchanged attempt name to its original issue run. All 116 selected journal files were compared byte-for-byte with their originals. Source commits and accepted conflict snapshots remain authoritative.
+
+The latest survivor journal references a local regression invocation interrupted with exit 130. It produced no qualification result and is not passing evidence. The missing result is not reconstructed. Hosted observations supply actual acceptance instead: the current-head inventory, JSON and MIME production round-trips and the unchanged residency case passed. Earlier transcript mismatches and their corrected final-head confirmations are retained together.
+
+The capacity audit explains the exact constructor identity refresh without changing sinks, authorities, classes, reasons or enforcement. The assembly record retains the first job cancellation after cross-toolchain installation consumed twenty-two minutes of its 45-minute deadline. Its targeted retry and complete-matrix/document-parity aggregate passed, with source, checks, product budgets and job timeout unchanged. The complete current-head workflow passed with forty-two successful jobs and four opt-in jobs skipped.
+
+Issue 1119 remains open for its original downstream RAF test, which was not run within this repository boundary. Native type/reifier acceptance does not claim that external result.
+
+Substantive review captures and optional raw CI logs remain local. Prohibited saved attribution HTML metadata was deleted at the user's instruction; no review finding, source invariant, hook or gate was removed. The selected archive contains no symlinks.

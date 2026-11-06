@@ -1,0 +1,47 @@
+[
+  {
+    "issue": 1126,
+    "attempt": "20261106T055404-e1d7a22f26c4450698e04df94d840b6a",
+    "source": "/home/paudley/Active/purrdf/.worktrees/1126-skip-proven-losing-rdfc-permutation/.stage/skip-proven-losing-rdfc-permutation/sync/20261106T055404-e1d7a22f26c4450698e04df94d840b6a"
+  },
+  {
+    "issue": 1126,
+    "attempt": "20261106T064237-d4a76ecee0f84dc8a4fe86aa7e71ca60",
+    "source": "/home/paudley/Active/purrdf/.worktrees/1126-skip-proven-losing-rdfc-permutation/.stage/skip-proven-losing-rdfc-permutation/sync/20261106T064237-d4a76ecee0f84dc8a4fe86aa7e71ca60"
+  },
+  {
+    "issue": 1126,
+    "attempt": "20261106T080437-545d324fa7bb468fa16e89528b67d6a5",
+    "source": "/home/paudley/Active/purrdf/.worktrees/1126-skip-proven-losing-rdfc-permutation/.stage/skip-proven-losing-rdfc-permutation/sync/20261106T080437-545d324fa7bb468fa16e89528b67d6a5"
+  },
+  {
+    "issue": 1119,
+    "attempt": "20261106T033824-eb96b509de8049eb9e2030d2fba185fd",
+    "source": "/home/paudley/Active/purrdf/.worktrees/1119-fix-expanded-json-ld-type-entries-that/.stage/fix-expanded-json-ld-type-entries-that/sync/20261106T033824-eb96b509de8049eb9e2030d2fba185fd"
+  },
+  {
+    "issue": 1119,
+    "attempt": "20261106T042351-94628886b3ba4e2eb158eb105b28126a",
+    "source": "/home/paudley/Active/purrdf/.worktrees/1119-fix-expanded-json-ld-type-entries-that/.stage/fix-expanded-json-ld-type-entries-that/sync/20261106T042351-94628886b3ba4e2eb158eb105b28126a"
+  },
+  {
+    "issue": 1119,
+    "attempt": "20261106T045702-bdebb140a9a94e639c592044472b6d5d",
+    "source": "/home/paudley/Active/purrdf/.worktrees/1119-fix-expanded-json-ld-type-entries-that/.stage/fix-expanded-json-ld-type-entries-that/sync/20261106T045702-bdebb140a9a94e639c592044472b6d5d"
+  },
+  {
+    "issue": 1119,
+    "attempt": "20261106T060537-0613139826584551b3e6a3d846409e2b",
+    "source": "/home/paudley/Active/purrdf/.worktrees/1119-fix-expanded-json-ld-type-entries-that/.stage/fix-expanded-json-ld-type-entries-that/sync/20261106T060537-0613139826584551b3e6a3d846409e2b"
+  },
+  {
+    "issue": 1119,
+    "attempt": "20261106T062559-154d555fbf384526be9147d583bd7c73",
+    "source": "/home/paudley/Active/purrdf/.worktrees/1119-fix-expanded-json-ld-type-entries-that/.stage/fix-expanded-json-ld-type-entries-that/sync/20261106T062559-154d555fbf384526be9147d583bd7c73"
+  },
+  {
+    "issue": 1119,
+    "attempt": "20261106T073640-6310142063434e71912854784647395a",
+    "source": "/home/paudley/Active/purrdf/.worktrees/1119-fix-expanded-json-ld-type-entries-that/.stage/fix-expanded-json-ld-type-entries-that/sync/20261106T073640-6310142063434e71912854784647395a"
+  }
+]

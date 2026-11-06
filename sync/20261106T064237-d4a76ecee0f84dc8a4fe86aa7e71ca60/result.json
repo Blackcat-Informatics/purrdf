@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1126-skip-proven-losing-rdfc-permutation",
+  "branch": "paudley/1126-skip-proven-losing-rdfc-permutation",
+  "base_ref": "refs/remotes/origin/main",
+  "head": "dceefb0bbf59da9c4964bcf789d2fd070137ad5b",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/1126-skip-proven-losing-rdfc-permutation/.stage/skip-proven-losing-rdfc-permutation/sync/20261106T064237-d4a76ecee0f84dc8a4fe86aa7e71ca60",
+  "conflicts": [
+    "CHANGELOG.md"
+  ],
+  "status": "completed",
+  "base": "9be0479391422f9aee9a2336ee2639f93442d480",
+  "merge_bases": [
+    "7de2439ef0024e999f61ee78989da44fc2db0311"
+  ],
+  "merge_index": "deab4b3d796b374812b97bc1543068903454165273039b38ff8bae297dae9d3d",
+  "reused_paths": [
+    "CHANGELOG.md"
+  ],
+  "rerere_output": "Resolved 'CHANGELOG.md' using previous resolution.\n",
+  "candidate_tree": "eb2afd1010aae825c4a3cf33a52b837cb23a52ff",
+  "candidate_patch": "candidate-04e45d0ba21c463e8ccad6ecce7cf724.patch",
+  "validation_records": [],
+  "commit": "0029e948f67aba00f9234cf602c26638cb419a0c",
+  "tree": "eb2afd1010aae825c4a3cf33a52b837cb23a52ff"
+}

@@ -1,0 +1,5 @@
+{"time": "2026-11-06T07:36:40.239046+00:00", "status": "started"}
+{"time": "2026-11-06T07:36:41.757983+00:00", "status": "merging"}
+{"time": "2026-11-06T07:36:44.145465+00:00", "status": "conflicted"}
+{"time": "2026-11-06T07:36:44.255512+00:00", "status": "review_required", "reused_paths": [], "rerere_output": "Recorded preimage for 'CHANGELOG.md'\n"}
+{"time": "2026-11-06T07:42:11.186750+00:00", "status": "aborted"}

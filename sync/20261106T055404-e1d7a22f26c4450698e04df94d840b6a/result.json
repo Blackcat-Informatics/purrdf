@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1126-skip-proven-losing-rdfc-permutation",
+  "branch": "paudley/1126-skip-proven-losing-rdfc-permutation",
+  "base_ref": "refs/remotes/origin/main",
+  "head": "1427a421af317bb78c0d5c08bb7c88c2d67be0d4",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/1126-skip-proven-losing-rdfc-permutation/.stage/skip-proven-losing-rdfc-permutation/sync/20261106T055404-e1d7a22f26c4450698e04df94d840b6a",
+  "conflicts": [],
+  "status": "completed",
+  "base": "7de2439ef0024e999f61ee78989da44fc2db0311",
+  "merge_bases": [
+    "9fa1f4ce83b4aca745473645b590c63e42d1f9d4"
+  ],
+  "merge_index": "432c956dd0ead04f7944770d0fe8004cfbc612969fd6ef8783e7ec907e08f2a2",
+  "candidate_tree": "5f08b19ce4a5e4768f27b0ac5d09695bc9d634ec",
+  "candidate_patch": "candidate-a78879257193417fa9922554380455ed.patch",
+  "validation_records": [],
+  "commit": "c6b3c3e50267a768eefc609344bc48d3f217a504",
+  "tree": "5f08b19ce4a5e4768f27b0ac5d09695bc9d634ec"
+}
