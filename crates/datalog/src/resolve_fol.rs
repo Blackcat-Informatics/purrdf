@@ -84,11 +84,17 @@ use purrdf_lex::allocation::StorageError;
 
 use crate::clause::{ClauseAtom, ClauseTerm, DlClause, NonDatalogClause};
 use crate::id::{MetaId, NodeId};
-use crate::term::{NodeData, TermDag};
+use crate::term::{NodeData, TermDag, TermRead};
 use crate::unify::{self, SortContext, Subst, Unified};
 
 mod program;
 pub use program::{FolConstructionError, FolPosition};
+mod answer;
+use answer::{Assignment, Projected};
+pub use answer::{FolBinding, FolBindingEntry, FolTerm};
+mod rdf;
+use rdf::Constants;
+pub use rdf::{FolRdfError, FolRdfSource};
 
 /// A clause body literal cannot exceed this many atoms.
 ///
@@ -282,18 +288,6 @@ impl FolProof {
     }
 }
 
-/// One projected answer: the goal's named variables bound to rendered values,
-/// the fully-ground goal instance, and its proof.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FolBinding {
-    /// Goal variable name → its rendered value under this answer.
-    pub bindings: BTreeMap<String, String>,
-    /// The fully-ground goal instance this answer is for.
-    pub atom: NodeId,
-    /// A checkable proof of `atom`.
-    pub proof: FolProof,
-}
-
 /// Whether a resolution ran to completion or was cut short by its step budget.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FolStatus {
@@ -303,6 +297,15 @@ pub enum FolStatus {
     /// `well_founded` for the soundness demotion this triggers: negation is no
     /// longer trusted, so nothing dependent on it can be reported [`Truth::True`].
     Partial,
+}
+
+/// The selected answer semantics. Representation of compound terms does not
+/// imply symbolic query evaluation or a decision procedure for nonground goals.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum FolAnswerContract {
+    /// Enumerate only fully ground answers, with scoped WFS verdicts.
+    GroundOnly,
 }
 
 /// Why a selected run has not established a ground WFS verdict for a probe.
@@ -344,6 +347,8 @@ pub struct FolOutcome {
 /// One computation's admitted ground probes and completion evidence.
 #[derive(Debug, Clone)]
 struct FolScope {
+    /// Original selected execution contract, retained with its verdict evidence.
+    contract: FolAnswerContract,
     /// Whether grounding ran to completion or was budget-cut.
     status: FolStatus,
     /// Demanded ground calls and reached ground answers, under this run's
@@ -375,6 +380,11 @@ impl FolScope {
 }
 
 impl FolOutcome {
+    /// The exact answer contract selected for this original run.
+    #[must_use]
+    pub fn answer_contract(&self) -> FolAnswerContract {
+        self.scope.contract
+    }
     /// Whether this original run completed or was interrupted by its budget.
     #[must_use]
     pub fn status(&self) -> FolStatus {
@@ -468,8 +478,13 @@ pub struct FolBudget {
 /// containing commas or brackets and is therefore never used as a dedup or
 /// identity key — only [`canon`] is. It exists solely to give a [`FolBinding`]'s
 /// values and a [`FolProofError`] diagnostic something readable.
-pub fn render(dag: &TermDag, node: NodeId) -> String {
+pub fn render(dag: &(impl TermRead + ?Sized), node: NodeId) -> String {
     match dag.data(node) {
+        NodeData::Rdf(value) => {
+            let mut out = String::new();
+            purrdf_core::term_writer::write_term_value(value.value(), &mut out);
+            out
+        }
         NodeData::Leaf(sym) | NodeData::Free(sym) => dag.symbol(*sym).to_owned(),
         NodeData::Meta(m) => format!("_m{}", m.index()),
         NodeData::Bound { debruijn, slot } => format!("_b{debruijn}.{slot}"),
@@ -506,7 +521,7 @@ fn frame(out: &mut String, s: &str) {
 /// number's decimal rendering) is length-prefixed via `frame`, mirroring
 /// [`crate::proof::ProofArena::encode`]'s wire discipline, so distinct shapes can
 /// never collide through concatenation ambiguity.
-pub fn canon(dag: &TermDag, node: NodeId) -> String {
+pub fn canon(dag: &(impl TermRead + ?Sized), node: NodeId) -> String {
     canon_sorted(dag, node, &|_| None)
 }
 
@@ -517,14 +532,16 @@ pub fn canon(dag: &TermDag, node: NodeId) -> String {
 /// sort, a distinct `S` frame carrying that sort's own [`canon`] is appended, so
 /// two otherwise-identical patterns that differ only in a metavariable's sort
 /// produce DIFFERENT keys — the order-sorted call patterns table apart. The `S`
-/// tag is deliberately outside the node-tag alphabet (`L`/`F`/`M`/`B`/`A`/`D`), so
+/// tag is deliberately outside the node-tag alphabet (`R`/`L`/`F`/`M`/`B`/`A`/`D`), so
 /// it can never be confused with a following sibling node. When `sort_of` returns
 /// `None` for every metavariable — the sort-blind case, and exactly what [`canon`]
 /// passes — no `S` frame is ever emitted and the bytes are IDENTICAL to a
 /// resolution that never knew about sorts.
+/// Native RDF constants use `R` followed by framed base16 of the original
+/// [`purrdf_core::TermValue::canonical_bytes`], never human-facing rendering.
 #[must_use]
 pub fn canon_sorted(
-    dag: &TermDag,
+    dag: &(impl TermRead + ?Sized),
     node: NodeId,
     sort_of: &impl Fn(MetaId) -> Option<NodeId>,
 ) -> String {
@@ -536,13 +553,20 @@ pub fn canon_sorted(
 
 /// The recursive core of [`canon_sorted`].
 fn canon_sorted_at(
-    dag: &TermDag,
+    dag: &(impl TermRead + ?Sized),
     node: NodeId,
     sort_of: &impl Fn(MetaId) -> Option<NodeId>,
     numbering: &mut Vec<MetaId>,
     out: &mut String,
 ) {
     match dag.data(node) {
+        NodeData::Rdf(value) => {
+            out.push('R');
+            frame(
+                out,
+                &purrdf_hash::hex::encode(&value.value().to_canonical_bytes()),
+            );
+        }
         NodeData::Leaf(sym) => {
             out.push('L');
             frame(out, dag.symbol(*sym));
@@ -1337,7 +1361,7 @@ fn project(
         .collect();
     candidates.sort();
 
-    let mut answers: Vec<FolBinding> = Vec::new();
+    let mut answers = Vec::new();
     let mut seen: BTreeSet<String> = BTreeSet::new();
     for (atom_key, atom) in candidates {
         let mut subst = Subst::default();
@@ -1365,24 +1389,25 @@ fn project(
             continue;
         };
 
-        let mut bindings = BTreeMap::new();
+        let mut bindings = Vec::new();
         for (var_node, name) in &program.goal_vars {
             let value = unify::apply(dag, &subst, *var_node)?;
-            bindings.insert(name.clone(), render(dag, value));
+            bindings.push(Assignment {
+                variable: *var_node,
+                name: name.clone(),
+                value,
+            });
         }
-        answers.push(FolBinding {
+        answers.push(Projected {
             bindings,
             atom: applied_goal,
             proof: proof.clone(),
         });
     }
 
-    answers.sort_by(|a, b| {
-        a.bindings
-            .cmp(&b.bindings)
-            .then_with(|| a.atom.cmp(&b.atom))
-    });
-    Ok(answers)
+    // Candidates already follow structural canonical-key order. Presentation
+    // strings never sort, deduplicate or join answer terms.
+    FolBinding::retain(dag, answers, scope.contract)
 }
 
 // ── Entry point ──────────────────────────────────────────────────────────────────
@@ -1411,6 +1436,7 @@ pub fn resolve_fol(
     dag: &mut TermDag,
     program: &FolProgram,
     ctx: &SortContext,
+    contract: FolAnswerContract,
     budget: &FolBudget,
 ) -> Result<FolControl, StorageError> {
     for (index, clause) in program.clauses.iter().enumerate() {
@@ -1441,13 +1467,16 @@ pub fn resolve_fol(
         }
     }
     let scope = FolScope {
+        contract,
         status,
         ground,
         not_false,
         true_set,
     };
     let proofs = build_proofs(dag, &engine, program, &scope);
-    let answers = project(dag, &engine, program, ctx, &scope, &proofs)?;
+    let answers = match contract {
+        FolAnswerContract::GroundOnly => project(dag, &engine, program, ctx, &scope, &proofs)?,
+    };
 
     Ok(FolControl::Decided(Box::new(FolOutcome { answers, scope })))
 }
@@ -1677,7 +1706,7 @@ pub fn check_fol_proof(
 /// child DERIVATION ids (a Merkle recursion); both readings are exposed and
 /// documented so a consumer keys on whichever its own lane uses.
 #[must_use]
-pub fn content_key(dag: &TermDag, proof: &FolProof) -> String {
+pub fn content_key(dag: &(impl TermRead + ?Sized), proof: &FolProof) -> String {
     canon(dag, proof.goal())
 }
 
@@ -1715,7 +1744,7 @@ pub fn content_key(dag: &TermDag, proof: &FolProof) -> String {
 /// # Ok::<(), purrdf_lex::allocation::StorageError>(())
 /// ```
 #[must_use]
-pub fn derivation_id(dag: &TermDag, proof: &FolProof) -> String {
+pub fn derivation_id(dag: &(impl TermRead + ?Sized), proof: &FolProof) -> String {
     let mut hasher = Sha1::new();
     hasher.update(proof.rule_identity().as_bytes());
     hasher.update(b"\n");
@@ -1750,7 +1779,7 @@ pub fn derivation_id(dag: &TermDag, proof: &FolProof) -> String {
 /// here; child derivation ids in [`derivation_id`]), both published so a consumer
 /// keys on whichever its own lane uses.
 #[must_use]
-pub fn flat_derivation_id(dag: &TermDag, proof: &FolProof) -> String {
+pub fn flat_derivation_id(dag: &(impl TermRead + ?Sized), proof: &FolProof) -> String {
     let mut premise_keys: Vec<String> = proof
         .premises()
         .iter()
@@ -1774,6 +1803,8 @@ pub enum FolError {
     Storage(StorageError),
     /// Original invalid structured-program construction.
     Construction(FolConstructionError),
+    /// Original native RDF operand missing from its declared source dictionary.
+    Rdf(FolRdfError),
 }
 
 impl purrdf_hash::error::StructuredError for FolError {
@@ -1781,6 +1812,7 @@ impl purrdf_hash::error::StructuredError for FolError {
         Clause(cause) => "fol-clause" { "cause" => Cause(cause) },
         Storage(cause) => "fol-storage" { "cause" => Cause(cause) },
         Construction(cause) => "fol-construction" { "cause" => Cause(cause) },
+        Rdf(cause) => "fol-rdf" { "cause" => Cause(cause) },
     }
 }
 impl core::fmt::Display for FolError {
@@ -1789,6 +1821,7 @@ impl core::fmt::Display for FolError {
             Self::Clause(e) => e.fmt(f),
             Self::Storage(e) => e.fmt(f),
             Self::Construction(e) => e.fmt(f),
+            Self::Rdf(e) => e.fmt(f),
         }
     }
 }
@@ -1798,10 +1831,11 @@ impl std::error::Error for FolError {
             Self::Clause(e) => Some(e),
             Self::Storage(e) => Some(e),
             Self::Construction(e) => Some(e),
+            Self::Rdf(e) => Some(e),
         }
     }
 }
-purrdf_lex::variant_from!(FolError { Clause(NonDatalogClause), Storage(StorageError), Construction(FolConstructionError) });
+purrdf_lex::variant_from!(FolError { Clause(NonDatalogClause), Storage(StorageError), Construction(FolConstructionError), Rdf(FolRdfError) });
 
 // ── The DlClause lowering adapter ───────────────────────────────────────────────
 
@@ -1814,7 +1848,8 @@ fn lower_term(
     dag: &mut TermDag,
     scope: &mut BTreeMap<String, NodeId>,
     term: &ClauseTerm,
-) -> Result<NodeId, StorageError> {
+    constants: &Constants<'_>,
+) -> Result<NodeId, FolError> {
     match term {
         ClauseTerm::Var(name) => {
             if let Some(&node) = scope.get(name) {
@@ -1824,12 +1859,7 @@ fn lower_term(
             scope.insert(name.clone(), node);
             Ok(node)
         }
-        other => {
-            let surface = other
-                .surface()
-                .expect("a non-variable clause term has a lexical surface");
-            dag.intern_leaf(&surface)
-        }
+        other => constants.lower(dag, other),
     }
 }
 
@@ -1839,13 +1869,14 @@ fn lower_atom(
     triple_op: NodeId,
     scope: &mut BTreeMap<String, NodeId>,
     atom: &ClauseAtom,
-) -> Result<NodeId, StorageError> {
+    constants: &Constants<'_>,
+) -> Result<NodeId, FolError> {
     let args: Vec<NodeId> = atom
         .terms()
         .into_iter()
-        .map(|term| lower_term(dag, scope, term))
-        .collect::<Result<Vec<_>, StorageError>>()?;
-    dag.intern_app(triple_op, args)
+        .map(|term| lower_term(dag, scope, term, constants))
+        .collect::<Result<Vec<_>, FolError>>()?;
+    Ok(dag.intern_app(triple_op, args)?)
 }
 
 /// Lower `clauses` into [`FolClause`]s over `dag`, sharing one metavariable per
@@ -1861,6 +1892,7 @@ fn lower_datalog_clauses(
     dag: &mut TermDag,
     triple_op: NodeId,
     clauses: &[DlClause],
+    constants: &Constants<'_>,
 ) -> Result<Vec<FolClause>, FolError> {
     let mut out = Vec::with_capacity(clauses.len());
     for (index, clause) in clauses.iter().enumerate() {
@@ -1873,19 +1905,19 @@ fn lower_datalog_clauses(
             return Err(NonDatalogClause::guarded(index, clause.head_form()).into());
         }
         let mut scope: BTreeMap<String, NodeId> = BTreeMap::new();
-        let head = lower_atom(dag, triple_op, &mut scope, head_atom)?;
+        let head = lower_atom(dag, triple_op, &mut scope, head_atom, constants)?;
         let body = clause
             .body()
             .iter()
             .map(|atom| {
-                let lowered = lower_atom(dag, triple_op, &mut scope, atom)?;
+                let lowered = lower_atom(dag, triple_op, &mut scope, atom, constants)?;
                 if atom.is_negated() {
                     Ok(FolLit::Neg(lowered))
                 } else {
                     Ok(FolLit::Pos(lowered))
                 }
             })
-            .collect::<Result<Vec<_>, StorageError>>()?;
+            .collect::<Result<Vec<_>, FolError>>()?;
         out.push(FolClause::new(dag, head, body)?);
     }
     Ok(out)
@@ -1898,7 +1930,8 @@ fn lower_goal(
     dag: &mut TermDag,
     triple_op: NodeId,
     goal: &ClauseAtom,
-) -> Result<(NodeId, Vec<(NodeId, String)>), StorageError> {
+    constants: &Constants<'_>,
+) -> Result<(NodeId, Vec<(NodeId, String)>), FolError> {
     let mut scope = BTreeMap::new();
     let mut order = Vec::new();
     let mut args = Vec::new();
@@ -1914,12 +1947,7 @@ fn lower_goal(
                     node
                 }
             }
-            other => {
-                let surface = other
-                    .surface()
-                    .expect("a non-variable clause term has a lexical surface");
-                dag.intern_leaf(&surface)?
-            }
+            other => constants.lower(dag, other)?,
         };
         args.push(node);
     }
@@ -1934,12 +1962,16 @@ fn lower_goal(
 /// useful when only ONE goal's answer (and its proof) is wanted, without
 /// materialising the rest of the program's model.
 ///
-/// Returns the [`TermDag`] the answers' [`NodeId`]s and [`FolControl`] are
-/// addressed against, alongside the control value itself: a [`FolBinding`]'s
-/// `bindings` map is already a plain rendered string map (everything a
-/// [`DlClause`]-level caller usually needs), but a caller wanting
-/// [`FolOutcome::truth_of`] or to re-check a proof via [`check_fol_proof`] needs
-/// the arena the [`NodeId`]s were minted in.
+/// Clause constants remain opaque symbols carrying their original lexical
+/// transport identity. This does not parse arbitrary literal strings as RDF;
+/// use [`solve_datalog_goal_rdf`] with the original source dictionary for native
+/// RDF operands. Both adapters select [`FolAnswerContract::GroundOnly`] and use
+/// the same solver and shared structural answer owner.
+///
+/// Returned answers survive dropping the returned [`TermDag`]. The arena is
+/// still required for live [`FolOutcome::truth_of`] probes and the current
+/// [`check_fol_proof`] interface; answer inspection and explicit presentation
+/// use the retained graph instead.
 ///
 /// # Errors
 ///
@@ -1951,15 +1983,45 @@ pub fn solve_datalog_goal(
     goal: &ClauseAtom,
     budget: &FolBudget,
 ) -> Result<(TermDag, FolControl), FolError> {
+    solve_datalog_goal_with(clauses, goal, *budget, &Constants::Opaque)
+}
+
+/// Lower using original native RDF values from the declared source dictionary.
+/// Generic clause literal strings are source addresses, never parsed or treated
+/// as RDF values themselves. Missing originals are hard typed failures.
+///
+/// # Errors
+/// Preserves lowering, source identity and native storage failures.
+pub fn solve_datalog_goal_rdf(
+    clauses: &[DlClause],
+    goal: &ClauseAtom,
+    budget: &FolBudget,
+    source: &dyn FolRdfSource,
+) -> Result<(TermDag, FolControl), FolError> {
+    solve_datalog_goal_with(clauses, goal, *budget, &Constants::Rdf(source))
+}
+
+fn solve_datalog_goal_with(
+    clauses: &[DlClause],
+    goal: &ClauseAtom,
+    budget: FolBudget,
+    constants: &Constants<'_>,
+) -> Result<(TermDag, FolControl), FolError> {
     let mut dag = TermDag::default();
     let triple_op = dag.intern_leaf("triple")?;
 
-    let fol_clauses = lower_datalog_clauses(&mut dag, triple_op, clauses)?;
-    let (goal_node, goal_vars) = lower_goal(&mut dag, triple_op, goal)?;
+    let fol_clauses = lower_datalog_clauses(&mut dag, triple_op, clauses, constants)?;
+    let (goal_node, goal_vars) = lower_goal(&mut dag, triple_op, goal, constants)?;
 
     // Datalog lowering has no sorts, so this bridge stays sort-blind.
     let program = FolProgram::new(&dag, fol_clauses, goal_node, goal_vars, BTreeMap::new())?;
-    let control = resolve_fol(&mut dag, &program, &SortContext::default(), budget)?;
+    let control = resolve_fol(
+        &mut dag,
+        &program,
+        &SortContext::default(),
+        FolAnswerContract::GroundOnly,
+        &budget,
+    )?;
     Ok((dag, control))
 }
 
@@ -2084,29 +2146,39 @@ mod tests {
         .unwrap();
 
         let budget = FolBudget { max_steps: 10_000 };
-        let control = resolve_fol(&mut dag, &program, &SortContext::default(), &budget).unwrap();
+        let control = resolve_fol(
+            &mut dag,
+            &program,
+            &SortContext::default(),
+            FolAnswerContract::GroundOnly,
+            &budget,
+        )
+        .unwrap();
         let FolControl::Decided(outcome) = control else {
             panic!("Peano addition must be decidable");
         };
         assert_eq!(outcome.answers.len(), 1, "exactly one sum");
         let answer = &outcome.answers[0];
-        assert_eq!(answer.bindings.get("R"), Some(&render(&dag, three)));
         assert_eq!(
-            outcome.truth_of(&dag, answer.atom),
+            answer.get("R").map(FolTerm::render),
+            Some(render(&dag, three))
+        );
+        assert_eq!(
+            outcome.truth_of(&dag, answer.atom().source_id()),
             FolVerdict::Established(Truth::True),
             "a projected answer is always in the true set"
         );
 
         let checked = check_fol_proof(
             &mut dag,
-            &answer.proof,
+            answer.proof(),
             &clauses,
             &BTreeMap::new(),
             &SortContext::default(),
             &always_not_false,
         )
         .expect("the derivation re-derives cleanly");
-        assert_eq!(checked, answer.atom);
+        assert_eq!(checked, answer.atom().source_id());
     }
 
     // ── 2: member/2 over a cons list ─────────────────────────────────────────
@@ -2155,14 +2227,21 @@ mod tests {
         .unwrap();
 
         let budget = FolBudget { max_steps: 10_000 };
-        let control = resolve_fol(&mut dag, &program, &SortContext::default(), &budget).unwrap();
+        let control = resolve_fol(
+            &mut dag,
+            &program,
+            &SortContext::default(),
+            FolAnswerContract::GroundOnly,
+            &budget,
+        )
+        .unwrap();
         let FolControl::Decided(outcome) = control else {
             panic!("member/2 over a finite ground list must be decidable");
         };
         let mut found: Vec<String> = outcome
             .answers
             .iter()
-            .map(|answer| answer.bindings.get("X").expect("X is bound").clone())
+            .map(|answer| answer.get("X").expect("X is bound").render())
             .collect();
         found.sort();
         assert_eq!(found, vec!["a".to_owned(), "b".to_owned(), "c".to_owned()]);
@@ -2170,14 +2249,14 @@ mod tests {
         for answer in &outcome.answers {
             let checked = check_fol_proof(
                 &mut dag,
-                &answer.proof,
+                answer.proof(),
                 &clauses,
                 &BTreeMap::new(),
                 &SortContext::default(),
                 &always_not_false,
             )
             .unwrap_or_else(|error| panic!("{error:?}"));
-            assert_eq!(checked, answer.atom);
+            assert_eq!(checked, answer.atom().source_id());
         }
     }
 
@@ -2208,7 +2287,15 @@ mod tests {
             let program =
                 FolProgram::new(dag, clauses, goal_atom, vec![], BTreeMap::new()).unwrap();
             let budget = FolBudget { max_steps: 10_000 };
-            match resolve_fol(dag, &program, &SortContext::default(), &budget).unwrap() {
+            match resolve_fol(
+                dag,
+                &program,
+                &SortContext::default(),
+                FolAnswerContract::GroundOnly,
+                &budget,
+            )
+            .unwrap()
+            {
                 FolControl::Decided(outcome) => *outcome,
                 FolControl::Unsupported(reason) => panic!("expected a decision, got {reason:?}"),
             }
@@ -2251,9 +2338,14 @@ mod tests {
         let clause = FolClause::new(&dag, p, vec![FolLit::Neg(p)]).unwrap();
         let program = FolProgram::new(&dag, vec![clause], p, vec![], BTreeMap::new()).unwrap();
         let budget = FolBudget { max_steps: 10_000 };
-        let FolControl::Decided(outcome) =
-            resolve_fol(&mut dag, &program, &SortContext::default(), &budget).unwrap()
-        else {
+        let FolControl::Decided(outcome) = resolve_fol(
+            &mut dag,
+            &program,
+            &SortContext::default(),
+            FolAnswerContract::GroundOnly,
+            &budget,
+        )
+        .unwrap() else {
             panic!("a direct negative loop is decidable (as Undefined), not Unsupported");
         };
         assert_eq!(
@@ -2289,9 +2381,14 @@ mod tests {
         // Four steps reach the positive fact and interrupt discovery of the
         // negative dependency. Negation must not certify truth or falsity.
         let budget = FolBudget { max_steps: 4 };
-        let FolControl::Decided(outcome) =
-            resolve_fol(&mut dag, &program, &SortContext::default(), &budget).unwrap()
-        else {
+        let FolControl::Decided(outcome) = resolve_fol(
+            &mut dag,
+            &program,
+            &SortContext::default(),
+            FolAnswerContract::GroundOnly,
+            &budget,
+        )
+        .unwrap() else {
             panic!("a budget cut is Partial, not Unsupported");
         };
         assert_eq!(outcome.status(), FolStatus::Partial);
@@ -2324,6 +2421,7 @@ mod tests {
             &mut dag,
             &positive,
             &SortContext::default(),
+            FolAnswerContract::GroundOnly,
             &FolBudget { max_steps: 1 },
         )
         .unwrap() else {
@@ -2333,7 +2431,7 @@ mod tests {
         assert_eq!(partial.answers.len(), 1);
         let proved = check_fol_proof(
             &mut dag,
-            &partial.answers[0].proof,
+            partial.answers[0].proof(),
             positive.clauses(),
             positive.meta_sorts(),
             &SortContext::default(),
@@ -2351,14 +2449,24 @@ mod tests {
         let (clauses, _base, goal_atom) = budget_cut_program(&mut dag);
         let program = FolProgram::new(&dag, clauses, goal_atom, vec![], BTreeMap::new()).unwrap();
         let budget = FolBudget { max_steps: 4 };
-        let FolControl::Decided(first) =
-            resolve_fol(&mut dag, &program, &SortContext::default(), &budget).unwrap()
-        else {
+        let FolControl::Decided(first) = resolve_fol(
+            &mut dag,
+            &program,
+            &SortContext::default(),
+            FolAnswerContract::GroundOnly,
+            &budget,
+        )
+        .unwrap() else {
             panic!("expected a decision");
         };
-        let FolControl::Decided(second) =
-            resolve_fol(&mut dag, &program, &SortContext::default(), &budget).unwrap()
-        else {
+        let FolControl::Decided(second) = resolve_fol(
+            &mut dag,
+            &program,
+            &SortContext::default(),
+            FolAnswerContract::GroundOnly,
+            &budget,
+        )
+        .unwrap() else {
             panic!("expected a decision");
         };
         assert_eq!(first.answers, second.answers);
@@ -2388,7 +2496,15 @@ mod tests {
         )
         .unwrap();
         let budget = FolBudget { max_steps: 10_000 };
-        match resolve_fol(&mut dag, &program, &SortContext::default(), &budget).unwrap() {
+        match resolve_fol(
+            &mut dag,
+            &program,
+            &SortContext::default(),
+            FolAnswerContract::GroundOnly,
+            &budget,
+        )
+        .unwrap()
+        {
             FolControl::Unsupported(FolUnsupported::Floundering) => {}
             other => panic!("expected Floundering, got {other:?}"),
         }
@@ -2407,7 +2523,15 @@ mod tests {
         let clause = FolClause::new(&dag, head, body).unwrap();
         let program = FolProgram::new(&dag, vec![clause], head, vec![], BTreeMap::new()).unwrap();
         let budget = FolBudget { max_steps: 10_000 };
-        match resolve_fol(&mut dag, &program, &SortContext::default(), &budget).unwrap() {
+        match resolve_fol(
+            &mut dag,
+            &program,
+            &SortContext::default(),
+            FolAnswerContract::GroundOnly,
+            &budget,
+        )
+        .unwrap()
+        {
             FolControl::Unsupported(FolUnsupported::ClauseBodyTooWide { rule: 0, literals }) => {
                 assert_eq!(literals, literal_count);
             }
@@ -2619,19 +2743,24 @@ mod tests {
             meta_sorts,
         )
         .unwrap();
-        let FolControl::Decided(sorted_outcome) =
-            resolve_fol(&mut dag, &sorted, &ctx, &budget).unwrap()
-        else {
+        let FolControl::Decided(sorted_outcome) = resolve_fol(
+            &mut dag,
+            &sorted,
+            &ctx,
+            FolAnswerContract::GroundOnly,
+            &budget,
+        )
+        .unwrap() else {
             panic!("the sorted program is decidable, and a sort clash is not floundering");
         };
-        let sorted_answers: Vec<&String> = sorted_outcome
+        let sorted_answers: Vec<String> = sorted_outcome
             .answers
             .iter()
-            .map(|answer| answer.bindings.get("R").expect("R is bound"))
+            .map(|answer| answer.get("R").expect("R is bound").render())
             .collect();
         assert_eq!(
             sorted_answers,
-            vec![&"felix".to_owned()],
+            vec!["felix".to_owned()],
             "only the Cat-sorted value satisfies a Cat-declared variable"
         );
 
@@ -2645,9 +2774,14 @@ mod tests {
             BTreeMap::new(),
         )
         .unwrap();
-        let FolControl::Decided(unsorted_outcome) =
-            resolve_fol(&mut dag, &unsorted, &SortContext::default(), &budget).unwrap()
-        else {
+        let FolControl::Decided(unsorted_outcome) = resolve_fol(
+            &mut dag,
+            &unsorted,
+            &SortContext::default(),
+            FolAnswerContract::GroundOnly,
+            &budget,
+        )
+        .unwrap() else {
             panic!("the sort-blind program is decidable");
         };
         assert_eq!(
@@ -2690,12 +2824,17 @@ mod tests {
         )
         .unwrap();
         let budget = FolBudget { max_steps: 10_000 };
-        let FolControl::Decided(outcome) =
-            resolve_fol(&mut dag, &program, &SortContext::default(), &budget).unwrap()
-        else {
+        let FolControl::Decided(outcome) = resolve_fol(
+            &mut dag,
+            &program,
+            &SortContext::default(),
+            FolAnswerContract::GroundOnly,
+            &budget,
+        )
+        .unwrap() else {
             panic!("Peano addition is decidable");
         };
-        let proof = outcome.answers[0].proof.clone();
+        let proof = outcome.answers[0].proof().clone();
         (dag, clauses, proof)
     }
 
@@ -2872,9 +3011,14 @@ mod tests {
         let program =
             FolProgram::new(&dag, clauses.clone(), holds, vec![], BTreeMap::new()).unwrap();
         let budget = FolBudget { max_steps: 10_000 };
-        let FolControl::Decided(outcome) =
-            resolve_fol(&mut dag, &program, &SortContext::default(), &budget).unwrap()
-        else {
+        let FolControl::Decided(outcome) = resolve_fol(
+            &mut dag,
+            &program,
+            &SortContext::default(),
+            FolAnswerContract::GroundOnly,
+            &budget,
+        )
+        .unwrap() else {
             panic!("a neg-only clause with a false negand is decidable");
         };
         assert_eq!(
@@ -2882,7 +3026,7 @@ mod tests {
             FolVerdict::Established(Truth::True)
         );
         assert_eq!(outcome.answers.len(), 1);
-        let proof = &outcome.answers[0].proof;
+        let proof = outcome.answers[0].proof();
         assert!(
             !proof.is_assert(),
             "a negation-guarded fact is a ByRule (its negation must be re-checkable), not an Assert"
@@ -2971,16 +3115,22 @@ mod tests {
         )
         .unwrap();
         let budget = FolBudget { max_steps: 10_000 };
-        let FolControl::Decided(outcome) = resolve_fol(&mut dag, &program, &ctx, &budget).unwrap()
-        else {
+        let FolControl::Decided(outcome) = resolve_fol(
+            &mut dag,
+            &program,
+            &ctx,
+            FolAnswerContract::GroundOnly,
+            &budget,
+        )
+        .unwrap() else {
             panic!("a sorted NAF program is decidable, not floundering");
         };
         assert_eq!(outcome.answers.len(), 1, "safe(felix) holds");
         assert_eq!(
-            outcome.answers[0].bindings.get("R"),
-            Some(&"felix".to_owned())
+            outcome.answers[0].get("R").map(FolTerm::render),
+            Some("felix".to_owned())
         );
-        let proof = outcome.answers[0].proof.clone();
+        let proof = outcome.answers[0].proof().clone();
         // The proof is a rule firing (it has a negation to re-check), NOT an Assert.
         assert!(
             !proof.is_assert(),
@@ -3098,18 +3248,19 @@ mod tests {
             );
 
             let triple_op = dag.intern_leaf("triple").unwrap();
-            let fol_clauses = lower_datalog_clauses(&mut dag, triple_op, &backward_rules)
-                .expect("the same Datalog-only program lowers cleanly a second time");
+            let fol_clauses =
+                lower_datalog_clauses(&mut dag, triple_op, &backward_rules, &Constants::Opaque)
+                    .expect("the same Datalog-only program lowers cleanly a second time");
             let checked = check_fol_proof(
                 &mut dag,
-                &outcome.answers[0].proof,
+                outcome.answers[0].proof(),
                 &fol_clauses,
                 &BTreeMap::new(),
                 &SortContext::default(),
                 &always_not_false,
             )
             .expect("the backward derivation re-derives cleanly");
-            assert_eq!(checked, outcome.answers[0].atom);
+            assert_eq!(checked, outcome.answers[0].atom().source_id());
         }
 
         #[test]

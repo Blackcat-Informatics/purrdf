@@ -7,6 +7,222 @@ use purrdf_datalog::term::{RetainedTerm, TermDag};
 use purrdf_hash::error::ErrorValue;
 use purrdf_testkit::error_capture::Capture;
 
+fn structural_answers_share_terms_and_variables_after_producer_destruction() {
+    use purrdf_datalog::resolve_fol::{
+        FolAnswerContract, FolBudget, FolClause, FolControl, FolProgram, check_fol_proof,
+        resolve_fol,
+    };
+    use purrdf_datalog::term::NodeData;
+    use purrdf_datalog::unify::SortContext;
+    use std::collections::BTreeMap;
+
+    let mut dag = TermDag::default();
+    let p = dag.intern_leaf("p").unwrap();
+    let f = dag.intern_leaf("f").unwrap();
+    let a = dag
+        .intern_rdf(purrdf_core::TermValue::simple_literal("a"))
+        .unwrap();
+    let shared = dag.intern_app(f, vec![a, a]).unwrap();
+    let one = dag.intern_app(p, vec![shared, shared]).unwrap();
+    let two = dag.intern_app(p, vec![shared, a]).unwrap();
+    let (_, x) = dag.fresh_meta().unwrap();
+    let (_, y) = dag.fresh_meta().unwrap();
+    let goal = dag.intern_app(p, vec![x, y]).unwrap();
+    let clauses = [one, two]
+        .into_iter()
+        .map(|head| FolClause::new(&dag, head, vec![]).unwrap())
+        .collect();
+    let program = FolProgram::new(
+        &dag,
+        clauses,
+        goal,
+        vec![(x, "X".into()), (x, "alias".into()), (y, "Y".into())],
+        BTreeMap::new(),
+    )
+    .unwrap();
+    let FolControl::Decided(outcome) = resolve_fol(
+        &mut dag,
+        &program,
+        &SortContext::default(),
+        FolAnswerContract::GroundOnly,
+        &FolBudget { max_steps: 100 },
+    )
+    .unwrap() else {
+        panic!("ground facts must be decided");
+    };
+    assert_eq!(outcome.answers.len(), 2);
+    let answer = outcome
+        .answers
+        .iter()
+        .find(|row| row.get("Y").unwrap().source_id() == shared)
+        .unwrap()
+        .clone();
+    let other = outcome
+        .answers
+        .iter()
+        .find(|row| row.get("Y").unwrap().source_id() == a)
+        .unwrap()
+        .clone();
+    assert!(answer.get("X").unwrap().same_node(answer.get("Y").unwrap()));
+    assert!(answer.get("X").unwrap().same_node(other.get("X").unwrap()));
+    let variables: Vec<_> = answer
+        .bindings()
+        .map(purrdf_datalog::resolve_fol::FolBindingEntry::variable)
+        .collect();
+    assert!(variables[0].same_node(variables[1]));
+    assert!(!variables[0].same_node(variables[2]));
+    assert!(variables[0].same_node(other.bindings().next().unwrap().variable()));
+    assert!(matches!(variables[0].data(), NodeData::Meta(_)));
+    let FolControl::Decided(other_scope) = resolve_fol(
+        &mut dag,
+        &program,
+        &SortContext::default(),
+        FolAnswerContract::GroundOnly,
+        &FolBudget { max_steps: 100 },
+    )
+    .unwrap() else {
+        panic!("the repeated query must also decide");
+    };
+    assert!(!variables[0].same_node(other_scope.answers[0].bindings().next().unwrap().variable()));
+    drop(other_scope);
+    let checked = check_fol_proof(
+        &mut dag,
+        answer.proof(),
+        program.clauses(),
+        program.meta_sorts(),
+        &SortContext::default(),
+        &|_, _| false,
+    )
+    .unwrap();
+    assert!(answer.term(checked).unwrap().same_node(answer.atom()));
+    let identity = answer.derivation_id();
+    drop(outcome);
+    drop(program);
+    drop(dag);
+    let clone = answer.clone();
+    drop(answer);
+    assert_eq!(clone.answer_contract(), FolAnswerContract::GroundOnly);
+    assert_eq!(clone.derivation_id(), identity);
+    let term = clone.get("X").unwrap();
+    let NodeData::App { args, .. } = term.data() else {
+        panic!("the compound answer stays structural");
+    };
+    assert!(
+        term.term(args[0])
+            .unwrap()
+            .same_node(term.term(args[1]).unwrap())
+    );
+    assert_eq!(term.render(), "f(\"a\", \"a\")");
+}
+
+fn rdf_answers_retain_original_literal_blank_and_quoted_identity() {
+    use purrdf_core::{BlankScope, RdfTextDirection, TermBox, TermValue};
+    use purrdf_datalog::clause::{ClauseAtom, ClauseTerm, DlClause};
+    use purrdf_datalog::resolve_fol::{
+        FolBudget, FolControl, FolError, FolRdfSource, solve_datalog_goal_rdf,
+    };
+    use purrdf_datalog::term::NodeData;
+    use std::collections::BTreeMap;
+
+    struct Source(BTreeMap<String, TermValue>);
+    impl FolRdfSource for Source {
+        fn resolve(&self, identity: &str) -> Option<&TermValue> {
+            self.0.get(identity)
+        }
+    }
+    let blank = |scope| TermValue::Blank {
+        label: "same".into(),
+        scope: BlankScope(scope),
+    };
+    let directed = TermValue::Literal {
+        lexical_form: "same\nquoted\"".into(),
+        datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString".into(),
+        language: Some("ar".into()),
+        direction: Some(RdfTextDirection::Rtl),
+    };
+    let quoted = TermValue::Triple {
+        s: TermBox::new(blank(1)),
+        p: TermBox::new(TermValue::iri("urn:p")),
+        o: TermBox::new(directed.clone()),
+    };
+    // These are original dictionary addresses, deliberately not parsed RDF or
+    // human displays. Only that source's native values enter the resolver.
+    let mut source = Source(BTreeMap::from([
+        ("<urn:p>".into(), TermValue::iri("urn:p")),
+        ("blank one".into(), blank(1)),
+        ("blank two".into(), blank(2)),
+        ("directed".into(), directed.clone()),
+        ("quoted".into(), quoted.clone()),
+        ("plain".into(), TermValue::simple_literal("same\nquoted\"")),
+    ]));
+    let clauses = [
+        ("blank one", "directed"),
+        ("blank two", "directed"),
+        ("blank one", "quoted"),
+        ("blank one", "plain"),
+    ]
+    .into_iter()
+    .map(|(s, o)| {
+        DlClause::datalog(
+            ClauseAtom::positive(ClauseTerm::literal(s), "urn:p", ClauseTerm::literal(o)),
+            vec![],
+        )
+    })
+    .collect::<Vec<_>>();
+    let goal = ClauseAtom::positive(ClauseTerm::var("S"), "urn:p", ClauseTerm::var("O"));
+    let budget = FolBudget { max_steps: 1000 };
+    let (dag, control) = solve_datalog_goal_rdf(&clauses, &goal, &budget, &source).unwrap();
+    let FolControl::Decided(outcome) = control else {
+        panic!("native ground RDF facts must be decided");
+    };
+    assert_eq!(outcome.answers.len(), 4);
+    let native = |term: purrdf_datalog::resolve_fol::FolTerm<'_>| match term.data() {
+        NodeData::Rdf(value) => value.value().clone(),
+        _ => panic!("RDF inputs must retain native components"),
+    };
+    assert!(
+        outcome
+            .answers
+            .iter()
+            .any(|row| native(row.get("S").unwrap()) == blank(1))
+    );
+    assert!(
+        outcome
+            .answers
+            .iter()
+            .any(|row| native(row.get("S").unwrap()) == blank(2))
+    );
+    assert!(
+        outcome
+            .answers
+            .iter()
+            .any(|row| native(row.get("O").unwrap()) == directed)
+    );
+    let retained = outcome
+        .answers
+        .iter()
+        .find(|row| native(row.get("O").unwrap()) == quoted)
+        .unwrap()
+        .clone();
+    let key = retained.get("O").unwrap().canonical_key();
+    source.0.remove("directed");
+    let error = solve_datalog_goal_rdf(&clauses, &goal, &budget, &source).unwrap_err();
+    let FolError::Rdf(cause) = &error else {
+        panic!("a missing original operand is a hard typed failure");
+    };
+    assert_eq!(cause.identity(), "directed");
+    assert!(
+        std::error::Error::source(&error)
+            .unwrap()
+            .is::<purrdf_datalog::resolve_fol::FolRdfError>()
+    );
+    drop(source);
+    drop(outcome);
+    drop(dag);
+    assert_eq!(native(retained.get("O").unwrap()), quoted);
+    assert_eq!(retained.get("O").unwrap().canonical_key(), key);
+}
+
 fn negative_only_demand_observes_asserted_dependency() {
     use purrdf_datalog::resolve_fol::{
         FolBudget, FolClause, FolControl, FolLit, FolProgram, FolStatus, FolUnestablished,
@@ -33,6 +249,7 @@ fn negative_only_demand_observes_asserted_dependency() {
         &mut dag,
         &program,
         &SortContext::default(),
+        purrdf_datalog::resolve_fol::FolAnswerContract::GroundOnly,
         &FolBudget { max_steps: 100 },
     )
     .unwrap() else {
@@ -64,6 +281,7 @@ fn negative_only_demand_observes_asserted_dependency() {
         &mut dag,
         &program,
         &SortContext::default(),
+        purrdf_datalog::resolve_fol::FolAnswerContract::GroundOnly,
         &FolBudget { max_steps: 1 },
     )
     .unwrap() else {
@@ -96,6 +314,7 @@ fn negative_only_demand_observes_asserted_dependency() {
         &mut dag,
         &absent_program,
         &SortContext::default(),
+        purrdf_datalog::resolve_fol::FolAnswerContract::GroundOnly,
         &FolBudget { max_steps: 100 },
     )
     .unwrap() else {
@@ -112,7 +331,7 @@ fn negative_only_demand_observes_asserted_dependency() {
     assert_eq!(absent.answers.len(), 1);
     check_fol_proof(
         &mut dag,
-        &absent.answers[0].proof,
+        absent.answers[0].proof(),
         absent_program.clauses(),
         absent_program.meta_sorts(),
         &SortContext::default(),
@@ -148,6 +367,7 @@ fn indirect_negative_demands_reach_facts_and_preserve_cycles() {
             &mut dag,
             &program,
             &SortContext::default(),
+            purrdf_datalog::resolve_fol::FolAnswerContract::GroundOnly,
             &FolBudget { max_steps: 100 },
         )
         .unwrap() else {
@@ -293,15 +513,16 @@ fn fol_projection_validation_preserves_names_and_admits_aliases() {
         &mut dag,
         &program,
         &SortContext::default(),
+        purrdf_datalog::resolve_fol::FolAnswerContract::GroundOnly,
         &FolBudget { max_steps: 100 },
     )
     .unwrap() else {
         panic!("a ground fact must be decidable");
     };
     assert_eq!(outcome.answers.len(), 1);
-    assert_eq!(outcome.answers[0].atom, asserted);
-    assert_eq!(outcome.answers[0].bindings.get("X").unwrap(), "value");
-    assert_eq!(outcome.answers[0].bindings.get("alias").unwrap(), "value");
+    assert_eq!(outcome.answers[0].atom().source_id(), asserted);
+    assert_eq!(outcome.answers[0].get("X").unwrap().render(), "value");
+    assert_eq!(outcome.answers[0].get("alias").unwrap().render(), "value");
 }
 
 fn fol_sort_construction_checks_handles_without_rejecting_unused_declarations() {
@@ -435,6 +656,8 @@ fn actual_proof_decoder_preserves_rejected_bytes_and_native_lengths() {
 }
 
 purrdf_testkit::harness_main!(
+    structural_answers_share_terms_and_variables_after_producer_destruction,
+    rdf_answers_retain_original_literal_blank_and_quoted_identity,
     negative_only_demand_observes_asserted_dependency,
     indirect_negative_demands_reach_facts_and_preserve_cycles,
     fol_construction_checks_resident_handles_and_original_positions,

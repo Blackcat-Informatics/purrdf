@@ -8,6 +8,15 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Owned structural answers (breaking Rust API):** `FolBinding` exposes native
+  term views and original scoped variables through one retained graph shared by
+  the complete answer set. Extracted rows survive source destruction; rendering
+  is explicit and canonical structural keys order answers. `resolve_fol` selects
+  and retains `FolAnswerContract::GroundOnly`. Native RDF constants preserve full
+  literal, blank-scope and quoted-term identity; the explanation adapter uses its
+  original dictionary and propagates missing operands as typed failures. Existing
+  opaque identity laws remain unchanged; the RDF adapter uses native RDF keys.
+
 - **Scoped structured truth (breaking Rust API):** `truth_of` distinguishes
   established WFS values from unevaluated, incomplete and nonground probes.
   Completion is read through `status()`; `confirms_not_false` is removed.

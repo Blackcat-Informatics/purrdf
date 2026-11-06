@@ -44,6 +44,11 @@
 //! variable — and a [`NodeData::Meta`] is the third, unifiable kind:
 //! [`crate::unify`] binds metavariables and never touches `Free` or `Bound` nodes.
 //!
+//! Native RDF constants use [`NodeData::Rdf`], preserving the original
+//! [`TermValue`] identity, including every literal component, blank scope and
+//! quoted triple. Quoted RDF constants are atomic to unification; pattern
+//! metavariables still live in this arena's compound-term structure.
+//!
 //! # Free-metavariable caching
 //!
 //! Every node caches the sorted, deduplicated set of [`MetaId`]s it mentions,
@@ -52,25 +57,72 @@
 //! ([`crate::unify`]'s `occurs_through`) a binary-searchable fast path instead of a
 //! structural walk on every call.
 
-use core::hash::BuildHasher;
+use core::hash::{BuildHasher, Hash, Hasher};
 
+use purrdf_core::TermValue;
 use purrdf_core::hash::table::HashTable;
 use purrdf_hash::fixed::FixedState;
-use purrdf_lex::allocation::{Memory, Resident, StorageError};
+use purrdf_lex::allocation::{Memory, Resident, Shared, StorageError};
 
 use crate::id::{MetaId, NodeId, SymId};
 
 mod retained;
-pub use retained::RetainedTerm;
+pub use retained::{RetainedGraph, RetainedTerm};
+
+/// Shared immutable ownership of one native RDF value, including all original
+/// literal components, blank scope and quoted triple components.
+#[derive(Debug, Clone)]
+pub struct RdfAtom(Shared<TermValue>);
+
+impl RdfAtom {
+    /// The original structural RDF value; display is never its identity key.
+    #[must_use]
+    pub fn value(&self) -> &TermValue {
+        &self.0
+    }
+}
+
+impl PartialEq for RdfAtom {
+    fn eq(&self, other: &Self) -> bool {
+        self.value() == other.value()
+    }
+}
+impl Eq for RdfAtom {}
+impl PartialOrd for RdfAtom {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for RdfAtom {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.value().cmp(other.value())
+    }
+}
+impl Hash for RdfAtom {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.value().hash(state);
+    }
+}
+
+/// Read-only term inspection shared by the mutable arena and its retained graph.
+/// Handles and symbol IDs are local to this one reader.
+pub trait TermRead {
+    /// The complete node at this reader's local handle.
+    fn data(&self, node: NodeId) -> &NodeData;
+    /// The original text of this reader's local symbol.
+    fn symbol(&self, id: SymId) -> &str;
+}
 
 /// One node's shape.
 ///
-/// A `Leaf`/`Free`/`Meta`/`Bound` node is a LEAF of the term structure (it has no
+/// An `Rdf`/`Leaf`/`Free`/`Meta`/`Bound` node is a leaf of the term structure (it has no
 /// children in this enum's own sense, though a `Meta` may later be bound to
 /// arbitrary structure by [`crate::unify`]); `App` and `Binder` are the two ways
 /// this arena builds compound structure.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum NodeData {
+    /// An original RDF value. Its native components, not its display, define identity.
+    Rdf(RdfAtom),
     /// An interned atomic constant (an IRI or a rendered literal surface) — not
     /// unifiable, but comparable and shareable.
     Leaf(SymId),
@@ -251,6 +303,15 @@ impl TermDag {
         self.intern_named(symbol, NodeData::Leaf)
     }
 
+    /// Intern an owned native RDF value by structural identity.
+    ///
+    /// # Errors
+    /// Returns the original physical storage or arena capacity refusal.
+    pub fn intern_rdf(&mut self, value: TermValue) -> Result<NodeId, StorageError> {
+        let owner = Shared::try_new(value).map_err(|_| StorageError::AllocationFailed)?;
+        self.intern(NodeData::Rdf(RdfAtom(owner)))
+    }
+
     /// Intern a [`NodeData::Free`] naming `symbol`.
     pub fn intern_free(&mut self, symbol: &str) -> Result<NodeId, StorageError> {
         self.intern_named(symbol, NodeData::Free)
@@ -310,7 +371,9 @@ impl TermDag {
         let mut resident = Resident;
         let mut memory = Memory::new(&mut resident);
         Ok(match data {
-            NodeData::Leaf(_) | NodeData::Free(_) | NodeData::Bound { .. } => Vec::new(),
+            NodeData::Rdf(_) | NodeData::Leaf(_) | NodeData::Free(_) | NodeData::Bound { .. } => {
+                Vec::new()
+            }
             NodeData::Meta(meta) => memory.collect([*meta])?,
             NodeData::App { op, args } => {
                 let mut acc = memory.collect(self.free_meta(*op).iter().copied())?;
@@ -366,6 +429,15 @@ impl TermDag {
             FixedState::new().hash_one(&nodes[id.resident_index()])
         });
         Ok(id)
+    }
+}
+
+impl TermRead for TermDag {
+    fn data(&self, node: NodeId) -> &NodeData {
+        self.data(node)
+    }
+    fn symbol(&self, id: SymId) -> &str {
+        self.symbol(id)
     }
 }
 

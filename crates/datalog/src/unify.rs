@@ -356,7 +356,9 @@ impl SortContext {
     pub fn sort_of(&self, dag: &TermDag, node: NodeId, s: &Subst) -> Option<NodeId> {
         let resolved = s.resolve(dag, node);
         match dag.data(resolved) {
-            NodeData::Leaf(_) | NodeData::Free(_) => self.term_sorts.get(&resolved).copied(),
+            NodeData::Rdf(_) | NodeData::Leaf(_) | NodeData::Free(_) => {
+                self.term_sorts.get(&resolved).copied()
+            }
             NodeData::App { op, .. } => self.op_result_sort.get(op).copied(),
             NodeData::Meta(m) => s.meta_sort(*m),
             NodeData::Bound { .. } | NodeData::Binder { .. } => None,
@@ -620,7 +622,7 @@ fn occurs_through(s: &Subst, dag: &TermDag, m: MetaId, node: NodeId) -> bool {
                 || sorts.iter().any(|&sort| occurs_through(s, dag, m, sort))
                 || occurs_through(s, dag, m, *body)
         }
-        NodeData::Leaf(_) | NodeData::Free(_) | NodeData::Bound { .. } => false,
+        NodeData::Rdf(_) | NodeData::Leaf(_) | NodeData::Free(_) | NodeData::Bound { .. } => false,
     }
 }
 
@@ -650,7 +652,7 @@ fn apply_at(
         return Ok(cached);
     }
     let result = match dag.data(node).clone() {
-        NodeData::Leaf(_) | NodeData::Free(_) | NodeData::Bound { .. } => node,
+        NodeData::Rdf(_) | NodeData::Leaf(_) | NodeData::Free(_) | NodeData::Bound { .. } => node,
         NodeData::Meta(_) => {
             let resolved = s.resolve(dag, node);
             if resolved == node {
@@ -711,7 +713,7 @@ fn shift_at(
         return Ok(cached);
     }
     let result = match dag.data(node).clone() {
-        NodeData::Leaf(_) | NodeData::Free(_) | NodeData::Meta(_) => node,
+        NodeData::Rdf(_) | NodeData::Leaf(_) | NodeData::Free(_) | NodeData::Meta(_) => node,
         NodeData::Bound { debruijn, slot } => {
             if debruijn >= cutoff {
                 dag.intern_bound(
@@ -768,7 +770,7 @@ fn shift_down_at(
         return Ok(cached);
     }
     let result = match dag.data(node).clone() {
-        NodeData::Leaf(_) | NodeData::Free(_) | NodeData::Meta(_) => Some(node),
+        NodeData::Rdf(_) | NodeData::Leaf(_) | NodeData::Free(_) | NodeData::Meta(_) => Some(node),
         NodeData::Bound { debruijn, slot } => {
             if debruijn < cutoff {
                 Some(node)

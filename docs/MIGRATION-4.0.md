@@ -967,6 +967,59 @@ than `Copy`; borrow literals or clone when ownership is needed. The current
 `Pos(NodeId)` and `Neg(NodeId)` payloads retain their meaning. No term rendering,
 canonical key, rule identity, proof identity or admitted execution meaning changes.
 
+## Owned structural answers
+
+Pass `FolAnswerContract::GroundOnly` to `resolve_fol` between its sort context
+and budget. The original selection remains inspectable through
+`FolOutcome::answer_contract()` and `FolBinding::answer_contract()`. This
+contract enumerates fully ground answers to a query pattern; representation of
+variables and compound terms does not establish symbolic verdicts.
+
+`FolBinding` fields are private. Replace the rendered `bindings` map with
+`bindings()`, which visits authored names, original scoped variables and native
+term values. `get(name)` selects a structural value. Replace `atom` with `atom()`
+and `proof` with `proof()`. A `FolTerm` exposes its complete `NodeData`; child
+handles resolve through `term(source_id)`, and `same_node` compares a local node
+within its retained owner scope. Names label projection columns; they are not
+variable identities. Local source IDs alone do not identify nodes across owners.
+
+One reachable graph is retained for the entire answer set, including all original
+goal variables, projected terms, answer atoms and proof conclusions. Extracted or
+cloned rows share that graph and survive dropping the outcome, program and source
+arena. `FolBinding::term` inspects a checked original conclusion in that same
+graph. `derivation_id()` reproduces the proof identity after source destruction.
+Row equality includes owner scope. Compare explicit canonical structural keys
+when cross-run structural comparison is intended.
+
+Rendering is an explicit presentation operation: use `get(name).map(FolTerm::render)`
+when a transport needs strings. No rendered-answer compatibility map is maintained.
+Projection, joins, deduplication and answer ordering use structural identities;
+answer order now follows canonical atom keys instead of rendered binding strings.
+
+`TermDag::intern_rdf` and `NodeData::Rdf` retain the original native `TermValue`,
+including lexical form, datatype, language, direction, blank scope and quoted
+components. Native RDF constants are atomic to the compound-term unifier and
+compare by the original structural RDF identity. `RetainedGraph` and `TermRead`
+provide the same read path for live and retained nodes; single-term error
+snapshots use that shared home.
+
+`solve_datalog_goal` retains its opaque-symbol input interpretation. It does not
+parse an arbitrary clause literal spelling into RDF. For RDF sources, use
+`solve_datalog_goal_rdf` with a `FolRdfSource` that resolves the original source
+store's injective transport identity to its original `TermValue`. This address
+is not human-facing `render` output. The explanation adapter retains and passes
+its existing source dictionary, whose identity encoding includes blank scope and
+every RDF component. Missing originals return `FolError::Rdf` with the exact
+source identity; explanation checking propagates this failure through
+`ExplainError::Backward` rather than treating it as an abstention.
+
+Both input adapters use one lowering/solver and one answer owner. Existing opaque
+term, clause and proof identity bytes remain unchanged. Native RDF constants use
+a distinct `R` tag with framed base16 native canonical bytes; proofs produced
+through the RDF adapter therefore have native RDF identities rather than opaque
+surface identities. Regenerate such derived artifacts from their original source
+values; do not reinterpret old opaque symbols as RDF constants.
+
 ## Scoped structured truth verdicts
 
 `FolOutcome::truth_of` returns `FolVerdict`, distinguishing
