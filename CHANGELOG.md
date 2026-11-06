@@ -13,6 +13,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   size-field bytes and native UTF-8 causes. Projection packages preserve that
   cause through structured inspection and the standard error source chain.
 
+- **Extensible planner estimates (breaking Rust API):** `PlanEstimate` is
+  non-exhaustive and constructed with `PlanEstimate::new(rows, peak_rows, columns)`.
+  Its public fields, estimate semantics and EXPLAIN output remain unchanged.
+
 - **Fresh OWL refutation witnesses:** generated symbols are checked against the
   current term interner, including caller terms introduced after preparation.
   Repeated role-inclusion queries preserve distinct witness identities.
