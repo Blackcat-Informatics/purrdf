@@ -1,0 +1,284 @@
+diff --git CHANGELOG.md CHANGELOG.md
+index 6d3eaef36..a56a6c604 100644
+--- CHANGELOG.md
++++ CHANGELOG.md
+@@ -13,6 +13,11 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
+   size-field bytes and native UTF-8 causes. Projection packages preserve that
+   cause through structured inspection and the standard error source chain.
+ 
++- **Extensible format and glob refusals (breaking Rust API):** `SourceFormat`
++  and `purrdf_glob::SyntaxReason` are non-exhaustive. External matches need an
++  unsupported-case arm; the CLI refuses unknown source kinds rather than
++  routing them through an existing syntax or container.
++
+ - **Extensible planner estimates (breaking Rust API):** `PlanEstimate` is
+   non-exhaustive and constructed with `PlanEstimate::new(rows, peak_rows, columns)`.
+   Its public fields, estimate semantics and EXPLAIN output remain unchanged.
+diff --git crates/cli/src/describe.rs crates/cli/src/describe.rs
+index 61e897362..c88f39b01 100644
+--- crates/cli/src/describe.rs
++++ crates/cli/src/describe.rs
+@@ -191,8 +191,12 @@ fn refuse_uncarriable_named_graphs<D: DatasetView>(
+     description: &D,
+     target: SourceFormat,
+ ) -> Result<(), CliError> {
+-    let SourceFormat::Native(format) = target else {
+-        return Ok(());
++    let format = match target {
++        SourceFormat::Native(format) => format,
++        SourceFormat::Pack | SourceFormat::Gts => return Ok(()),
++        _ => {
++            return Err(format::unsupported_format(target, "the output target"));
++        }
+     };
+     if format.supports_datasets() {
+         return Ok(());
+@@ -322,5 +326,6 @@ fn subject_base(
+     match source_format {
+         SourceFormat::Native(native) => source::effective_base(options.input, native, options.base),
+         SourceFormat::Pack | SourceFormat::Gts => Ok(options.base.map(ToOwned::to_owned)),
++        _ => Err(format::unsupported_format(source_format, "the data input")),
+     }
+ }
+diff --git crates/cli/src/entails.rs crates/cli/src/entails.rs
+index cad147df6..e1d3ec43c 100644
+--- crates/cli/src/entails.rs
++++ crates/cli/src/entails.rs
+@@ -294,6 +294,12 @@ pub(crate) fn run(
+             source::effective_base(options.premise, native, options.base)?
+         }
+         SourceFormat::Pack | SourceFormat::Gts => None,
++        _ => {
++            return Err(format::unsupported_format(
++                premise_format,
++                "the premise input",
++            ));
++        }
+     };
+     let premise_iris: Vec<&str> = premise_base.as_deref().into_iter().collect();
+     let imports = read_imports(&import_plan, options, canonical)?;
+diff --git crates/cli/src/format.rs crates/cli/src/format.rs
+index 5d37a10d4..207915925 100644
+--- crates/cli/src/format.rs
++++ crates/cli/src/format.rs
+@@ -51,6 +51,15 @@ use purrdf_rdf::{SourceFormat, classify_source, strip_transport_suffix};
+ use crate::cli::CliRdfFormat;
+ use crate::error::CliError;
+ 
++/// Refuse a format introduced by a newer library until this CLI supports its routes.
++pub(crate) fn unsupported_format(format: SourceFormat, role: &str) -> CliError {
++    CliError::Usage(format!(
++        "{role} uses format `{}`, which this CLI does not support. Choose a supported \
++         native syntax or container, or upgrade the CLI to a version supporting this format",
++        format.token()
++    ))
++}
++
+ /// Resolve a `--from`/`--to` choice plus a path into a [`SourceFormat`].
+ ///
+ /// Precedence: an explicit choice always wins. Otherwise a recognized gzip/zstd
+@@ -214,8 +223,8 @@ impl<'a> BaseUse<'a> {
+     /// Decided ENTIRELY by the two format-registry columns, so a newly registered syntax
+     /// is classified by its own row rather than by a list kept here that someone would
+     /// have to remember to extend.
+-    fn consumes_base(self) -> bool {
+-        match self.format {
++    fn consumes_base(self) -> Result<bool, CliError> {
++        Ok(match self.format {
+             SourceFormat::Native(native) => match self.leg {
+                 BaseLeg::Parse => native.admits_relative_iri(),
+                 BaseLeg::Serialize => native.emits_base(),
+@@ -223,7 +232,8 @@ impl<'a> BaseUse<'a> {
+             // Both native containers store fully-resolved terms and have no relative-IRI
+             // syntax, in either direction.
+             SourceFormat::Pack | SourceFormat::Gts => false,
+-        }
++            _ => return Err(unsupported_format(self.format, self.role)),
++        })
+     }
+ 
+     /// Why this leg cannot consume one, in the operator's vocabulary.
+@@ -275,7 +285,14 @@ pub(crate) fn refuse_unconsumable_base(
+     base: Option<&str>,
+     legs: &[BaseUse<'_>],
+ ) -> Result<(), CliError> {
+-    if base.is_none() || legs.iter().copied().any(BaseUse::consumes_base) {
++    if base.is_none() {
++        return Ok(());
++    }
++    let mut consumes_base = false;
++    for leg in legs {
++        consumes_base |= leg.consumes_base()?;
++    }
++    if consumes_base {
+         return Ok(());
+     }
+     let reasons = legs
+diff --git crates/cli/src/premise_imports.rs crates/cli/src/premise_imports.rs
+index ea1d0598a..5baff6fbb 100644
+--- crates/cli/src/premise_imports.rs
++++ crates/cli/src/premise_imports.rs
+@@ -64,6 +64,10 @@ pub(crate) fn premise_iri(
+     match format {
+         SourceFormat::Native(native) => source::effective_base(path, native, base),
+         SourceFormat::Pack | SourceFormat::Gts => Ok(None),
++        _ => Err(crate::format::unsupported_format(
++            format,
++            "the premise input",
++        )),
+     }
+ }
+ 
+diff --git crates/cli/src/shapes_source.rs crates/cli/src/shapes_source.rs
+index d40116651..96e73eaf7 100644
+--- crates/cli/src/shapes_source.rs
++++ crates/cli/src/shapes_source.rs
+@@ -133,6 +133,12 @@ pub(crate) fn read_shapes_document(
+                 loaded: base.into_iter().map(str::to_owned).collect(),
+             });
+         }
++        _ => {
++            return Err(crate::format::unsupported_format(
++                format,
++                "the shapes input",
++            ));
++        }
+     };
+     let (dataset, document_base, prefixes) = if native == NativeRdfFormat::Turtle {
+         let bytes = source::read_bytes(path)?;
+diff --git crates/cli/src/shapes_tools.rs crates/cli/src/shapes_tools.rs
+index 566f94bfd..c2de30dd7 100644
+--- crates/cli/src/shapes_tools.rs
++++ crates/cli/src/shapes_tools.rs
+@@ -789,6 +789,9 @@ pub(crate) fn run_lint(
+                 )));
+             }
+         },
++        _ => {
++            return Err(format::unsupported_format(format, "the shapes input"));
++        }
+     };
+     let shapes_graph = resolve_shapes_graph(options.shapes_graph, base.as_deref())?;
+     let root = read_shapes_document(
+diff --git crates/cli/src/sink.rs crates/cli/src/sink.rs
+index 3296bb79e..c8ca670d3 100644
+--- crates/cli/src/sink.rs
++++ crates/cli/src/sink.rs
+@@ -387,6 +387,7 @@ pub(crate) fn write_rdf<D: DatasetView>(
+         // for the caller who reaches the sink by some other route.
+         SourceFormat::Gts => Err(format::refuse_gts_target(target, "the output target")
+             .expect_err("refuse_gts_target rejects SourceFormat::Gts")),
++        _ => Err(format::unsupported_format(target, "the output target")),
+     }
+ }
+ 
+diff --git crates/cli/src/source.rs crates/cli/src/source.rs
+index 969b5005f..9d0f9634f 100644
+--- crates/cli/src/source.rs
++++ crates/cli/src/source.rs
+@@ -733,6 +733,10 @@ pub(crate) fn run_over_input_with_transport<Op: ViewOp>(
+             let (dataset, _envelope_ledger) = load_gts(path, policy)?;
+             op.run(&*dataset, canonical)
+         }
++        _ => Err(crate::format::unsupported_format(
++            format,
++            "the input source",
++        )),
+     }
+ }
+ 
+@@ -790,6 +794,10 @@ pub(crate) fn load_dataset_reporting(
+             Ok((dataset_from_view(&view)?, LossLedger::new()))
+         }
+         SourceFormat::Gts => load_gts(path, policy),
++        _ => Err(crate::format::unsupported_format(
++            format,
++            "the input source",
++        )),
+     }
+ }
+ 
+diff --git crates/cli/src/validate.rs crates/cli/src/validate.rs
+index f484e22a8..7eab4e771 100644
+--- crates/cli/src/validate.rs
++++ crates/cli/src/validate.rs
+@@ -685,6 +685,7 @@ fn data_graph_iris(
+                 .collect())
+         }
+         SourceFormat::Pack | SourceFormat::Gts => Ok(Vec::new()),
++        _ => Err(format::unsupported_format(format, "the data input")),
+     }
+ }
+ 
+@@ -1373,6 +1374,7 @@ pub(crate) fn shapes_document_base(
+                  --shapes an RDF text document"
+             ))),
+         },
++        _ => Err(format::unsupported_format(format, "the shapes input")),
+     }
+ }
+ 
+diff --git crates/glob/src/lib.rs crates/glob/src/lib.rs
+index 61f203d4b..1d298bdaf 100644
+--- crates/glob/src/lib.rs
++++ crates/glob/src/lib.rs
+@@ -52,8 +52,10 @@ impl purrdf_hash::error::StructuredError for IriComponent {
+     }
+ }
+ 
+-/// A closed syntax refusal; offsets always refer to the original pattern bytes.
++/// A syntax refusal; offsets always refer to the original pattern bytes.
++/// New reasons may be added without changing existing patterns or refusal payloads.
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
++#[non_exhaustive]
+ pub enum SyntaxReason {
+     /// A backslash has no following scalar.
+     TrailingEscape,
+@@ -81,7 +83,7 @@ impl purrdf_hash::error::StructuredError for SyntaxReason {
+ /// An original syntax or physical storage failure during compilation.
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+ pub enum CompileError {
+-    /// Invalid pattern, with the original byte offset and closed reason.
++    /// Invalid pattern, with the original byte offset and native reason.
+     Syntax {
+         /// Zero-based pattern byte offset.
+         offset: usize,
+diff --git crates/rdf/src/native_codecs/source_format.rs crates/rdf/src/native_codecs/source_format.rs
+index 39b4aaafa..6169dcca5 100644
+--- crates/rdf/src/native_codecs/source_format.rs
++++ crates/rdf/src/native_codecs/source_format.rs
+@@ -46,7 +46,11 @@ pub const GTS_EXTENSIONS: &[&str] = &["gts"];
+ /// the RDF text syntaxes" and "a container" — not just "which text syntax" — resolves
+ /// through [`classify_source`] to this type rather than hand-rolling a second
+ /// container/extension decision.
++///
++/// New routing kinds may be added. Consumers outside this crate must explicitly
++/// handle an unsupported kind instead of treating it as a known syntax or container.
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
++#[non_exhaustive]
+ pub enum SourceFormat {
+     /// One of the native RDF text syntaxes (see [`NativeRdfFormat`]).
+     Native(NativeRdfFormat),
+diff --git docs/MIGRATION-4.0.md docs/MIGRATION-4.0.md
+index a8a753d16..d77adb4a0 100644
+--- docs/MIGRATION-4.0.md
++++ docs/MIGRATION-4.0.md
+@@ -57,6 +57,18 @@ division, WKT and GeoJSON parsing resource policies, the SPARQL pre-binding rewr
+ SPARQL diagnostic codes.
+ Each has its own section below.
+ 
++## Extensible source formats and glob refusals
++
++`SourceFormat` and `purrdf_glob::SyntaxReason` are now non-exhaustive.
++External matches must include an unsupported-case arm. Keep known variants'
++behavior explicit; an unknown source format must produce an actionable refusal
++rather than acquire the behavior of a native syntax or container. The CLI
++refuses unknown kinds when reading, writing or resolving a document base.
++
++Existing format routing, glob matching and refusal payloads remain unchanged.
++Future language or compiled-plan laws must preserve existing valid patterns and
++readable 4.0 portable descriptions, or use explicitly selected versioned forms.
++
+ ## Planner estimates
+ 
+ `PlanEstimate` is non-exhaustive. Replace struct literals with

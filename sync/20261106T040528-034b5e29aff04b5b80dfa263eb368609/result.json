@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1108-v4-api-stabilize-typed-ustar-reader",
+  "branch": "paudley/1108-v4-api-stabilize-typed-ustar-reader",
+  "base_ref": "refs/remotes/origin/main",
+  "head": "9c92b0bf6586d9d889e4e57f813000bb519de768",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/1108-v4-api-stabilize-typed-ustar-reader/.stage/v4-api-stabilize-typed-ustar-reader/sync/20261106T040528-034b5e29aff04b5b80dfa263eb368609",
+  "conflicts": [
+    "CHANGELOG.md"
+  ],
+  "status": "completed",
+  "base": "036fc2e47dc880451026c6eedf29d39a80b94499",
+  "merge_bases": [
+    "4f093b056695c2a571876121f9a97f6d7da76bf5"
+  ],
+  "merge_index": "7def6f01bbe9690b9c395279f5f2c07c40180d6e6dcc839bfbf8c160931e045c",
+  "reused_paths": [],
+  "rerere_output": "Recorded preimage for 'CHANGELOG.md'\n",
+  "candidate_tree": "eea039fc533825dd3c31d49ae2e47def82cb0576",
+  "candidate_patch": "candidate-35b6469563a24f84addd41418292a8d9.patch",
+  "validation_records": [
+    "validation-runs/20261106T030436-4792e43df6/result.json",
+    "validation-runs/20261106T030837-f59e7f1a0f/result.json",
+    "validation-runs/20261106T032919-112638148e/result.json"
+  ],
+  "commit": "c0a9d42fa57c38245ec4a1770eb35e4b21a3c7ed",
+  "tree": "eea039fc533825dd3c31d49ae2e47def82cb0576"
+}
