@@ -2531,11 +2531,13 @@ mod parse_residency {
     ///
     /// The bar is a ratio against the document because the document is the only
     /// quantity a caller controls, and it is stated wide because it is separating two
-    /// measured regimes rather than pinning a number: on this fixture the peak was
-    /// 18.0x the document before the drain and is 9.2x after. A parse that went back
-    /// to holding both would land above 12x again.
+    /// measured regimes rather than pinning a number. The original input and strict
+    /// twelve-times-input ceiling remain fixed; the closed window reports its actual
+    /// peak beside the input size and ceiling.
     #[test]
     fn parsing_does_not_hold_the_tree_and_the_carrier_at_once() {
+        use std::io::Write as _;
+
         let mut builder = RdfDatasetBuilder::new();
         for i in 0..20_000 {
             let subject = builder
@@ -2566,6 +2568,14 @@ mod parse_residency {
             "the drain must not lose rows"
         );
         let ceiling = (bytes.len() as i64) * 12;
+        writeln!(
+            std::io::stdout().lock(),
+            "JSON-LD parse residency: input={} bytes, peak={} bytes, ceiling={} bytes",
+            bytes.len(),
+            measured.peak_working_bytes,
+            ceiling,
+        )
+        .expect("write the measured parse residency");
         assert!(
             measured.peak_working_bytes < ceiling,
             "parsing a {}-byte document peaked at {} live bytes ({:.1}x). Above 12x \
