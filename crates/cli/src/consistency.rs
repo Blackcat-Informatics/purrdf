@@ -187,7 +187,7 @@ pub(crate) fn run(
         options.work_cap,
         options.proof,
     )
-    .map_err(CliError::Runtime)?;
+    .map_err(CliError::native)?;
     let answer: ReasoningAnswer<ReasoningText> = if options.proof {
         session.prove("consistency", "", canonical.control()?)
     } else {

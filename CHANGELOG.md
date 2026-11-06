@@ -8,6 +8,13 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Typed reasoning requests (breaking Rust API):** regime, session, proof,
+  profile, import and fixture operations retain owned native failures through
+  non-exhaustive errors. Facade request parsing shares the typed boundary;
+  directness refusals own their original certificate. Scope bindings and host
+  import-array pairing retain their original operands. CLI, Python, C and
+  JavaScript callers preserve native causes while rendering existing messages.
+
 - **Typed loss-ledger refusals (breaking Rust API):** return owned completeness
   code lists and original borrowed soundness failures from loss-ledger checks.
   Projection, schema-import and LinkML refusals retain native loss evidence,

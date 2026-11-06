@@ -186,7 +186,7 @@ pub use expr_selector::{ExprSelector, ExprSelectorError, ParsedExprSelector, Sel
 pub use purrdf_shapes::srl::{CheckLevel, CheckedRuleSet};
 pub use shapes_tools::{
     NodeExprOutcome, NodeExprRequest, RuleLimits, RulesHost, RulesOutcome, RulesRequest,
-    apply_rules_to_ntriples, apply_rules_to_ntriples_with_coordinates,
+    ScopeBindingError, apply_rules_to_ntriples, apply_rules_to_ntriples_with_coordinates,
     apply_rules_to_ntriples_with_xpath_regex, check_rules, eval_node_expr,
     eval_node_expr_with_xpath_regex, lint_shapes_ttl, lint_shapes_ttl_with_shapes_graph,
     parse_check_level, parse_scope_binding,

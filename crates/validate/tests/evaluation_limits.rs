@@ -8,6 +8,7 @@
 //! limit completes.
 
 use purrdf_validate::canonical::CanonicalServiceError;
+use purrdf_validate::regime::ReasoningError;
 use purrdf_validate::{
     MaterializeLimits, RegimeHost, RulesHost, RulesRequest, apply_rules_to_ntriples,
     materialize_to_nquads_string, materialize_to_nquads_string_with,
@@ -139,7 +140,7 @@ fn canonical_materialization_refusal_retains_the_original_native_cause() {
         .expect_err("a symmetric blank pair requires a search frame");
     let native = purrdf_validate::canonical::native_canonical_cause(&refused)
         .expect("the shared host boundary retains its native canonicalizer cause");
-    let CanonicalServiceError::Canonical { cause, .. } = &refused else {
+    let ReasoningError::Canonical(CanonicalServiceError::Canonical { cause, .. }) = &refused else {
         panic!("the finite refusal must retain a canonical cause");
     };
     assert!(std::ptr::eq(native, cause.as_ref()));
@@ -198,7 +199,7 @@ fn a_materialization_refusal_names_the_hosts_knob_and_the_neighbour_completes() 
             )
             .expect_err("one fact short");
             assert!(
-                matches!(&refused, CanonicalServiceError::Text(_)),
+                matches!(&refused, ReasoningError::Entailment { .. }),
                 "{refused:?}"
             );
             let refused = refused.to_string();
@@ -240,7 +241,7 @@ fn a_materialization_refusal_names_the_hosts_knob_and_the_neighbour_completes() 
             )
             .expect_err("one join step");
             assert!(
-                matches!(&refused, CanonicalServiceError::Text(_)),
+                matches!(&refused, ReasoningError::Entailment { .. }),
                 "{refused:?}"
             );
             let refused = refused.to_string();
@@ -332,7 +333,7 @@ fn term_arena_limits_reach_the_engine_and_name_the_available_rust_control() {
         )
         .expect_err("one original byte short");
         assert!(
-            matches!(&refused, CanonicalServiceError::Text(_)),
+            matches!(&refused, ReasoningError::Entailment { .. }),
             "{refused:?}"
         );
         let refused = refused.to_string();
@@ -385,7 +386,8 @@ fn a_conclusion_directed_refusal_names_the_services_knob_and_the_neighbour_answe
         &purrdf_validate::ImportList<'_>,
         &[&str],
         &MaterializeLimits,
-    ) -> Result<purrdf_validate::regime::ReasoningAnswer<String>, String>;
+    )
+        -> Result<purrdf_validate::regime::ReasoningAnswer<String>, ReasoningError>;
     let conclusion = "<http://example.org/s0> <http://example.org/p> <http://example.org/o0> .\n";
     let pattern = "?s <http://example.org/p> ?o .\n";
     let services: [(Service, RegimeService, &str); 3] = [
@@ -447,9 +449,15 @@ fn a_conclusion_directed_refusal_names_the_services_knob_and_the_neighbour_answe
             )
             .expect_err("one fact short");
             assert!(
-                refused.contains("evaluation exceeded the stored-fact limit: ")
-                    && refused.contains(&format!("{} permitted (the caller's limit)", stored - 1))
-                    && refused.ends_with(&format!("raise it with {stored_facts}")),
+                refused
+                    .to_string()
+                    .contains("evaluation exceeded the stored-fact limit: ")
+                    && refused
+                        .to_string()
+                        .contains(&format!("{} permitted (the caller's limit)", stored - 1))
+                    && refused
+                        .to_string()
+                        .ends_with(&format!("raise it with {stored_facts}")),
                 "{which:?} {host:?}: {refused}"
             );
             let answered = service(
@@ -465,8 +473,12 @@ fn a_conclusion_directed_refusal_names_the_services_knob_and_the_neighbour_answe
             let refused = service("owl-rl", DATA, question, &[], &[], &limits(None, Some(1)))
                 .expect_err("one join step");
             assert!(
-                refused.contains("evaluation exceeded the join-step limit: ")
-                    && refused.ends_with(&format!("raise it with {join_steps}")),
+                refused
+                    .to_string()
+                    .contains("evaluation exceeded the join-step limit: ")
+                    && refused
+                        .to_string()
+                        .ends_with(&format!("raise it with {join_steps}")),
                 "{which:?} {host:?}: {refused}"
             );
         }

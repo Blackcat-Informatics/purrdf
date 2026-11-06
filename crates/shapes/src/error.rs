@@ -47,6 +47,10 @@ use crate::imports::ShapesImportError;
 /// Why a shapes-graph entry point refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShapesError {
+    /// Original shared import-array boundary failure.
+    ImportArrays(purrdf_core::imports::ImportArrayError),
+    /// Original explicit scope binding without its required equals sign.
+    ScopeBinding(crate::scope_binding::ScopeBindingError),
     /// Original native refusal while canonicalizing caller-derived output.
     Canonical(purrdf_core::CanonError),
     /// Original rule failure with the contexts observed before refusal.
@@ -121,6 +125,8 @@ impl ShapesError {
             | Self::Storage(_)
             | Self::Canonical(_)
             | Self::Processor(_)
+            | Self::ScopeBinding(_)
+            | Self::ImportArrays(_)
             | Self::Invalid(_) => None,
         }
     }
@@ -144,6 +150,8 @@ impl ShapesError {
             | Self::Storage(_)
             | Self::Canonical(_)
             | Self::Processor(_)
+            | Self::ScopeBinding(_)
+            | Self::ImportArrays(_)
             | Self::Invalid(_) => None,
         }
     }
@@ -167,6 +175,8 @@ impl ShapesError {
             | Self::Storage(_)
             | Self::Canonical(_)
             | Self::Processor(_)
+            | Self::ScopeBinding(_)
+            | Self::ImportArrays(_)
             | Self::Invalid(_) => None,
         }
     }
@@ -190,6 +200,8 @@ impl ShapesError {
             | Self::Storage(_)
             | Self::Canonical(_)
             | Self::Processor(_)
+            | Self::ScopeBinding(_)
+            | Self::ImportArrays(_)
             | Self::Invalid(_) => None,
         }
     }
@@ -213,6 +225,8 @@ impl ShapesError {
             | Self::Storage(_)
             | Self::Canonical(_)
             | Self::Processor(_)
+            | Self::ScopeBinding(_)
+            | Self::ImportArrays(_)
             | Self::Invalid(_) => None,
         }
     }
@@ -236,6 +250,8 @@ impl ShapesError {
             | Self::Storage(_)
             | Self::Canonical(_)
             | Self::Processor(_)
+            | Self::ScopeBinding(_)
+            | Self::ImportArrays(_)
             | Self::Invalid(_) => None,
         }
     }
@@ -275,7 +291,14 @@ impl ShapesError {
     #[must_use]
     pub const fn failure_class(&self) -> FailureClass {
         match self {
-            Self::Invalid(_) => FailureClass::Evaluation,
+            Self::Invalid(_) | Self::ScopeBinding(_) => FailureClass::Evaluation,
+            Self::ImportArrays(error) => {
+                if error.storage_error().is_some() {
+                    FailureClass::Processor
+                } else {
+                    FailureClass::Evaluation
+                }
+            }
             Self::Storage(_) | Self::Canonical(_) | Self::Processor(_) | Self::Preparation(_) => {
                 FailureClass::Processor
             }
@@ -316,6 +339,8 @@ impl ShapesError {
             | Self::SparqlTargetDisagreement(_)
             | Self::Storage(_)
             | Self::Canonical(_)
+            | Self::ScopeBinding(_)
+            | Self::ImportArrays(_)
             | Self::Invalid(_) => None,
         }
     }
@@ -481,6 +506,8 @@ impl std::error::Error for ProcessorFailure {}
 impl fmt::Display for ShapesError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ImportArrays(error) => error.fmt(f),
+            Self::ScopeBinding(error) => error.fmt(f),
             Self::RuleExecution(error) => error.fmt(f),
             Self::Preparation(refusal) => refusal.fmt(f),
             Self::Recursion(refusal) => refusal.fmt(f),
@@ -501,6 +528,8 @@ impl fmt::Display for ShapesError {
 impl std::error::Error for ShapesError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::ImportArrays(error) => Some(error),
+            Self::ScopeBinding(error) => Some(error),
             Self::RuleExecution(error) => Some(error.as_ref()),
             Self::Preparation(refusal) => Some(refusal),
             Self::Recursion(refusal) => Some(refusal),
@@ -797,6 +826,8 @@ impl fmt::Display for RecursionRefusal {
 impl std::error::Error for RecursionRefusal {}
 
 purrdf_lex::variant_from!(ShapesError {
+    ImportArrays(purrdf_core::imports::ImportArrayError),
+    ScopeBinding(crate::scope_binding::ScopeBindingError),
     Storage(purrdf_lex::allocation::StorageError),
     Processor(ProcessorFailure),
 });

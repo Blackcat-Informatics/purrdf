@@ -140,7 +140,9 @@ fn attach_error(
         refused
             .value(py)
             .setattr("canonicalization_json", receipts)?;
-        if let Some(cause) = cause {
+        if let Some(cause) = cause
+            && !refused.value(py).hasattr("native_cause_json")?
+        {
             let fields = purrdf_validate::native_error::to_json(&cause).map_err(|failure| {
                 pyo3::exceptions::PyRuntimeError::new_err(failure.to_string())
             })?;

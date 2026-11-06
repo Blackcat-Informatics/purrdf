@@ -553,8 +553,8 @@ impl PyQuadStore {
             let division = division_policy(division.as_deref())?;
             let subs = collect_substitutions(substitutions)?;
             let specs = collect_relations(relations, relations_from_graph, path_relations)?;
-            let plan =
-                QueryEntailmentPlan::parse(entailment, program).map_err(PyValueError::new_err)?;
+            let plan = QueryEntailmentPlan::parse(entailment, program)
+                .map_err(crate::py_entail::reasoning_error)?;
             // The store's `owl:imports` table, parsed by the shared boundary before any closure
             // work. Absent is EMPTY — "imports nothing" — so a store that does import a document
             // is refused by name rather than closed without it.
@@ -640,23 +640,41 @@ impl PyQuadStore {
                     &relations,
                     governors,
                 )
-                .map_err(|failure| match &failure {
-                    // Rendered by the shared boundary, so a passed evaluation limit names this
-                    // method's keyword rather than a Rust type a Python caller cannot reach.
-                    crate::ReasoningError::Entailment(error) => PyValueError::new_err(format!(
-                        "entailment query failed: {}",
-                        purrdf_validate::render_entail_error_in(
-                            entailment,
-                            error,
-                            purrdf_validate::RegimeHost::Python,
-                            purrdf_validate::RegimeService::Query,
-                        )
-                    )),
-                    crate::ReasoningError::Query(diagnostic) => presentation::value_error(
-                        format!("entailment query failed: {failure}"),
-                        diagnostic,
-                    ),
-                    _ => PyValueError::new_err(format!("entailment query failed: {failure}")),
+                .map_err(|failure| {
+                    Python::attach(|py| match failure {
+                        // Rendered by the shared boundary, so a passed evaluation limit names this
+                        // method's keyword rather than a Rust type a Python caller cannot reach.
+                        crate::ReasoningError::Entailment(error) => {
+                            let error = purrdf_validate::regime::ReasoningError::entail(
+                                purrdf_validate::regime::EntailContext::Regime {
+                                    spelling: entailment.to_owned(),
+                                    host: purrdf_validate::RegimeHost::Python,
+                                    service: purrdf_validate::RegimeService::Query,
+                                },
+                                error,
+                            );
+                            let diagnostic = error.into_diagnostic();
+                            let message =
+                                format!("entailment query failed: {}", diagnostic.message);
+                            presentation::native_error_with_message(py, message, &diagnostic)
+                        }
+                        crate::ReasoningError::Query(diagnostic) => {
+                            let message = format!(
+                                "entailment query failed: SPARQL query failed: {diagnostic}"
+                            );
+                            presentation::native_error_with_message(py, message, &diagnostic)
+                        }
+                        other => {
+                            let diagnostic = purrdf_validate::native_error::diagnostic(
+                                "reasoning-refused",
+                                other,
+                                None,
+                            );
+                            let message =
+                                format!("entailment query failed: {}", diagnostic.message);
+                            presentation::native_error_with_message(py, message, &diagnostic)
+                        }
+                    })
                 })
             });
             let (outcome, _) = presentation::observed_result(py, capture, outcome)?;

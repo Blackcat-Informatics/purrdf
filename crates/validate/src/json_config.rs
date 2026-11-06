@@ -4,34 +4,14 @@
 //! One bounded JSON/record decoder for closed native configuration boundaries.
 
 use purrdf_core::RdfDiagnostic;
-use purrdf_lex::allocation::{Ceiling, Memory, Resident, StorageError, retain_native_cause};
+use purrdf_lex::allocation::{Ceiling, Memory};
 use purrdf_lex::json::record::{
     DecodeError, FromJsonNative, Record, RecordAllocation, RecordMemory, Within,
 };
 use purrdf_lex::json::{self, Value};
 use std::cell::RefCell;
 
-pub(crate) fn failure(
-    code: &str,
-    error: impl purrdf_hash::error::NativeError + 'static,
-    storage: Option<StorageError>,
-) -> RdfDiagnostic {
-    let result = || {
-        let mut resident = Resident;
-        let diagnostic = match storage {
-            Some(storage) => RdfDiagnostic::from(storage),
-            None => {
-                RdfDiagnostic::try_error_with_memory(code, &error, &mut Memory::new(&mut resident))?
-            }
-        };
-        let retained = diagnostic
-            .retained_bytes()
-            .ok_or(StorageError::SizeOverflow)?;
-        let mut memory = Memory::resume(&mut resident, retained);
-        diagnostic.with_native_cause(retain_native_cause(error)?, &mut memory)
-    };
-    result().unwrap_or_else(RdfDiagnostic::from)
-}
+pub(crate) use crate::native_error::diagnostic as failure;
 
 pub(crate) fn field<T: FromJsonNative>(
     record: &mut Record<'_>,

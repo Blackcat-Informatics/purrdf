@@ -175,6 +175,57 @@ use purrdf_iri::vocab::owl::IMPORTS as OWL_IMPORTS;
 /// `owl:versionIRI`.
 use purrdf_iri::vocab::owl::VERSION_IRI as OWL_VERSIONIRI;
 
+/// A parallel import table that cannot supply complete borrowed pairs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ImportArrayError {
+    /// The original arrays have different lengths.
+    Length {
+        /// Original ontology IRI count.
+        iris: usize,
+        /// Original document count.
+        documents: usize,
+    },
+    /// Original refusal to admit the complete pair vector.
+    Storage(purrdf_lex::allocation::StorageError),
+}
+
+impl ImportArrayError {
+    /// The original storage refusal, when pairing was physically refused.
+    #[must_use]
+    pub const fn storage_error(&self) -> Option<purrdf_lex::allocation::StorageError> {
+        match self {
+            Self::Storage(cause) => Some(*cause),
+            Self::Length { .. } => None,
+        }
+    }
+}
+
+impl core::fmt::Display for ImportArrayError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Length { iris, documents } => write!(
+                f,
+                "the import table has {iris} ontology IRI(s) and {documents} document(s); an entry is a PAIR, so truncating to the shorter array would drop an import the caller supplied"
+            ),
+            Self::Storage(cause) => core::fmt::Display::fmt(cause, f),
+        }
+    }
+}
+
+purrdf_hash::error_sources!(ImportArrayError, Storage);
+
+impl purrdf_hash::error::StructuredError for ImportArrayError {
+    purrdf_hash::error_visit! {
+        Length { iris, documents } => "import-array-length" {
+            "iris" => Unsigned(*iris as u128), "documents" => Unsigned(*documents as u128),
+        },
+        Storage(cause) => "import-array-storage" { "cause" => Cause(cause) },
+    }
+}
+
+purrdf_lex::variant_from!(ImportArrayError { Storage(purrdf_lex::allocation::StorageError) });
+
 /// Why [`ImportMap::try_insert`] refused a key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]

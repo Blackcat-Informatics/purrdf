@@ -92,7 +92,16 @@ pub(crate) fn value_error(message: String, diagnostic: &RdfDiagnostic) -> PyErr 
 
 /// Preserve the existing diagnostic presentation and original native cause fields.
 pub(crate) fn native_error(py: Python<'_>, diagnostic: &RdfDiagnostic) -> PyErr {
-    let refused = value_error(diagnostic.to_string(), diagnostic);
+    native_error_with_message(py, diagnostic.to_string(), diagnostic)
+}
+
+/// Retain native fields while preserving a boundary's existing plain message.
+pub(crate) fn native_error_with_message(
+    py: Python<'_>,
+    message: String,
+    diagnostic: &RdfDiagnostic,
+) -> PyErr {
+    let refused = value_error(message, diagnostic);
     let attach = || -> PyResult<()> {
         if let Some(cause) = diagnostic.native_cause() {
             let fields = crate::py_native_fields::inspect(py, cause)?;

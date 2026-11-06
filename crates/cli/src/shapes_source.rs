@@ -230,6 +230,12 @@ pub(crate) fn shapes_error(
     base_flag: &str,
 ) -> CliError {
     let error = match error {
+        ShapesError::ScopeBinding(error) => {
+            return CliError::Runtime(format!("{context}: {error}"));
+        }
+        ShapesError::ImportArrays(error) => {
+            return CliError::Runtime(format!("{context}: {error}"));
+        }
         ShapesError::Canonical(cause) => {
             return CliError::Canonical {
                 message: format!("{context}: {cause}"),

@@ -1094,7 +1094,7 @@ export interface CanonicalizationFailure extends Error {
   readonly canonicalizationJson: string;
   readonly nativeCauseJson?: string;
   /** Free this owned native cause when the refusal is no longer needed. */
-  readonly nativeCause?: CanonicalCause;
+  readonly nativeCause?: CanonicalCause | YamlSourceCause;
 }
 
 export class RegimeClosure {

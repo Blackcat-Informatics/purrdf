@@ -4,7 +4,35 @@
 //! Exact JSON rendering of the native error-inspection protocol for host errors.
 
 use purrdf_hash::error::{ErrorValue, ErrorVisitor, StructuredError};
+use purrdf_lex::allocation::{Memory, Resident, StorageError, retain_native_cause};
 use purrdf_lex::json::Value;
+
+/// Own an original native failure through the shared diagnostic boundary.
+/// A supplied storage cause preserves its native classification. Failure to retain
+/// the original owner returns that physical storage refusal as the diagnostic.
+#[must_use]
+pub fn diagnostic(
+    code: &str,
+    error: impl purrdf_hash::error::NativeError + 'static,
+    storage: Option<StorageError>,
+) -> purrdf_core::RdfDiagnostic {
+    use purrdf_core::RdfDiagnostic;
+    let result = || {
+        let mut resident = Resident;
+        let diagnostic = match storage {
+            Some(storage) => RdfDiagnostic::from(storage),
+            None => {
+                RdfDiagnostic::try_error_with_memory(code, &error, &mut Memory::new(&mut resident))?
+            }
+        };
+        let retained = diagnostic
+            .retained_bytes()
+            .ok_or(StorageError::SizeOverflow)?;
+        let mut memory = Memory::resume(&mut resident, retained);
+        diagnostic.with_native_cause(retain_native_cause(error)?, &mut memory)
+    };
+    result().unwrap_or_else(RdfDiagnostic::from)
+}
 
 /// A native producer violated the closed inspection protocol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -69,6 +69,7 @@ pub mod rules;
 mod schema_catalog;
 pub mod schema_import;
 mod schema_surface;
+pub mod scope_binding;
 #[doc(hidden)]
 pub mod shacl_corpora;
 pub mod shape_union;

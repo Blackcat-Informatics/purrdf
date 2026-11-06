@@ -77,29 +77,18 @@ impl YamlSourceCause {
 
 /// Preserve the existing diagnostic and original typed native-cause interface.
 pub(crate) fn native_diagnostic_to_js(diagnostic: RdfDiagnostic) -> JsValue {
-    let attach = || -> Result<JsValue, JsValue> {
-        let copy = diagnostic
-            .clone_with_memory(&mut Memory::new(&mut Resident))
-            .map_err(|error| diagnostic_to_js(error.into()))?;
-        let refused = diagnostic_to_js(copy);
-        if let Some(cause) = diagnostic.native_cause() {
-            let fields = purrdf_validate::native_error::to_json(cause)
-                .map_err(|error| JsError::new(&error.to_string()))?;
-            if !crate::host::reflect_set(
-                &refused,
-                &JsValue::from_str("nativeCauseJson"),
-                &JsValue::from_str(&fields.to_string()),
-            )? {
-                return Err(JsError::new("cannot attach native YAML source cause fields").into());
-            }
-            let original: JsValue = YamlSourceCause { diagnostic }.into();
-            if !crate::host::reflect_set(&refused, &JsValue::from_str("nativeCause"), &original)? {
-                return Err(JsError::new("cannot retain original native YAML source cause").into());
-            }
-        }
-        Ok(refused)
-    };
-    attach().unwrap_or_else(core::convert::identity)
+    native_diagnostic_to_js_with_text(diagnostic, ErrorText::Diagnostic)
+}
+
+/// Retain a native diagnostic while preserving an existing plain factory message.
+pub(crate) fn native_diagnostic_to_js_with_message(diagnostic: RdfDiagnostic) -> JsValue {
+    native_diagnostic_to_js_with_text(diagnostic, ErrorText::Message)
+}
+
+fn native_diagnostic_to_js_with_text(diagnostic: RdfDiagnostic, text: ErrorText) -> JsValue {
+    let mut error = JobError::diagnostic(diagnostic);
+    error.text = text;
+    error.to_js()
 }
 
 // ---------------------------------------------------------------------------
@@ -176,6 +165,7 @@ pub(crate) struct JobError {
     execution_receipt: Option<Box<str>>,
     canonicalization_json: Option<Box<str>>,
     native_canonical_cause: Option<Box<purrdf_core::CanonError>>,
+    retained_native_diagnostic: Option<Box<RdfDiagnostic>>,
     kind: JobErrorKind,
     diagnostic: Box<RdfDiagnostic>,
     text: ErrorText,
@@ -185,12 +175,29 @@ pub(crate) struct JobError {
 }
 
 impl JobError {
+    /// A reasoning request failure retaining its original fields under the job code.
+    pub(crate) fn reasoning_request(error: purrdf_validate::regime::ReasoningError) -> Self {
+        Self::diagnostic_message(purrdf_validate::native_error::diagnostic(
+            ENTAILMENT_CODE,
+            error,
+            None,
+        ))
+    }
+
+    /// A retained native diagnostic with the boundary's original plain message.
+    pub(crate) fn diagnostic_message(diagnostic: RdfDiagnostic) -> Self {
+        let mut error = Self::diagnostic(diagnostic);
+        error.text = ErrorText::Message;
+        error
+    }
+
     /// An engine diagnostic, rendered as the engine renders it.
     pub(crate) fn diagnostic(diagnostic: RdfDiagnostic) -> Self {
         Self {
             execution_receipt: None,
             canonicalization_json: None,
             native_canonical_cause: None,
+            retained_native_diagnostic: None,
             kind: JobErrorKind::Error,
             presentation: diagnostic.presentation().cloned().map(Box::new),
             diagnostic: Box::new(diagnostic),
@@ -204,6 +211,7 @@ impl JobError {
             execution_receipt: None,
             canonicalization_json: None,
             native_canonical_cause: None,
+            retained_native_diagnostic: None,
             kind: JobErrorKind::Error,
             diagnostic: Box::new(RdfDiagnostic::error(code, message)),
             text: ErrorText::Message,
@@ -217,6 +225,7 @@ impl JobError {
             execution_receipt: None,
             canonicalization_json: None,
             native_canonical_cause: None,
+            retained_native_diagnostic: None,
             kind: JobErrorKind::NotAcceptable,
             diagnostic: Box::new(RdfDiagnostic::error(
                 FailureCode::NotAcceptable.code(),
@@ -233,6 +242,7 @@ impl JobError {
             execution_receipt: None,
             canonicalization_json: None,
             native_canonical_cause: None,
+            retained_native_diagnostic: None,
             kind: JobErrorKind::Fault,
             diagnostic: Box::new(RdfDiagnostic::error(FailureCode::HostFault.code(), message)),
             text: ErrorText::Message,
@@ -268,6 +278,7 @@ impl JobError {
             execution_receipt: None,
             canonicalization_json: None,
             native_canonical_cause: None,
+            retained_native_diagnostic: None,
             kind,
             diagnostic: Box::new(RdfDiagnostic::error(failure.code(), message)),
             text: ErrorText::Message,
@@ -278,13 +289,17 @@ impl JobError {
     /// An entailment query's failure: a query diagnostic keeps its code, and the closure's
     /// own failure is reported under [`ENTAILMENT_CODE`]; either reads as the reasoning
     /// layer renders it.
-    fn reasoning(error: &ReasoningError) -> Self {
+    fn reasoning(error: ReasoningError) -> Self {
         match error {
             ReasoningError::Query(diagnostic) => Self {
                 text: ErrorText::ReasoningQuery,
-                ..Self::diagnostic(diagnostic.clone())
+                ..Self::diagnostic(diagnostic)
             },
-            _ => Self::message(ENTAILMENT_CODE, error.to_string()),
+            other => Self::diagnostic_message(purrdf_validate::native_error::diagnostic(
+                ENTAILMENT_CODE,
+                other,
+                None,
+            )),
         }
     }
 
@@ -302,14 +317,37 @@ impl JobError {
         self.canonicalization_json.as_deref().map(str::to_owned)
     }
 
-    pub(crate) fn native_cause(&self) -> Option<crate::canonical::CanonicalCause> {
-        self.native_canonical_cause
+    fn native_diagnostic(&self) -> Option<&RdfDiagnostic> {
+        if self.diagnostic.native_cause().is_some() {
+            Some(&self.diagnostic)
+        } else {
+            self.retained_native_diagnostic.as_deref()
+        }
+    }
+
+    pub(crate) fn native_cause(&self) -> Result<Option<JsValue>, JsError> {
+        if let Some(original) = self.native_diagnostic() {
+            let diagnostic = original
+                .clone_with_memory(&mut Memory::new(&mut Resident))
+                .map_err(|error| JsError::new(&error.to_string()))?;
+            return Ok(Some(YamlSourceCause { diagnostic }.into()));
+        }
+        Ok(self
+            .native_canonical_cause
             .as_deref()
             .cloned()
-            .map(Into::into)
+            .map(|cause| JsValue::from(crate::canonical::CanonicalCause::from(cause))))
     }
 
     pub(crate) fn native_cause_json(&self) -> Result<Option<String>, JsError> {
+        if let Some(cause) = self
+            .native_diagnostic()
+            .and_then(RdfDiagnostic::native_cause)
+        {
+            return purrdf_validate::native_error::to_json(cause)
+                .map(|value| Some(value.to_string()))
+                .map_err(|error| JsError::new(&error.to_string()));
+        }
         self.native_canonical_cause
             .as_deref()
             .map(|cause| {
@@ -330,6 +368,13 @@ impl JobError {
         self.canonicalization_json = original.canonicalization_json;
         self.native_canonical_cause = original.native_canonical_cause;
         self.execution_receipt = original.execution_receipt;
+        self.retained_native_diagnostic = original.retained_native_diagnostic.or_else(|| {
+            original
+                .diagnostic
+                .native_cause()
+                .is_some()
+                .then_some(original.diagnostic)
+        });
         self
     }
 
@@ -418,14 +463,36 @@ impl JobError {
             error.set_presentation(&presentation);
         }
         let error = error.into();
-        match self.canonicalization_json.as_deref() {
+        let error = match self.canonicalization_json.as_deref() {
             Some(receipts) => crate::canonical::attach_evidence(
                 error,
                 receipts,
                 self.native_canonical_cause.as_deref(),
             ),
             None => error,
-        }
+        };
+        let attach = || -> Result<JsValue, JsValue> {
+            if self.native_diagnostic().is_some() {
+                let fields = self
+                    .native_cause_json()?
+                    .expect("original native cause is present");
+                if !crate::host::reflect_set(
+                    &error,
+                    &JsValue::from_str("nativeCauseJson"),
+                    &JsValue::from_str(&fields),
+                )? {
+                    return Err(JsError::new("cannot attach native cause fields").into());
+                }
+                let cause = self
+                    .native_cause()?
+                    .expect("original native cause is present");
+                if !crate::host::reflect_set(&error, &JsValue::from_str("nativeCause"), &cause)? {
+                    return Err(JsError::new("cannot retain original native cause").into());
+                }
+            }
+            Ok(error)
+        };
+        attach().unwrap_or_else(core::convert::identity)
     }
 }
 
@@ -1014,13 +1081,13 @@ impl OperationInput<'_> {
                     let regime = regime.unwrap_or_default();
                     let plan =
                         QueryEntailmentPlan::parse(&regime, program.as_deref().unwrap_or(""))
-                            .map_err(|message| JobError::message(ENTAILMENT_CODE, message))?;
+                            .map_err(JobError::reasoning_request)?;
                     let imports = crate::entail::entailment_import_map(
                         &closure.import_iris,
                         &closure.import_documents,
                         &closure.premise_iris,
                     )
-                    .map_err(|message| JobError::message(ENTAILMENT_CODE, message))?;
+                    .map_err(JobError::reasoning_request)?;
                     let limits = crate::entail::wasm_limits(
                         closure.max_stored_facts,
                         closure.max_join_steps,
@@ -1058,16 +1125,17 @@ impl OperationInput<'_> {
                             // Rendered by the shared boundary, so a passed evaluation limit
                             // names `queryEntailmentGoverned`'s argument rather than a Rust type
                             // a JavaScript caller cannot reach.
-                            ReasoningError::Entailment(error) => JobError::message(
-                                ENTAILMENT_CODE,
-                                purrdf_validate::render_entail_error_in(
-                                    &regime,
-                                    &error,
-                                    purrdf_validate::RegimeHost::Wasm,
-                                    purrdf_validate::RegimeService::Query,
+                            ReasoningError::Entailment(error) => JobError::reasoning_request(
+                                purrdf_validate::regime::ReasoningError::entail(
+                                    purrdf_validate::regime::EntailContext::Regime {
+                                        spelling: regime.clone(),
+                                        host: purrdf_validate::RegimeHost::Wasm,
+                                        service: purrdf_validate::RegimeService::Query,
+                                    },
+                                    error,
                                 ),
                             ),
-                            other => JobError::reasoning(&other),
+                            other => JobError::reasoning(other),
                         })?;
                     if let Some(answered) = outcome.outcome() {
                         run.record_evidence(answered.evidence());
@@ -1239,7 +1307,7 @@ mod tests {
         let reasoning = ReasoningError::Query(original.clone());
         for error in [
             JobError::diagnostic(original.clone()),
-            JobError::reasoning(&reasoning),
+            JobError::reasoning(reasoning),
         ] {
             assert_eq!(error.diagnostic.storage_error(), Some(cause));
             assert_eq!(error.code(), original.code);
@@ -1247,8 +1315,8 @@ mod tests {
             assert!(error.presentation_json().is_none());
         }
         assert_eq!(
-            JobError::reasoning(&reasoning).rendered(),
-            reasoning.to_string()
+            JobError::reasoning(ReasoningError::Query(original.clone())).rendered(),
+            ReasoningError::<std::convert::Infallible>::Query(original).to_string()
         );
     }
 
@@ -1277,7 +1345,7 @@ mod tests {
                 Some(expected.as_str())
             );
             assert_eq!(direct.rendered(), original.to_string());
-            let reasoning = JobError::reasoning(&ReasoningError::Query(original.clone()));
+            let reasoning = JobError::reasoning(ReasoningError::Query(original.clone()));
             assert_eq!(
                 reasoning.presentation_json().as_deref(),
                 Some(expected.as_str())
