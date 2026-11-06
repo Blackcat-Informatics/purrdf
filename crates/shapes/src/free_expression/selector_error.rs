@@ -29,7 +29,7 @@ pub enum ExprSelectorError {
         node: Term,
     },
     /// A walk with no predicate, which would select the start node itself — name that
-    /// with [`crate::free_expression::ExprSelector::Node`].
+    /// by selecting the node directly.
     EmptyPath,
     /// A walk predicate that is not an IRI.
     PredicateNotIri {
