@@ -443,7 +443,7 @@ struct Interner {
     /// existing validation boundary. The code is the grammar's own `langtag-*`
     /// when a language tag is malformed, and `model::LITERAL_SHAPE_CODE` when
     /// the datatype, language and direction merely disagree.
-    invalid_literal: Option<(&'static str, &'static str)>,
+    invalid_literal: Option<crate::LiteralComponentError>,
 }
 
 impl Interner {
@@ -890,7 +890,7 @@ struct BuilderCheckpoint {
     next_merge_scope: u64,
     reifies_predicate: Option<TermId>,
     relative_iri: bool,
-    invalid_literal: Option<(&'static str, &'static str)>,
+    invalid_literal: Option<crate::LiteralComponentError>,
 }
 
 impl ValidatedRdfDatasetBuilder {
@@ -1258,7 +1258,7 @@ impl RdfDatasetBuilder {
         let invalid_literal = self
             .interner
             .invalid_literal
-            .or_else(|| RdfLiteral::diagnose_components(datatype_iri, language, direction).err());
+            .or_else(|| RdfLiteral::validate_components(datatype_iri, language, direction).err());
         let datatype_id = self.intern_iri_with_memory(datatype_iri, memory)?;
         let language = language
             .map(|tag| super::term::interned_language_with_memory(tag, memory))
@@ -2779,9 +2779,8 @@ impl RdfDatasetBuilder {
             .map(|(iri, err)| (iri.as_str(), err))
     }
 
-    /// Read the first refused literal recorded by the infallible interner, as
-    /// `(diagnostic code, message)`.
-    pub(crate) fn invalid_literal(&self) -> Option<(&'static str, &'static str)> {
+    /// Read the first literal's original typed refusal recorded by the interner.
+    pub(crate) fn invalid_literal(&self) -> Option<crate::LiteralComponentError> {
         self.interner.invalid_literal
     }
 
@@ -5343,9 +5342,18 @@ mod native_graph_birth_tests {
         invalid
             .intern_literal_parts("accepted", None, None, Some(RdfTextDirection::Ltr))
             .unwrap();
-        assert!(
-            invalid.freeze().is_err(),
-            "an admitted invalid literal still refuses validation"
+        invalid
+            .intern_literal(RdfLiteral::language_tagged("later", "en us"))
+            .unwrap();
+        let diagnostic = invalid
+            .freeze()
+            .expect_err("an admitted invalid literal still refuses validation");
+        let cause = diagnostic
+            .native_cause()
+            .expect("first literal's original typed refusal");
+        assert_eq!(
+            (cause as &dyn std::error::Error).downcast_ref::<crate::LiteralComponentError>(),
+            Some(&crate::LiteralComponentError::DirectionWithoutLanguage)
         );
     }
 

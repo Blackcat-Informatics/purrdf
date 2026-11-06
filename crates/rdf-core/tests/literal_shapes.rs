@@ -3,7 +3,12 @@
 
 //! Native literal shape admission and compatible implied datatype expansion.
 
-use purrdf_core::{RdfDatasetBuilder, RdfLiteral, RdfTextDirection};
+use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
+use purrdf_core::{LiteralComponentError, RdfDatasetBuilder, RdfLiteral, RdfTextDirection};
+use purrdf_testkit::error_capture::Capture;
+
+#[global_allocator]
+static GLOBAL: CountingAllocator = CountingAllocator;
 
 #[test]
 fn invalid_literal_shapes_cannot_cross_native_validation() {
@@ -27,6 +32,61 @@ fn invalid_literal_shapes_cannot_cross_native_validation() {
                 .code,
             "rdf-ir-literal-shape"
         );
+    }
+}
+
+#[test]
+fn component_diagnostic_preserves_the_original_account_and_storage_refusal() {
+    use purrdf_lex::allocation::{Admission, Memory, StorageError};
+    #[derive(Default)]
+    struct Account {
+        limit: usize,
+        live: usize,
+        refused: Option<usize>,
+    }
+    impl Admission for Account {
+        fn resize(&mut self, live: usize) -> Result<(), StorageError> {
+            if live > self.limit {
+                self.refused = Some(live);
+                return Err(StorageError::AdmissionFailed);
+            }
+            self.live = live;
+            Ok(())
+        }
+    }
+    let cause = RdfLiteral::validate_components(
+        RdfLiteral::language_datatype_iri(None),
+        Some("en us"),
+        None,
+    )
+    .expect_err("native grammar refusal");
+    let mut account = Account {
+        limit: usize::MAX,
+        ..Account::default()
+    };
+    let mut memory = Memory::new(&mut account);
+    let diagnostic = cause.into_diagnostic_with_memory(&mut memory).unwrap();
+    let retained = diagnostic.retained_bytes().unwrap();
+    assert_eq!(memory.admitted_bytes(), retained);
+    drop(diagnostic);
+    memory.release_bytes(retained).unwrap();
+    assert_eq!(account.live, 0);
+    for limit in [0, retained - 1] {
+        let mut account = Account {
+            limit,
+            ..Account::default()
+        };
+        let mut memory = Memory::new(&mut account);
+        let window = CurrentThreadWindow::open();
+        let failure = cause
+            .into_diagnostic_with_memory(&mut memory)
+            .expect_err("original account refuses diagnostic storage");
+        let measured = window.close();
+        assert_eq!(failure, StorageError::AdmissionFailed);
+        assert_eq!(memory.admitted_bytes(), 0);
+        assert_eq!(measured.retained_bytes, 0);
+        assert_eq!(account.live, 0);
+        assert!(account.refused.unwrap() > limit);
     }
 }
 
@@ -60,6 +120,29 @@ fn malformed_language_tags_cannot_cross_the_intern_path() {
             .expect_err("a malformed language tag must not publish");
         assert_eq!(diagnostic.code, code, "{tag:?}");
         assert!(!diagnostic.message.is_empty(), "{tag:?} gave no reason");
+        let expected = RdfLiteral::validate_components(
+            RdfLiteral::language_datatype_iri(None),
+            Some(tag),
+            None,
+        )
+        .expect_err("original component refusal");
+        let copy = diagnostic.clone();
+        assert!(core::ptr::eq(
+            std::error::Error::source(&diagnostic).unwrap(),
+            std::error::Error::source(&copy).unwrap()
+        ));
+        drop(diagnostic);
+        let original = copy.native_cause().unwrap();
+        assert_eq!(
+            (original as &dyn std::error::Error).downcast_ref::<LiteralComponentError>(),
+            Some(&expected)
+        );
+        let events = Vec::with_capacity(8);
+        let window = CurrentThreadWindow::open();
+        let fields = Capture::read_with_buffer(original, events);
+        let allocation = window.close();
+        assert_eq!(allocation.allocations, 0);
+        assert_eq!(fields.child("cause").code, code);
     }
 }
 

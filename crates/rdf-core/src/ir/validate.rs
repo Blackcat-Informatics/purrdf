@@ -154,11 +154,11 @@ pub(crate) fn validate_literal_with_memory<S: Admission + ?Sized>(
     if let Err(cause) =
         crate::RdfLiteral::diagnose_components_with_memory(datatype, language, direction, memory)
     {
-        let (code, message) = match cause {
+        let cause = match cause {
             purrdf_lex::control::ControlledError::Control(cause) => return Err(cause.into()),
             purrdf_lex::control::ControlledError::Native(cause) => cause,
         };
-        return Err(RdfDiagnostic::try_error_with_memory(code, message, memory)?.into());
+        return Err(cause.into_diagnostic_with_memory(memory)?.into());
     }
     match crate::cdt_blank::bind_cdt_blank_labels_with_memory(
         lexical_form,
@@ -373,8 +373,8 @@ pub(super) fn validate_rows_with_memory<S: Admission + ?Sized>(
     //    structural rule, because a relative IRI is a defect in the term's IDENTITY:
     //    every positional check below would report a downstream symptom of it.
     require_absolute_iris_with_memory(builder, memory)?;
-    if let Some((code, message)) = builder.invalid_literal() {
-        return Err(diag_with_memory(code, message, memory));
+    if let Some(cause) = builder.invalid_literal() {
+        return Err(cause.into_diagnostic_with_memory(memory)?.into());
     }
 
     // 1. Every interned triple term references in-range ids, has an IRI predicate
@@ -894,16 +894,17 @@ mod tests {
         let duplicate = format!("{{\"{key}\":null,\"{key}\":null}}");
         let relative = "relative".repeat(128);
         let malformed = format!("[<{relative}>]");
-        for (lexical, datatype) in [
-            (duplicate.as_str(), purrdf_cdt::CDT_MAP),
-            (malformed.as_str(), purrdf_cdt::CDT_LIST),
-            ("value", relative.as_str()),
+        for (lexical, datatype, language) in [
+            (duplicate.as_str(), purrdf_cdt::CDT_MAP, None),
+            (malformed.as_str(), purrdf_cdt::CDT_LIST, None),
+            ("value", relative.as_str(), None),
+            ("value", purrdf_iri::vocab::rdf::LANG_STRING, Some("en us")),
         ] {
             let mut checkpoints = 0;
             let failure = validate_literal_with_control(
                 lexical,
                 datatype,
-                None,
+                language,
                 None,
                 &mut memory,
                 &mut |_| {
@@ -917,6 +918,19 @@ mod tests {
             };
             let bytes = diagnostic.retained_bytes().unwrap();
             assert_eq!(memory.admitted_bytes(), bytes);
+            if language.is_some() {
+                assert_eq!(diagnostic.code, "langtag-terminal-primary-not-alpha");
+                let original = diagnostic.native_cause().unwrap();
+                let original = (original as &dyn std::error::Error)
+                    .downcast_ref::<crate::LiteralComponentError>()
+                    .unwrap();
+                assert_eq!(
+                    *original,
+                    crate::LiteralComponentError::LanguageTag(
+                        purrdf_iri::langtag::LanguageTagError::TerminalPrimaryNotAlpha
+                    )
+                );
+            }
             drop(diagnostic);
             memory.release_bytes(bytes).unwrap();
             for stop_at in 0..checkpoints {
@@ -924,7 +938,7 @@ mod tests {
                 let failure = validate_literal_with_control(
                     lexical,
                     datatype,
-                    None,
+                    language,
                     None,
                     &mut memory,
                     &mut |_| {

@@ -3168,11 +3168,30 @@ fn invalid_term_kind_yields_invalid_argument() {
 #[test]
 fn invalid_direction_yields_invalid_argument() {
     unsafe {
-        for (direction, language) in [
-            (99, "en"),
-            (purrdf::term::PurrdfDirection::Ltr as i32, ""),
-            (purrdf::term::PurrdfDirection::Rtl as i32, ""),
+        for (direction, language, expected) in [
+            (99, "en", PurrdfStatus::InvalidArgument),
+            (
+                purrdf::term::PurrdfDirection::Ltr as i32,
+                "",
+                PurrdfStatus::InvalidArgument,
+            ),
+            (
+                purrdf::term::PurrdfDirection::Rtl as i32,
+                "",
+                PurrdfStatus::InvalidArgument,
+            ),
+            (
+                purrdf::term::PurrdfDirection::None as i32,
+                "en us",
+                PurrdfStatus::InvalidArgument,
+            ),
+            (
+                purrdf::term::PurrdfDirection::Ltr as i32,
+                "en",
+                PurrdfStatus::Ok,
+            ),
         ] {
+            let language = language.to_owned();
             let lex = "hello";
             let dt = "http://www.w3.org/2001/XMLSchema#string";
             let view = PurrdfTermView {
@@ -3202,12 +3221,50 @@ fn invalid_direction_yields_invalid_argument() {
                 &raw mut error,
             );
             assert_eq!(
-                status,
-                PurrdfStatus::InvalidArgument as i32,
-                "expected InvalidArgument for direction {direction} and language {language:?}"
+                status, expected as i32,
+                "direction {direction} and language {language:?}"
             );
+            drop(language);
+            if expected == PurrdfStatus::Ok {
+                assert!(error.is_null());
+                assert!(!buffer.is_null());
+                purrdf_buffer_free(buffer);
+                continue;
+            }
             assert!(buffer.is_null());
             assert!(!error.is_null());
+            let native = purrdf::error::purrdf_error_native_cause_json(error);
+            if direction == 99 {
+                assert!(native.is_null());
+            } else {
+                assert!(!native.is_null());
+                let fields =
+                    purrdf_lex::json::read(std::ffi::CStr::from_ptr(native).to_str().unwrap())
+                        .unwrap();
+                let message = std::ffi::CStr::from_ptr(purrdf_error_message(error))
+                    .to_str()
+                    .unwrap();
+                if direction == purrdf::term::PurrdfDirection::None as i32 {
+                    assert_eq!(
+                        fields["code"].as_str(),
+                        Some("rdf-literal-component-language")
+                    );
+                    assert_eq!(
+                        fields["fields"]["cause"]["value"]["code"].as_str(),
+                        Some("langtag-terminal-primary-not-alpha")
+                    );
+                    assert_eq!(
+                        message,
+                        "first subtag of the `LANGTAG` terminal is not one or more ASCII letters"
+                    );
+                } else {
+                    assert_eq!(
+                        fields["code"].as_str(),
+                        Some("rdf-literal-component-direction-without-language")
+                    );
+                    assert_eq!(message, "a base direction requires a language tag");
+                }
+            }
             purrdf_error_free(error);
         }
     }

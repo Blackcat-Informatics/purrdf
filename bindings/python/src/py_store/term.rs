@@ -146,61 +146,68 @@ impl PyLiteral {
     #[new]
     #[pyo3(signature = (value, *, datatype=None, language=None, direction=None))]
     fn new(
+        py: Python<'_>,
         value: String,
         datatype: Option<&PyNamedNode>,
         language: Option<String>,
         direction: Option<&str>,
     ) -> PyResult<Self> {
         let direction = parse_direction(direction)?;
+        if language.is_some() && datatype.is_some() {
+            return Err(PyValueError::new_err(
+                "a language-tagged literal cannot also carry an explicit datatype",
+            ));
+        }
+        let component_message = if language.as_ref().is_some_and(String::is_empty) {
+            Some("invalid language tag: a language tag must not be empty")
+        } else if language.is_none() && direction.is_some() {
+            Some("a base direction requires a language tag (RDF 1.2 dirLangString)")
+        } else {
+            None
+        };
+        RdfLiteral::validate_components(
+            RdfLiteral::datatype_iri_from_parts(
+                datatype.map(|node| node.inner.as_str()),
+                language.as_deref(),
+                direction,
+            ),
+            language.as_deref(),
+            direction,
+        )
+        .map_err(|cause| match cause.into_diagnostic() {
+            Ok(diagnostic) => super::presentation::native_error_with_message(
+                py,
+                component_message
+                    .unwrap_or_else(|| cause.message())
+                    .to_owned(),
+                &diagnostic,
+            ),
+            Err(storage) => super::presentation::native_error(py, &storage.into()),
+        })?;
         let inner = if let Some(language) = language {
-            if datatype.is_some() {
-                return Err(PyValueError::new_err(
-                    "a language-tagged literal cannot also carry an explicit datatype",
-                ));
-            }
-            if language.is_empty() {
-                return Err(PyValueError::new_err(
-                    "invalid language tag: a language tag must not be empty",
-                ));
-            }
             RdfLiteral {
                 lexical_form: value,
                 datatype: None,
                 language: Some(language),
                 direction,
             }
-        } else {
-            // RDF 1.2: base direction is only meaningful on a language-tagged
-            // literal (a `dirLangString`). Reject a bare/typed literal carrying one.
-            if direction.is_some() {
-                return Err(PyValueError::new_err(
-                    "a base direction requires a language tag (RDF 1.2 dirLangString)",
-                ));
+        } else if let Some(datatype) = datatype {
+            RdfLiteral {
+                lexical_form: value,
+                datatype: Some(datatype.inner.clone()),
+                language: None,
+                direction,
             }
-            if let Some(datatype) = datatype {
-                RdfLiteral {
-                    lexical_form: value,
-                    datatype: Some(datatype.inner.clone()),
-                    language: None,
-                    direction: None,
-                }
-            } else {
-                // A plain literal: datatype-less in the native model, surfaced as
-                // `xsd:string` by the `datatype` getter.
-                RdfLiteral {
-                    lexical_form: value,
-                    datatype: None,
-                    language: None,
-                    direction: None,
-                }
+        } else {
+            // A plain literal: datatype-less in the native model, surfaced as
+            // `xsd:string` by the `datatype` getter.
+            RdfLiteral {
+                lexical_form: value,
+                datatype: None,
+                language: None,
+                direction,
             }
         };
-        RdfLiteral::validate_components(
-            inner.datatype_iri(),
-            inner.language.as_deref(),
-            inner.direction,
-        )
-        .map_err(PyValueError::new_err)?;
         Ok(Self { inner })
     }
 

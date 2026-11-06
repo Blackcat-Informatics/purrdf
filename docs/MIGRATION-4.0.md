@@ -677,6 +677,50 @@ Freeze failures previously returned as `ColumnarError::Storage` now also return
 `Reconstruction(RdfDiagnostic)`. Update `Storage` matches for freeze failures to
 handle `Reconstruction` and inspect its diagnostic's `storage_error()` instead.
 
+## Literal component refusals
+
+`RdfLiteral::validate_components` returns `Result<(), LiteralComponentError>`
+instead of `Result<(), &'static str>`. The non-exhaustive error distinguishes
+native `LanguageTag(LanguageTagError)` failures from datatype mismatch,
+direction without language and language-string datatype without language.
+Its `diagnostic_code()` and `message()` preserve the existing codes and plain
+wording. Match typed variants with an unsupported-case arm, or inspect borrowed
+fields through the shared visitor and standard error source chain.
+
+The error is allocation-free and `Copy`; it borrows no caller text.
+`into_diagnostic_with_memory` admits diagnostic presentation and attachments
+through the supplied account while retaining the original cause under its
+independent shared owner. `into_diagnostic` uses resident diagnostic storage.
+Both conversions return the original `StorageError` on physical refusal.
+Builder checkpoints and freeze retain the first component failure; controlled
+validation preserves the original progress and storage refusal channels.
+
+`PackDictError::LiteralComponents` and `EmbeddingError::LiteralComponents`
+carry the native component cause under their existing outer malformed-input
+presentation. Embedding's earlier strict language parser retains its own
+original grammar cause and still checks lowercase identity afterward.
+
+Python literal exceptions keep their plain messages and expose `code`,
+`diagnostic_json`, `native_cause` and `native_cause_json`. C term-input errors
+retain the diagnostic through `purrdf_error_free`; the existing native-cause
+JSON accessor borrows that owner. WASM Rust callers of
+`DataFactory::checked_literal` and `directional_literal` now receive
+`Result<Term, JsValue>` instead of `Result<Term, JsError>`. The JavaScript
+exception keeps its plain message and carries `nativeCauseJson` plus a retained
+`nativeCause` owner, whose `json` getter remains usable after the throwing call.
+Free that owner when done. The explicitly unchecked Rust `literal` constructor
+keeps its existing behavior.
+
+Geographic strict-record responses retain `invalid-record`, the original pointer
+and message, and now include `error.cause` when the record refused an original
+native component cause. The shared native field codec constructs this metadata
+under the existing physical account and admits its complete output/work/scratch
+bound before construction. `native_error::to_json_with_memory` returns owned JSON
+under that account; `to_json_with_admission` additionally lets the caller refuse
+its layout through the original control channel. Drop the returned value before
+refunding its grant. `InspectionError::storage_error()` exposes a physical
+refusal directly, while existing protocol messages remain unchanged.
+
 ## Visualization codec refusals
 
 `purrdf_rdf::viz::VizError::Serialize` now retains the original

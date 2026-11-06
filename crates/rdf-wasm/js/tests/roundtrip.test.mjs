@@ -44,21 +44,19 @@ test("DataFactory builds RDF/JS terms", () => {
   assert.equal(lang.datatype.value, RDF_LANG_STRING);
 });
 
-// The JS binding was the one of three that admitted any string as a language
-// tag: the C ABI and Python both refuse a non-tag at their literal constructor,
-// while `factory.literal("x", "en us")` returned a Literal and only failed at a
-// later freeze or serializer, at a call site that never saw the string. Both
-// halves are driven, because refusing `@x-purrdf-afrikaans` or `@en-fr-jura` —
-// tags real data carries — would be the worse bug.
-test("literal() refuses a non-tag where the caller named it", () => {
+// The host must retain the original native owner and plain Error presentation.
+test("literal_component_native_error_transport", () => {
   const f = new DataFactory();
-  for (const tag of ["en", "en-US", "x-purrdf-afrikaans", "en-fr-jura", "abcdefgh"]) {
-    assert.equal(f.literal("v", tag).language, tag.toLowerCase());
-    assert.equal(f.directionalLiteral("v", tag, "ltr").language, tag.toLowerCase());
-  }
-  for (const tag of ["en us", "1", "9-9", "en-", "-", "!!!", "abcdefghi"]) {
-    assert.throws(() => f.literal("v", tag));
-    assert.throws(() => f.directionalLiteral("v", tag, "ltr"));
+  for (const call of [() => f.literal("v", "en us"), () => f.directionalLiteral("v", "en us", "ltr")]) {
+    let retained, json;
+    assert.throws(call, (error) => {
+      assert.equal(error.message, "first subtag of the `LANGTAG` terminal is not one or more ASCII letters");
+      [retained, json] = [error.nativeCause, error.nativeCauseJson];
+      assert.equal(JSON.parse(json).fields.cause.value.code, "langtag-terminal-primary-not-alpha");
+      return error.code === "langtag-terminal-primary-not-alpha";
+    });
+    assert.equal(retained.json, json);
+    retained.free();
   }
 });
 

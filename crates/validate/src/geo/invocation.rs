@@ -88,14 +88,26 @@ impl Invocation {
         }
     }
 
-    pub(super) fn admit_refusal(&self, error: &super::GeoCallError) -> Result<(), GeoError> {
+    pub(super) fn admit_refusal(
+        &self,
+        error: &super::GeoCallError,
+        native: Option<purrdf_lex::json::OutputLayout>,
+    ) -> Result<(), GeoError> {
         let receipt = self.receipt.get();
         let mut budget = PreparationBudget::new(self.policy);
         // A refused worker has dropped its temporaries, but keeping its whole
         // peak here conservatively covers original input and error owners that
         // remain live beside the response. No new policy allowance is opened.
         budget.retain(receipt.work, receipt.workspace)?;
-        let layout = super::output::refusal(error)?;
+        let mut layout = super::output::refusal(error)?;
+        if let Some(native) = native {
+            layout = layout
+                .with_child(super::output::record(1, 5)?)
+                .and_then(|layout| layout.with_child(native))
+                .ok_or(GeoError::ArithmeticOverflow(
+                    "geographic native error layout",
+                ))?;
+        }
         super::output::admit(budget, layout)
     }
 }
@@ -205,14 +217,14 @@ mod tests {
             ..ExecutionLimits::GEOMETRY
         })
         .unwrap();
-        assert!(Invocation::new(policy).admit_refusal(&error).is_ok());
+        assert!(Invocation::new(policy).admit_refusal(&error, None).is_ok());
         let invocation = Invocation::new(policy);
         {
             let mut phase = invocation.phase(PreparationBudget::new(policy));
             phase.charge_chunk(1, 0).unwrap();
         }
         assert!(matches!(
-            invocation.admit_refusal(&error),
+            invocation.admit_refusal(&error, None),
             Err(GeoError::WorkExhausted { .. })
         ));
         let invocation = Invocation::new(policy);
@@ -221,7 +233,7 @@ mod tests {
             phase.charge_chunk(0, 1).unwrap();
         }
         assert!(matches!(
-            invocation.admit_refusal(&error),
+            invocation.admit_refusal(&error, None),
             Err(GeoError::MemoryExhausted { .. })
         ));
     }
@@ -266,7 +278,7 @@ mod tests {
         .unwrap();
         let invocation = Invocation::new(policy);
         let window = purrdf_alloc_probe::CurrentThreadWindow::open();
-        let result = invocation.admit_refusal(&error);
+        let result = invocation.admit_refusal(&error, None);
         let stats = window.close();
         assert!(matches!(
             result,

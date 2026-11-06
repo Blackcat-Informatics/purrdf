@@ -76,7 +76,21 @@ impl fmt::Display for GeoCallError {
     }
 }
 
-impl std::error::Error for GeoCallError {}
+impl std::error::Error for GeoCallError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Decode(cause) => Some(cause),
+            Self::Engine(cause) => Some(cause),
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for GeoCallError {
+    purrdf_hash::error_visit! {
+        Decode(cause) => "geo-invalid-record" { "cause" => Cause(cause) },
+        Engine(cause) => "geo-engine" { "cause" => Cause(cause) },
+    }
+}
 
 impl purrdf_lex::json::record::Within for GeoCallError {
     fn within(self, token: &str) -> Self {
