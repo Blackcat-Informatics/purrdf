@@ -8,6 +8,14 @@ the PurRDF crates together when adopting them.
 
 ## At a glance
 
+The USTAR reader, borrowed-member iterator and writer functions now return
+`purrdf::ustar::UstarError` instead of `String`. Match its non-exhaustive variants
+with a wildcard or inspect the borrowed structured fields. Refusals retain their
+original byte offsets, declared and available lengths, raw size fields and native
+UTF-8 causes. Use `Display` only for presentation; projection-package failures
+also retain the archive error in their standard source chain. Current valid
+archive bytes and member ordering are unchanged.
+
 GTS transport decoding retains original native Zstandard frame errors through
 `TransportError::cause` and the standard I/O source chain. Inspect structured
 causes for decoder fields; `message()` remains an explicit presentation accessor.
@@ -48,6 +56,26 @@ remembered empty named graphs, model-only Datalog output, exact decimal
 division, WKT and GeoJSON parsing resource policies, the SPARQL pre-binding rewrite and specific
 SPARQL diagnostic codes.
 Each has its own section below.
+
+## Extensible source formats and glob refusals
+
+`SourceFormat` and `purrdf_glob::SyntaxReason` are now non-exhaustive.
+External matches must include an unsupported-case arm. Keep known variants'
+behavior explicit; an unknown source format must produce an actionable refusal
+rather than acquire the behavior of a native syntax or container. The CLI
+refuses unknown kinds when reading, writing or resolving a document base.
+
+Existing format routing, glob matching and refusal payloads remain unchanged.
+Future language or compiled-plan laws must preserve existing valid patterns and
+readable 4.0 portable descriptions, or use explicitly selected versioned forms.
+
+## Planner estimates
+
+`PlanEstimate` is non-exhaustive. Replace struct literals with
+`PlanEstimate::new(rows, peak_rows, columns)`, and include `..` when destructuring
+the record. Its public fields remain readable. Row and peak-row estimates, and
+the cell estimate returned by `peak_cells()`, are predictions rather than
+guaranteed output bounds; their meaning and EXPLAIN representation are unchanged.
 
 ## Streaming GTS payloads
 
@@ -645,6 +673,32 @@ Target-specific capacity default constants have been removed.
 `EvalOptions::without_stored_fact_limit`,
 `without_join_step_limit` and `without_term_arena_limit` remove selected ceilings.
 
+## Prepared chase certificates
+
+`PreparedChase::certificate()` now borrows an opaque `ChaseCertificate`, which
+retains the original verified evidence and its allocation owner. Inspect its
+`criterion()`, `law_version()`, `program_identity()`, `report()` and `summary()`
+without copying the proof. `weakly_acyclic()` returns an optional borrowed
+`WaCertificate` for WA-specific positions and ranks. The `certify` and
+`certify_with` functions still produce owned WA evidence with independent
+verification before preparation. Explicit
+`close()` still owns evidence destruction and the original fallible grant refund.
+
+`ChaseTermination`, `TerminationError` and `TerminationCriterion` are
+non-exhaustive. Match known variants with a future-case arm; use the native
+criterion classification rather than treating an unfamiliar certified summary
+as an absent certificate. The implemented criterion remains weak acyclicity
+under law version 1; the chase, witnesses and model identities are unchanged.
+
+Entailment's `TerminationCertificate` retains the native certified summary and
+criterion and implements `Clone` without `Copy`. `ReasoningReport::termination()`
+returns `Option<&TerminationCertificate>`. Borrow it for inspection or explicitly
+clone it when an owned value is required. `positions()` and `existential_edges()`
+return `Option<usize>` because these counts belong to WA evidence. Structured
+inspection exposes the original `summary` and `criterion` records with the law
+version. Display delegates to the original native summary, and current WA report
+bytes remain unchanged. A lane that invents no term still reports no certificate.
+
 ## HNSW arithmetic refusals
 
 Shared distance pair and batch APIs now return `Result<f64, NonFinite>` instead
@@ -1192,3 +1246,16 @@ parameter slots are reset before applying its dictionary. No execution inputs
 are retained from a previous call. Ordinary, RDFLib, governed and entailment
 query methods accept the same coordinate keywords; parser/provider settings
 remain preparation-time configuration. See the [Python API reference](book/src/reference/python-api.md#supplied-query-time-and-entropy).
+
+## Slice ownership query diagnostics
+
+`OwnershipDiagnostic` is non-exhaustive. Its `UnparseableQuery` variant replaces
+`message: String` with `cause: QueryArtifactError`, retaining the original
+`Utf8Error` or SPARQL `ParseError`. Use `cause.to_string()` at the presentation
+boundary for the former message, or inspect the native cause through `source()`
+and `StructuredError`. External matches need an arm for unfamiliar diagnostics.
+
+The causes, owning slice and logical path remain available after the catalog is
+dropped, including in cloned reports. Malformed query artifacts are still skipped
+in artifact order; valid queries continue to contribute dependency evidence.
+Python's ownership lint and ownership-defect classification are unchanged.

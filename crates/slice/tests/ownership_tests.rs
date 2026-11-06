@@ -12,7 +12,7 @@ use purrdf_testkit::temp_dir;
 
 use purrdf_slice::{
     EdgeKind, NamedNode, OwnershipAnalyzer, OwnershipDiagnostic, OwnershipStatus, ParserOptions,
-    ReconciliationStatus, SliceCatalog, SliceVocab,
+    QueryArtifactError, ReconciliationStatus, SliceCatalog, SliceVocab,
 };
 
 /// Pure fixtures use a caller-supplied example.org vocabulary (the slice
@@ -259,6 +259,9 @@ fn ownership_mismatch() {
 
 #[test]
 fn parsed_not_textual_edges() {
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::Capture;
+
     let tmp = temp_dir!().unwrap();
     let root = tmp.path();
 
@@ -300,6 +303,23 @@ fn parsed_not_textual_edges() {
         ),
     );
 
+    let invalid_utf8 = vec![b'#', b' ', 255];
+    let expected_utf8 = std::str::from_utf8(&invalid_utf8).unwrap_err();
+    std::fs::write(
+        root.join("slices/grpB/sliceB/queries/competency/a-invalid-utf8.rq"),
+        &invalid_utf8,
+    )
+    .unwrap();
+    let invalid_sparql = "SELECT WHERE {".to_owned();
+    let expected_sparql = purrdf_sparql_algebra::SparqlParser::new()
+        .parse_query_with(&invalid_sparql, &ParserOptions::default())
+        .unwrap_err();
+    write(
+        root,
+        "slices/grpB/sliceB/queries/competency/b-invalid-sparql.rq",
+        &invalid_sparql,
+    );
+
     let catalog = SliceCatalog::discover(
         root,
         test_vocab(),
@@ -307,6 +327,69 @@ fn parsed_not_textual_edges() {
     )
     .unwrap();
     let report = OwnershipAnalyzer::new(&catalog).analyze().unwrap();
+
+    drop(catalog);
+    drop(tmp);
+    drop(invalid_utf8);
+    drop(invalid_sparql);
+    assert!(!report.has_ownership_defect());
+    assert_eq!(report.clone().diagnostics, report.diagnostics);
+    let skipped: Vec<_> = report.diagnostics.iter().filter_map(|diagnostic| {
+        if let OwnershipDiagnostic::UnparseableQuery { slice, logical_path, cause } = diagnostic {
+            let captured = Capture::read(diagnostic);
+            assert_eq!(captured.code, "slice-ownership-unparseable-query");
+            assert!(matches!(captured.field("slice"), ErrorValue::Iri(value) if value == iri("sliceB")));
+            assert!(matches!(captured.field("logical_path"), ErrorValue::Text(value) if value == logical_path));
+            Some((slice, logical_path, cause, captured.child("cause")))
+        } else {
+            None
+        }
+    }).collect();
+    let [
+        (slice, path, utf8, captured_utf8),
+        (_, sparql_path, sparql, captured_sparql),
+    ] = skipped.as_slice()
+    else {
+        panic!("both malformed queries must remain nonfatal diagnostics");
+    };
+    assert_eq!(*slice, &iri("sliceB"));
+    assert_eq!(path.as_str(), "queries/competency/a-invalid-utf8.rq");
+    assert_eq!(
+        sparql_path.as_str(),
+        "queries/competency/b-invalid-sparql.rq"
+    );
+    assert_eq!(utf8, &&QueryArtifactError::Utf8(expected_utf8));
+    assert_eq!(
+        sparql,
+        &&QueryArtifactError::Sparql(expected_sparql.clone())
+    );
+    assert_eq!(
+        utf8.to_string(),
+        format!("query is not valid UTF-8: {expected_utf8}")
+    );
+    assert_eq!(sparql.to_string(), expected_sparql.to_string());
+    assert_eq!(captured_utf8.code, "slice-query-utf8");
+    assert!(matches!(
+        captured_utf8.child("cause").field("valid_up_to"),
+        ErrorValue::ByteCount(2)
+    ));
+    assert_eq!(captured_sparql.code, "slice-query-sparql");
+    assert_eq!(
+        captured_sparql.child("cause").code,
+        Capture::read(&expected_sparql).code
+    );
+    assert_eq!(
+        std::error::Error::source(*utf8)
+            .unwrap()
+            .downcast_ref::<std::str::Utf8Error>(),
+        Some(&expected_utf8)
+    );
+    assert_eq!(
+        std::error::Error::source(*sparql)
+            .unwrap()
+            .downcast_ref::<purrdf_sparql_algebra::ParseError>(),
+        Some(&expected_sparql)
+    );
 
     // Exactly one B → A query edge, with termT as evidence.
     let edge = report

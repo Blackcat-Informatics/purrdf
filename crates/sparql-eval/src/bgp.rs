@@ -3646,11 +3646,14 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
             // Leaves that hold no BGP: there is no triple-pattern join order to choose and
             // no base cardinality to probe.
             GraphPattern::Values { variables, bindings } => {
-                survey.record(pattern, PlanEstimate {
-                    rows: bindings.len() as u64,
-                    peak_rows: bindings.len() as u64,
-                    columns: variables.len() as u64,
-                });
+                survey.record(
+                    pattern,
+                    PlanEstimate::new(
+                        bindings.len() as u64,
+                        bindings.len() as u64,
+                        variables.len() as u64,
+                    ),
+                );
             }
             GraphPattern::Path { .. } | GraphPattern::Service { .. } => {}
         }
@@ -3660,11 +3663,7 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
 
 /// The estimate of a `GRAPH <name> { ... }` block whose name addresses no graph: no
 /// row, and an inner pattern that is never evaluated.
-const EMPTY_SCOPE: PlanEstimate = PlanEstimate {
-    rows: 0,
-    peak_rows: 0,
-    columns: 0,
-};
+const EMPTY_SCOPE: PlanEstimate = PlanEstimate::new(0, 0, 0);
 
 /// The graph `GRAPH <name> { ... }` scopes its block to, as evaluation decides it
 /// (`modifier::eval_graph`): the name's term, when it names a graph of `dataset` that
@@ -3767,11 +3766,11 @@ fn forecast_bgp<D: DatasetView>(
             compiled, dataset, &scope, &order, &initial, seed.rows, &workspace,
         )?
     };
-    let estimate = PlanEstimate {
+    let estimate = PlanEstimate::new(
         rows,
         peak_rows,
-        columns: u64::try_from(working.len()).map_err(|_| EvalError::WorkspaceBoundOverflow)?,
-    };
+        u64::try_from(working.len()).map_err(|_| EvalError::WorkspaceBoundOverflow)?,
+    );
     Ok((schema, estimate, order))
 }
 
@@ -3961,14 +3960,7 @@ fn record_call_estimate(
     // bound cannot be denominated out of a cell ceiling; saturating, because a `usize`
     // arity beyond `u64` is already past any ceiling a caller can express.
     let columns = u64::try_from(arity.total()).unwrap_or(u64::MAX).max(1);
-    survey.record(
-        node,
-        PlanEstimate {
-            rows,
-            peak_rows: rows,
-            columns,
-        },
-    );
+    survey.record(node, PlanEstimate::new(rows, rows, columns));
     Ok(())
 }
 
@@ -6899,11 +6891,11 @@ mod survey_tests {
             } => {
                 survey.record(
                     pattern,
-                    PlanEstimate {
-                        rows: bindings.len() as u64,
-                        peak_rows: bindings.len() as u64,
-                        columns: variables.len() as u64,
-                    },
+                    PlanEstimate::new(
+                        bindings.len() as u64,
+                        bindings.len() as u64,
+                        variables.len() as u64,
+                    ),
                 );
                 Ok(())
             }

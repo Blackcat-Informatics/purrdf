@@ -789,6 +789,9 @@ pub(crate) fn run_lint(
                 )));
             }
         },
+        _ => {
+            return Err(format::unsupported_format(format, "the shapes input"));
+        }
     };
     let shapes_graph = resolve_shapes_graph(options.shapes_graph, base.as_deref())?;
     let root = read_shapes_document(

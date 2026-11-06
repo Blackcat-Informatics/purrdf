@@ -835,6 +835,7 @@ fn rule_lines(rules: &[purrdf_entail::RuleId]) -> String {
 /// contract-hash <64 lowercase hex>
 /// withheld-surrogates <n>
 /// termination none | termination weakly-acyclic positions <n> existential-edges <n>
+///   | termination <criterion> law <version>
 /// inconsistency none | inconsistency <rule-id> premises <n>
 /// inconsistency-graph default | inconsistency-graph <term>   (only after a witness)
 /// inconsistency-premise <s> <p> <o>       (n of them, the rule's own premise order)
@@ -851,6 +852,10 @@ fn rule_lines(rules: &[purrdf_entail::RuleId]) -> String {
 /// NOT say: it names the rules the run's calculus STATES beyond the table, whether or not
 /// they fired, because a caller choosing whether to trust a closure needs to know which
 /// rule set produced it. Whether an extension actually contributed is the `fired` line.
+///
+/// Termination criterion labels are extensible. The WA form retains its original
+/// counts; another certified criterion carries its native label and law version.
+/// An unfamiliar criterion is not an absent certificate or a claim of WA.
 ///
 /// `termination` is the chase's own proof that the run had to stop. `rdf` and `rdfs` state
 /// existentially quantified rules and are evaluated by `purrdf-datalog`'s restricted
@@ -1078,12 +1083,19 @@ impl fmt::Display for RenderedReport<'_> {
         writeln!(f, "withheld-surrogates {}", report.withheld_surrogates())?;
         match report.termination() {
             None => writeln!(f, "termination none")?,
-            Some(certificate) => writeln!(
-                f,
-                "termination weakly-acyclic positions {} existential-edges {}",
-                certificate.positions(),
-                certificate.existential_edges()
-            )?,
+            Some(certificate) => match (certificate.positions(), certificate.existential_edges()) {
+                (Some(positions), Some(existential_edges)) => writeln!(
+                    f,
+                    "termination {} positions {positions} existential-edges {existential_edges}",
+                    certificate.criterion().label(),
+                )?,
+                _ => writeln!(
+                    f,
+                    "termination {} law {}",
+                    certificate.criterion().label(),
+                    certificate.law_version(),
+                )?,
+            },
         }
         let Some(witness) = report.inconsistency() else {
             return writeln!(f, "inconsistency none");
