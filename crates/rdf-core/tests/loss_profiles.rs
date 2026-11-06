@@ -136,6 +136,29 @@ fn downstream_projection_checks_soundness_and_intent() {
         1
     );
     check_ledger_sound_in(&profile, &LossLedger::new(), "unknown", "unknown").unwrap();
+    check_ledger_sound(&LossLedger::new(), "unknown", "unknown").unwrap();
+    assert_eq!(
+        check_ledger_sound(&ledger, "different-source", "target-json"),
+        check_ledger_sound_in(
+            &LossProfile::builtin(),
+            &ledger,
+            "different-source",
+            "target-json"
+        ),
+    );
+    let owned = error.into_owned();
+    drop(ledger);
+    drop(profile);
+    let inspected = Capture::read(&owned);
+    assert_eq!(inspected.code, "loss-pair-mismatch");
+    assert!(matches!(
+        inspected.field("actual_from"),
+        ErrorValue::Code("wrong-source")
+    ));
+    assert!(matches!(
+        inspected.field("expected_from"),
+        ErrorValue::Code("source-model")
+    ));
 }
 
 /// Code collisions preserve pair-scoped builtin meanings and caller isolation.

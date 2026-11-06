@@ -80,7 +80,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Err("native LinkML read/write path drifted".into());
     }
     let native_linkml = import_linkml(&linkml_document, &config)?;
-    purrdf_rdf::loss::check_ledger_sound(&native_linkml.losses, "linkml-1.11", "shacl")?;
+    purrdf_rdf::loss::check_ledger_sound(&native_linkml.losses, "linkml-1.11", "shacl")
+        .map_err(purrdf_rdf::loss::LossSoundnessError::into_owned)?;
     println!(
         "linkml-1.11/native: canonical read/write; {} located reverse loss(es)",
         native_linkml.losses.entries().len()
@@ -125,7 +126,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         ("typescript-7.0", "typescript-7.0", typescript),
         ("graphql-september-2025", "graphql-september-2025", graphql),
     ] {
-        purrdf_rdf::loss::check_ledger_sound(&imported.losses, profile, "shacl")?;
+        purrdf_rdf::loss::check_ledger_sound(&imported.losses, profile, "shacl")
+            .map_err(purrdf_rdf::loss::LossSoundnessError::into_owned)?;
         let round_trip =
             purrdf_shapes::json_schema::compile(&imported.shapes, config.namespaces())?;
         if round_trip.schema_json != compiled.schema_json {

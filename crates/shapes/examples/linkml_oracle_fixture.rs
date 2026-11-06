@@ -74,7 +74,8 @@ fn reverse_payload(
     config: &SchemaImportConfig,
 ) -> Result<Value, Box<dyn Error>> {
     let imported = import_linkml_package(package, config)?;
-    check_ledger_sound(&imported.losses, "linkml-1.11", "shacl")?;
+    check_ledger_sound(&imported.losses, "linkml-1.11", "shacl")
+        .map_err(purrdf_rdf::loss::LossSoundnessError::into_owned)?;
     let repeated = import_linkml_package(package, config)?;
     if imported.losses.render_json() != repeated.losses.render_json() {
         return Err("LinkML reverse ledger is not deterministic".into());
@@ -251,7 +252,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         )
         .into());
     }
-    check_ledger_sound(&lossy.losses, "json-schema", "linkml-1.11")?;
+    check_ledger_sound(&lossy.losses, "json-schema", "linkml-1.11")
+        .map_err(purrdf_rdf::loss::LossSoundnessError::into_owned)?;
     let observed_losses = lossy
         .losses
         .entries()
@@ -354,7 +356,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     // projected instances of real data and their SHACL verdicts.
     let list_schema = shacl_lists::FIXTURE.compiled()?;
     let lists = emit_linkml(&list_schema, &config)?;
-    check_ledger_sound(&lists.losses, "json-schema", "linkml-1.11")?;
+    check_ledger_sound(&lists.losses, "json-schema", "linkml-1.11")
+        .map_err(purrdf_rdf::loss::LossSoundnessError::into_owned)?;
     let list_probes = shacl_lists::FIXTURE
         .cases()?
         .into_iter()
@@ -364,7 +367,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     // The temporal range-bound fixture (see `support/shacl_temporal.rs`).
     let temporal_schema = shacl_temporal::FIXTURE.compiled()?;
     let temporal = emit_linkml(&temporal_schema, &config)?;
-    check_ledger_sound(&temporal.losses, "json-schema", "linkml-1.11")?;
+    check_ledger_sound(&temporal.losses, "json-schema", "linkml-1.11")
+        .map_err(purrdf_rdf::loss::LossSoundnessError::into_owned)?;
     let temporal_probes = shacl_temporal::FIXTURE
         .cases()?
         .into_iter()
@@ -375,7 +379,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     // `support/shacl_value_shapes.rs`).
     let value_shape_schema = shacl_value_shapes::FIXTURE.compiled()?;
     let value_shapes = emit_linkml(&value_shape_schema, &config)?;
-    check_ledger_sound(&value_shapes.losses, "json-schema", "linkml-1.11")?;
+    check_ledger_sound(&value_shapes.losses, "json-schema", "linkml-1.11")
+        .map_err(purrdf_rdf::loss::LossSoundnessError::into_owned)?;
     let value_shape_probes = shacl_value_shapes::cases()?
         .into_iter()
         .map(|case| json!({ "label": case.label, "value": case.value, "conforms": case.conforms }))

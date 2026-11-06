@@ -481,10 +481,82 @@ pub struct LinkmlPackage {
     canonical_slot_diagnostics: Vec<LinkmlSlotDiagnostic>,
 }
 
-purrdf_lex::message_error! {
-    /// A malformed LinkML configuration, document, or projection input.
-    #[derive(Debug, Clone, PartialEq, Eq)]
-    pub struct LinkmlError, detail;
+/// A malformed LinkML configuration, document, or projection input.
+/// Native loss and schema-import causes remain owned beyond the caller's inputs.
+#[derive(Debug, Clone)]
+pub struct LinkmlError {
+    detail: String,
+    cause: Option<LinkmlCause>,
+}
+
+#[derive(Debug, Clone)]
+enum LinkmlCause {
+    Loss(Box<::purrdf_rdf::LossSoundnessError>),
+    Import(Box<crate::schema_import::SchemaImportError>),
+}
+
+impl LinkmlError {
+    /// An authored LinkML refusal with verbatim presentation.
+    pub fn new(detail: impl Into<String>) -> Self {
+        Self {
+            detail: detail.into(),
+            cause: None,
+        }
+    }
+
+    /// The original human-readable context, verbatim.
+    #[must_use]
+    pub fn detail(&self) -> &str {
+        &self.detail
+    }
+
+    fn native_cause(&self) -> Option<&(dyn purrdf_lex::error::NativeError + 'static)> {
+        match &self.cause {
+            Some(LinkmlCause::Loss(cause)) => Some(cause.as_ref()),
+            Some(LinkmlCause::Import(cause)) => Some(cause.as_ref()),
+            None => None,
+        }
+    }
+
+    fn import(cause: crate::schema_import::SchemaImportError) -> Self {
+        Self {
+            detail: format!("LinkML import model: {cause}"),
+            cause: Some(LinkmlCause::Import(Box::new(cause))),
+        }
+    }
+}
+
+impl From<::purrdf_rdf::LossSoundnessError<&str>> for LinkmlError {
+    fn from(cause: ::purrdf_rdf::LossSoundnessError<&str>) -> Self {
+        Self {
+            detail: cause.to_string(),
+            cause: Some(LinkmlCause::Loss(Box::new(cause.into_owned()))),
+        }
+    }
+}
+
+impl PartialEq for LinkmlError {
+    fn eq(&self, other: &Self) -> bool {
+        self.detail == other.detail
+    }
+}
+impl Eq for LinkmlError {}
+
+impl std::fmt::Display for LinkmlError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.detail)
+    }
+}
+
+purrdf_hash::error_sources!(LinkmlError, native native_cause);
+
+impl purrdf_lex::error::StructuredError for LinkmlError {
+    purrdf_hash::error_visit! {
+        @record self { detail, cause } => "message-LinkmlError" {
+            "detail" => Text(&self.detail),
+            "cause" => Value(self.native_cause().map_or(purrdf_lex::error::ErrorValue::Absent, |cause| purrdf_lex::error::ErrorValue::Cause(cause))),
+        }
+    }
 }
 
 /// Parse a LinkML 1.11 YAML document without accepting lossy YAML semantics.
@@ -817,6 +889,47 @@ pub(super) fn is_reserved_jsonld_slot(value: &str) -> bool {
 mod tests {
     use super::*;
     use crate::json_model::json;
+
+    #[test]
+    fn native_loss_causes_survive_importer_context_and_input_destruction() {
+        use purrdf_lex::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+        let mut ledger = ::purrdf_rdf::LossLedger::new();
+        ledger.record(::purrdf_rdf::LossEntry {
+            code: String::from("undeclared").into(),
+            from: String::from("json-schema").into(),
+            to: String::from("shacl").into(),
+            note: "a loss".into(),
+            location: None,
+        });
+        let native = ::purrdf_rdf::check_ledger_sound(&ledger, "json-schema", "shacl").unwrap_err();
+        let direct = LinkmlError::from(native);
+        let imported = crate::schema_import::SchemaImportError::from(native);
+        let message = imported.to_string();
+        let outer = LinkmlError::import(imported);
+        drop(ledger);
+        let retained = outer.clone();
+        drop(outer);
+        assert_eq!(retained.detail(), format!("LinkML import model: {message}"));
+        assert_eq!(retained, LinkmlError::new(retained.detail()));
+        let fields = Capture::read(&direct);
+        assert!(matches!(
+            fields.child("cause").field("code"),
+            ErrorValue::Code("undeclared")
+        ));
+        let fields = Capture::read(&retained);
+        let imported = fields.child("cause");
+        assert_eq!(imported.code, "message-SchemaImportError");
+        assert!(matches!(
+            imported.child("cause").field("code"),
+            ErrorValue::Code("undeclared")
+        ));
+        let imported = std::error::Error::source(&retained).unwrap();
+        let native = std::error::Error::source(imported).unwrap();
+        assert!(
+            matches!(native.downcast_ref::<::purrdf_rdf::LossSoundnessError>(), Some(::purrdf_rdf::LossSoundnessError::UnregisteredCode { code, .. }) if code == "undeclared")
+        );
+    }
 
     #[test]
     fn an_ncname_is_exactly_the_production_and_not_a_unicode_property() {

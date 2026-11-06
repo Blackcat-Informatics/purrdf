@@ -245,7 +245,7 @@ impl<'a> Projector<'a> {
 
         self.record_unmapped_losses();
         check_ledger_sound(&self.ledger, "rdf-1.2-dataset", &self.target_profile)
-            .map_err(ProjectionError::integrity)?;
+            .map_err(ProjectionError::from)?;
 
         let model = ResearchObjectModel {
             dataset,

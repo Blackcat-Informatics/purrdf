@@ -1326,3 +1326,31 @@ The causes, owning slice and logical path remain available after the catalog is
 dropped, including in cloned reports. Malformed query artifacts are still skipped
 in artifact order; valid queries continue to contribute dependency evidence.
 Python's ownership lint and ownership-defect classification are unchanged.
+
+### Typed loss-ledger checks
+
+`check_ledger_complete` now returns an owned `LossCompletenessError` instead of a
+string. Its `missing()` and `unexpected()` slices contain every distinct differing code
+in lexical order, preserving duplicate-insensitive set comparison. Display keeps the
+previous missing-before-unexpected message. The refusal owns its strings and remains
+inspectable after the ledger and expected inputs are dropped.
+
+Both `check_ledger_sound` and `check_ledger_sound_in` now return the same native
+`LossSoundnessError<&str>`. The explicit-profile helper still checks the original entry
+pair before code membership and stops at the first offending entry. The built-in helper
+delegates to it; empty ledgers remain sound for unregistered pairs. Neither borrowed
+refusal depends on the temporary built-in profile.
+
+The former lifetime spelling `LossSoundnessError<'a>` becomes `LossSoundnessError<&'a
+str>`. Borrowed errors remain Copy; call `into_owned()` before returning them through a
+static error owner or beyond the ledger/pair strings. The default `LossSoundnessError`
+uses owned String fields. Original variant fields, human messages and borrowed
+structured codes are preserved across that conversion.
+
+Projection integrity errors, schema-import errors and LinkML errors retain their
+original native soundness cause through the standard source chain and structured
+inspection, including the outer LinkML import-model context. Their existing human detail
+and projection path/category remain unchanged. Schema-import and LinkML equality still
+compares the original detail; native provenance is supplemental. The panicking assert
+helpers remain explicit invariant/presentation boundaries over these same typed checks.
+No loss profile or serialization format changes.

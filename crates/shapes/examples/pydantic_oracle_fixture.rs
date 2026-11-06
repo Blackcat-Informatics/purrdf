@@ -44,7 +44,8 @@ fn reverse_evidence(
     config: &SchemaImportConfig,
 ) -> Result<Value, Box<dyn Error>> {
     let imported = import_pydantic_package(package, config)?;
-    check_ledger_sound(&imported.losses, PYDANTIC_DIALECT, "shacl")?;
+    check_ledger_sound(&imported.losses, PYDANTIC_DIALECT, "shacl")
+        .map_err(purrdf_rdf::loss::LossSoundnessError::into_owned)?;
     let repeated = import_pydantic_package(package, config)?;
     if imported.losses.render_json() != repeated.losses.render_json() {
         return Err("Pydantic reverse ledger is not deterministic".into());

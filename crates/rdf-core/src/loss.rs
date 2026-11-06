@@ -44,7 +44,9 @@ use purrdf_iri::json_escape::{JsonEscapes, push_body};
 
 use crate::RdfLocation;
 
+mod completeness;
 mod profile;
+pub use completeness::LossCompletenessError;
 pub use profile::{LossDefinition, LossProfile, LossProfileError, LossSoundnessError};
 
 /// In-band machine code: a `CONSTRUCT` whose `WHERE` bound an RDF-1.2 reifier (via
@@ -2317,25 +2319,26 @@ pub fn profile_for(from: &str, to: &str) -> BTreeSet<&'static str> {
 ///
 /// Returns `Err` naming every code missing from `ledger` and/or every code
 /// `ledger` recorded that is not in `expected_codes`, when the two sets
-/// differ.
-pub fn check_ledger_complete(ledger: &LossLedger, expected_codes: &[&str]) -> Result<(), String> {
+/// differ. The owned refusal retains both distinct code lists in lexical order
+/// and remains inspectable after the ledger and expected inputs are dropped.
+pub fn check_ledger_complete(
+    ledger: &LossLedger,
+    expected_codes: &[&str],
+) -> Result<(), LossCompletenessError> {
     let present: BTreeSet<&str> = ledger.entries().iter().map(|e| e.code.as_ref()).collect();
     let expected: BTreeSet<&str> = expected_codes.iter().copied().collect();
-    let missing: Vec<&str> = expected.difference(&present).copied().collect();
-    let unexpected: Vec<&str> = present.difference(&expected).copied().collect();
+    let missing: Vec<String> = expected
+        .difference(&present)
+        .map(|code| (*code).to_owned())
+        .collect();
+    let unexpected: Vec<String> = present
+        .difference(&expected)
+        .map(|code| (*code).to_owned())
+        .collect();
     if missing.is_empty() && unexpected.is_empty() {
         return Ok(());
     }
-    let mut reasons = Vec::new();
-    if !missing.is_empty() {
-        reasons.push(format!("expected code(s) {missing:?} were never recorded"));
-    }
-    if !unexpected.is_empty() {
-        reasons.push(format!(
-            "ledger recorded unexpected code(s) {unexpected:?} not in expected_codes"
-        ));
-    }
-    Err(format!("loss ledger incomplete: {}", reasons.join("; ")))
+    Err(LossCompletenessError::new(missing, unexpected))
 }
 
 /// Panicking wrapper over [`check_ledger_complete`]: the set of codes
@@ -2359,22 +2362,29 @@ pub fn assert_ledger_complete(ledger: &LossLedger, expected_codes: &[&str]) {
 /// # Errors
 ///
 /// Returns `Err` naming the first offending code when an entry has a different
-/// conversion pair or a code outside `profile_for(from, to)`.
-pub fn check_ledger_sound(ledger: &LossLedger, from: &str, to: &str) -> Result<(), String> {
+/// conversion pair or a code outside `profile_for(from, to)`. The refusal
+/// borrows its original operands from the ledger and requested pair, independently
+/// of the temporary built-in profile. Use `into_owned()` to retain it beyond
+/// those inputs.
+pub fn check_ledger_sound<'a>(
+    ledger: &'a LossLedger,
+    from: &'a str,
+    to: &'a str,
+) -> Result<(), LossSoundnessError<&'a str>> {
     check_ledger_sound_in(&LossProfile::builtin(), ledger, from, to)
-        .map_err(|error| error.to_string())
 }
 
 /// Check each original entry's pair and code against an explicit profile.
 ///
 /// The first refusal borrows its original code and pair operands; it allocates
-/// nothing. Empty ledgers remain sound, including for unregistered pairs.
+/// nothing and does not borrow the profile. Empty ledgers remain sound,
+/// including for unregistered pairs.
 pub fn check_ledger_sound_in<'a>(
     profile: &LossProfile,
     ledger: &'a LossLedger,
     from: &'a str,
     to: &'a str,
-) -> Result<(), LossSoundnessError<'a>> {
+) -> Result<(), LossSoundnessError<&'a str>> {
     for entry in ledger.entries() {
         if entry.from != from || entry.to != to {
             return Err(LossSoundnessError::PairMismatch {
@@ -3265,15 +3275,40 @@ mod tests {
 
     #[test]
     fn check_ledger_complete_flags_missing_code() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::{Capture, Event};
         let mut ledger = LossLedger::new();
         ledger.record(owned_entry("a", "x", "y"));
-        let err =
-            check_ledger_complete(&ledger, &["a", "b"]).expect_err("code `b` was never recorded");
-        assert!(err.contains('b'), "error must name the missing code: {err}");
+        let err = check_ledger_complete(&ledger, &["c", "a", "b", "b"])
+            .expect_err("codes were never recorded");
+        drop(ledger);
+        let retained = err.clone();
+        drop(err);
+        assert_eq!(retained.missing(), ["b", "c"]);
+        assert!(retained.unexpected().is_empty());
+        assert_eq!(
+            retained.to_string(),
+            "loss ledger incomplete: expected code(s) [\"b\", \"c\"] were never recorded"
+        );
+        let fields = Capture::read(&retained);
+        assert_eq!(fields.code, "loss-ledger-incomplete");
+        assert!(matches!(
+            fields.events.as_slice(),
+            [
+                Event::BeginList(Some("missing"), 2),
+                Event::Value(None, ErrorValue::Code("b")),
+                Event::Value(None, ErrorValue::Code("c")),
+                Event::EndList,
+                Event::BeginList(Some("unexpected"), 0),
+                Event::EndList,
+            ]
+        ));
     }
 
     #[test]
     fn check_ledger_complete_flags_unexpected_extra_code() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::{Capture, Event};
         // The other incompleteness direction: `ledger` recorded a real code
         // that the caller's `expected_codes` never declared — a silently
         // drifted contract, not merely a silently dropped construct.
@@ -3283,9 +3318,31 @@ mod tests {
         let err = check_ledger_complete(&ledger, &["a"])
             .expect_err("code `b` was recorded but not declared in expected_codes");
         assert!(
-            err.contains('b'),
+            err.to_string().contains('b'),
             "error must name the unexpected code: {err}"
         );
+        assert_eq!(err.unexpected(), ["b"]);
+        let both = check_ledger_complete(&ledger, &["c", "c"]).unwrap_err();
+        drop(ledger);
+        assert_eq!(both.missing(), ["c"]);
+        assert_eq!(both.unexpected(), ["a", "b"]);
+        assert_eq!(
+            both.to_string(),
+            "loss ledger incomplete: expected code(s) [\"c\"] were never recorded; ledger recorded unexpected code(s) [\"a\", \"b\"] not in expected_codes"
+        );
+        let fields = Capture::read(&both);
+        assert!(matches!(
+            fields.events.as_slice(),
+            [
+                Event::BeginList(Some("missing"), 1),
+                Event::Value(None, ErrorValue::Code("c")),
+                Event::EndList,
+                Event::BeginList(Some("unexpected"), 2),
+                Event::Value(None, ErrorValue::Code("a")),
+                Event::Value(None, ErrorValue::Code("b")),
+                Event::EndList,
+            ]
+        ));
     }
 
     #[test]
@@ -3314,7 +3371,7 @@ mod tests {
         let err = check_ledger_sound(&ledger, "shacl", "json-schema")
             .expect_err("`not-a-real-code` is outside the declared profile");
         assert!(
-            err.contains("not-a-real-code"),
+            err.to_string().contains("not-a-real-code"),
             "error must name the offending code: {err}"
         );
     }

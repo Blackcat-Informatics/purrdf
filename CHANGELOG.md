@@ -8,6 +8,8 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Typed loss-ledger refusals (breaking Rust API):** Return owned completeness code lists and original borrowed soundness failures from loss-ledger checks. Projection, schema-import and LinkML refusals retain native loss evidence, with an explicit owned conversion for escaping callers.
+
 - **Extensible governors (breaking Rust API):** `ResourceDimension` and
   `GovernorParts` are non-exhaustive, dimension enumeration is a static slice,
   and request parts use public const construction. The evaluator shares the

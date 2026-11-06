@@ -174,11 +174,65 @@ pub struct ImportedShapes {
     pub losses: LossLedger,
 }
 
-purrdf_lex::message_error! {
-    /// A malformed, ambiguous, unsupported-resource, or internally inconsistent
-    /// schema import request.
-    #[derive(Debug, Clone, PartialEq, Eq)]
-    pub struct SchemaImportError, detail;
+/// A malformed, ambiguous, unsupported-resource, or internally inconsistent
+/// schema import request. Native loss evidence is retained beside its presentation.
+#[derive(Debug, Clone)]
+pub struct SchemaImportError {
+    detail: String,
+    cause: Option<Box<::purrdf_rdf::LossSoundnessError>>,
+}
+
+impl SchemaImportError {
+    /// An authored schema-import refusal with verbatim presentation.
+    pub fn new(detail: impl Into<String>) -> Self {
+        Self {
+            detail: detail.into(),
+            cause: None,
+        }
+    }
+
+    /// The original human-readable context, verbatim.
+    #[must_use]
+    pub fn detail(&self) -> &str {
+        &self.detail
+    }
+
+    fn native_cause(&self) -> Option<&(dyn purrdf_lex::error::NativeError + 'static)> {
+        self.cause.as_deref().map(|cause| cause as _)
+    }
+}
+
+impl From<::purrdf_rdf::LossSoundnessError<&str>> for SchemaImportError {
+    fn from(cause: ::purrdf_rdf::LossSoundnessError<&str>) -> Self {
+        Self {
+            detail: cause.to_string(),
+            cause: Some(Box::new(cause.into_owned())),
+        }
+    }
+}
+
+impl PartialEq for SchemaImportError {
+    fn eq(&self, other: &Self) -> bool {
+        self.detail == other.detail
+    }
+}
+impl Eq for SchemaImportError {}
+
+impl std::fmt::Display for SchemaImportError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.detail)
+    }
+}
+
+purrdf_hash::error_sources!(SchemaImportError, native native_cause);
+
+impl purrdf_lex::error::StructuredError for SchemaImportError {
+    purrdf_hash::error_visit! {
+        @record self { detail, cause } => "message-SchemaImportError" {
+            "detail" => Text(&self.detail),
+            "cause" => Value(self.native_cause().map_or(purrdf_lex::error::ErrorValue::Absent, |cause| purrdf_lex::error::ErrorValue::Cause(cause))),
+        }
+    }
 }
 
 /// Import one JSON Schema draft 2020-12 document as SHACL shapes.
@@ -373,7 +427,7 @@ impl<'a> ImportContext<'a> {
     }
 
     fn finish(self, model: SchemaImportModel) -> Result<ImportedShapes, SchemaImportError> {
-        check_ledger_sound(&self.losses, self.source, "shacl").map_err(SchemaImportError::new)?;
+        check_ledger_sound(&self.losses, self.source, "shacl").map_err(SchemaImportError::from)?;
         let mut shapes = Shapes {
             node_shapes: model.node_shapes,
             ..Shapes::default()

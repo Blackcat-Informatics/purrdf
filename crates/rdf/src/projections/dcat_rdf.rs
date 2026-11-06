@@ -264,7 +264,7 @@ pub fn project_dcat_rdf<D: DatasetView<ReadError = std::convert::Infallible> + S
         DcatRdfSource::Mapped(mapping) => {
             let projection = project_research_object(view, DCAT_PROFILE, mapping.dcat().common())?;
             check_ledger_sound(&projection.loss_ledger, "rdf-1.2-dataset", DCAT_PROFILE)
-                .map_err(ProjectionError::integrity)?;
+                .map_err(ProjectionError::from)?;
             let dataset = emit_mapped_dcat(&projection.model, mapping)?;
             serialize_description(
                 dataset,
