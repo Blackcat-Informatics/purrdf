@@ -3285,7 +3285,7 @@ mod tests {
         let retained = err.clone();
         drop(err);
         assert_eq!(retained.missing(), ["b", "c"]);
-        assert!(retained.unexpected().is_empty());
+        assert_eq!(retained.unexpected(), &[] as &[String]);
         assert_eq!(
             retained.to_string(),
             "loss ledger incomplete: expected code(s) [\"b\", \"c\"] were never recorded"
