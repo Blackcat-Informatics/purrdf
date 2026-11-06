@@ -495,15 +495,14 @@ enum LinkmlCause {
     Import(Box<crate::schema_import::SchemaImportError>),
 }
 
-impl LinkmlError {
-    /// An authored LinkML refusal with verbatim presentation.
-    pub fn new(detail: impl Into<String>) -> Self {
-        Self {
-            detail: detail.into(),
-            cause: None,
-        }
+purrdf_lex::constructors! {
+    impl LinkmlError {
+        /// An authored LinkML refusal with verbatim presentation.
+        pub fn new(detail) -> Self { cause: None };
     }
+}
 
+impl LinkmlError {
     /// The original human-readable context, verbatim.
     #[must_use]
     pub fn detail(&self) -> &str {

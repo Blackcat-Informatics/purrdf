@@ -182,15 +182,14 @@ pub struct SchemaImportError {
     cause: Option<Box<::purrdf_rdf::LossSoundnessError>>,
 }
 
-impl SchemaImportError {
-    /// An authored schema-import refusal with verbatim presentation.
-    pub fn new(detail: impl Into<String>) -> Self {
-        Self {
-            detail: detail.into(),
-            cause: None,
-        }
+purrdf_lex::constructors! {
+    impl SchemaImportError {
+        /// An authored schema-import refusal with verbatim presentation.
+        pub fn new(detail) -> Self { cause: None };
     }
+}
 
+impl SchemaImportError {
     /// The original human-readable context, verbatim.
     #[must_use]
     pub fn detail(&self) -> &str {
