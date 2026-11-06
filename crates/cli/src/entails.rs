@@ -294,6 +294,12 @@ pub(crate) fn run(
             source::effective_base(options.premise, native, options.base)?
         }
         SourceFormat::Pack | SourceFormat::Gts => None,
+        _ => {
+            return Err(format::unsupported_format(
+                premise_format,
+                "the premise input",
+            ));
+        }
     };
     let premise_iris: Vec<&str> = premise_base.as_deref().into_iter().collect();
     let imports = read_imports(&import_plan, options, canonical)?;

@@ -51,6 +51,15 @@ use purrdf_rdf::{SourceFormat, classify_source, strip_transport_suffix};
 use crate::cli::CliRdfFormat;
 use crate::error::CliError;
 
+/// Refuse a format introduced by a newer library until this CLI supports its routes.
+pub(crate) fn unsupported_format(format: SourceFormat, role: &str) -> CliError {
+    CliError::Usage(format!(
+        "{role} uses format `{}`, which this CLI does not support. Choose a supported \
+         native syntax or container, or upgrade the CLI to a version supporting this format",
+        format.token()
+    ))
+}
+
 /// Resolve a `--from`/`--to` choice plus a path into a [`SourceFormat`].
 ///
 /// Precedence: an explicit choice always wins. Otherwise a recognized gzip/zstd
@@ -214,8 +223,8 @@ impl<'a> BaseUse<'a> {
     /// Decided ENTIRELY by the two format-registry columns, so a newly registered syntax
     /// is classified by its own row rather than by a list kept here that someone would
     /// have to remember to extend.
-    fn consumes_base(self) -> bool {
-        match self.format {
+    fn consumes_base(self) -> Result<bool, CliError> {
+        Ok(match self.format {
             SourceFormat::Native(native) => match self.leg {
                 BaseLeg::Parse => native.admits_relative_iri(),
                 BaseLeg::Serialize => native.emits_base(),
@@ -223,7 +232,8 @@ impl<'a> BaseUse<'a> {
             // Both native containers store fully-resolved terms and have no relative-IRI
             // syntax, in either direction.
             SourceFormat::Pack | SourceFormat::Gts => false,
-        }
+            _ => return Err(unsupported_format(self.format, self.role)),
+        })
     }
 
     /// Why this leg cannot consume one, in the operator's vocabulary.
@@ -275,7 +285,14 @@ pub(crate) fn refuse_unconsumable_base(
     base: Option<&str>,
     legs: &[BaseUse<'_>],
 ) -> Result<(), CliError> {
-    if base.is_none() || legs.iter().copied().any(BaseUse::consumes_base) {
+    if base.is_none() {
+        return Ok(());
+    }
+    let mut consumes_base = false;
+    for leg in legs {
+        consumes_base |= leg.consumes_base()?;
+    }
+    if consumes_base {
         return Ok(());
     }
     let reasons = legs

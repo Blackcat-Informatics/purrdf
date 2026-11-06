@@ -13,6 +13,11 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   size-field bytes and native UTF-8 causes. Projection packages preserve that
   cause through structured inspection and the standard error source chain.
 
+- **Extensible format and glob refusals (breaking Rust API):** `SourceFormat`
+  and `purrdf_glob::SyntaxReason` are non-exhaustive. External matches need an
+  unsupported-case arm; the CLI refuses unknown source kinds rather than
+  routing them through an existing syntax or container.
+
 - **Extensible planner estimates (breaking Rust API):** `PlanEstimate` is
   non-exhaustive and constructed with `PlanEstimate::new(rows, peak_rows, columns)`.
   Its public fields, estimate semantics and EXPLAIN output remain unchanged.

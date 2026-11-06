@@ -52,8 +52,10 @@ impl purrdf_hash::error::StructuredError for IriComponent {
     }
 }
 
-/// A closed syntax refusal; offsets always refer to the original pattern bytes.
+/// A syntax refusal; offsets always refer to the original pattern bytes.
+/// New reasons may be added without changing existing patterns or refusal payloads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SyntaxReason {
     /// A backslash has no following scalar.
     TrailingEscape,
@@ -81,7 +83,7 @@ impl purrdf_hash::error::StructuredError for SyntaxReason {
 /// An original syntax or physical storage failure during compilation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompileError {
-    /// Invalid pattern, with the original byte offset and closed reason.
+    /// Invalid pattern, with the original byte offset and native reason.
     Syntax {
         /// Zero-based pattern byte offset.
         offset: usize,

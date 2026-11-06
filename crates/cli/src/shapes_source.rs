@@ -133,6 +133,12 @@ pub(crate) fn read_shapes_document(
                 loaded: base.into_iter().map(str::to_owned).collect(),
             });
         }
+        _ => {
+            return Err(crate::format::unsupported_format(
+                format,
+                "the shapes input",
+            ));
+        }
     };
     let (dataset, document_base, prefixes) = if native == NativeRdfFormat::Turtle {
         let bytes = source::read_bytes(path)?;
