@@ -242,7 +242,7 @@ fn physical_inventory_defers_rdf_admission_and_preserves_reserved_roles() {
         assert_eq!(artifact.role(), &role);
         assert_eq!(artifact.content(), b"invalid RDF");
     }
-    let input = SliceInventory::from_slice_dir(&dir, &test_vocab()).expect("physical slice");
+    let input = inventory.into_records().pop().expect("physical slice");
     let mut control =
         purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
     assert!(input.into_record(&mut control).is_err());
@@ -280,8 +280,9 @@ fn retained_inventory_admits_original_relative_iris_after_removal() {
         purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
     let expected = SliceCatalog::from_slice_dir(&dir, &test_vocab(), &mut control)
         .expect("direct semantic admission");
-    let input = SliceInventory::from_slice_dir(&dir, &test_vocab()).expect("retained inputs");
+    let inventory = SliceInventory::discover(tmp.path(), test_vocab()).expect("retained inputs");
     std::fs::remove_dir_all(&dir).expect("remove source tree");
+    let input = inventory.into_records().pop().expect("discovered slice");
     let admitted = input.into_record(&mut control).expect("retained admission");
     assert_eq!(admitted.manifest, expected.manifest);
     assert_eq!(admitted.artifacts, expected.artifacts);

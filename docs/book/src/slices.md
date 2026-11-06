@@ -22,7 +22,8 @@ described by a `manifest.ttl`:
   identity comes from the manifest, not the directory name.
 - **Physical inputs** — `SliceInventory::discover` validates required manifests
   and retains artifact roles, bytes, paths, raw digests and original RDF retrieval
-  IRIs without parsing or canonicalizing other RDF. `SliceInput::into_record`
+  IRIs without parsing or canonicalizing other RDF. `SliceInventory::into_records`
+  transfers the retained inputs without rereading files; `SliceInput::into_record`
   explicitly admits retained RDF bytes with caller-owned canonicalization control;
   invalid RDF or exhausted search remains an error. Physical inventory does not
   establish a semantic identity or replace catalog admission.

@@ -289,6 +289,11 @@ impl SliceInventory {
     pub fn records(&self) -> &[SliceInput] {
         &self.records
     }
+
+    /// Consume this inventory into its retained physical inputs for semantic admission.
+    pub fn into_records(self) -> Vec<SliceInput> {
+        self.records
+    }
 }
 
 /// A fully-loaded slice record: manifest view, manifest IR dataset, and artifact
