@@ -312,7 +312,7 @@ impl ProjectionPackage {
             ));
         }
         let bytes = crate::ustar::write_archive_borrowed(self.artifacts())
-            .map_err(ProjectionError::package)?;
+            .map_err(ProjectionError::from)?;
         debug_assert_eq!(bytes.len(), self.archive_bytes);
         Ok(bytes)
     }
@@ -334,7 +334,7 @@ impl ProjectionPackage {
         }
         let mut package = Self::new(limits);
         for member in crate::ustar::archive_members(bytes) {
-            let member = member.map_err(ProjectionError::package)?;
+            let member = member.map_err(ProjectionError::from)?;
             package.insert_borrowed(member.name, member.data)?;
         }
         if package.is_empty() {
@@ -456,6 +456,33 @@ mod tests {
         let decoded = ProjectionPackage::from_ustar(&archive, limits()).expect("decode");
         assert_eq!(decoded, package);
         assert_eq!(decoded.to_ustar().expect("rewrite"), archive);
+    }
+
+    #[test]
+    fn malformed_archive_keeps_the_original_native_refusal() {
+        let raw = crate::ustar::write_archive(&[("a.csv".to_owned(), b"body".to_vec())])
+            .expect("archive");
+        let error = ProjectionPackage::from_ustar(&raw[..700], limits())
+            .expect_err("incomplete member padding");
+        assert_eq!(error.kind(), super::super::ProjectionErrorKind::Package);
+        let cause = std::error::Error::source(&error)
+            .expect("native archive refusal")
+            .downcast_ref::<crate::ustar::UstarError>()
+            .expect("original USTAR error");
+        assert_eq!(
+            cause,
+            &crate::ustar::UstarError::TruncatedPadding {
+                offset: 516,
+                required: 508,
+                available: 184,
+            }
+        );
+        let capture = purrdf_testkit::error_capture::Capture::read(&error).child("cause");
+        assert_eq!(capture.code, "ustar-truncated-padding");
+        assert!(matches!(
+            capture.field("available"),
+            purrdf_hash::error::ErrorValue::ByteCount(184)
+        ));
     }
 
     #[test]

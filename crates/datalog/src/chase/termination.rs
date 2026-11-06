@@ -18,6 +18,38 @@ use purrdf_lex::allocation::{Admission, Memory, Resident, StorageError};
 /// Version of the refined, frontier-dependent WA proof law.
 pub const WA_LAW_VERSION: u32 = 1;
 
+/// The sufficient termination criterion proved by native admission.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TerminationCriterion {
+    /// Constant-refined, frontier-dependent weak acyclicity.
+    WeaklyAcyclic,
+}
+
+impl TerminationCriterion {
+    /// Stable name of the criterion, independent of human presentation.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::WeaklyAcyclic => "weakly-acyclic",
+        }
+    }
+
+    /// Version of the evidence law this criterion currently proves.
+    #[must_use]
+    pub const fn law_version(self) -> u32 {
+        match self {
+            Self::WeaklyAcyclic => WA_LAW_VERSION,
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for TerminationCriterion {
+    purrdf_hash::error_visit! {
+        WeaklyAcyclic => "chase-criterion-weakly-acyclic" {},
+    }
+}
+
 /// Logical work ceiling for preparation or independent checking.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AnalysisLimits {
@@ -86,6 +118,7 @@ impl core::fmt::Display for TerminationViolation {
 
 /// No error variant is a termination certificate or a proof of nontermination.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum TerminationError {
     /// The sufficient WA criterion did not hold.
     Uncertified(TerminationViolation),
@@ -249,7 +282,7 @@ impl<A: Admission> WaCertificate<A> {
         match checked {
             Ok(verification) => Ok(PreparedChase {
                 program,
-                certificate: self,
+                certificate: ChaseCertificate { evidence: self },
                 verification,
             }),
             Err(original) => {
@@ -320,19 +353,73 @@ impl<A: Admission> WaCertificate<A> {
     }
 }
 
+/// Verified native admission evidence with its original allocation owner.
+/// The representation is private so additional criteria can retain their own
+/// evidence without changing the prepared executor's public certificate type.
+/// This owner neither clones evidence nor allocates another copy of it.
+pub struct ChaseCertificate<A: Admission = Resident> {
+    evidence: WaCertificate<A>,
+}
+purrdf_hash::debug_non_exhaustive!([A: Admission] ChaseCertificate<A> { evidence });
+
+impl<A: Admission> ChaseCertificate<A> {
+    /// The criterion independently checked before this owner was constructed.
+    #[must_use]
+    pub const fn criterion(&self) -> TerminationCriterion {
+        TerminationCriterion::WeaklyAcyclic
+    }
+
+    /// Version retained in the original admitted evidence.
+    #[must_use]
+    pub const fn law_version(&self) -> u32 {
+        self.evidence.law
+    }
+
+    /// Identity of the complete authored program admitted by this evidence.
+    #[must_use]
+    pub const fn program_identity(&self) -> &[u8; 32] {
+        self.evidence.program_identity()
+    }
+
+    /// Original production work and retained evidence layouts.
+    #[must_use]
+    pub const fn report(&self) -> AnalysisReport {
+        self.evidence.report()
+    }
+
+    /// Native summary carried by an execution admitted under this certificate.
+    #[must_use]
+    pub fn summary(&self) -> ChaseTermination {
+        self.evidence.summary()
+    }
+
+    /// Original WA positions and ranks, when this is a WA proof.
+    #[must_use]
+    pub const fn weakly_acyclic(&self) -> Option<&WaCertificate<A>> {
+        Some(&self.evidence)
+    }
+
+    /// Destroy evidence before returning its original allocation grant.
+    /// # Errors
+    /// Preserves the original account's refund refusal.
+    pub fn close(self) -> Result<(), TerminationError> {
+        self.evidence.close()
+    }
+}
+
 /// Immutable program and independently checked admission, reusable across source stores.
 /// Execution has the existing chase allocation/interrupt contract. Call [`Self::close`]
 /// when done to reclaim the original evidence grant with typed failure.
 pub struct PreparedChase<'p, A: Admission, const N: usize = 4> {
     program: &'p [DlClause<N>],
-    certificate: WaCertificate<A>,
+    certificate: ChaseCertificate<A>,
     verification: AnalysisReport,
 }
 purrdf_hash::debug_non_exhaustive!(['p, A: Admission, const N: usize] PreparedChase<'p, A, N> { certificate, verification });
 impl<A: Admission, const N: usize> PreparedChase<'_, A, N> {
     /// The original verified admission evidence.
     #[must_use]
-    pub const fn certificate(&self) -> &WaCertificate<A> {
+    pub const fn certificate(&self) -> &ChaseCertificate<A> {
         &self.certificate
     }
     /// Work spent checking, separate from production and execution work.
@@ -792,11 +879,23 @@ mod tests {
     #[test]
     fn prepared_admission_reuses_evidence_without_changing_chase_results() {
         let program = [rule()];
-        let prepared = certify(&program)
-            .unwrap()
+        let evidence = certify(&program).unwrap();
+        let original_work = evidence.report();
+        let original_program = *evidence.program_identity();
+        let original_summary = evidence.summary();
+        let original_positions = evidence.positions().as_ptr();
+        let original_ranks = evidence.ranks().as_ptr();
+        let prepared = evidence
             .prepare(&program, AnalysisLimits::default(), None)
             .unwrap();
-        let original_work = prepared.certificate().report();
+        let certificate = prepared.certificate();
+        assert_eq!(certificate.criterion(), TerminationCriterion::WeaklyAcyclic);
+        assert_eq!(certificate.law_version(), WA_LAW_VERSION);
+        assert_eq!(certificate.program_identity(), &original_program);
+        assert_eq!(certificate.summary(), original_summary);
+        let wa = certificate.weakly_acyclic().expect("prepared WA evidence");
+        assert_eq!(wa.positions().as_ptr(), original_positions);
+        assert_eq!(wa.ranks().as_ptr(), original_ranks);
         let check_work = prepared.verification();
         for _ in 0..2 {
             let reference = super::super::chase(&program, edb()).unwrap();
@@ -999,9 +1098,12 @@ mod tests {
             None,
         )
         .unwrap();
+        let prepared = evidence
+            .prepare(&program, AnalysisLimits::default(), None)
+            .unwrap();
         refuse.set(true);
         assert_eq!(
-            evidence.close(),
+            prepared.close(),
             Err(TerminationError::Storage(StorageError::AdmissionFailed))
         );
         assert!(retained.get() > 0);

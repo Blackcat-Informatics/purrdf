@@ -8,6 +8,14 @@ the PurRDF crates together when adopting them.
 
 ## At a glance
 
+The USTAR reader, borrowed-member iterator and writer functions now return
+`purrdf::ustar::UstarError` instead of `String`. Match its non-exhaustive variants
+with a wildcard or inspect the borrowed structured fields. Refusals retain their
+original byte offsets, declared and available lengths, raw size fields and native
+UTF-8 causes. Use `Display` only for presentation; projection-package failures
+also retain the archive error in their standard source chain. Current valid
+archive bytes and member ordering are unchanged.
+
 GTS transport decoding retains original native Zstandard frame errors through
 `TransportError::cause` and the standard I/O source chain. Inspect structured
 causes for decoder fields; `message()` remains an explicit presentation accessor.
@@ -664,6 +672,32 @@ values remain explicit; they do not retain the previous calculus identity.
 Target-specific capacity default constants have been removed.
 `EvalOptions::without_stored_fact_limit`,
 `without_join_step_limit` and `without_term_arena_limit` remove selected ceilings.
+
+## Prepared chase certificates
+
+`PreparedChase::certificate()` now borrows an opaque `ChaseCertificate`, which
+retains the original verified evidence and its allocation owner. Inspect its
+`criterion()`, `law_version()`, `program_identity()`, `report()` and `summary()`
+without copying the proof. `weakly_acyclic()` returns an optional borrowed
+`WaCertificate` for WA-specific positions and ranks. The `certify` and
+`certify_with` functions still produce owned WA evidence with independent
+verification before preparation. Explicit
+`close()` still owns evidence destruction and the original fallible grant refund.
+
+`ChaseTermination`, `TerminationError` and `TerminationCriterion` are
+non-exhaustive. Match known variants with a future-case arm; use the native
+criterion classification rather than treating an unfamiliar certified summary
+as an absent certificate. The implemented criterion remains weak acyclicity
+under law version 1; the chase, witnesses and model identities are unchanged.
+
+Entailment's `TerminationCertificate` retains the native certified summary and
+criterion and implements `Clone` without `Copy`. `ReasoningReport::termination()`
+returns `Option<&TerminationCertificate>`. Borrow it for inspection or explicitly
+clone it when an owned value is required. `positions()` and `existential_edges()`
+return `Option<usize>` because these counts belong to WA evidence. Structured
+inspection exposes the original `summary` and `criterion` records with the law
+version. Display delegates to the original native summary, and current WA report
+bytes remain unchanged. A lane that invents no term still reports no certificate.
 
 ## HNSW arithmetic refusals
 
