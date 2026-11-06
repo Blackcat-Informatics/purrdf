@@ -61,6 +61,14 @@ Existing format routing, glob matching and refusal payloads remain unchanged.
 Future language or compiled-plan laws must preserve existing valid patterns and
 readable 4.0 portable descriptions, or use explicitly selected versioned forms.
 
+## Planner estimates
+
+`PlanEstimate` is non-exhaustive. Replace struct literals with
+`PlanEstimate::new(rows, peak_rows, columns)`, and include `..` when destructuring
+the record. Its public fields remain readable. Row and peak-row estimates, and
+the cell estimate returned by `peak_cells()`, are predictions rather than
+guaranteed output bounds; their meaning and EXPLAIN representation are unchanged.
+
 ## Streaming GTS payloads
 
 `BlobPayload::bytes` now uses `BlobContent`: source-backed CBOR chunks,
