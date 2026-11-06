@@ -1416,17 +1416,18 @@ unsafe fn query_entailment_governed_entry(
                     },
                     error,
                 );
-                let message = error.to_string();
+                let diagnostic = error.into_diagnostic();
+                let message = diagnostic.message.clone();
                 PurrdfError::from_owned_diagnostic_with_message(
                     PurrdfStatus::QueryError,
-                    error.into_diagnostic(),
+                    diagnostic,
                     &message,
                 )
             }
             other => {
-                let message = other.to_string();
                 let diagnostic =
                     purrdf_validate::native_error::diagnostic("reasoning-refused", other, None);
+                let message = diagnostic.message.clone();
                 PurrdfError::from_owned_diagnostic_with_message(
                     PurrdfStatus::QueryError,
                     diagnostic,

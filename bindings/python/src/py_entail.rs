@@ -81,8 +81,8 @@ use crate::py_gts_dataset::PyRdfDataset;
 
 /// Preserve the original native request fields with the existing ValueError text.
 pub(crate) fn reasoning_error(error: ReasoningError) -> PyErr {
-    let message = error.to_string();
     let diagnostic = error.into_diagnostic();
+    let message = diagnostic.message.clone();
     Python::attach(|py| {
         crate::py_store::presentation::native_error_with_message(py, message, &diagnostic)
     })
@@ -802,11 +802,15 @@ pub(crate) fn entailment_import_map(
 fn premise_iri_refs(premise_iris: &[String]) -> PyResult<Vec<&str>> {
     let borrowed: Vec<&str> = premise_iris.iter().map(String::as_str).collect();
     check_premise_iris(&borrowed).map_err(|error| {
-        let message = error.to_string();
         let presentation = error.presentation();
         let diagnostic =
-            purrdf_validate::native_error::diagnostic("premise-iri-not-absolute", error, None)
-                .with_presentation(presentation);
+            purrdf_validate::native_error::diagnostic("premise-iri-not-absolute", error, None);
+        let diagnostic = if diagnostic.native_cause().is_some() {
+            diagnostic.with_presentation(presentation)
+        } else {
+            diagnostic
+        };
+        let message = diagnostic.message.clone();
         Python::attach(|py| {
             crate::py_store::presentation::native_error_with_message(py, message, &diagnostic)
         })

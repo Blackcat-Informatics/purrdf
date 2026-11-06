@@ -604,6 +604,7 @@ impl ReasoningError {
     }
 
     /// Retain an original native entailment failure under its actual request context.
+    #[must_use]
     pub fn entail(context: EntailContext, cause: EntailError) -> Self {
         Self::Entailment {
             context,

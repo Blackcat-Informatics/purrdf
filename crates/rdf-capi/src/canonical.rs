@@ -219,8 +219,7 @@ mod tests {
             assert!(native.contains("urn:purrdf:rdfc:private"), "{native}");
             let error_ref = error.as_ref().expect("native canonical refusal");
             assert!(matches!(
-                std::error::Error::source(error_ref)
-                    .and_then(|cause| cause.downcast_ref::<purrdf_core::CanonError>()),
+                native_canonical_cause(error_ref),
                 Some(purrdf_core::CanonError::ReservedVocabulary(_))
             ));
             purrdf_error_free(error);

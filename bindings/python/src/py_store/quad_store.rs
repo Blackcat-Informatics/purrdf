@@ -653,12 +653,10 @@ impl PyQuadStore {
                                 },
                                 error,
                             );
-                            let message = format!("entailment query failed: {error}");
-                            presentation::native_error_with_message(
-                                py,
-                                message,
-                                &error.into_diagnostic(),
-                            )
+                            let diagnostic = error.into_diagnostic();
+                            let message =
+                                format!("entailment query failed: {}", diagnostic.message);
+                            presentation::native_error_with_message(py, message, &diagnostic)
                         }
                         crate::ReasoningError::Query(diagnostic) => {
                             let message = format!(
@@ -667,12 +665,13 @@ impl PyQuadStore {
                             presentation::native_error_with_message(py, message, &diagnostic)
                         }
                         other => {
-                            let message = format!("entailment query failed: {other}");
                             let diagnostic = purrdf_validate::native_error::diagnostic(
                                 "reasoning-refused",
                                 other,
                                 None,
                             );
+                            let message =
+                                format!("entailment query failed: {}", diagnostic.message);
                             presentation::native_error_with_message(py, message, &diagnostic)
                         }
                     })

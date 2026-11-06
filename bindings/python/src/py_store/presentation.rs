@@ -101,9 +101,6 @@ pub(crate) fn native_error_with_message(
     message: String,
     diagnostic: &RdfDiagnostic,
 ) -> PyErr {
-    let message = diagnostic
-        .storage_error()
-        .map_or(message, |cause| cause.to_string());
     let refused = value_error(message, diagnostic);
     let attach = || -> PyResult<()> {
         if let Some(cause) = diagnostic.native_cause() {

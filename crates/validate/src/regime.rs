@@ -6106,6 +6106,11 @@ mod tests {
                 error.to_string().contains(needle),
                 "{error} (wanted {needle})"
             );
+            if needle == "@bogus" {
+                let fields = crate::native_error::to_json(&error).expect("native fixture fields");
+                assert_eq!(fields["fields"]["keyword"]["kind"].as_str(), Some("text"));
+                assert_eq!(fields["fields"]["keyword"]["value"].as_str(), Some("bogus"));
+            }
         }
     }
 

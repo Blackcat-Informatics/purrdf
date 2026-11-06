@@ -100,7 +100,7 @@ impl purrdf_hash::error::StructuredError for FixtureGrammarError {
         NestedCase { line } => "reasoning-fixture-nested-case" { "line" => Unsigned(*line as u128) },
         DuplicateCase { line, name } => "reasoning-fixture-duplicate-case" { "line" => Unsigned(*line as u128), "name" => Text(name) },
         MissingSection { line, section } => "reasoning-fixture-missing-section" { "line" => Unsigned(*line as u128), "section" => Code(section) },
-        Directive { line, keyword, misplaced } => "reasoning-fixture-directive" { "line" => Unsigned(*line as u128), "keyword" => Code(keyword), "misplaced" => Boolean(*misplaced) },
+        Directive { line, keyword, misplaced } => "reasoning-fixture-directive" { "line" => Unsigned(*line as u128), "keyword" => Text(keyword), "misplaced" => Boolean(*misplaced) },
         UnclosedCase { line, name } => "reasoning-fixture-unclosed-case" { "line" => Unsigned(*line as u128), "name" => Text(name) },
     }
 }

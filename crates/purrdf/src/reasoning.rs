@@ -52,7 +52,10 @@ use purrdf_sparql_eval::{
 /// let hierarchy = session.classify(&mut canonical).expect("decides"); // no second parse
 /// assert!(hierarchy.certificate().starts_with("purrdf-dl-certificate 1\n"));
 /// ```
-pub use purrdf_validate::regime::{ReasonerSession, ReasoningError as ReasoningRequestError};
+pub use purrdf_validate::regime::ReasonerSession;
+
+/// Owned failures of reasoning requests through the shared string boundary.
+pub use purrdf_validate::regime::ReasoningError as ReasoningRequestError;
 
 /// Entailment behavior applied before evaluating one SPARQL query.
 ///

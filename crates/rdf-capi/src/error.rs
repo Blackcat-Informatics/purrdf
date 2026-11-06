@@ -76,8 +76,9 @@ impl PurrdfError {
         } else {
             PurrdfStatus::ParseError
         };
-        let message = error.to_string();
-        Self::from_owned_diagnostic_with_message(code, error.into_diagnostic(), &message)
+        let diagnostic = error.into_diagnostic();
+        let message = diagnostic.message.clone();
+        Self::from_owned_diagnostic_with_message(code, diagnostic, &message)
     }
 
     /// Preserve the original native canonicalization cause while mapping host text.
@@ -115,12 +116,12 @@ impl PurrdfError {
     pub(crate) fn shapes(error: purrdf_validate::ShapesError) -> Self {
         match error {
             purrdf_validate::ShapesError::ImportArrays(cause) => {
-                let message = cause.to_string();
                 let diagnostic = purrdf_validate::native_error::diagnostic(
                     "import-array-refused",
                     cause,
                     cause.storage_error(),
                 );
+                let message = diagnostic.message.clone();
                 Self::from_owned_diagnostic_with_message(
                     PurrdfStatus::ParseError,
                     diagnostic,
@@ -128,9 +129,9 @@ impl PurrdfError {
                 )
             }
             purrdf_validate::ShapesError::ScopeBinding(cause) => {
-                let message = cause.to_string();
                 let diagnostic =
                     purrdf_validate::native_error::diagnostic("scope-binding-refused", cause, None);
+                let message = diagnostic.message.clone();
                 Self::from_owned_diagnostic_with_message(
                     PurrdfStatus::ParseError,
                     diagnostic,
@@ -259,9 +260,7 @@ impl PurrdfError {
             .transpose();
         let mut error = Self::from_diagnostic(code, &diagnostic);
         if let Some(message) = message {
-            error.message = diagnostic
-                .storage_error()
-                .map_or_else(|| sanitized(message), |cause| sanitized(&cause.to_string()));
+            error.message = sanitized(message);
         }
         match inspected {
             Ok(record) => {
@@ -486,6 +485,18 @@ mod tests {
         let expected = RdfDiagnostic::from(cause).to_json().to_string();
         assert_eq!(error.diagnostic.unwrap().to_str().unwrap(), expected);
         assert!(expected.contains("\"capacity\""));
+
+        let boundary = PurrdfError::from_owned_diagnostic_with_message(
+            PurrdfStatus::QueryError,
+            RdfDiagnostic::from(cause),
+            "entailment query failed: input\0unavailable",
+        );
+        assert_eq!(boundary.code, PurrdfStatus::StorageError);
+        assert_eq!(
+            boundary.message.to_str().unwrap(),
+            "entailment query failed: input unavailable"
+        );
+        assert_eq!(boundary.diagnostic.unwrap().to_str().unwrap(), expected);
     }
 
     #[test]

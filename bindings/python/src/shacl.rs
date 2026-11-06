@@ -2101,16 +2101,16 @@ create_exception!(
 fn shapes_error(py: Python<'_>, error: purrdf_validate::ShapesError) -> PyErr {
     match error {
         purrdf_validate::ShapesError::ScopeBinding(error) => {
-            let message = error.to_string();
             let diagnostic =
                 purrdf_validate::native_error::diagnostic("shapes-refused", error, None);
+            let message = diagnostic.message.clone();
             crate::py_store::presentation::native_error_with_message(py, message, &diagnostic)
         }
         purrdf_validate::ShapesError::ImportArrays(error) => {
-            let message = error.to_string();
             let storage = error.storage_error();
             let diagnostic =
                 purrdf_validate::native_error::diagnostic("shapes-refused", error, storage);
+            let message = diagnostic.message.clone();
             crate::py_store::presentation::native_error_with_message(py, message, &diagnostic)
         }
         purrdf_validate::ShapesError::Canonical(error) => {
