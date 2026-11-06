@@ -51,6 +51,7 @@ macro_rules! resident_clone {
 /// | `fn name(text, at: usize) -> Self::Variant { .. };` | `Self::Variant { text: text.into(), at }` |
 /// | `fn name(text) -> Self;` | `Self(text.into())` |
 /// | `fn name(text) -> Self { .. };` | `Self { text: text.into() }` |
+/// | `fn name(text) -> Self { cause: None };` | `Self { text: text.into(), cause: None }` |
 /// | `fn name(text: Source) -> Self { .. };` | `Self { text: text.into() }` |
 ///
 /// In the brace forms the text parameter's name is its field's name, and every
@@ -147,6 +148,21 @@ macro_rules! constructors {
         $(#[$meta])*
         $vis fn $name($text: impl ::core::convert::Into<::std::string::String>) -> Self {
             Self::$variant($crate::__text_field!($text))
+        }
+        $crate::constructors!(@items $($rest)*);
+    };
+    (@items
+        $(#[$meta:meta])* $vis:vis fn $name:ident($text:ident) -> Self {
+            $($field:ident: $value:expr),+ $(,)?
+        };
+        $($rest:tt)*
+    ) => {
+        $(#[$meta])*
+        $vis fn $name($text: impl ::core::convert::Into<::std::string::String>) -> Self {
+            Self {
+                $text: $crate::__text_field!($text),
+                $($field: $value),+
+            }
         }
         $crate::constructors!(@items $($rest)*);
     };

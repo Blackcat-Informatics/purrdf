@@ -37,6 +37,13 @@ preserved `rememberEmptyGraphs` slot, and native code/location records on real
 JavaScript `Error` objects. Run only that named case for configured input.
 Native Rust owns YAML grammar, selection and resource-account correctness.
 
+The exact package case `configured Dataset serialization reuses compiled contexts`
+in `jsonld-configured.test.mjs` checks options-string transport and the compiled
+context class reference passed through wasm-bindgen to Dataset serialization.
+The direct and reusable-context routes must return the same bytes and retain the
+selected context. Run only that named case for these host-interface obligations.
+Native Rust owns scalar compaction and the serialization policy matrix.
+
 Native Rust owns general semantics, grammar, arithmetic, refusal, ownership and
 conformance. A WASM build, 32-bit value, shared test runner, or historical
 selection does not justify replaying an ordinary Rust suite on WASM.

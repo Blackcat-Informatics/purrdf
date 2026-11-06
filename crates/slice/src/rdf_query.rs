@@ -395,6 +395,16 @@ impl Dataset {
     /// buffer, or freshly patched manifest text that is not yet on disk).
     pub fn parse_file(bytes: &[u8], path: &Path) -> Result<Self, SliceError> {
         let base = crate::retrieval::retrieval_base_iri(path)?;
+        Self::parse_with_retained_base(bytes, path, &base)
+    }
+
+    /// Parse retained file bytes under the retrieval identity captured when they were read.
+    /// Shares the file media type and diagnostic context law with [`Self::parse_file`].
+    pub(crate) fn parse_with_retained_base(
+        bytes: &[u8],
+        path: &Path,
+        base: &purrdf_iri::BaseIri,
+    ) -> Result<Self, SliceError> {
         Self::parse(
             bytes,
             rdf_media_type_for_path(path),

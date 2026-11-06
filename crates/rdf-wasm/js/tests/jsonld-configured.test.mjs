@@ -15,7 +15,7 @@ test("configured Dataset serialization reuses compiled contexts", () => {
   const reused = dataset.serializeWithContext("jsonld", context);
   assert.equal(direct, reused);
   assert.equal(JSON.parse(direct)["@graph"][0]["@id"], "ex:alice");
-  assert.equal(JSON.parse(direct)["@graph"][0]["schema:name"]["@value"], "Alice");
+  assert.equal(JSON.parse(direct)["@graph"][0]["schema:name"], "Alice");
 });
 test("configured graph results and YAML schema headers use the same engine", () => {
   const dataset = Dataset.parse(SOURCE, "nquads");

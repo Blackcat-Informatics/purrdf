@@ -870,7 +870,7 @@ impl<'a> TermsProjector<'a> {
         self.record_quad_losses(&memberships)?;
         self.record_structural_losses()?;
         check_ledger_sound(&self.ledger, "rdf-1.2-dataset", CSVW_TERMS_PROFILE)
-            .map_err(ProjectionError::integrity)?;
+            .map_err(ProjectionError::from)?;
 
         let plan = CsvwWritePlan::new(
             self.config.metadata_path.clone(),

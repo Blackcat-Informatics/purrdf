@@ -6,7 +6,7 @@
 use super::context::is_control;
 use super::{
     CompiledJsonLdContext, JsonLdContainer, JsonLdNullable, JsonLdTermDefinition,
-    JsonLdTypeMapping, RdfDiagnostic, decode,
+    JsonLdTypeMapping, RdfDiagnostic, decode, ordered_object,
 };
 use purrdf_lex::allocation::{Ceiling, Memory};
 use purrdf_lex::json::{Object, Value};
@@ -157,17 +157,22 @@ fn run(
                 .transpose()?,
             memory,
         };
-        walk.push(Task::Expand(
-            Request {
-                raw: input,
-                property: None,
-                from_map: false,
-                root: true,
-                nest: false,
-            },
-            Rc::new(context.clone()),
-            None,
-        ))?;
+        walk.tasks
+            .try_push_admitted(
+                Task::Expand(
+                    Request {
+                        raw: input,
+                        property: None,
+                        from_map: false,
+                        root: true,
+                        nest: false,
+                    },
+                    Rc::new(context.clone()),
+                    None,
+                ),
+                walk.memory,
+            )
+            .map_err(RdfDiagnostic::from)?;
         // Every expansion/continuation produces one result. A parent consumes
         // exactly the children it scheduled; successful completion leaves one root.
         while let Some(task) = walk.tasks.pop() {
@@ -221,22 +226,8 @@ impl<'a> Walk<'a, '_, '_> {
         members.sort_unstable_by(|a, b| a.0.cmp(b.0));
         Ok(members)
     }
-    fn push(&mut self, task: Task<'a>) -> Result<(), RdfDiagnostic> {
-        self.tasks
-            .try_push_admitted(task, self.memory)
-            .map_err(Into::into)
-    }
-    fn result(&mut self, value: Value) -> Result<(), RdfDiagnostic> {
-        self.memory
-            .push(&mut self.results, value)
-            .map_err(Into::into)
-    }
     fn string(&mut self, text: &str) -> Result<Value, RdfDiagnostic> {
         Ok(Value::String(self.memory.string(text)?))
-    }
-    fn object(&self, mut members: Members) -> Value {
-        members.sort_unstable_by(|a, b| a.0.cmp(&b.0));
-        Value::Object(Object::from(members))
     }
     fn put(
         &mut self,
@@ -296,7 +287,7 @@ impl<'a> Walk<'a, '_, '_> {
     fn field(&mut self, key: &str, value: Value) -> Result<Value, RdfDiagnostic> {
         let mut members = Vec::new();
         self.put(&mut members, key, value, false)?;
-        Ok(self.object(members))
+        Ok(ordered_object(members))
     }
     fn step(&mut self, task: Task<'a>) -> Result<(), RdfDiagnostic> {
         match task {
@@ -304,8 +295,12 @@ impl<'a> Walk<'a, '_, '_> {
                 // This continuation brackets the complete depth-first subtree;
                 // its children share this walk and the same construction account.
                 self.frame = false;
-                self.push(Task::RestoreFrame)?;
-                self.push(Task::Expand(request, context, None))
+                self.tasks
+                    .try_push_admitted(Task::RestoreFrame, self.memory)
+                    .map_err(RdfDiagnostic::from)?;
+                self.tasks
+                    .try_push_admitted(Task::Expand(request, context, None), self.memory)
+                    .map_err(RdfDiagnostic::from)
             }
             Task::RestoreFrame => {
                 self.frame = true;
@@ -329,18 +324,30 @@ impl<'a> Walk<'a, '_, '_> {
                     self.append(&mut output, value)?;
                 }
                 if let Some(raw) = remaining.next() {
-                    self.push(Task::Elements {
-                        remaining,
-                        request,
-                        context: Rc::clone(&context),
-                        nest_type: nest_type.clone(),
-                        output,
-                        list,
-                        waiting: true,
-                    })?;
-                    self.push(Task::Expand(Request { raw, ..request }, context, nest_type))
+                    self.tasks
+                        .try_push_admitted(
+                            Task::Elements {
+                                remaining,
+                                request,
+                                context: Rc::clone(&context),
+                                nest_type: nest_type.clone(),
+                                output,
+                                list,
+                                waiting: true,
+                            },
+                            self.memory,
+                        )
+                        .map_err(RdfDiagnostic::from)?;
+                    self.tasks
+                        .try_push_admitted(
+                            Task::Expand(Request { raw, ..request }, context, nest_type),
+                            self.memory,
+                        )
+                        .map_err(RdfDiagnostic::from)
                 } else {
-                    self.result(output)
+                    self.memory
+                        .push(&mut self.results, output)
+                        .map_err(RdfDiagnostic::from)
                 }
             }
             Task::Property(raw, key, context) => self.property(raw, key, context),
@@ -354,13 +361,18 @@ impl<'a> Walk<'a, '_, '_> {
                     self.append(&mut result, value)?;
                 }
                 self.results.truncate(start);
-                self.result(result)
+                self.memory
+                    .push(&mut self.results, result)
+                    .map_err(RdfDiagnostic::from)
             }
             Task::Object(plan, start) => self.finish_object(plan, start),
             Task::Wrap { list, graph } => {
                 let value = self.results.pop().expect("wrapped child");
                 if value.is_null() {
-                    return self.result(value);
+                    return self
+                        .memory
+                        .push(&mut self.results, value)
+                        .map_err(RdfDiagnostic::from);
                 }
                 let value = if list {
                     if value.get("@list").is_some() {
@@ -384,7 +396,9 @@ impl<'a> Walk<'a, '_, '_> {
                 } else {
                     self.array(value)?
                 };
-                self.result(value)
+                self.memory
+                    .push(&mut self.results, value)
+                    .map_err(RdfDiagnostic::from)
             }
             Task::Inject(injection) => self.inject(injection),
         }
@@ -396,7 +410,10 @@ impl<'a> Walk<'a, '_, '_> {
         nest_type: Option<Context>,
     ) -> Result<(), RdfDiagnostic> {
         match request.raw {
-            Value::Null => self.result(Value::Null),
+            Value::Null => self
+                .memory
+                .push(&mut self.results, Value::Null)
+                .map_err(RdfDiagnostic::from),
             Value::Array(values) => {
                 let list = request
                     .property
@@ -404,20 +421,26 @@ impl<'a> Walk<'a, '_, '_> {
                     .is_some_and(|definition| {
                         definition.containers().contains(&JsonLdContainer::List)
                     });
-                self.push(Task::Elements {
-                    remaining: values.iter(),
-                    request,
-                    context,
-                    nest_type,
-                    output: Value::Array(Vec::new()),
-                    list,
-                    waiting: false,
-                })
+                self.tasks
+                    .try_push_admitted(
+                        Task::Elements {
+                            remaining: values.iter(),
+                            request,
+                            context,
+                            nest_type,
+                            output: Value::Array(Vec::new()),
+                            list,
+                            waiting: false,
+                        },
+                        self.memory,
+                    )
+                    .map_err(RdfDiagnostic::from)
             }
             Value::Object(object) => self.start_object(request, object, &context, nest_type),
-            _ if request.property.is_none() || request.property == Some("@graph") => {
-                self.result(Value::Null)
-            }
+            _ if request.property.is_none() || request.property == Some("@graph") => self
+                .memory
+                .push(&mut self.results, Value::Null)
+                .map_err(RdfDiagnostic::from),
             _ => {
                 let scoped = request
                     .property
@@ -431,7 +454,9 @@ impl<'a> Walk<'a, '_, '_> {
                     active,
                     request.property.and_then(|key| active.term(key)),
                 )?;
-                self.result(value)
+                self.memory
+                    .push(&mut self.results, value)
+                    .map_err(RdfDiagnostic::from)
             }
         }
     }
@@ -594,33 +619,48 @@ impl<'a> Walk<'a, '_, '_> {
                 if singleton_null(member.raw) {
                     // The framing token @null is grammar, not a user string in
                     // an ordinary document. Its typed marker is created later.
-                    self.push(Task::Expand(
-                        Request {
-                            raw: member.raw,
-                            property: Some("@default"),
-                            from_map: false,
-                            root: false,
-                            nest: false,
-                        },
-                        Rc::clone(&active),
-                        None,
-                    ))?;
+                    self.tasks
+                        .try_push_admitted(
+                            Task::Expand(
+                                Request {
+                                    raw: member.raw,
+                                    property: Some("@default"),
+                                    from_map: false,
+                                    root: false,
+                                    nest: false,
+                                },
+                                Rc::clone(&active),
+                                None,
+                            ),
+                            self.memory,
+                        )
+                        .map_err(RdfDiagnostic::from)?;
                 } else {
-                    self.push(Task::OrdinaryDefault(
-                        Request {
-                            raw: member.raw,
-                            property: Some("@default"),
-                            from_map: false,
-                            root: false,
-                            nest: false,
-                        },
-                        Rc::clone(&active),
-                    ))?;
+                    self.tasks
+                        .try_push_admitted(
+                            Task::OrdinaryDefault(
+                                Request {
+                                    raw: member.raw,
+                                    property: Some("@default"),
+                                    from_map: false,
+                                    root: false,
+                                    nest: false,
+                                },
+                                Rc::clone(&active),
+                            ),
+                            self.memory,
+                        )
+                        .map_err(RdfDiagnostic::from)?;
                 }
                 continue;
             }
             if !is_control(&member.name) {
-                self.push(Task::Property(member.raw, key, Rc::clone(&active)))?;
+                self.tasks
+                    .try_push_admitted(
+                        Task::Property(member.raw, key, Rc::clone(&active)),
+                        self.memory,
+                    )
+                    .map_err(RdfDiagnostic::from)?;
             } else {
                 let property = match member.name.as_str() {
                     "@included" => None,
@@ -632,32 +672,42 @@ impl<'a> Walk<'a, '_, '_> {
                     "@object" => Some("@object"),
                     _ => request.property,
                 };
-                self.push(Task::Expand(
-                    Request {
-                        raw: member.raw,
-                        property,
-                        from_map: false,
-                        root: false,
-                        nest: member.name == "@nest",
-                    },
-                    Rc::clone(&active),
-                    (member.name == "@nest").then(|| Rc::clone(&type_context)),
-                ))?;
+                self.tasks
+                    .try_push_admitted(
+                        Task::Expand(
+                            Request {
+                                raw: member.raw,
+                                property,
+                                from_map: false,
+                                root: false,
+                                nest: member.name == "@nest",
+                            },
+                            Rc::clone(&active),
+                            (member.name == "@nest").then(|| Rc::clone(&type_context)),
+                        ),
+                        self.memory,
+                    )
+                    .map_err(RdfDiagnostic::from)?;
             }
         }
         // Put the continuation below its children, retaining their original order.
         let children = members.iter().filter(|member| member.child).count();
-        self.push(Task::Object(
-            Plan {
-                members,
-                context: active,
-                type_context,
-                property: request.property,
-                nest: request.nest,
-                input_json,
-            },
-            start,
-        ))?;
+        self.tasks
+            .try_push_admitted(
+                Task::Object(
+                    Plan {
+                        members,
+                        context: active,
+                        type_context,
+                        property: request.property,
+                        nest: request.nest,
+                        input_json,
+                    },
+                    start,
+                ),
+                self.memory,
+            )
+            .map_err(RdfDiagnostic::from)?;
         self.tasks.reverse_top(children + 1);
         // reverse_top above yields continuation first followed by lexical children.
         // Reverse just the children to preserve the stack's execution order.
@@ -715,7 +765,7 @@ impl<'a> Walk<'a, '_, '_> {
                 self.put(&mut members, "@direction", value, false)?;
             }
         }
-        Ok(self.object(members))
+        Ok(ordered_object(members))
     }
     fn property(
         &mut self,
@@ -731,9 +781,12 @@ impl<'a> Walk<'a, '_, '_> {
             self.put(&mut members, "@value", value, false)?;
             let json = self.string("@json")?;
             self.put(&mut members, "@type", json, false)?;
-            let object = self.object(members);
+            let object = ordered_object(members);
             let value = self.array(object)?;
-            return self.result(value);
+            return self
+                .memory
+                .push(&mut self.results, value)
+                .map_err(RdfDiagnostic::from);
         }
         let contains = |container| {
             definition.is_some_and(|definition| definition.containers().contains(&container))
@@ -772,12 +825,15 @@ impl<'a> Walk<'a, '_, '_> {
                         let value = self.string(direction.as_str())?;
                         self.put(&mut members, "@direction", value, false)?;
                     }
-                    let object = self.object(members);
+                    let object = ordered_object(members);
                     self.append(&mut output, object)?;
                 }
             }
             self.memory.release_vec(languages)?;
-            return self.result(output);
+            return self
+                .memory
+                .push(&mut self.results, output)
+                .map_err(RdfDiagnostic::from);
         }
         let id = contains(JsonLdContainer::Id);
         let rdf_type = contains(JsonLdContainer::Type);
@@ -786,10 +842,13 @@ impl<'a> Walk<'a, '_, '_> {
         if (id || rdf_type || index)
             && let Some(entries) = raw.as_object()
         {
-            self.push(Task::Array {
+            let task = Task::Array {
                 start: self.results.len(),
                 list: false,
-            })?;
+            };
+            self.tasks
+                .try_push_admitted(task, self.memory)
+                .map_err(RdfDiagnostic::from)?;
             let entries = self.ordered_members(entries)?;
             for &(index_key, values) in entries.iter().rev() {
                 let mut map_context = if (id || rdf_type) && context.has_previous_context() {
@@ -820,46 +879,66 @@ impl<'a> Walk<'a, '_, '_> {
                     } else {
                         None
                     };
-                    self.push(Task::Inject(Injection {
-                        term: key,
-                        key: index_key,
-                        index,
-                        id,
-                        rdf_type,
-                        graph,
-                        context: Rc::clone(&context),
-                    }))?;
-                    self.push(Task::Expand(
-                        Request {
-                            raw,
-                            property: Some(key),
-                            from_map: true,
-                            root: false,
-                            nest: false,
-                        },
-                        Rc::clone(&map_context),
-                        None,
-                    ))?;
+                    self.tasks
+                        .try_push_admitted(
+                            Task::Inject(Injection {
+                                term: key,
+                                key: index_key,
+                                index,
+                                id,
+                                rdf_type,
+                                graph,
+                                context: Rc::clone(&context),
+                            }),
+                            self.memory,
+                        )
+                        .map_err(RdfDiagnostic::from)?;
+                    self.tasks
+                        .try_push_admitted(
+                            Task::Expand(
+                                Request {
+                                    raw,
+                                    property: Some(key),
+                                    from_map: true,
+                                    root: false,
+                                    nest: false,
+                                },
+                                Rc::clone(&map_context),
+                                None,
+                            ),
+                            self.memory,
+                        )
+                        .map_err(RdfDiagnostic::from)?;
                 }
             }
             self.memory.release_vec(entries)?;
             return Ok(());
         }
-        self.push(Task::Wrap {
-            list: contains(JsonLdContainer::List),
-            graph,
-        })?;
-        self.push(Task::Expand(
-            Request {
-                raw,
-                property: Some(key),
-                from_map: false,
-                root: false,
-                nest: false,
-            },
-            context,
-            None,
-        ))
+        self.tasks
+            .try_push_admitted(
+                Task::Wrap {
+                    list: contains(JsonLdContainer::List),
+                    graph,
+                },
+                self.memory,
+            )
+            .map_err(RdfDiagnostic::from)?;
+        self.tasks
+            .try_push_admitted(
+                Task::Expand(
+                    Request {
+                        raw,
+                        property: Some(key),
+                        from_map: false,
+                        root: false,
+                        nest: false,
+                    },
+                    context,
+                    None,
+                ),
+                self.memory,
+            )
+            .map_err(RdfDiagnostic::from)
     }
     fn inject(&mut self, injection: Injection<'_>) -> Result<(), RdfDiagnostic> {
         let Injection {
@@ -905,7 +984,7 @@ impl<'a> Walk<'a, '_, '_> {
                             context,
                             context
                                 .term(term)
-                                .and_then(JsonLdTermDefinition::index_term)
+                                .and_then(JsonLdTermDefinition::index_lexical)
                                 .and_then(|term| context.term(term)),
                         )?;
                         raw.release_with_memory(self.memory)?;
@@ -931,14 +1010,16 @@ impl<'a> Walk<'a, '_, '_> {
                     }
                 }
             }
-            value = self.object(members);
+            value = ordered_object(members);
             self.append(&mut output, value)?;
         }
         values.release_with_memory(self.memory)?;
         if let Some(index) = index {
             self.memory.release_string(index)?;
         }
-        self.result(output)
+        self.memory
+            .push(&mut self.results, output)
+            .map_err(RdfDiagnostic::from)
     }
     #[expect(
         clippy::iter_with_drain,
@@ -1128,7 +1209,9 @@ impl<'a> Walk<'a, '_, '_> {
                     let direction = member
                         .raw
                         .as_str()
-                        .filter(|value| matches!(*value, "ltr" | "rtl"))
+                        .filter(|value| {
+                            purrdf_events::TextDirection::from_str_token(value).is_some()
+                        })
                         .ok_or_else(|| decode("@direction must be ltr or rtl"))?;
                     value = self.string(direction)?;
                 }
@@ -1251,12 +1334,15 @@ impl<'a> Walk<'a, '_, '_> {
             }
         }
         self.memory.release_vec(nests)?;
-        let mut value = self.object(output);
+        let mut value = ordered_object(output);
         if self.frame {
-            return self.result(value);
+            return self
+                .memory
+                .push(&mut self.results, value)
+                .map_err(RdfDiagnostic::from);
         }
         if plan.property == Some("@triple") {
-            // object() constructed this result from admitted unique members.
+            // ordered_object() constructed this result from admitted unique members.
             let object = value.as_object().unwrap();
             if object.len() != 3
                 || !["@subject", "@predicate", "@object"]
@@ -1344,7 +1430,9 @@ impl<'a> Walk<'a, '_, '_> {
                 value.release_with_memory(self.memory)?;
             }
         }
-        self.result(value)
+        self.memory
+            .push(&mut self.results, value)
+            .map_err(RdfDiagnostic::from)
     }
     fn reverse(
         &mut self,

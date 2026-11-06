@@ -57,6 +57,53 @@ impl purrdf_hash::error::StructuredError for ArtifactRole {
     }
 }
 
+/// A discovered physical artifact without a semantic identity claim.
+///
+/// These bytes and their raw digest describe the physical input only. They carry
+/// no claim that an RDF artifact parses or has a canonical semantic identity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArtifactInput {
+    /// What kind of file this is, using the catalog's artifact classification.
+    pub(crate) role: ArtifactRole,
+    /// Relative path within the slice directory (no `..`, no leading `/`).
+    pub(crate) logical_path: String,
+    /// MIME type derived from the artifact path.
+    pub(crate) media_type: String,
+    /// SHA-256 hex digest of the original file bytes.
+    pub(crate) raw_digest: String,
+    /// Original file bytes retained for explicit semantic admission.
+    pub(crate) content: Vec<u8>,
+    /// Original canonical retrieval identity for RDF, retained before admission.
+    pub(crate) rdf_base: Option<purrdf_iri::BaseIri>,
+}
+
+impl ArtifactInput {
+    /// The artifact role assigned by native physical discovery.
+    pub fn role(&self) -> &ArtifactRole {
+        &self.role
+    }
+
+    /// The relative path retained by native physical discovery.
+    pub fn logical_path(&self) -> &str {
+        &self.logical_path
+    }
+
+    /// The path-derived MIME type of the original artifact.
+    pub fn media_type(&self) -> &str {
+        &self.media_type
+    }
+
+    /// The SHA-256 digest of the original bytes.
+    pub fn raw_digest(&self) -> &str {
+        &self.raw_digest
+    }
+
+    /// The original bytes retained for explicit semantic admission.
+    pub fn content(&self) -> &[u8] {
+        &self.content
+    }
+}
+
 /// A single artifact within a slice: role, path, MIME type, and digests.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArtifactRecord {
@@ -72,10 +119,10 @@ pub struct ArtifactRecord {
     ///
     /// `None` means **this file is not RDF**, and nothing else. It is a discriminant on
     /// the artifact's KIND, never a report that computing the digest was attempted and
-    /// failed: discovery propagates every such failure instead
-    /// (`catalog::collect_artifacts`), so an RDF artifact always carries `Some`. That is
-    /// exactly the invariant `cache::phase_artifact_digest` relies on when it hard-fails
-    /// a semantics-sensitive phase whose artifact has no digest.
+    /// failed: semantic admission propagates every such failure instead
+    /// ([`crate::catalog::SliceInput::into_record`]), so an RDF artifact always carries
+    /// `Some`. That is exactly the invariant `cache::phase_artifact_digest` relies on
+    /// when it hard-fails a semantics-sensitive phase whose artifact has no digest.
     pub semantic_digest: Option<String>,
     /// The raw bytes of the artifact (content cache).
     pub content: Vec<u8>,

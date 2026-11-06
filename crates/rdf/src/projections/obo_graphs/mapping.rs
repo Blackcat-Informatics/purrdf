@@ -319,7 +319,7 @@ impl<'a> Projector<'a> {
         let _ = document.to_canonical_json(self.config)?;
         self.enforce_output_budget(&document)?;
         check_ledger_sound(&self.ledger, "rdf-1.2-dataset", "obo-graphs-0.3.2")
-            .map_err(ProjectionError::integrity)?;
+            .map_err(ProjectionError::from)?;
 
         Ok(OboGraphsProjection {
             document,

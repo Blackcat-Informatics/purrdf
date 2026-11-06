@@ -58,6 +58,7 @@ enum ProjectionCause {
     Storage(purrdf_lex::allocation::StorageError),
     Xsd(Box<purrdf_xsd::XsdError>),
     Ustar(crate::ustar::UstarError),
+    Loss(Box<purrdf_core::LossSoundnessError>),
 }
 
 impl ProjectionError {
@@ -111,6 +112,7 @@ impl ProjectionError {
             Some(ProjectionCause::Storage(error)) => Some(error),
             Some(ProjectionCause::Xsd(error)) => Some(error.as_ref()),
             Some(ProjectionCause::Ustar(error)) => Some(error),
+            Some(ProjectionCause::Loss(error)) => Some(error.as_ref()),
             None => None,
         }
     }
@@ -140,7 +142,10 @@ impl ProjectionError {
     pub const fn storage_error(&self) -> Option<purrdf_lex::allocation::StorageError> {
         match &self.cause {
             Some(ProjectionCause::Storage(error)) => Some(*error),
-            Some(ProjectionCause::Xsd(_) | ProjectionCause::Ustar(_)) | None => None,
+            Some(
+                ProjectionCause::Xsd(_) | ProjectionCause::Ustar(_) | ProjectionCause::Loss(_),
+            )
+            | None => None,
         }
     }
 }
@@ -178,6 +183,14 @@ impl From<crate::ustar::UstarError> for ProjectionError {
     fn from(error: crate::ustar::UstarError) -> Self {
         let mut result = Self::package(error.to_string());
         result.cause = Some(ProjectionCause::Ustar(error));
+        result
+    }
+}
+
+impl From<purrdf_core::LossSoundnessError<&str>> for ProjectionError {
+    fn from(error: purrdf_core::LossSoundnessError<&str>) -> Self {
+        let mut result = Self::integrity(error.to_string());
+        result.cause = Some(ProjectionCause::Loss(Box::new(error.into_owned())));
         result
     }
 }

@@ -143,8 +143,8 @@ fn frozen_corpus_round_trips_through_real_rdf_serialization_and_reparse() {
     }
     assert_eq!(
         purrdf_core::ContentDigest::of(&corpus_bytes).to_hex(),
-        "580633f8ca53cbdca3045ec708a9b9acf9631ff007457fb8878ab93454eee0fc",
-        "production RDF bytes must match the same native and wasm corpus golden"
+        "86ba6e23405fe3156b49624b8c77cd39c6bea2459f836dd2043122ac2135aeb2",
+        "production RDF bytes must match the frozen corpus golden"
     );
 }
 
