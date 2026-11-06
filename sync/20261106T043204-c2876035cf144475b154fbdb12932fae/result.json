@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1113-v4-api-generalize-prepared-chase",
+  "branch": "paudley/1113-v4-api-generalize-prepared-chase",
+  "base_ref": "refs/remotes/origin/main",
+  "head": "ca1944eb49f7e534c66d49d733eff4c75c0579f0",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/1113-v4-api-generalize-prepared-chase/.stage/v4-api-generalize-prepared-chase/sync/20261106T043204-c2876035cf144475b154fbdb12932fae",
+  "conflicts": [
+    "CHANGELOG.md"
+  ],
+  "status": "completed",
+  "base": "9fa1f4ce83b4aca745473645b590c63e42d1f9d4",
+  "merge_bases": [
+    "05d1e3550752d8f185710da0b00459651955d9f1"
+  ],
+  "merge_index": "c815b27729a3d7176c3783e69a36ead01791f0831b768d53231ef90c007a2f57",
+  "reused_paths": [],
+  "rerere_output": "Recorded preimage for 'CHANGELOG.md'\n",
+  "candidate_tree": "ca8197c94922625d8cc9bdb699c454b0c5658762",
+  "candidate_patch": "candidate-f0ecf54ec7ef42bdb4c5be4f1c8b638f.patch",
+  "validation_records": [
+    "validation-runs/20261106T032725-026f49a912/result.json",
+    "validation-runs/20261106T033432-8531e8657e/result.json",
+    "validation-runs/20261106T033819-0d1ffa79ca/result.json",
+    "validation-runs/20261106T035033-8c4f8249e5/result.json",
+    "validation-runs/20261106T040514-ebece8bbb6/result.json",
+    "validation-runs/20261106T041553-5754714163/result.json"
+  ],
+  "commit": "74f39930828a72b575e67d40134c3caddd6dfd6e",
+  "tree": "ca8197c94922625d8cc9bdb699c454b0c5658762"
+}
