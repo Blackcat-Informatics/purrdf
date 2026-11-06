@@ -420,7 +420,8 @@ pub fn provenance_from_xml(xml: &str, prefix: &str, iri: &str) -> Result<Provena
 #[must_use]
 pub fn governor_dimensions() -> Vec<String> {
     ResourceDimension::ALL
-        .into_iter()
+        .iter()
+        .copied()
         .map(|dimension| dimension.label().to_owned())
         .collect()
 }
@@ -579,16 +580,16 @@ impl GovernorArgs {
     /// These ceilings as the shared decoder's [`GovernorParts`]: a governed call from this
     /// package exposes an explicit no-ceiling choice.
     const fn parts(self) -> GovernorParts {
-        GovernorParts {
-            fuel: self.fuel,
-            max_answers: self.max_answers,
-            max_intermediate_cells: self.max_intermediate_cells,
-            max_scratch_bytes: self.max_scratch_bytes,
-            max_remote_requests: self.max_remote_requests,
-            max_udf_depth: self.max_udf_depth,
-            unlimited_udf_depth: self.unlimited_udf_depth,
-            no_ceiling: self.no_ceiling,
-        }
+        let mut parts = GovernorParts::new();
+        parts.fuel = self.fuel;
+        parts.max_answers = self.max_answers;
+        parts.max_intermediate_cells = self.max_intermediate_cells;
+        parts.max_scratch_bytes = self.max_scratch_bytes;
+        parts.max_remote_requests = self.max_remote_requests;
+        parts.max_udf_depth = self.max_udf_depth;
+        parts.unlimited_udf_depth = self.unlimited_udf_depth;
+        parts.no_ceiling = self.no_ceiling;
+        parts
     }
 
     /// These ceilings over the `METERED` base, with no stop signal attached yet, through
@@ -850,7 +851,8 @@ impl GovernorEvidence {
     #[must_use]
     pub fn consumed(&self) -> Vec<u64> {
         ResourceDimension::ALL
-            .into_iter()
+            .iter()
+            .copied()
             .map(|dimension| self.inner.consumed_in(dimension))
             .collect()
     }
@@ -863,7 +865,8 @@ impl GovernorEvidence {
     #[must_use]
     pub fn limits(&self) -> Vec<u64> {
         ResourceDimension::ALL
-            .into_iter()
+            .iter()
+            .copied()
             .map(|dimension| self.inner.limit_for(dimension))
             .collect()
     }

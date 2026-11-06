@@ -2752,7 +2752,7 @@ mod tests {
         // end), so the zero-mutation assertion above cannot by itself distinguish
         // "refused before evaluation" from "refused after the WHERE was fully
         // evaluated, metered, and then discarded". The governor ledger can.
-        for dimension in ResourceDimension::ALL {
+        for &dimension in ResourceDimension::ALL {
             assert_eq!(
                 state.consumed_in(dimension),
                 0,

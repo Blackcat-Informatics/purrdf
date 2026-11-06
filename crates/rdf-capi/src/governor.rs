@@ -253,7 +253,10 @@ pub enum PurrdfStopCause {
     Deadline = 2,
 }
 
-/// A fixed, named C representation of the kernel's eight-dimensional resource vector.
+/// A fixed projection of the kernel's eight currently named resource dimensions.
+///
+/// This layout remains fixed when the Rust vocabulary grows. New dimensions need
+/// an additional C evidence carrier retaining the complete native receipt.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PurrdfResourceVector {
@@ -294,7 +297,8 @@ impl PurrdfResourceVector {
 pub struct PurrdfGovernorTrip {
     /// [`PurrdfGovernorTripKind`] discriminant.
     pub kind: i32,
-    /// [`PurrdfResourceDimension`] discriminant, or `-1` for a stop/none/unknown.
+    /// [`PurrdfResourceDimension`] discriminant, or `-1` when absent or not represented
+    /// by this ABI. A budget/refusal still retains its kind and counts in that case.
     pub dimension: i32,
     /// [`PurrdfStopCause`] discriminant.
     pub stop_cause: i32,
@@ -369,7 +373,11 @@ fn expression_error_index(code: ErrorCode) -> usize {
     discriminant as usize
 }
 
-/// One governed execution's deterministic accounting receipt.
+/// One governed execution's deterministic accounting receipt projected to this ABI.
+///
+/// The consumed and limit vectors retain their eight fixed fields. Complete evidence
+/// for a future Rust dimension needs an additive carrier owning the native receipt;
+/// the projected fields cannot recover measurements that they do not represent.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PurrdfGovernorEvidence {
@@ -428,26 +436,24 @@ unsafe fn decode_parts(
             ));
         }
 
-        let parts = GovernorParts {
-            fuel: config.flag(PurrdfGovernorFlag::Fuel).then_some(config.fuel),
-            max_answers: config
-                .flag(PurrdfGovernorFlag::MaxAnswers)
-                .then_some(config.max_answers),
-            max_intermediate_cells: config
-                .flag(PurrdfGovernorFlag::MaxIntermediateCells)
-                .then_some(config.max_intermediate_cells),
-            max_scratch_bytes: config
-                .flag(PurrdfGovernorFlag::MaxScratchBytes)
-                .then_some(config.max_scratch_bytes),
-            max_remote_requests: config
-                .flag(PurrdfGovernorFlag::MaxRemoteRequests)
-                .then_some(config.max_remote_requests),
-            max_udf_depth: config
-                .flag(PurrdfGovernorFlag::MaxUdfDepth)
-                .then_some(config.max_udf_depth),
-            unlimited_udf_depth: config.flag(PurrdfGovernorFlag::UnlimitedUdfDepth),
-            no_ceiling: false,
-        };
+        let mut parts = GovernorParts::new();
+        parts.fuel = config.flag(PurrdfGovernorFlag::Fuel).then_some(config.fuel);
+        parts.max_answers = config
+            .flag(PurrdfGovernorFlag::MaxAnswers)
+            .then_some(config.max_answers);
+        parts.max_intermediate_cells = config
+            .flag(PurrdfGovernorFlag::MaxIntermediateCells)
+            .then_some(config.max_intermediate_cells);
+        parts.max_scratch_bytes = config
+            .flag(PurrdfGovernorFlag::MaxScratchBytes)
+            .then_some(config.max_scratch_bytes);
+        parts.max_remote_requests = config
+            .flag(PurrdfGovernorFlag::MaxRemoteRequests)
+            .then_some(config.max_remote_requests);
+        parts.max_udf_depth = config
+            .flag(PurrdfGovernorFlag::MaxUdfDepth)
+            .then_some(config.max_udf_depth);
+        parts.unlimited_udf_depth = config.flag(PurrdfGovernorFlag::UnlimitedUdfDepth);
 
         let cancellation = if config.flag(PurrdfGovernorFlag::Cancellation) {
             if config.cancellation.is_null() {
@@ -544,6 +550,7 @@ fn encode_dimension(dimension: ResourceDimension) -> i32 {
         ResourceDimension::UdfDepth => PurrdfResourceDimension::UdfDepth as i32,
         ResourceDimension::Pages => PurrdfResourceDimension::Pages as i32,
         ResourceDimension::Bytes => PurrdfResourceDimension::Bytes as i32,
+        _ => -1,
     }
 }
 

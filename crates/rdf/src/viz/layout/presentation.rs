@@ -11,10 +11,10 @@ use super::{
 };
 use crate::viz::presentation::{interaction_values, presentation_error, scene_node};
 use crate::viz::{
-    VizBoundaryPort, VizComponent, VizError, VizInteractionLayout, VizLayout, VizLayoutLabel,
-    VizLayoutOptions, VizMode, VizParticipantLayout, VizPoint, VizPresentationFrame,
-    VizPresentationIssue, VizPresentationLayout, VizPresentedScene, VizProjection, VizRect,
-    VizRegionKind, VizScenario, VizScene, VizSceneLabel,
+    VizBoundaryPort, VizComponent, VizError, VizInteractionLayout, VizLayout, VizLayoutError,
+    VizLayoutLabel, VizLayoutOptions, VizMode, VizParticipantLayout, VizPoint,
+    VizPresentationFrame, VizPresentationIssue, VizPresentationLayout, VizPresentedScene,
+    VizProjection, VizRect, VizRegionKind, VizScenario, VizScene, VizSceneLabel,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -32,7 +32,7 @@ fn coordinate(value: i64) -> Result<i32, VizError> {
         });
     }
     i32::try_from(value)
-        .map_err(|_| VizError::Layout("presentation coordinate cannot be represented".to_owned()))
+        .map_err(|cause| VizError::Layout(VizLayoutError::Coordinate { value, cause }))
 }
 
 fn add(a: i32, b: i32) -> Result<i32, VizError> {
@@ -216,10 +216,11 @@ fn compound(
         for (child, parent) in &parents {
             if parent == scope {
                 let child_layout = &local[child];
-                let declaration = components
-                    .iter()
-                    .find(|c| &c.id == child)
-                    .ok_or_else(|| VizError::Layout("component declaration absent".to_owned()))?;
+                let declaration = components.iter().find(|c| &c.id == child).ok_or_else(|| {
+                    VizError::Layout(VizLayoutError::MissingComponentDeclaration {
+                        component: child.clone(),
+                    })
+                })?;
                 let label_width =
                     presentation_measure(&declaration.label.text, options.max_node_width).0;
                 nodes.insert(
@@ -266,7 +267,9 @@ fn compound(
         for (id, rect) in &current.layout.positions {
             if let Some(child) = id.strip_prefix("present-component-") {
                 let c = components.iter().find(|c| c.id == child).ok_or_else(|| {
-                    VizError::Layout("component geometry lost its declaration".to_owned())
+                    VizError::Layout(VizLayoutError::ComponentDeclarationLost {
+                        component: id.clone(),
+                    })
                 })?;
                 let outer = translate_rect(*rect, dx, dy)?;
                 let label_rect = VizRect {
@@ -295,7 +298,7 @@ fn compound(
             } else {
                 rects.insert(id.clone(), translate_rect(*rect, dx, dy)?);
                 let rank = current.layout.ranks.get(id).copied().ok_or_else(|| {
-                    VizError::Layout(format!("component layout omitted rank for {id}"))
+                    VizError::Layout(VizLayoutError::ComponentRankMissing { node: id.clone() })
                 })?;
                 ranks.insert(id.clone(), (0, rank));
             }
@@ -374,9 +377,12 @@ fn place_anchor_ownership(
             let mut to = ancestry(&endpoint_work_id(&edge.target), owners, parents);
             let mut common = String::new();
             while from.last().is_some() && from.last() == to.last() {
-                common = from
-                    .pop()
-                    .ok_or_else(|| VizError::Layout("anchor ancestry became empty".to_owned()))?;
+                common = from.pop().ok_or_else(|| {
+                    VizError::Layout(VizLayoutError::EmptyAnchorAncestry {
+                        edge: edge.id.clone(),
+                        anchor: anchor.id.clone(),
+                    })
+                })?;
                 to.pop();
             }
             let id = anchor_work_id(&edge.id, &anchor.id);
@@ -390,7 +396,9 @@ fn place_anchor_ownership(
         }
     }
     Err(VizError::Layout(
-        "statement-anchor containment did not reach a stable common ancestor".to_owned(),
+        VizLayoutError::UnstableAnchorContainment {
+            edges: scene.edges.len(),
+        },
     ))
 }
 
@@ -412,11 +420,21 @@ fn boundary_routes(
         let target = endpoint_work_id(&edge.target);
         let start = rects
             .get(&source)
-            .ok_or_else(|| VizError::Layout("missing compound source".to_owned()))?
+            .ok_or_else(|| {
+                VizError::Layout(VizLayoutError::MissingCompoundSource {
+                    edge: edge.id.clone(),
+                    source: source.clone(),
+                })
+            })?
             .center();
         let end = rects
             .get(&target)
-            .ok_or_else(|| VizError::Layout("missing compound target".to_owned()))?
+            .ok_or_else(|| {
+                VizError::Layout(VizLayoutError::MissingCompoundTarget {
+                    edge: edge.id.clone(),
+                    target: target.clone(),
+                })
+            })?
             .center();
         let mut from = ancestry(&source, owners, parents);
         let mut to = ancestry(&target, owners, parents);
@@ -625,9 +643,13 @@ fn scenario_layout(
                 if region {
                     let r = &s.regions[index];
                     let depth = path.matches('.').count();
-                    let indent = i32::try_from(depth)
-                        .map_err(|_| VizError::Layout("region depth overflow".to_owned()))?
-                        * 8;
+                    let indent = i32::try_from(depth).map_err(|cause| {
+                        VizError::Layout(VizLayoutError::RegionDepth {
+                            region: r.id.clone(),
+                            depth,
+                            cause,
+                        })
+                    })? * 8;
                     let mut label = r.label.clone();
                     label.text = format!("{} — {}", region_name(r.kind), label.text);
                     label.full_text = format!("{} — {}", region_name(r.kind), label.full_text);
@@ -664,11 +686,17 @@ fn scenario_layout(
                 } else {
                     let interaction = &s.interactions[index];
                     let (_, _, predicate) = interaction_values(model, &interaction.binding)?;
-                    let predicate = model
-                        .terms
-                        .iter()
-                        .find(|t| t.id == predicate)
-                        .ok_or_else(|| VizError::Layout("scenario predicate absent".to_owned()))?;
+                    let predicate =
+                        model
+                            .terms
+                            .iter()
+                            .find(|t| t.id == predicate)
+                            .ok_or_else(|| {
+                                VizError::Layout(VizLayoutError::MissingScenarioPredicate {
+                                    interaction: interaction.id.clone(),
+                                    predicate: predicate.0.clone(),
+                                })
+                            })?;
                     let mut label = interaction
                         .label
                         .clone()
@@ -718,10 +746,11 @@ fn scenario_layout(
         }
     }
     for frame in &mut geometry.regions {
-        let region_id = frame
-            .id
-            .strip_prefix("present-region-")
-            .ok_or_else(|| VizError::Layout("region geometry lost its identity".to_owned()))?;
+        let region_id = frame.id.strip_prefix("present-region-").ok_or_else(|| {
+            VizError::Layout(VizLayoutError::RegionIdentityLost {
+                frame: frame.id.clone(),
+            })
+        })?;
         let mut bindings = BTreeSet::new();
         for interaction in &s.interactions {
             let mut parent = interaction.region.as_deref();

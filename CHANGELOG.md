@@ -13,6 +13,12 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   reader. This corrects the emitted type-entry bytes; the untyped expanded byte
   baseline is unchanged.
 
+- **Extensible governors (breaking Rust API):** `ResourceDimension` and
+  `GovernorParts` are non-exhaustive, dimension enumeration is a static slice,
+  and request parts use public const construction. The evaluator shares the
+  Core dimension index; current labels, defaults, accounting and the fixed C
+  projection remain unchanged.
+
 - **Typed skipped-query diagnostics (breaking Rust API):** slice ownership
   diagnostics retain original UTF-8 and SPARQL errors through
   `QueryArtifactError`. `OwnershipDiagnostic` is non-exhaustive; malformed query
@@ -92,6 +98,12 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 - **Query-only bottom properties:** native axiom refutations install the same
   empty-role law as ontology parsing. Querying an unmentioned bottom object
   property now preserves its empty extension and native proof origin.
+
+- **Native import and proof refusals (breaking import error payload):**
+  `ImportKeyError` is non-exhaustive and retains the original `IriError` in
+  `NotAbsolute.reason`. Its native source and structured fields preserve the
+  original key. `DlProofError` exposes its native proof evidence through borrowed
+  inspection without changing proof bytes, calculus identities or decisions.
 
 - **Certified direct OWL answers (breaking Rust API and incomplete outcomes):**
   direct class subsumptions and most-specific types are read from the certified
@@ -235,6 +247,16 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   remain unchanged.
 
 ### Breaking Changes
+
+- **Typed visualization refusals:** `VizError::Layout` owns a non-exhaustive
+  `VizLayoutError` with original identities, geometry and arithmetic operands.
+  Construct presentation refusals through `VizPresentationError::new` and use
+  borrowed field accessors; `VizPresentationIssue` is non-exhaustive. Navigation
+  retains native IRI failures through direct and nested JSON callers. Shared
+  record decoding carries supplemental native causes without changing its
+  pointer, message, compatibility equality or original record-account ownership;
+  `DecodeReason` is non-exhaustive. Successful output and refusal order are
+  unchanged.
 
 - **Canonical reserved-vocabulary refusals:** `ReservedVocabulary` lends its
   original IRI and position through `iri()` and `position()`; clones share the
@@ -1671,6 +1693,15 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 - **rdf:** Serializing a named graph the dataset does not contain
   (`SerializeGraph::Named` with an absent name) now emits no rows. Previously it
   emitted the default graph's triples in place of the requested graph.
+- **Structured YAML refusals (breaking Rust API):** `ErrorKind` is
+  non-exhaustive and `Error::kind()` borrows owned context. Repeated keys retain
+  decoded text and original occurrences; disabled anchors and aliases, refused
+  escapes, unfinished quotes/flow collections and trailing content expose typed
+  context through native access and structured inspection. Both error types
+  lose `Copy`; successful parsing, parser messages and emitter bytes are unchanged.
+  Physical storage causes remain inspectable through the standard source chain;
+  shared YAML host adapters now classify those failures as storage refusals.
+
 - **rdf:** Declared empty named graphs survive JSON-LD, YAML-LD and TriX, as
   they already did in TriG. The JSON-LD and YAML-LD writers emit
   `{"@id": g, "@graph": []}` and their readers declare such a graph; the TriX

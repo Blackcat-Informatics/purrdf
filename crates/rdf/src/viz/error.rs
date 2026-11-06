@@ -10,8 +10,8 @@ use purrdf_hash::error::{ErrorValue, StructuredError};
 use purrdf_lex::json::record::DecodeError;
 
 use super::{
-    VizPredicateError, VizPresentationError, VizPresentationIssue, VizSceneError, VizSpecError,
-    VizStatementId, VizTermId, VizVocabularyError,
+    VizLayoutError, VizPredicateError, VizPresentationError, VizPresentationIssue, VizSceneError,
+    VizSpecError, VizStatementId, VizTermId, VizVocabularyError,
 };
 
 /// The original sorted candidate identities for an ambiguous focus selector.
@@ -107,13 +107,15 @@ pub enum VizError {
     /// A renderer-neutral scene is structurally invalid.
     Scene(VizSceneError),
     /// Deterministic layout could not satisfy its structural invariants.
-    Layout(String),
+    Layout(VizLayoutError),
     /// Original XML character refusal from SVG serialization.
     Serialize(InvalidXmlChar),
     /// Original native JSON record refusal and private diagnostic fields.
     Decode(DecodeError),
     /// A caller-owned presentation instruction is invalid or unsupported.
     Presentation(VizPresentationError),
+    /// Physical refusal while retaining an original native diagnostic cause.
+    Storage(purrdf_lex::allocation::StorageError),
 }
 
 impl fmt::Display for VizError {
@@ -133,7 +135,7 @@ impl fmt::Display for VizError {
             Self::InvalidVocabulary(cause) => cause.fmt(f),
             Self::InvalidSpec(cause) => cause.fmt(f),
             Self::Scene(cause) => cause.fmt(f),
-            Self::Layout(message) => f.write_str(message),
+            Self::Layout(cause) => cause.fmt(f),
             Self::InvalidPredicate(cause) => cause.fmt(f),
             Self::UnknownFocus(focus) => {
                 write!(
@@ -146,6 +148,7 @@ impl fmt::Display for VizError {
             Self::Serialize(cause) => cause.fmt(f),
             Self::Decode(cause) => write!(f, "visualization JSON: {cause}"),
             Self::Presentation(cause) => cause.fmt(f),
+            Self::Storage(cause) => cause.fmt(f),
         }
     }
 }
@@ -158,9 +161,11 @@ purrdf_hash::error_sources!(
     AmbiguousFocus,
     IdCollision,
     Scene,
+    Layout,
     Serialize,
     Decode,
-    Presentation
+    Presentation,
+    Storage
 );
 
 impl StructuredError for VizError {
@@ -177,10 +182,11 @@ impl StructuredError for VizError {
         AmbiguousFocus(cause) => "rdf-viz-ambiguous-focus" { "cause" => Cause(cause) },
         IdCollision(cause) => "rdf-viz-identity-collision" { "cause" => Cause(cause) },
         Scene(cause) => "rdf-viz-scene" { "cause" => Cause(cause) },
-        Layout(message) => "rdf-viz-layout" { "message" => Message(message) },
+        Layout(cause) => "rdf-viz-layout" { "cause" => Cause(cause) },
         Serialize(cause) => "rdf-viz-xml" { "cause" => Cause(cause) },
         Decode(cause) => "rdf-viz-json-decode" { "cause" => Cause(cause) },
         Presentation(cause) => "rdf-viz-presentation" { "cause" => Cause(cause) },
+        Storage(cause) => "rdf-viz-storage" { "cause" => Cause(cause) },
     }
 }
 
@@ -194,11 +200,16 @@ impl fmt::Display for VizPresentationError {
     }
 }
 
-impl std::error::Error for VizPresentationError {}
+impl std::error::Error for VizPresentationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.native_cause()
+            .map(|cause| cause as &dyn std::error::Error)
+    }
+}
 
 impl StructuredError for VizPresentationError {
     purrdf_hash::error_visit! {
-        @record self { issue, instruction, message } => "rdf-viz-presentation-refusal" {
+        @record self { issue, instruction, message, native_cause } => "rdf-viz-presentation-refusal" {
             "issue" => Code(match self.issue {
                 VizPresentationIssue::Binding => "binding",
                 VizPresentationIssue::Containment => "containment",
@@ -208,6 +219,7 @@ impl StructuredError for VizPresentationError {
                 VizPresentationIssue::Export => "export",
             }),
             "instruction" => Text(&self.instruction), "message" => Message(&self.message),
+            "native_cause" => Value(self.native_cause().map_or(ErrorValue::Absent, |cause| ErrorValue::Cause(cause))),
         }
     }
 }

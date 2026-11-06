@@ -228,7 +228,7 @@ fn forked_high_cost_rows_stop_with_bounded_workspace_and_work() {
             let visited = visits.load(Ordering::Relaxed);
             let observation = (
                 outcome.tripped(),
-                ResourceDimension::ALL.map(|dimension| outcome.evidence().consumed_in(dimension)),
+                outcome.evidence().consumed(),
                 format!("{outcome:?}"),
             );
             assert!(

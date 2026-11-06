@@ -967,7 +967,7 @@ fn an_ungoverned_update_is_the_execution_it_was_before_governors_existed() {
         "governing a request with no ceilings changed what it did"
     );
 
-    for dimension in ResourceDimension::ALL {
+    for &dimension in ResourceDimension::ALL {
         // The recursion guard carries a fixed build ceiling on every execution, governed or
         // not, so it is the one dimension whose *limit* is finite here; its consumption is
         // still zero because nothing recursed.

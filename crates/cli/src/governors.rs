@@ -165,16 +165,15 @@ impl GovernorFlags {
     /// A usage error naming both flags when `--no-ceiling` is given beside a numeric
     /// ceiling.
     pub(crate) fn to_governors(self) -> Result<QueryGovernors, CliError> {
-        let parts = GovernorParts {
-            fuel: self.fuel,
-            max_answers: self.max_answers,
-            max_intermediate_cells: self.max_intermediate_cells,
-            max_scratch_bytes: self.max_scratch_bytes,
-            max_remote_requests: self.max_remote_requests,
-            max_udf_depth: self.max_udf_depth,
-            unlimited_udf_depth: self.unlimited_udf_depth,
-            no_ceiling: self.no_ceiling,
-        };
+        let mut parts = GovernorParts::new();
+        parts.fuel = self.fuel;
+        parts.max_answers = self.max_answers;
+        parts.max_intermediate_cells = self.max_intermediate_cells;
+        parts.max_scratch_bytes = self.max_scratch_bytes;
+        parts.max_remote_requests = self.max_remote_requests;
+        parts.max_udf_depth = self.max_udf_depth;
+        parts.unlimited_udf_depth = self.unlimited_udf_depth;
+        parts.no_ceiling = self.no_ceiling;
         let stop = self
             .deadline
             .map(|budget| Arc::new(WallDeadline::after(budget)) as Arc<dyn StopSignal>);
@@ -324,7 +323,7 @@ pub(crate) fn render_trip(exhausted: &BudgetExhausted) -> String {
             let _ = writeln!(out, "barrier {}", barrier.operator());
         }
     }
-    for dimension in ResourceDimension::ALL {
+    for &dimension in ResourceDimension::ALL {
         let _ = writeln!(
             out,
             "consumed {} {}",
@@ -332,7 +331,7 @@ pub(crate) fn render_trip(exhausted: &BudgetExhausted) -> String {
             exhausted.evidence.consumed_in(dimension)
         );
     }
-    for dimension in ResourceDimension::ALL {
+    for &dimension in ResourceDimension::ALL {
         let _ = match named_limit(exhausted.evidence.limits(), dimension) {
             Some(limit) => writeln!(out, "limit {} {limit}", dimension.label()),
             None => writeln!(out, "limit {} unbounded", dimension.label()),
@@ -412,7 +411,7 @@ fn render_all_or_nothing_trip(
     let _ = writeln!(out, "tripped {}", tripped.label());
     let _ = writeln!(out, "detail {tripped}");
     let _ = writeln!(out, "{effect}");
-    for dimension in ResourceDimension::ALL {
+    for &dimension in ResourceDimension::ALL {
         let _ = writeln!(
             out,
             "consumed {} {}",
@@ -420,7 +419,7 @@ fn render_all_or_nothing_trip(
             evidence.consumed_in(dimension)
         );
     }
-    for dimension in ResourceDimension::ALL {
+    for &dimension in ResourceDimension::ALL {
         let _ = match named_limit(evidence.limits(), dimension) {
             Some(limit) => writeln!(out, "limit {} {limit}", dimension.label()),
             None => writeln!(out, "limit {} unbounded", dimension.label()),

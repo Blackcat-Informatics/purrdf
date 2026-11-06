@@ -140,7 +140,7 @@ pub(super) struct CoreNode {
 }
 pub(super) struct CoreMap {
     members: Vec<(String, CoreNode)>,
-    keys: OrderedTable<String, ()>,
+    keys: OrderedTable<String, usize>,
 }
 
 impl CoreBuilder {
@@ -431,7 +431,7 @@ impl Builder for CoreBuilder {
         _: usize,
         _: bool,
     ) -> Result<CoreNode, Refusal> {
-        while let Some((name, ())) = map.keys.pop_first() {
+        while let Some((name, _)) = map.keys.pop_first() {
             self.discard_text(name)?;
         }
         self.allocations
@@ -476,15 +476,22 @@ impl Builder for CoreBuilder {
         value: CoreNode,
         at: usize,
     ) -> Result<(), Refusal> {
-        if map.keys.get(&key).is_some() {
-            return Err((ErrorKind::DuplicateKey, at));
+        if let Some(&first) = map.keys.get(&key) {
+            return Err((
+                ErrorKind::DuplicateKey {
+                    key,
+                    first,
+                    repeated: at,
+                },
+                at,
+            ));
         }
         let indexed = self
             .allocations
             .string(&key)
             .map_err(|cause| self.storage(cause, at))?;
         self.allocations
-            .memory(|memory| map.keys.insert(indexed, (), memory))
+            .memory(|memory| map.keys.insert(indexed, at, memory))
             .map_err(|cause| self.storage(cause, at))?;
         self.allocations
             .push(&mut map.members, (key, value))

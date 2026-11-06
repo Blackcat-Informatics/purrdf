@@ -69,6 +69,37 @@ Existing format routing, glob matching and refusal payloads remain unchanged.
 Future language or compiled-plan laws must preserve existing valid patterns and
 readable 4.0 portable descriptions, or use explicitly selected versioned forms.
 
+## YAML reader refusals
+
+`purrdf_lex::yaml::ErrorKind` is non-exhaustive. Include a wildcard when matching
+it. Both `ErrorKind` and `Error` now own context and are no longer `Copy`;
+`Error::kind()` borrows the kind and `into_kind()` consumes the error. Move the
+original error through native and host wrappers instead of relying on copies.
+
+Repeated scalar-key failures retain the decoded key text and the first and
+repeated occurrence offsets. Lexical collection-key duplicates retain their
+original occurrence spans. Disabled anchor and alias failures distinguish the
+indicator and retain the name span, excluding that indicator. Unknown and cyclic
+aliases retain the alias occurrence's name span rather than the target's range.
+Escape failures retain their original escape span; unfinished quote, unfinished
+flow and trailing-content failures have stable native categories and ranges.
+`TrailingContext` distinguishes a completed node, document or explicit end marker.
+
+Every span refers to the original UTF-8 source, including stream offsets. Keep
+that source if its verbatim name or escape bytes are needed; failure construction
+does not allocate a second copy of lexical names. Decoded repeated-key text is
+owned by the error and remains available after the source is dropped. Borrowed
+structured inspection exposes these fields without rendering messages. Existing
+parser messages, refusal positions, successful values and emitter bytes are unchanged.
+
+Physical lexical allocation failures now expose their original storage cause
+through the standard source chain. The shared YAML source host adapter classifies
+these as `rdf-storage-refused` or `rdf-capacity-exhausted`, rather than
+`yaml-source-native`; the C transport returns `StorageError` rather than
+`ParseError`, and Python/JavaScript expose the corresponding storage diagnostic.
+Explicit configured allocation-limit refusals keep their existing classification.
+The separate JSON-LD adapter retains its `native-yaml-storage` code.
+
 ## Planner estimates
 
 `PlanEstimate` is non-exhaustive. Replace struct literals with
@@ -363,6 +394,21 @@ its `reason` field is a borrowed nested cause, and `at` retains the original byt
 offset. Native Unicode-escape and language-tag causes are also available through
 the standard error-source chain. Human messages and byte offsets are unchanged.
 
+## Native import and proof refusals
+
+`purrdf_core::imports::ImportKeyError` is non-exhaustive. Include a wildcard
+when matching it. `NotAbsolute.reason` now holds `Option<purrdf_iri::IriError>`
+instead of `Option<String>`; borrow that original cause or use its standard
+source chain and structured visitor. Relative references retain an absent parser
+cause. Existing empty-key, malformed-key and duplicate-key messages and ordering
+are unchanged, and cloning and equality preserve native error fields.
+
+`DlProofError` and its proof evidence support borrowed structured inspection,
+including original node identities, roles, witness atoms, alternatives, counts,
+source failures and canonicalization causes. Inspection preserves the original
+field and list ordering without rendering or cloning evidence. Proof encoding,
+calculus identities and decision rules are unchanged.
+
 ## Certified direct OWL answers
 
 Call `direct_subsumptions()` on `Certified<ClassHierarchy>` and `direct_types()`
@@ -568,13 +614,34 @@ Unicode scalar and relative byte offset, or private JSON pointer, reason,
 found/expected values and nested reader/storage causes. Standard error sources
 borrow those same owners. Clone and equality operate on the native fields.
 
-Every visualization-error variant reports its currently stored fields through
-the shared visitor. The existing `VizPresentationError` also supplies its own
-unchanged human presentation, standard error interface and structured issue,
-instruction and message. Remaining text/message payloads keep their current
-contents; inspection does not reconstruct operands already rendered by their
-producers. Parsing, escaping, successful SVG/JSON bytes and human messages are
-unchanged.
+`VizError::Layout` now owns a non-exhaustive `VizLayoutError` instead of a
+rendered string. Inspect its original node, edge, rank, component, anchor and
+parent identities, counts, rectangles, route points and arithmetic operands.
+Checked coordinate and region-depth conversions retain their original
+`TryFromIntError`. Layout errors and their geometry records support borrowed
+structured inspection and standard error sources.
+
+`VizPresentationIssue` is non-exhaustive. Replace `VizPresentationError` struct
+literals with `VizPresentationError::new(issue, instruction, message)` and field
+access with `issue()`, `instruction()` and `message()`. Navigation parsing keeps
+the original `IriError` through `native_cause()`, the shared visitor and standard
+source chain. Clones share that cause; compatibility equality still compares
+the original issue, instruction and message. Physical failure to retain a
+native cause returns `VizError::Storage` with the original `StorageError`.
+
+Navigation refusals nested in presentation JSON retain their native cause and
+RFC 6901 pointer through `DecodeError::native`. Record consumers can use
+`native_with_allocation` to admit presentation and pointers through their
+original `RecordAllocation`; the cause has its own independent Resident owner.
+`DecodeReason` is non-exhaustive and its borrowed `Native` case shares an already
+retained owner. Record equality still compares the original pointer, message
+and failure, independently of supplemental provenance. Genuine authored
+messages continue through `custom`; native presentation is exposed as
+`native_cause` rather than `external_message` during inspection. Physical
+retention or record admission failures keep the existing typed storage channel.
+
+Parsing, refusal priority, escaping, successful SVG/JSON bytes and human
+messages are unchanged.
 
 ## Visualization specification refusals
 
@@ -717,6 +784,25 @@ outer error code and exposes the failed operation, original operands, byte/count
 units and destination limit through its cause. Integer-conversion failures retain
 their original native source. Successful calculations, refusal order and human
 messages are unchanged.
+
+## Extensible governor dimensions and request parts
+
+`ResourceDimension` and `GovernorParts` are now non-exhaustive. Construct
+request parts with `GovernorParts::new()` or `Default::default()`, then assign
+the public settings you need. Unspecified settings retain the metered base and
+its logical UDF depth of 32; requesting no ceiling remains explicit.
+
+`ResourceDimension::ALL` is a static slice. Iterate by reference, or use
+`.iter().copied()` when values are needed. Use `ResourceDimension::index()`
+for this build's local counters. The index and `COUNT` are not persisted or
+wire identities; stable labels and explicit host mappings retain that role.
+Current dimension order, labels, accounting and refusal priority are unchanged.
+
+The C resource and evidence structs retain their eight named fields and stable
+discriminants. An unrepresented trip dimension is `-1`, with the original
+budget/refusal kind and counts retained. Complete future-dimensional evidence
+needs an additive native-owned carrier; the existing projection cannot recover
+measurements omitted from its fixed fields.
 
 ## Regime term arena controls
 

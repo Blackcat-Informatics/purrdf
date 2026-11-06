@@ -8,7 +8,7 @@ use super::{ErrorKind, Limits, read, read_with, write};
 use crate::json::{self, Object, Value};
 
 fn kind(text: &str) -> ErrorKind {
-    read(text).expect_err(text).kind()
+    read(text).expect_err(text).into_kind()
 }
 
 fn json(text: &str) -> Value {
@@ -401,7 +401,10 @@ fn a_repeated_key_is_refused_and_distinct_keys_are_accepted() {
         "a: 1\n\"a\": 2\n",
         "? a\n? a\n",
     ] {
-        assert_eq!(kind(bad), ErrorKind::DuplicateKey, "{bad:?}");
+        assert!(
+            matches!(kind(bad), ErrorKind::DuplicateKey { .. }),
+            "{bad:?}"
+        );
     }
     assert_eq!(
         read("a: 1\nb: {a: 2}\n").unwrap(),
@@ -475,8 +478,29 @@ fn malformed_structure_is_refused() {
     ] {
         assert!(read(bad).is_err(), "{bad:?}");
     }
-    assert_eq!(kind("*unknown\n"), ErrorKind::UnknownAlias);
-    assert_eq!(kind("a: \"\\ud800\"\n"), ErrorKind::Escape);
+    assert!(matches!(kind("*unknown\n"), ErrorKind::UnknownAlias { .. }));
+    assert!(matches!(kind("a: \"\\ud800\"\n"), ErrorKind::Escape { .. }));
+    // Exercise the production storage-refusal constructor without exhausting
+    // the process allocator. Host classification is checked at its own boundary.
+    let source = String::from("α\r\nfailed");
+    let original = crate::allocation::StorageError::AllocationFailed;
+    let refused = read::Error::storage(&source, None, original, 4);
+    drop(source);
+    assert_eq!(
+        (refused.offset(), refused.line(), refused.column()),
+        (4, 2, 1)
+    );
+    assert_eq!(
+        std::error::Error::source(&refused)
+            .unwrap()
+            .downcast_ref::<crate::allocation::StorageError>(),
+        Some(&original),
+    );
+    let captured = purrdf_testkit::error_capture::Capture::read(&refused);
+    assert_eq!(
+        captured.child("kind").child("cause").code,
+        "storage-allocation-failed"
+    );
 }
 
 #[test]
@@ -485,10 +509,10 @@ fn aliases_are_refused_when_off_and_read_when_on() {
         aliases: false,
         ..Limits::DEFAULT
     };
-    assert_eq!(
-        read_with("a: &x 1\nb: *x\n", off).unwrap_err().kind(),
-        ErrorKind::Alias
-    );
+    assert!(matches!(
+        read_with("a: &x 1\nb: *x\n", off).unwrap_err().into_kind(),
+        ErrorKind::Alias { .. }
+    ));
     assert_eq!(
         read_with("a: 1\nb: '&x *x'\n", off).unwrap(),
         json(r#"{"a":1,"b":"&x *x"}"#)
@@ -543,7 +567,7 @@ fn the_depth_cap_accepts_n_collections_and_refuses_n_plus_one() {
         for build in [flow, block] {
             assert!(read_with(&build(cap), limits).is_ok(), "{:?}", build(cap));
             assert_eq!(
-                read_with(&build(cap + 1), limits).unwrap_err().kind(),
+                read_with(&build(cap + 1), limits).unwrap_err().into_kind(),
                 ErrorKind::Depth { limit: cap }
             );
         }
