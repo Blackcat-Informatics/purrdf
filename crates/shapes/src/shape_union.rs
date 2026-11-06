@@ -15,6 +15,9 @@
 //!    hand-written ones, so their absence would silently stop enforcing those constraints);
 //! 3. every `slices/*/*/shapes.ttl` (sorted) — exactly two directory levels.
 
+mod error;
+pub use error::ShapeFilesError;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -39,7 +42,7 @@ pub const EXCLUDED: &[&str] = &[
 ///
 /// Returns `Err` when no `generated/shapes/*.ttl` exist (fail-closed, mirroring
 /// `validate.py`) or when a directory cannot be read.
-pub fn shape_files(repo_root: &Path) -> Result<Vec<PathBuf>, String> {
+pub fn shape_files(repo_root: &Path) -> Result<Vec<PathBuf>, crate::ShapesError> {
     let mut files: Vec<PathBuf> = Vec::new();
 
     // 1. shapes/*.ttl minus the excluded DSL/manifest lints.
@@ -56,10 +59,7 @@ pub fn shape_files(repo_root: &Path) -> Result<Vec<PathBuf>, String> {
     let generated_dir = repo_root.join("generated").join("shapes");
     let generated = ttl_files(&generated_dir)?;
     if generated.is_empty() {
-        return Err(format!(
-            "no generated shapes under {} — run `purrdf regenerate frame-shapes` (P11 enforcement lives there)",
-            generated_dir.display()
-        ));
+        return Err(ShapeFilesError::missing_generated(generated_dir));
     }
     files.extend(generated);
 
@@ -112,8 +112,7 @@ pub fn load_shapes(
     // of one names a document in hand (see `crate::imports`).
     let mut imports = ShapesImports::new();
     for file in &files {
-        let bytes = std::fs::read(file)
-            .map_err(|e| format!("failed to read shape file {}: {e}", file.display()))?;
+        let bytes = std::fs::read(file).map_err(|cause| ShapeFilesError::read_file(file, cause))?;
         // The document's own origin, through the workspace's one RFC-8089 derivation
         // (`purrdf_slice::retrieval_base_iri`) rather than a second copy of it here.
         let base = purrdf_slice::retrieval_base_iri(file)
@@ -151,16 +150,14 @@ pub fn load_shapes(
 
 /// Every `*.ttl` directly under `dir`, sorted. An absent directory yields an
 /// empty list (the caller decides whether that is fail-closed).
-fn ttl_files(dir: &Path) -> Result<Vec<PathBuf>, String> {
+fn ttl_files(dir: &Path) -> Result<Vec<PathBuf>, crate::ShapesError> {
     if !dir.exists() {
         return Ok(Vec::new());
     }
     let mut out: Vec<PathBuf> = Vec::new();
-    let entries =
-        std::fs::read_dir(dir).map_err(|e| format!("failed to read {}: {e}", dir.display()))?;
+    let entries = std::fs::read_dir(dir).map_err(|cause| ShapeFilesError::directory(dir, cause))?;
     for entry in entries {
-        let entry =
-            entry.map_err(|e| format!("failed to read dir entry in {}: {e}", dir.display()))?;
+        let entry = entry.map_err(|cause| ShapeFilesError::entry(dir, cause, false))?;
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) == Some("ttl") && path.is_file() {
             out.push(path);
@@ -171,15 +168,15 @@ fn ttl_files(dir: &Path) -> Result<Vec<PathBuf>, String> {
 }
 
 /// Every `slices/*/*/shapes.ttl` (exactly two directory levels), sorted.
-fn slice_shape_files(slices_dir: &Path) -> Result<Vec<PathBuf>, String> {
+fn slice_shape_files(slices_dir: &Path) -> Result<Vec<PathBuf>, crate::ShapesError> {
     if !slices_dir.exists() {
         return Ok(Vec::new());
     }
     let mut out: Vec<PathBuf> = Vec::new();
     let groups = std::fs::read_dir(slices_dir)
-        .map_err(|e| format!("failed to read {}: {e}", slices_dir.display()))?;
+        .map_err(|cause| ShapeFilesError::directory(slices_dir, cause))?;
     for group in groups {
-        let group = group.map_err(|e| format!("dir entry error: {e}"))?;
+        let group = group.map_err(|cause| ShapeFilesError::entry(slices_dir, cause, true))?;
         let group_path = group.path();
         if !group_path.is_dir() {
             continue;
@@ -189,9 +186,9 @@ fn slice_shape_files(slices_dir: &Path) -> Result<Vec<PathBuf>, String> {
         // Schema. Hard-fail instead (no-optionality), matching every sibling
         // read_dir in this file.
         let slices = std::fs::read_dir(&group_path)
-            .map_err(|e| format!("failed to read {}: {e}", group_path.display()))?;
+            .map_err(|cause| ShapeFilesError::directory(&group_path, cause))?;
         for slice in slices {
-            let slice = slice.map_err(|e| format!("dir entry error: {e}"))?;
+            let slice = slice.map_err(|cause| ShapeFilesError::entry(&group_path, cause, true))?;
             let slice_path = slice.path();
             if !slice_path.is_dir() {
                 continue;
@@ -290,7 +287,39 @@ mod tests {
         // No generated/shapes/*.ttl present.
         let result = shape_files(&repo);
         assert!(result.is_err(), "absent generated shapes must fail closed");
-        assert!(result.unwrap_err().contains("generated shapes"));
+        let error = result.unwrap_err();
+        assert!(error.to_string().contains("generated shapes"));
+        let crate::ShapesError::ShapeFiles(refusal) = error else {
+            panic!("missing generated shapes retain their discovery refusal");
+        };
+        assert_eq!(
+            refusal.failure_class(),
+            crate::error::FailureClass::Evaluation
+        );
+        let capture = purrdf_testkit::error_capture::Capture::read(refusal.as_ref());
+        assert!(matches!(
+            capture.field("operation"),
+            purrdf_hash::error::ErrorValue::Code("missing-generated")
+        ));
+        drop(capture);
+        fs::remove_dir_all(repo.join("shapes")).unwrap();
+        touch(&repo.join("shapes"), "not a directory");
+        let error = shape_files(&repo).unwrap_err();
+        fs::remove_dir_all(&repo).unwrap();
+        assert_eq!(error.failure_class(), crate::error::FailureClass::Processor);
+        let crate::ShapesError::ShapeFiles(refusal) = error else {
+            panic!("discovery retains its native I/O failure");
+        };
+        let source = std::error::Error::source(refusal.as_ref()).unwrap();
+        let native = source
+            .downcast_ref::<purrdf_hash::error::IoFailure>()
+            .unwrap();
+        assert_eq!(native.kind(), std::io::ErrorKind::NotADirectory);
+        assert!(native.raw_os_error().is_some());
+        let capture = purrdf_testkit::error_capture::Capture::read(refusal.as_ref());
+        assert!(
+            matches!(capture.field("path"), purrdf_hash::error::ErrorValue::Bytes(bytes) if bytes == repo.join("shapes").as_os_str().as_encoded_bytes())
+        );
         let _ = fs::remove_dir_all(&repo);
     }
 

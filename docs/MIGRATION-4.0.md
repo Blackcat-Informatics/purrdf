@@ -1722,3 +1722,27 @@ follows N references and performs N × (N − 1) / 2 cycle-membership probes.
 The native API resource-growth case reports allocations, requested bytes,
 retained bytes and peak working bytes for verdict and full-output evaluation;
 its windows exclude schema compilation and keep the full result alive.
+
+## Standalone RDF and SHACL helpers
+
+`purrdf_rdf::dataset_from_bytes` now returns the original `RdfDiagnostic`
+instead of `String`. Its code, locations, storage classification and native
+cause remain available after the input bytes are dropped. Add presentation
+prefixes at the host boundary rather than replacing the diagnostic.
+
+`purrdf_shapes::sparql::{eval_aggregate, eval_order, current_env,
+bind_in_current_env}` now return `ShapesError`. Native aggregate and environment
+failures retain their original `EvalError`; function-binding failures retain the
+original `RdfDiagnostic`. `ShapesError::SparqlOperation` exposes the operation
+and original cause through borrowed structured inspection and standard error
+sources. Aggregate failures also retain the aggregate name. Processor failures
+propagate through SHACL alternatives; ordinary evaluation failures remain
+catchable. Ordering still uses the same infallible native comparator.
+
+`purrdf_shapes::shape_union::shape_files` now returns `ShapesError` instead of
+`String`. `ShapesError::ShapeFiles` retains the original directory or file path,
+discovery operation and native I/O cause through `ShapeFilesError`. Missing
+generated shapes retain their original directory as a configuration failure;
+I/O failures are operational processor failures. File ordering, exclusions and
+fail-closed discovery remain unchanged. File reads in `load_shapes` use the same
+native owner. Retrieval-IRI and RDF loading still use their existing contracts.

@@ -23,7 +23,7 @@
 use purrdf_rdf::{NativeRdfFormat, dataset_from_bytes};
 
 /// Parse `text` in the given line format, returning the quad count or the diagnostic.
-fn parse(text: &str, format: NativeRdfFormat) -> Result<usize, String> {
+fn parse(text: &str, format: NativeRdfFormat) -> Result<usize, purrdf_rdf::RdfDiagnostic> {
     dataset_from_bytes(text.as_bytes(), format).map(|dataset| dataset.quads().count())
 }
 
@@ -46,7 +46,7 @@ fn a_statement_without_its_terminator_is_refused() {
             .err()
             .unwrap_or_else(|| panic!("{label}: a statement with no '.' must be refused"));
         assert!(
-            error.contains("terminator '.' is missing"),
+            error.to_string().contains("terminator '.' is missing"),
             "{label}: the refusal must name the missing terminator, got: {error}"
         );
     }
@@ -56,7 +56,10 @@ fn a_statement_without_its_terminator_is_refused() {
         NativeRdfFormat::NQuads,
     )
     .expect_err("an unterminated quad must be refused");
-    assert!(error.contains("terminator '.' is missing"), "got: {error}");
+    assert!(
+        error.to_string().contains("terminator '.' is missing"),
+        "got: {error}"
+    );
 }
 
 /// The diagnostic has to point at the line and the column where the terminator was owed,
@@ -70,14 +73,14 @@ fn the_refusal_names_the_line_and_column_the_terminator_was_owed() {
     )
     .expect_err("refused");
     assert!(
-        error.contains("2:"),
+        error.to_string().contains("2:"),
         "the refusal must name line 2, got: {error}"
     );
     // Column 42: the two leading spaces are counted, and the 39 scalars of
     // `<http://e/s> <http://e/p> <http://e/o2>` follow them, so the scalar the terminator
     // was owed at is 2 + 39 + 1.
     assert!(
-        error.contains("2:42"),
+        error.to_string().contains("2:42"),
         "the refusal must point just past the last token, got: {error}"
     );
 }
@@ -189,7 +192,7 @@ fn a_token_after_the_terminator_still_reports_its_own_defect() {
     )
     .expect_err("a second statement on one line is refused");
     assert!(
-        error.contains("after the statement terminator"),
+        error.to_string().contains("after the statement terminator"),
         "got: {error}"
     );
 }

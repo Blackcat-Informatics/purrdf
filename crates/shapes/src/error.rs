@@ -48,6 +48,10 @@ use crate::imports::ShapesImportError;
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ShapesError {
+    /// Original shape-file discovery or read failure, including its native path and cause.
+    ShapeFiles(Box<crate::shape_union::ShapeFilesError>),
+    /// Original native aggregate, environment or function-binding failure.
+    SparqlOperation(Box<crate::sparql::OperationError>),
     /// Original SPARQL namespace lowering, arity or rendered-query refusal.
     SparqlCall(Box<crate::expression::SparqlCallError>),
     /// Original prepared binding or changed-row refusal.
@@ -102,6 +106,8 @@ pub enum ShapesError {
 
 impl purrdf_hash::error::StructuredError for ShapesError {
     purrdf_hash::error_visit! {
+        ShapeFiles(cause) => "shapes-shape-files" { "cause" => Cause(cause.as_ref()) },
+        SparqlOperation(cause) => "shapes-sparql-operation" { "cause" => Cause(cause.as_ref()) },
         SparqlCall(cause) => "shapes-sparql-call" { "cause" => Cause(cause.as_ref()) },
         Binding(cause) => "shapes-binding" { "cause" => Cause(cause) },
         Selector(cause) => "shapes-selector" { "cause" => Cause(cause.as_ref()) },
@@ -167,6 +173,8 @@ impl ShapesError {
             | Self::Text(_)
             | Self::Selector(_)
             | Self::Binding(_)
+            | Self::ShapeFiles(_)
+            | Self::SparqlOperation(_)
             | Self::SparqlCall(_)
             | Self::Invalid(_) => None,
         }
@@ -197,6 +205,8 @@ impl ShapesError {
             | Self::Text(_)
             | Self::Selector(_)
             | Self::Binding(_)
+            | Self::ShapeFiles(_)
+            | Self::SparqlOperation(_)
             | Self::SparqlCall(_)
             | Self::Invalid(_) => None,
         }
@@ -227,6 +237,8 @@ impl ShapesError {
             | Self::Text(_)
             | Self::Selector(_)
             | Self::Binding(_)
+            | Self::ShapeFiles(_)
+            | Self::SparqlOperation(_)
             | Self::SparqlCall(_)
             | Self::Invalid(_) => None,
         }
@@ -257,6 +269,8 @@ impl ShapesError {
             | Self::Text(_)
             | Self::Selector(_)
             | Self::Binding(_)
+            | Self::ShapeFiles(_)
+            | Self::SparqlOperation(_)
             | Self::SparqlCall(_)
             | Self::Invalid(_) => None,
         }
@@ -287,6 +301,8 @@ impl ShapesError {
             | Self::Text(_)
             | Self::Selector(_)
             | Self::Binding(_)
+            | Self::ShapeFiles(_)
+            | Self::SparqlOperation(_)
             | Self::SparqlCall(_)
             | Self::Invalid(_) => None,
         }
@@ -317,6 +333,8 @@ impl ShapesError {
             | Self::Text(_)
             | Self::Selector(_)
             | Self::Binding(_)
+            | Self::ShapeFiles(_)
+            | Self::SparqlOperation(_)
             | Self::SparqlCall(_)
             | Self::Invalid(_) => None,
         }
@@ -364,6 +382,8 @@ impl ShapesError {
             | Self::Selector(_)
             | Self::Binding(_)
             | Self::SparqlCall(_) => FailureClass::Evaluation,
+            Self::SparqlOperation(error) => error.failure_class(),
+            Self::ShapeFiles(error) => error.failure_class(),
             Self::ImportArrays(error) => {
                 if error.storage_error().is_some() {
                     FailureClass::Processor
@@ -417,6 +437,8 @@ impl ShapesError {
             | Self::Text(_)
             | Self::Selector(_)
             | Self::Binding(_)
+            | Self::ShapeFiles(_)
+            | Self::SparqlOperation(_)
             | Self::SparqlCall(_)
             | Self::Invalid(_) => None,
         }
@@ -643,6 +665,8 @@ impl std::error::Error for ProcessorFailure {
 impl fmt::Display for ShapesError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::SparqlOperation(error) => error.fmt(f),
+            Self::ShapeFiles(error) => error.fmt(f),
             Self::ImportArrays(error) => error.fmt(f),
             Self::ScopeBinding(error) => error.fmt(f),
             Self::RuleExecution(error) => error.fmt(f),
@@ -670,6 +694,8 @@ impl fmt::Display for ShapesError {
 impl std::error::Error for ShapesError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::SparqlOperation(error) => Some(error.as_ref()),
+            Self::ShapeFiles(error) => Some(error.as_ref()),
             Self::ImportArrays(error) => Some(error),
             Self::ScopeBinding(error) => Some(error),
             Self::RuleExecution(error) => Some(error.as_ref()),

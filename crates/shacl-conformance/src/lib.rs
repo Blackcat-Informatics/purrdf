@@ -189,7 +189,9 @@ pub type Multiset = BTreeMap<Tuple, usize>;
 /// EXACTLY that multiset, recursively.
 #[derive(Clone, Debug)]
 pub struct ExpectedResult {
+    /// Normalized result fields compared by the shared grader.
     pub tuple: Tuple,
+    /// Required nested results, or no constraint on nested results.
     pub details: Option<Vec<Self>>,
 }
 
@@ -199,7 +201,12 @@ pub enum Expected {
     /// `mf:result sht:Failure` — the validator must reject the input.
     Failure,
     /// A full expected `sh:ValidationReport`.
-    Report { conforms: bool, results: Multiset },
+    Report {
+        /// Expected report conformance.
+        conforms: bool,
+        /// Expected normalized result multiplicities.
+        results: Multiset,
+    },
 }
 
 /// One `sht:Validate` entry from the vendored manifest tree.
@@ -209,11 +216,14 @@ pub struct W3cCase {
     pub id: String,
     /// Manifest section, e.g. `core/node`.
     pub section: String,
+    /// File containing the shapes graph.
     pub shapes_path: PathBuf,
+    /// File containing the data graph.
     pub data_path: PathBuf,
     /// IRI supplied by `sht:shapesGraph` (often `<>` resolving to the test file),
     /// used as the named graph for `$shapesGraph` pre-binding in SHACL-SPARQL.
     pub shapes_graph_iri: Option<String>,
+    /// Outcome declared by the manifest.
     pub expected: Expected,
     /// The `sh:conformanceDisallows` IRIs of the EXPECTED report, which the suite
     /// uses as a validation parameter ("the test framework needs to use the
@@ -259,8 +269,11 @@ pub struct W3cCase {
 pub struct FirstPartyCase {
     /// The directory name, e.g. `01-min-count`.
     pub name: String,
+    /// File containing the shapes graph.
     pub shapes_path: PathBuf,
+    /// File containing the data graph.
     pub data_path: PathBuf,
+    /// File containing the frozen expected validation report.
     pub expected_report_path: PathBuf,
 }
 
@@ -275,6 +288,7 @@ pub fn first_party_box_role_vocab() -> BoxRoleVocab {
 
 // ── Graph helpers ─────────────────────────────────────────────────────────────
 
+/// Construct a named term from a trusted fixture IRI.
 pub fn named(iri: &str) -> Term {
     Term::NamedNode(NamedNode::new_unchecked(iri))
 }
@@ -329,10 +343,12 @@ pub fn norm(t: &Term) -> String {
 
 // ── IRI ↔ path mapping ────────────────────────────────────────────────────────
 
+/// Spell a fixture path as a file IRI for relative reference resolution.
 pub fn file_iri(path: &Path) -> String {
     format!("file://{}", path.display())
 }
 
+/// Recover the fixture path from a file IRI, panicking on another scheme.
 pub fn iri_to_path(iri: &str) -> PathBuf {
     PathBuf::from(
         iri.strip_prefix("file://")
