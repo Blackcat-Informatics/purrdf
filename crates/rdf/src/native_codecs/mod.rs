@@ -241,6 +241,9 @@ mod tests {
         let p = b.intern_iri("https://e/p").unwrap();
         let o = b.intern_iri("https://e/o").unwrap();
         b.push_quad(s, p, o, None).unwrap();
+        let rdf_type = b.intern_iri(purrdf_iri::vocab::rdf::TYPE).unwrap();
+        let class = b.intern_iri("https://example.org/Type").unwrap();
+        b.push_quad(s, rdf_type, class, None).unwrap();
         let ds = b.freeze().expect("freeze");
         // Every bidirectional format round-trips a basic graph isomorphically — JSON-LD /
         // YAML-LD alongside the FULL declared peer set (including TriX / HexTuples).
@@ -304,6 +307,9 @@ mod tests {
             .unwrap();
         b.push_reifier(r, triple).unwrap();
         b.push_annotation(r, conf, val).unwrap();
+        let rdf_type = b.intern_iri(purrdf_iri::vocab::rdf::TYPE).unwrap();
+        let class = b.intern_iri("https://example.org/Review").unwrap();
+        b.push_annotation(r, rdf_type, class).unwrap();
         let ds = b.freeze().expect("freeze");
         assert_round_trips(&ds, "application/n-triples");
         assert_round_trips(&ds, "text/turtle");
@@ -399,11 +405,7 @@ mod tests {
         let err = parse_dataset(json.as_bytes(), "application/ld+json", None)
             .expect_err("@annotation inside a @triple component must be rejected");
         assert_eq!(err.code, "native-jsonld-decode");
-        assert!(
-            err.message
-                .contains("not permitted inside a @triple component"),
-            "unexpected error: {err}"
-        );
+        assert_eq!(err.message, "triple components cannot carry annotations");
     }
 
     #[test]
@@ -430,10 +432,9 @@ mod tests {
         let err = parse_dataset(json.as_bytes(), "application/ld+json", None)
             .expect_err("@annotation directly inside a @triple object must be rejected");
         assert_eq!(err.code, "native-jsonld-decode");
-        assert!(
-            err.message
-                .contains("not permitted inside a @triple object"),
-            "unexpected error: {err}"
+        assert_eq!(
+            err.message,
+            "@triple requires exactly @subject, @predicate and @object"
         );
     }
 

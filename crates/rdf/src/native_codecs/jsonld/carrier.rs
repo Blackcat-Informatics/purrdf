@@ -660,12 +660,7 @@ impl Node {
                 JsonValue::Array(
                     self.types
                         .iter()
-                        .map(|iri| {
-                            JsonValue::Object(Object::from_iter(BTreeMap::from([(
-                                "@id".to_owned(),
-                                JsonValue::String(iri.clone()),
-                            )])))
-                        })
+                        .map(|iri| JsonValue::String(iri.clone()))
                         .collect(),
                 ),
             );

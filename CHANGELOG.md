@@ -8,6 +8,11 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Expanded JSON-LD and YAML-LD types:** node `@type` entries now use IRI strings,
+  so typed nodes and reifier annotations round-trip through the strict native
+  reader. This corrects the emitted type-entry bytes; the untyped expanded byte
+  baseline is unchanged.
+
 - **Fresh OWL refutation witnesses:** generated symbols are checked against the
   current term interner, including caller terms introduced after preparation.
   Repeated role-inclusion queries preserve distinct witness identities.
