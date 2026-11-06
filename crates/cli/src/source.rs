@@ -321,29 +321,25 @@ pub(crate) fn read_raw_bytes_bounded(path: &str, maximum: usize) -> Result<Vec<u
 /// the working directory or on `..` segments in the argument. A path that cannot be
 /// expressed as a `file://` IRI is a hard error, never a silent fall back to "no base".
 pub(crate) fn retrieval_base_iri(path: &str) -> Result<String, CliError> {
-    purrdf::slice::retrieval_base_iri(std::path::Path::new(path))
-        .map(|base| base.as_str().to_owned())
-        .map_err(|error| {
-            CliError::Runtime(format!(
-                "{}: {error}; pass --base explicitly",
-                display_path(path)
-            ))
-        })
+    file_retrieval_iri(path).map_err(|error| {
+        CliError::Runtime(format!(
+            "{}: {error}; pass --base explicitly",
+            display_path(path)
+        ))
+    })
 }
 
-/// The crate-internal `retrieval_base_iri`, for a consumer outside this crate — the
-/// integration tests, which assert against the pipeline's OWN derivation rather than a
-/// second transcription of it.
+/// Derive the same file retrieval IRI the CLI uses, retaining the native path refusal.
 ///
-/// A second implementation in the test harness is exactly how a platform divergence hides:
-/// the tests agreed with themselves while the binary emitted something else. The error is
-/// flattened to a `String` because `CliError` is crate-internal.
+/// The shared slice derivation owns the original path and filesystem or IRI cause.
+/// The CLI adds its path display and `--base` hint only when presenting the refusal.
 ///
 /// # Errors
 ///
 /// When `path` does not canonicalize, is not UTF-8, or has no usable `file://` IRI.
-pub fn file_retrieval_iri(path: &str) -> Result<String, String> {
-    retrieval_base_iri(path).map_err(|error| error.to_string())
+pub fn file_retrieval_iri(path: &str) -> Result<String, purrdf::slice::SliceError> {
+    purrdf::slice::retrieval_base_iri(std::path::Path::new(path))
+        .map(|base| base.as_str().to_owned())
 }
 
 /// The RFC-8089 `file://` IRI of an ALREADY-ABSOLUTE platform path, touching no filesystem.
@@ -874,4 +870,38 @@ pub(crate) fn serialize_input_to_nquads(
     }
 
     run_over_input(path, format, base, input_options, NQuadsOp, canonical)
+}
+
+#[cfg(test)]
+mod retrieval_tests {
+    use super::{display_path, file_retrieval_iri, retrieval_base_iri};
+
+    #[test]
+    fn retrieval_refusal_retains_the_path_and_native_io_cause_before_cli_presentation() {
+        let missing = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("Cargo.toml")
+            .join("missing.ttl");
+        let path = missing.to_str().expect("manifest path is UTF-8");
+        let expected = std::fs::canonicalize(&missing)
+            .expect_err("a regular manifest file cannot contain a child path");
+        let error = file_retrieval_iri(path).expect_err("missing file cannot supply a base");
+        let purrdf::slice::SliceError::InvalidPath(
+            purrdf::slice::error::PathRefusal::Canonicalize {
+                path: offered,
+                cause,
+            },
+        ) = &error
+        else {
+            panic!("expected original path refusal, got {error:?}");
+        };
+        assert_eq!(offered, &missing);
+        assert_eq!(cause.original().kind(), expected.kind());
+        assert_eq!(cause.original().raw_os_error(), expected.raw_os_error());
+        assert_eq!(
+            retrieval_base_iri(path)
+                .expect_err("CLI must refuse the same missing file")
+                .to_string(),
+            format!("{}: {error}; pass --base explicitly", display_path(path))
+        );
+    }
 }

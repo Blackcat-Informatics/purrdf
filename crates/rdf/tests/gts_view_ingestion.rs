@@ -35,6 +35,7 @@
 
 use purrdf_core::TermBox;
 use purrdf_core::term_fixture::{ProbeFault, RowBudget};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use purrdf_rdf::dataset_view::ViewOperationStatus;
@@ -50,8 +51,8 @@ use purrdf_rdf::gts_fixtures::{
 use purrdf_rdf::{
     BlankScope, DatasetMut, DatasetView, DeltaDatasetView, FallibleDatasetView, GraphMatch,
     MutableDataset, PipelineViewBundle, QuadIds, QuadValues, RdfDataset, RdfDatasetBuilder,
-    RdfLiteral, RdfStoreCapabilities, RdfTextDirection, RetentionLedger, TermId, TermRef,
-    TermValue, ViewLimits, parse_dataset,
+    RdfLiteral, RdfStoreCapabilities, RdfTextDirection, RetentionLedger, SerializeGraph, TermId,
+    TermRef, TermValue, ViewLimits, import_gts_events, parse_dataset, serialize_dataset,
 };
 
 #[path = "support/blank_identity.rs"]
@@ -546,24 +547,184 @@ fn colliding_blank_wire_values_are_refused_and_neighbouring_ones_are_not() {
 // Terminal poison
 // ---------------------------------------------------------------------------
 
-/// A dataset carrying a quoted triple in ORDINARY object position — the shape the
-/// plain-slot guard exists for.
-fn quoted_triple_in_a_plain_slot() -> Arc<RdfDataset> {
-    use purrdf_rdf::{RdfDatasetBuilder, TermFactory, TermValue as Value};
+/// Quoted objects on every admitted surface, with shared scoped blank leaves.
+fn quoted_object_source() -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
     let s = builder.intern_iri("https://example.org/s").unwrap();
     let p = builder.intern_iri("https://example.org/p").unwrap();
-    let o = builder.intern_iri("https://example.org/o").unwrap();
-    let quoted = builder
-        .intern_value(&Value::Triple {
-            s: TermBox::new(Value::iri("https://example.org/qs")),
-            p: TermBox::new(Value::iri("https://example.org/qp")),
-            o: TermBox::new(Value::iri("https://example.org/qo")),
-        })
+    let blank = builder.intern_blank("b0", BlankScope(7)).unwrap();
+    let claim = builder.intern_iri("https://example.org/claim").unwrap();
+    let mut quoted = Vec::new();
+    for direction in [RdfTextDirection::Ltr, RdfTextDirection::Rtl] {
+        let literal = builder
+            .intern_literal(RdfLiteral {
+                direction: Some(direction),
+                ..RdfLiteral::language_tagged("same", "en")
+            })
+            .unwrap();
+        let inner = builder.intern_triple(blank, p, literal).unwrap();
+        let outer = builder.intern_triple(s, p, inner).unwrap();
+        builder.push_quad(s, p, outer, None).unwrap();
+        quoted.push(outer);
+    }
+    let literal = builder
+        .intern_literal(RdfLiteral::typed("007", "https://example.org/type"))
         .unwrap();
-    builder.push_quad(s, p, quoted, None).unwrap();
-    builder.push_quad(s, p, o, None).unwrap();
-    builder.freeze().expect("the dataset freezes")
+    let typed = builder.intern_triple(blank, p, literal).unwrap();
+    builder.push_quad(s, p, typed, None).unwrap();
+    let binding = builder.intern_triple(s, p, quoted[0]).unwrap();
+    builder.push_reifier_in_graph(claim, binding, None).unwrap();
+    builder.push_annotation(claim, p, quoted[1]).unwrap();
+    builder.freeze().expect("the quoted-object dataset freezes")
+}
+
+#[test]
+fn native_snapshot_quoted_objects_preserve_structure_identity_and_scopes() {
+    let source = quoted_object_source();
+    let mut forward = SnapshotBuilder::new();
+    for scope in ["a", "b"] {
+        forward
+            .add_dataset_scoped(&source, None, Some(scope))
+            .expect("native quoted objects ingest");
+    }
+    let mut reversed = SnapshotBuilder::new();
+    for scope in ["b", "a", "a"] {
+        let _ = reversed
+            .add_view_scoped(&composite_over(&source), None, Some(scope))
+            .expect("quoted objects ingest through the composed view");
+    }
+    assert_eq!(forward.snapshot_payload(), reversed.snapshot_payload());
+    assert_eq!(
+        forward.ingest_totals().terms_interned,
+        reversed.ingest_totals().terms_interned,
+        "equal quoted structures are interned once per scoped identity"
+    );
+    let restored = import_gts_events(&emitted(&forward)).expect("strict native snapshot import");
+    assert_eq!(restored.dataset.quads().count(), 6);
+    assert_eq!(restored.dataset.reifier_quads().count(), 2);
+    assert_eq!(restored.dataset.annotation_quads().count(), 2);
+    let text = String::from_utf8(
+        serialize_dataset(
+            &restored.dataset,
+            "application/n-quads",
+            SerializeGraph::Dataset,
+        )
+        .expect("render the restored native terms"),
+    )
+    .unwrap();
+    for scope in ["a", "b"] {
+        let wire = format!("{scope}-{}", BlankScope(7).qualify_label("b0"));
+        // The single imported segment places the preserved wire label in scope one.
+        let blank = format!("_:{}", BlankScope(1).qualify_label(&wire));
+        assert!(
+            text.contains(&format!(
+                "<<( <https://example.org/s> <https://example.org/p> \
+                 <<( {blank} <https://example.org/p> \"same\"@en--ltr )>> )>>"
+            )),
+            "nested quoted structure and its blank identity survive: {text}"
+        );
+        assert!(text.contains(&format!(
+            "<<( {blank} <https://example.org/p> \"same\"@en--rtl )>>"
+        )));
+        assert!(text.contains(&format!(
+            "<<( {blank} <https://example.org/p> \"007\"^^<https://example.org/type> )>>"
+        )));
+    }
+}
+
+/// An external view can expose malformed cycles or excessive nesting even
+/// though the native dataset validator refuses to freeze those structures.
+fn quoted_chain_view(levels: usize, cyclic: bool) -> ProbeView {
+    let mut builder = RdfDatasetBuilder::new();
+    let s = builder.intern_iri("https://example.org/s").unwrap();
+    let p = builder.intern_iri("https://example.org/p").unwrap();
+    let leaf = builder.intern_iri("https://example.org/leaf").unwrap();
+    let ids: Vec<_> = (0..levels)
+        .map(|index| {
+            builder
+                .intern_iri(&format!("https://example.org/quote/{index}"))
+                .unwrap()
+        })
+        .collect();
+    builder.push_quad(s, p, ids[0], None).unwrap();
+    let mut view = ProbeView::honest(builder.freeze().unwrap());
+    for (index, &id) in ids.iter().enumerate() {
+        let o = ids
+            .get(index + 1)
+            .copied()
+            .unwrap_or(if cyclic { ids[0] } else { leaf });
+        view.term_overrides.insert(id, TermRef::Triple { s, p, o });
+    }
+    view
+}
+
+#[test]
+fn quoted_term_cycles_and_excessive_nesting_refuse_but_the_boundary_ingests() {
+    let limit = purrdf_events::MAX_TERM_NESTING_DEPTH;
+    let mut valid = SnapshotBuilder::new();
+    let _ = valid
+        .add_view(&quoted_chain_view(limit, false))
+        .expect("the native maximum nesting remains admitted");
+    import_gts_events(&emitted(&valid)).expect("the boundary snapshot imports");
+    for (levels, cyclic, reason) in [(2, true, "cyclic"), (limit + 1, false, "nesting limit")] {
+        let mut refused = SnapshotBuilder::new();
+        let accepted = refused.snapshot_payload();
+        let message = refused
+            .add_view(&quoted_chain_view(levels, cyclic))
+            .expect_err("malformed quoted structure must fail closed")
+            .to_string();
+        assert!(message.contains(reason), "{message}");
+        assert_eq!(refused.snapshot_payload(), accepted);
+        assert!(refused.poison().is_some());
+    }
+}
+
+#[test]
+fn quoted_terms_remain_forbidden_in_non_object_positions() {
+    for position in [
+        "quad subject",
+        "quad graph name",
+        "quoted triple subject",
+        "quoted predicate",
+    ] {
+        let mut view = quoted_chain_view(1, false);
+        let quad = view.inner.quads().next().unwrap();
+        match position {
+            "quad subject" => view.quad_override = Some(QuadIds { s: quad.o, ..quad }),
+            "quad graph name" => {
+                view.quad_override = Some(QuadIds {
+                    g: Some(quad.o),
+                    ..quad
+                });
+            }
+            "quoted triple subject" => {
+                view.term_overrides.insert(
+                    quad.o,
+                    TermRef::Triple {
+                        s: quad.o,
+                        p: quad.p,
+                        o: quad.s,
+                    },
+                );
+            }
+            "quoted predicate" => {
+                view.term_overrides.insert(
+                    quad.o,
+                    TermRef::Triple {
+                        s: quad.s,
+                        p: quad.o,
+                        o: quad.s,
+                    },
+                );
+            }
+            _ => unreachable!(),
+        }
+        let message = SnapshotBuilder::new()
+            .add_view(&view)
+            .expect_err("quoted terms are only admitted in RDF 1.2 object positions")
+            .to_string();
+        assert!(message.contains(position), "{message}");
+    }
 }
 
 #[test]
@@ -571,20 +732,23 @@ fn a_failed_ingestion_poisons_both_surfaces_and_emit() {
     for flat_first in [false, true] {
         let mut builder = SnapshotBuilder::new();
         let _ = builder
-            .add_view(&source_a())
+            .add_view_scoped(&blank_subject("b-c"), None, Some("a"))
             .expect("a healthy ingestion precedes the failure");
-        let poisoned = quoted_triple_in_a_plain_slot();
+        let poisoned = blank_subject("c");
         let first = if flat_first {
             builder
-                .add_dataset(&poisoned)
-                .expect_err("a quoted triple in a plain slot must fail closed")
+                .add_dataset_scoped(&poisoned, None, Some("a-b"))
+                .expect_err("distinct blank identities must not share wire bytes")
         } else {
             builder
-                .add_view(&poisoned)
-                .expect_err("a quoted triple in a plain slot must fail closed")
+                .add_view_scoped(&poisoned, None, Some("a-b"))
+                .expect_err("distinct blank identities must not share wire bytes")
                 .to_string()
         };
-        assert!(first.contains("not directly representable"), "{first}");
+        assert!(
+            first.contains("two distinct blank-node intern keys"),
+            "{first}"
+        );
         assert!(builder.poison().is_some(), "the failure is terminal");
 
         // Every later ingestion refuses, on BOTH surfaces, naming the earlier failure.
@@ -595,7 +759,11 @@ fn a_failed_ingestion_poisons_both_surfaces_and_emit() {
             matches!(again, GtsIngestError::Poisoned { .. }),
             "{again:?}"
         );
-        assert!(again.to_string().contains("not directly representable"));
+        assert!(
+            again
+                .to_string()
+                .contains("two distinct blank-node intern keys")
+        );
         let flat_again = builder
             .add_dataset(&source_b())
             .expect_err("a poisoned builder refuses the flat surface");
@@ -616,7 +784,7 @@ fn a_failed_ingestion_poisons_both_surfaces_and_emit() {
         )
         .expect_err("a poisoned builder must not publish");
         assert!(err.contains("poisoned"), "{err}");
-        assert!(err.contains("not directly representable"), "{err}");
+        assert!(err.contains("two distinct blank-node intern keys"), "{err}");
     }
 
     // THE NEIGHBOURING CASE: the same two sources with no failure between them
@@ -662,7 +830,7 @@ fn a_refused_ingestion_leaves_the_snapshot_accessors_exactly_where_they_were() {
     let accepted_payload = builder.snapshot_payload();
     let accepted_totals = builder.ingest_totals();
 
-    // A source that ingests a great many rows and THEN hits the plain-slot guard.
+    // A source that includes quoted terms and faults after many ordinary rows.
     let mut poisoning = RdfDatasetBuilder::new();
     let s = poisoning
         .intern_iri("https://example.org/poison/s")
@@ -670,6 +838,9 @@ fn a_refused_ingestion_leaves_the_snapshot_accessors_exactly_where_they_were() {
     let p = poisoning
         .intern_iri("https://example.org/poison/p")
         .unwrap();
+    // Its object id precedes the noise rows, so it is consumed before the fault.
+    let quoted = poisoning.intern_triple(s, p, s).unwrap();
+    poisoning.push_quad(s, p, quoted, None).unwrap();
     for index in 0..64 {
         let o = poisoning
             .intern_iri(&format!("https://example.org/poison/o{index}"))
@@ -680,14 +851,13 @@ fn a_refused_ingestion_leaves_the_snapshot_accessors_exactly_where_they_were() {
         poisoning.push_quad(s, p, o, None).unwrap();
         poisoning.push_quad(blank, p, o, None).unwrap();
     }
-    let quoted = poisoning.intern_triple(s, p, s).unwrap();
-    poisoning.push_quad(s, p, quoted, None).unwrap();
     let poisoning = poisoning.freeze().expect("the poisoning source freezes");
 
+    let budget = poisoning.quads().count() - 1;
     let err = builder
-        .add_view(&poisoning)
-        .expect_err("a quoted triple in a plain slot must fail closed");
-    assert!(matches!(err, GtsIngestError::UnrepresentableTerm { .. }));
+        .add_view(&ProbeView::budgeted(poisoning, budget))
+        .expect_err("a truncated source must fail closed");
+    assert!(matches!(err, GtsIngestError::SourceRead { .. }));
     assert!(builder.poison().is_some(), "the failure is terminal");
 
     // THE ROLLBACK: not one row, term or index entry of the refused ingestion
@@ -709,7 +879,7 @@ fn a_refused_ingestion_leaves_the_snapshot_accessors_exactly_where_they_were() {
     );
 
     // NON-VACUITY: the refused source really would have moved the content id had
-    // any of it been kept. The same rows, minus the one unrepresentable term,
+    // any of it been kept. The same ordinary rows, without the source fault,
     // ingest into a fresh builder and mint something different.
     let mut without_the_trap = RdfDatasetBuilder::new();
     let s = without_the_trap
@@ -759,10 +929,8 @@ fn a_refused_ingestion_leaves_the_snapshot_accessors_exactly_where_they_were() {
 /// An unrepresentable-term refusal names the term in RDF TEXT, never in the
 /// view's own ids.
 ///
-/// A quoted triple used to fall through to `Debug`, so the message read
-/// `Triple { s: Id(..), p: Id(..), o: Id(..) }` — the offending term named in a
-/// vocabulary only the view speaks, leaving the reader unable to find the row it
-/// came from. Every constituent is now resolved.
+/// A quoted triple in a predicate slot remains invalid. Every constituent of
+/// that offending term is resolved, including the directional literal leaf.
 #[test]
 fn an_unrepresentable_quoted_triple_is_named_in_its_own_text() {
     let mut b = RdfDatasetBuilder::new();
@@ -780,12 +948,19 @@ fn an_unrepresentable_quoted_triple_is_named_in_its_own_text() {
     let plain_s = b.intern_iri("https://example.org/s").unwrap();
     let plain_p = b.intern_iri("https://example.org/p").unwrap();
     b.push_quad(plain_s, plain_p, quoted, None).unwrap();
-    let source = b.freeze().expect("the plain-slot trap freezes");
+    let source = b.freeze().expect("the valid quoted object freezes");
+    let mut invalid = ProbeView::honest(source);
+    invalid.quad_override = Some(QuadIds {
+        s: plain_s,
+        p: quoted,
+        o: quoted,
+        g: None,
+    });
 
     let mut builder = SnapshotBuilder::new();
     let message = builder
-        .add_view(&source)
-        .expect_err("a quoted triple in a plain slot must fail closed")
+        .add_view(&invalid)
+        .expect_err("a quoted triple predicate must fail closed")
         .to_string();
 
     for text in [
@@ -822,6 +997,9 @@ struct ProbeView {
     claim_annotations: bool,
     /// Whether the statement-layer accessors answer at all.
     enumerate_statements: bool,
+    /// Malformed external terms/rows that cannot pass native freeze.
+    term_overrides: BTreeMap<TermId, TermRef<'static, TermId>>,
+    quad_override: Option<QuadIds>,
 }
 
 impl ProbeView {
@@ -833,6 +1011,8 @@ impl ProbeView {
             claim_reifiers: false,
             claim_annotations: false,
             enumerate_statements: true,
+            term_overrides: BTreeMap::new(),
+            quad_override: None,
         }
     }
 
@@ -897,11 +1077,16 @@ impl DatasetView for ProbeView {
     }
 
     fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
-        self.budget.take(self.inner.quads())
+        self.budget
+            .take(self.inner.quads())
+            .map(|quad| self.quad_override.unwrap_or(quad))
     }
 
     fn resolve(&self, id: TermId) -> Result<Self::TermGuard<'_>, Self::ReadError> {
-        self.checked_read(|_| self.inner.as_ref().resolve(id))
+        self.checked_read(|_| match self.term_overrides.get(&id) {
+            Some(term) => *term,
+            None => self.inner.as_ref().resolve(id),
+        })
     }
 
     fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError> {

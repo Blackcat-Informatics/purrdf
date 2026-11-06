@@ -1,35 +1,35 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! A JSON number becomes the binary64 nearest its decimal value in every reader that
-//! turns one into RDF, on every target, the x87 included.
+//! A JSON number selected for double conversion becomes the nearest value on every
+//! target, the x87 included. JSON-LD also preserves untyped integral values below
+//! 10^21 as exact RDF integers.
 //!
 //! The witnesses are numbers a reader that is not correctly rounded gets wrong, found by
 //! search against [`soft::significand_power_decimal`] -- the significand-times-power
 //! conversion a fast JSON reader makes, reproduced in integers -- and against the x87's
-//! double rounding of an exact fast path ([`soft::x87_fast_path_decimals`]). Each reader
-//! must give every witness the value `str::parse::<f64>` gives it (core's reader is
-//! correctly rounded and sets the x87's precision itself), and so the literal that value
-//! implies, and never the neighbour the old reading landed on.
+//! double rounding of an exact fast path ([`soft::x87_fast_path_decimals`]). Each double
+//! conversion must give every witness the value `str::parse::<f64>` gives it (core's
+//! reader is correctly rounded and sets the x87's precision itself), and so the literal
+//! that value implies, and never the neighbour the old reading landed on.
 
 use std::collections::BTreeMap;
 
-use purrdf_lex::json::{self, Number, Object, Value};
+use purrdf_lex::json::{self, Exponent, Number, Object, Value};
 use purrdf_lex::json_escape::JsonEscapes;
 use purrdf_rdf::{
     CsvwAction, CsvwConfig, CsvwContext, CsvwInput, CsvwMode, CsvwVocabulary, DatasetSink,
     OkfBundle, OkfConfig, ProjectionLimits, SerializeGraph, datasets_isomorphic, lift_okf_bundle,
     parse_dataset, read_csvw, serialize_dataset, write_okf_bundle,
 };
+use purrdf_xsd::datatype::{XSD_DOUBLE, XSD_INTEGER};
 use purrdf_xsd::ieee::Binary64Scope;
 use purrdf_xsd::ieee::reference as soft;
 use purrdf_xsd::numeric::canonical_double;
 
-const XSD_DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
-
 /// Every decimal witness: long mantissas and shortest forms the significand-times-power
 /// reader misreads, fast-path numbers the x87 double rounds, the published misreadings,
-/// and midpoints between neighbouring binary64 values (with a digit more and a digit
+/// and midpoints between neighbouring doubles (with a digit more and a digit
 /// less), which only a reader of every digit decides.
 fn witnesses() -> Vec<String> {
     let mut witnesses = soft::misread_decimals(40);
@@ -63,7 +63,7 @@ fn witnesses() -> Vec<String> {
     witnesses
 }
 
-/// The binary64 nearest `lexical`'s decimal value.
+/// The double nearest `lexical`'s decimal value.
 fn correct(lexical: &str) -> f64 {
     lexical.parse().expect("a decimal number")
 }
@@ -76,7 +76,7 @@ fn nquads(dataset: &purrdf_rdf::RdfDataset) -> String {
     .expect("UTF-8")
 }
 
-/// The reader itself: the workspace's one JSON reader, its number converted to binary64
+/// The reader itself: the workspace's one JSON reader, its number converted to a double
 /// under the scope every result-affecting read in this workspace enters.
 /// The sweep covers the witnesses and a wide draw of midpoints, the hardest inputs a
 /// decimal reader has.
@@ -119,10 +119,10 @@ fn the_json_reader_reads_every_witness_and_midpoint_correctly_rounded() {
     );
 }
 
-/// JSON-LD: a bare number, a value object, a number coerced to `xsd:double` by the
-/// context, and an `@json` value all carry the correctly rounded value.
+/// JSON-LD preserves eligible untyped integers exactly; other bare numbers and value
+/// objects, every context-coerced double, and `@json` numbers round correctly.
 #[test]
-fn json_ld_numbers_expand_to_the_correctly_rounded_double() {
+fn json_ld_numbers_preserve_exact_integers_and_correctly_rounded_doubles() {
     let witnesses = witnesses();
     let list = witnesses.join(",");
     let objects = witnesses
@@ -150,10 +150,33 @@ fn json_ld_numbers_expand_to_the_correctly_rounded_double() {
     let mut expected = std::collections::BTreeSet::new();
     for witness in &witnesses {
         let value = correct(witness);
-        let lexical = canonical_double(value);
+        let double = canonical_double(value);
+        let decimal = Number::from_lexeme(witness.as_str())
+            .expect("a decimal witness")
+            .decimal();
+        // Normalization removes fractional trailing zeros. Exact integer arithmetic
+        // decides the JSON-LD 1.1 Object to RDF threshold, before any double rounding.
+        // Overflow here also proves the magnitude exceeds that threshold.
+        let coefficient = decimal.coefficient().parse::<u128>().ok();
+        let integer = match decimal.exponent() {
+            Exponent::Small(exponent) => u32::try_from(*exponent)
+                .ok()
+                .and_then(|power| 10_u128.checked_pow(power))
+                .and_then(|scale| coefficient?.checked_mul(scale))
+                .filter(|magnitude| *magnitude < 10_u128.pow(21))
+                .map(|magnitude| {
+                    let sign = if decimal.is_negative() { "-" } else { "" };
+                    format!("{sign}{magnitude}")
+                }),
+            Exponent::Large { .. } => None,
+        };
         for property in ["bare", "object", "coerced"] {
+            let (lexical, datatype) = match (property, integer.as_deref()) {
+                ("bare" | "object", Some(integer)) => (integer, XSD_INTEGER),
+                _ => (double.as_str(), XSD_DOUBLE),
+            };
             let line = format!(
-                "<http://example.org/s> <http://example.org/{property}> \"{lexical}\"^^<{XSD_DOUBLE}> .",
+                "<http://example.org/s> <http://example.org/{property}> \"{lexical}\"^^<{datatype}> .",
             );
             assert!(quads.contains(&line), "{witness}: missing {line}");
             expected.insert(line);

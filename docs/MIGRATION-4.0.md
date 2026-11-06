@@ -394,7 +394,17 @@ its `reason` field is a borrowed nested cause, and `at` retains the original byt
 offset. Native Unicode-escape and language-tag causes are also available through
 the standard error-source chain. Human messages and byte offsets are unchanged.
 
-## Native import and proof refusals
+## Native retrieval, import and proof refusals
+
+`purrdf_cli::file_retrieval_iri` now returns
+`Result<String, purrdf::slice::SliceError>` instead of `Result<String, String>`.
+Match the native refusal or inspect its structured fields and standard source
+chain. Call `to_string()` when presenting it. The public helper renders the
+native slice error; the CLI adds its existing path display and `--base` hint
+at its presentation boundary. Successful file IRIs are unchanged.
+
+`PremiseIriError` supports borrowed structured inspection of its original `iri`
+and native IRI `cause`, alongside its existing accessors and source chain.
 
 `purrdf_core::imports::ImportKeyError` is non-exhaustive. Include a wildcard
 when matching it. `NotAbsolute.reason` now holds `Option<purrdf_iri::IriError>`

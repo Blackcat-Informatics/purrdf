@@ -252,6 +252,21 @@ impl<Id: ViewTermId> Workspace<Id> {
             .then_with(|| self.frontier.cmp(&stored.frontier))
     }
 
+    /// Report the exact issued dependencies already obtained by preparation.
+    /// The focus is expanded even though issued; every other issued ID is a frontier.
+    fn observe_dependencies<D: DatasetView<Id = Id>>(
+        &self,
+        state: &CanonState<'_, D>,
+        focus: Id,
+        mut observe: impl FnMut(Id),
+    ) -> Result<(), CanonError<D::ReadError>> {
+        for id in std::iter::once(focus).chain(self.frontier.iter().map(|&(id, _)| id)) {
+            state.check_stop().map_err(CanonError::with_read_error)?;
+            observe(id);
+        }
+        Ok(())
+    }
+
     fn release<S: Admission + ?Sized>(
         self,
         memory: &mut Memory<'_, S>,
@@ -371,6 +386,7 @@ impl<'a, Id: ViewTermId> Memo<'a, Id> {
         focus: Id,
         issuer: &mut IdIssuer<Id>,
         memory: &mut Memory<'_, S>,
+        observe: impl FnMut(Id),
     ) -> Result<Option<HashHex>, CanonError<D::ReadError>> {
         if self.table.is_empty() {
             return Ok(None);
@@ -391,6 +407,7 @@ impl<'a, Id: ViewTermId> Memo<'a, Id> {
         let Some(value) = self.table.get_by(|key| workspace.compare(prefix, key)) else {
             return Ok(None);
         };
+        workspace.observe_dependencies(state, focus, observe)?;
         // The complete frontier includes every initially issued ID the result
         // can encounter. Equal keys make each suffix ID fresh in this caller.
         for &id in &value.suffix {
@@ -409,11 +426,11 @@ impl<'a, Id: ViewTermId> Memo<'a, Id> {
     pub(super) fn completed<D: DatasetView<Id = Id>, S: Admission + ?Sized>(
         &mut self,
         state: &CanonState<'_, D>,
-        focus: Id,
+        (focus, hash): (Id, HashHex),
         issuer: &IdIssuer<Id>,
         entry: &IdIssuer<Id>,
-        hash: HashHex,
         memory: &mut Memory<'_, S>,
+        observe: impl FnMut(Id),
     ) -> Result<(), CanonError<D::ReadError>> {
         self.workspace(state, memory)?;
         let workspace = self
@@ -428,6 +445,7 @@ impl<'a, Id: ViewTermId> Memo<'a, Id> {
             entry.order().len(),
             memory,
         )?;
+        workspace.observe_dependencies(state, focus, observe)?;
         if self
             .table
             .get_by(|key| workspace.compare(prefix, key))

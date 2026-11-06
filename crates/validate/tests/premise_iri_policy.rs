@@ -107,6 +107,15 @@ fn the_presentation_nests_the_iri_parser_condition() {
     ] {
         let error = check_premise_iris(&[ONTOLOGY, premise]).expect_err(premise);
         assert_eq!(error.iri(), premise);
+        let original = purrdf_validate::native_error::to_json(&error)
+            .expect("the original premise refusal is inspectable");
+        assert_eq!(original["code"].as_str(), Some("premise-iri-not-absolute"));
+        assert_eq!(original["fields"]["iri"]["value"].as_str(), Some(premise));
+        assert_eq!(
+            original["fields"]["cause"]["value"],
+            purrdf_validate::native_error::to_json(error.cause())
+                .expect("the original IRI condition is inspectable")
+        );
         let presentation = error.presentation();
         assert_eq!(presentation.message_id(), "premise-iri-not-absolute");
         // The message every host renders IS the presentation's English, and it is the

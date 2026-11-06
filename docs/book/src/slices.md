@@ -20,6 +20,13 @@ described by a `manifest.ttl`:
 - **Catalog** — manifest-based discovery (`SliceCatalog::discover`), typed
   slice metadata (`SliceRecord`, `SliceTier`), and artifact roles. Slice
   identity comes from the manifest, not the directory name.
+- **Physical inputs** — `SliceInventory::discover` validates required manifests
+  and retains artifact roles, bytes, paths, raw digests and original RDF retrieval
+  IRIs without parsing or canonicalizing other RDF. `SliceInventory::into_records`
+  transfers the retained inputs without rereading files; `SliceInput::into_record`
+  explicitly admits retained RDF bytes with caller-owned canonicalization control;
+  invalid RDF or exhausted search remains an error. Physical inventory does not
+  establish a semantic identity or replace catalog admission.
 - **Ownership & dependencies** — term-ownership analysis (every declared term
   has exactly one owning slice), dependency edges with evidence,
   forbidden-edge rules (extension slices depend only on core), and
@@ -37,13 +44,15 @@ every public entry point.
 ```rust,no_run
 use std::path::Path;
 use purrdf::slice::{SliceCatalog, SliceVocab};
+use purrdf::{CanonicalizationControl, RDFC_V2_CORPUS_POLICY};
 
 // Your vocabulary namespace — PurRDF fabricates none.
 let vocab = SliceVocab::for_namespace("https://example.org/vocab/");
 assert_eq!(vocab.slice_class(), "https://example.org/vocab/Slice");
 
 // Discover each manifest.ttl below the caller's slices directory.
-let catalog = SliceCatalog::discover(Path::new("slices"), vocab)
+let mut control = CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None);
+let catalog = SliceCatalog::discover(Path::new("slices"), vocab, &mut control)
     .expect("slices discovered");
 for slice in catalog.records() {
     println!("{} ({:?})", slice.manifest.slice_iri, slice.manifest.tier);

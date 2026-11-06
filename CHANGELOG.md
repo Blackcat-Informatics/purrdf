@@ -8,7 +8,23 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
-- **Typed loss-ledger refusals (breaking Rust API):** Return owned completeness code lists and original borrowed soundness failures from loss-ledger checks. Projection, schema-import and LinkML refusals retain native loss evidence, with an explicit owned conversion for escaping callers.
+- **Typed loss-ledger refusals (breaking Rust API):** return owned completeness
+  code lists and original borrowed soundness failures from loss-ledger checks.
+  Projection, schema-import and LinkML refusals retain native loss evidence,
+  with an explicit owned conversion for escaping callers.
+
+- **Native retrieval refusals (breaking Rust API):**
+  `purrdf_cli::file_retrieval_iri` returns the original `SliceError` instead of
+  `String`, retaining the path and filesystem or IRI cause. The CLI keeps its
+  existing path diagnostic and `--base` hint. `PremiseIriError` exposes its
+  original IRI condition through borrowed structured inspection.
+
+- **Expanded JSON-LD and YAML-LD types:** node `@type` entries now use IRI strings,
+  so typed nodes and reifier annotations round-trip through the strict native
+  reader. This corrects the emitted type-entry bytes; the untyped expanded byte
+  baseline is unchanged.
+  The MIME/RDF and JSON-cover serialization transcript goldens follow those
+  corrected bytes.
 
 - **Extensible governors (breaking Rust API):** `ResourceDimension` and
   `GovernorParts` are non-exhaustive, dimension enumeration is a static slice,

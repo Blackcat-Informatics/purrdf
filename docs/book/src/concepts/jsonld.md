@@ -7,7 +7,8 @@ SPDX-License-Identifier: CC-BY-4.0
 
 PurRDF has three explicit JSON-LD/YAML-LD serialization modes:
 
-- `expanded` preserves the byte-frozen empty-`@context` representation;
+- `expanded` emits a deterministic empty-`@context` representation with `@type`
+  entries written as IRI strings;
 - `context` compiles a caller prefix map or local JSON-LD 1.1 context once and
   applies normative compaction;
 - `derived` deterministically assigns neutral `ns0`, `ns1`, ... aliases solely
@@ -333,8 +334,9 @@ document algorithm as well. Multiple lists retain explicit list objects when one
 list container would combine their identities. If an immutable context shadows
 every lossless spelling, compaction returns an actionable error. These configured
 outputs can be more compact
-than earlier carrier output. Frozen no-base, no-options expanded bytes are retained,
-and RDF JSON literals keep typed lexical forms whenever raw JSON coercion would
+than earlier carrier output. The untyped no-base, no-options expanded byte baseline
+is retained. Node types use IRI strings in both JSON-LD and YAML-LD. RDF JSON
+literals keep typed lexical forms whenever raw JSON coercion would
 change their spelling, collection shape or annotation identity.
 
 ## Document framing across hosts
