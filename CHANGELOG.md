@@ -8,6 +8,11 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Typed USTAR refusals (breaking Rust API):** archive readers, member
+  iterators and writers return `UstarError` with original offsets, lengths,
+  size-field bytes and native UTF-8 causes. Projection packages preserve that
+  cause through structured inspection and the standard error source chain.
+
 - **Fresh OWL refutation witnesses:** generated symbols are checked against the
   current term interner, including caller terms introduced after preparation.
   Repeated role-inclusion queries preserve distinct witness identities.
