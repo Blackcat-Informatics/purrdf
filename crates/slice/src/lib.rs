@@ -35,12 +35,12 @@ pub mod vocab;
 pub use analysis::{
     AnalysisError, AnalysisGraph, bundle_content_id, emit_analysis_graph, is_forbidden_edge,
 };
-pub use artifact::{ArtifactRecord, ArtifactRole};
+pub use artifact::{ArtifactInput, ArtifactRecord, ArtifactRole};
 pub use cache::{
     CacheKey, LinkUnit, Phase, ProductUnit, ToolchainContext, dependency_closure, link_unit_key,
     link_units, product_unit, product_unit_key, source_unit_key,
 };
-pub use catalog::{ManifestView, SliceCatalog, SliceRecord, SliceTier};
+pub use catalog::{ManifestView, SliceCatalog, SliceInput, SliceInventory, SliceRecord, SliceTier};
 pub use claim_view::{CLAIM_VIEW_FILE, emit_claim_view};
 pub use diagnostics::ProjectionDiagnostic;
 pub use dsl_stats_emit::emit_dsl_stats;

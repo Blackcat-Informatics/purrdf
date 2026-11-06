@@ -6,7 +6,7 @@
 
 use purrdf_slice::SliceVocab;
 use purrdf_slice::artifact::ArtifactRole;
-use purrdf_slice::catalog::SliceCatalog;
+use purrdf_slice::catalog::{SliceCatalog, SliceInventory};
 
 /// Pure fixtures use a caller-supplied example.org vocabulary.
 fn test_vocab() -> SliceVocab {
@@ -204,6 +204,111 @@ fn role_classification() {
     assert!(has_manifest, "manifest.ttl must be classified as Manifest");
     assert!(has_module, "module.ttl must be classified as Module");
     assert!(has_docs, "docs.md must be classified as Documentation");
+
+    let inventory = SliceInventory::discover(&dir, test_vocab()).expect("physical inventory");
+    let input = &inventory.records()[0];
+    assert_eq!(input.manifest(), &rec.manifest);
+    for (physical, admitted) in input.artifacts().iter().zip(&rec.artifacts) {
+        assert_eq!(physical.role(), &admitted.role);
+        assert_eq!(physical.logical_path(), admitted.logical_path);
+        assert_eq!(physical.media_type(), admitted.media_type);
+        assert_eq!(physical.raw_digest(), admitted.raw_digest);
+        assert_eq!(physical.content(), admitted.content);
+    }
+    assert_eq!(input.artifacts().len(), rec.artifacts.len());
+}
+
+/// Invalid nonmanifest RDF is still a physical input, but cannot become a catalog record.
+#[test]
+fn physical_inventory_defers_rdf_admission_and_preserves_reserved_roles() {
+    let tmp = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = tmp.path().join("slice");
+    copy_dir_all(&fixture_dir(), &dir).expect("copy fixture");
+    std::fs::create_dir(dir.join("mappings")).expect("mapping directory");
+    std::fs::write(dir.join("mappings/module.ttl"), b"invalid RDF").expect("invalid module");
+    std::fs::write(dir.join("mappings/map.ttl"), b"invalid RDF").expect("invalid mapping");
+
+    let inventory = SliceInventory::discover(tmp.path(), test_vocab()).expect("physical inputs");
+    let input = &inventory.records()[0];
+    for (path, role) in [
+        ("mappings/module.ttl", ArtifactRole::Module),
+        ("mappings/map.ttl", ArtifactRole::Mapping),
+    ] {
+        let artifact = input
+            .artifacts()
+            .iter()
+            .find(|artifact| artifact.logical_path() == path)
+            .expect("required physical artifact");
+        assert_eq!(artifact.role(), &role);
+        assert_eq!(artifact.content(), b"invalid RDF");
+    }
+    let input = SliceInventory::from_slice_dir(&dir, &test_vocab()).expect("physical slice");
+    let mut control =
+        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+    assert!(input.into_record(&mut control).is_err());
+    assert!(SliceCatalog::discover(tmp.path(), test_vocab(), &mut control).is_err());
+}
+
+/// Physical discovery still requires a readable, syntactically and structurally valid manifest.
+#[test]
+fn physical_inventory_requires_a_valid_manifest() {
+    let tmp = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = tmp.path().join("slice");
+    copy_dir_all(&fixture_dir(), &dir).expect("copy fixture");
+    assert!(SliceInventory::from_slice_dir(&dir, &test_vocab()).is_ok());
+    let manifest = dir.join("manifest.ttl");
+    std::fs::remove_file(&manifest).expect("remove manifest");
+    assert!(SliceInventory::from_slice_dir(&dir, &test_vocab()).is_err());
+    for bytes in [b"invalid RDF".as_slice(), b"# no slice owner\n".as_slice()] {
+        std::fs::write(&manifest, bytes).expect("invalid manifest");
+        assert!(SliceInventory::discover(tmp.path(), test_vocab()).is_err());
+    }
+}
+
+/// Admission preserves relative IRI identity and original bytes after the source tree is removed.
+#[test]
+fn retained_inventory_admits_original_relative_iris_after_removal() {
+    let tmp = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = tmp.path().join("slice");
+    copy_dir_all(&fixture_dir(), &dir).expect("copy fixture");
+    std::fs::write(
+        dir.join("module.ttl"),
+        b"<> <https://example.org/declares> <child> .\n",
+    )
+    .expect("relative source");
+    let mut control =
+        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+    let expected = SliceCatalog::from_slice_dir(&dir, &test_vocab(), &mut control)
+        .expect("direct semantic admission");
+    let input = SliceInventory::from_slice_dir(&dir, &test_vocab()).expect("retained inputs");
+    std::fs::remove_dir_all(&dir).expect("remove source tree");
+    let admitted = input.into_record(&mut control).expect("retained admission");
+    assert_eq!(admitted.manifest, expected.manifest);
+    assert_eq!(admitted.artifacts, expected.artifacts);
+}
+
+/// Physical inventory does not spend the caller's allowance; semantic admission must obey it.
+#[test]
+fn retained_inventory_refuses_exhausted_semantic_control() {
+    let tmp = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = tmp.path().join("slice");
+    copy_dir_all(&fixture_dir(), &dir).expect("copy fixture");
+    std::fs::write(
+        dir.join("module.ttl"),
+        b"_:a <https://example.org/p> _:b .\n_:b <https://example.org/p> _:a .\n",
+    )
+    .expect("symmetric source");
+    let input = SliceInventory::from_slice_dir(&dir, &test_vocab()).expect("physical inputs");
+    let mut control =
+        purrdf_core::CanonicalizationControl::new(purrdf_core::SearchPolicy::Finite(0), None);
+    match input.into_record(&mut control) {
+        Err(purrdf_slice::SliceError::Canonicalize { path, cause }) => {
+            assert_eq!(path, dir.join("module.ttl"));
+            assert!(matches!(*cause, purrdf_core::CanonError::BudgetExceeded(_)));
+        }
+        other => panic!("expected a native semantic refusal, got {other:?}"),
+    }
+    assert!(control.receipts().iter().any(|receipt| !receipt.completed));
 }
 
 // ── (e) Semantic-digest blank-node determinism ────────────────────────────────
