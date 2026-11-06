@@ -8,6 +8,12 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **JSON Schema evaluation policy (breaking Rust API):** reference-chain causes
+  retain attempted and selected maximum counts, and `EvaluationCause` is
+  non-exhaustive. Caller-selected policies share regex budgets and configure
+  consecutive references without disabling cycle detection or descent resets.
+  Existing convenience methods retain their defaults.
+
 - **Typed reasoning requests (breaking Rust API):** regime, session, proof,
   profile, import and fixture operations retain owned native failures through
   non-exhaustive errors. Facade request parsing shares the typed boundary;

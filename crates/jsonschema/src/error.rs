@@ -69,19 +69,25 @@ impl Error for UriRefusal {
 
 /// Why an evaluation stopped without reaching a verdict.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum EvaluationCause {
     /// A regular expression exhausted its matcher budget, or a string checked
     /// by the asserting `regex` format exceeds the ECMA-262 parser's limits.
     Pattern(PatternError),
-    /// More than [`crate::MAX_REF_CHAIN`] references were followed in a row
-    /// at one instance location.
-    ReferenceChain,
+    /// The caller's consecutive-reference maximum was exceeded at one
+    /// instance location.
+    ReferenceChain {
+        /// Number of references the refused chain would have followed.
+        attempted: usize,
+        /// Caller-selected maximum consecutive references.
+        maximum: usize,
+    },
 }
 
 impl purrdf_hash::error::StructuredError for EvaluationCause {
     purrdf_hash::error_visit! {
         Pattern(cause) => "schema-evaluation-pattern" { "cause" => Cause(cause) },
-        ReferenceChain => "schema-evaluation-reference-chain" { "limit" => Unsigned(crate::MAX_REF_CHAIN as u128) },
+        ReferenceChain { attempted, maximum } => "schema-evaluation-reference-chain" { "attempted" => Unsigned(*attempted as u128), "maximum" => Unsigned(*maximum as u128) },
     }
 }
 
@@ -89,10 +95,9 @@ impl fmt::Display for EvaluationCause {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Pattern(error) => error.fmt(f),
-            Self::ReferenceChain => write!(
+            Self::ReferenceChain { attempted, maximum } => write!(
                 f,
-                "more than {} references are followed in a row at one instance location",
-                crate::MAX_REF_CHAIN
+                "reference chain attempted {attempted} references at one instance location, exceeding the maximum {maximum}"
             ),
         }
     }
@@ -131,7 +136,7 @@ impl Error for EvaluationError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match &self.cause {
             EvaluationCause::Pattern(error) => Some(error),
-            EvaluationCause::ReferenceChain => None,
+            EvaluationCause::ReferenceChain { .. } => None,
         }
     }
 }
