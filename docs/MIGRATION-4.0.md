@@ -57,6 +57,45 @@ division, WKT and GeoJSON parsing resource policies, the SPARQL pre-binding rewr
 SPARQL diagnostic codes.
 Each has its own section below.
 
+## Typed reasoning request failures
+
+The public operations in `purrdf_validate::regime` now return owned,
+non-exhaustive `ReasoningError` values. This includes regime and service parsing,
+rule construction and listing, materialization, sessions, proof decoding and
+verification, profiles, conclusion queries and import configuration. The facade's
+`QueryEntailmentPlan::parse` returns the same type, re-exported as
+`purrdf::reasoning::ReasoningRequestError`; the facade's existing generic
+`ReasoningError<E>` still describes query execution.
+
+Match the semantic variants with a wildcard, inspect their borrowed structured
+fields, or follow their standard error sources. Original spellings, supplied
+programs, RDF input roles, native parser failures and proof causes remain owned by
+the error. A directness refusal owns its original certificate. Render `Display`
+at the presentation boundary; the human renderers such as
+`render_entail_error_in` remain available for callers that already hold a native
+error. Valid answers, certificate bytes and request precedence are unchanged.
+
+Shipping fixture readers and checkers also return typed grammar, comparison and
+case failures. They retain line numbers, directives, expected and produced text,
+and original case causes. Update function-pointer aliases and `?` conversions
+that previously required `String` or `CanonicalServiceError`.
+
+`parse_scope_binding` returns `ScopeBindingError`, which owns the original
+binding. Its implementation lives in `purrdf_shapes::scope_binding` and remains
+re-exported through Validate. It still splits at the first equals sign and leaves
+empty names and values to their existing downstream interpretation. Parallel
+host import arrays use Core's `ImportArrayError`, retaining both lengths or the
+original storage refusal.
+
+Python reasoning failures keep their existing `ValueError` messages and expose
+`native_cause` and `native_cause_json`. C errors retain the corresponding native
+record through `purrdf_error_native_cause_json`; query, canonicalization and
+storage classification remain available. JavaScript reasoning errors carry the
+retained native fields and diagnostic record on both synchronous and
+asynchronous query paths. Attaching canonical-search receipts preserves the
+complete request cause. Hosts must read structured fields rather than parse
+message text.
+
 ## Extensible source formats and glob refusals
 
 `SourceFormat` and `purrdf_glob::SyntaxReason` are now non-exhaustive.

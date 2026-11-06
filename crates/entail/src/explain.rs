@@ -206,6 +206,17 @@ impl std::error::Error for ExplainError {
     }
 }
 
+impl purrdf_hash::error::StructuredError for ExplainError {
+    purrdf_hash::error_visit! {
+        NotDerived { conclusion } => "explanation-not-derived" { "conclusion" => Text(conclusion) },
+        BackwardDisagreement { conclusion } => "explanation-backward-disagreement" { "conclusion" => Text(conclusion) },
+        NotEntailed => "explanation-not-entailed" {},
+        Existential(regime) => "explanation-existential" { "regime" => Code(regime.token()) },
+        Entail(cause) => "explanation-run" { "cause" => Cause(cause.as_ref()) },
+        Unchecked(cause) => "explanation-unchecked" { "cause" => Cause(cause) },
+    }
+}
+
 impl From<EntailError> for ExplainError {
     fn from(error: EntailError) -> Self {
         Self::Entail(Box::new(error))

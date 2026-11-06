@@ -571,6 +571,51 @@ impl purrdf_hash::error::StructuredError for DirectnessRefusal<'_> {
     }
 }
 
+/// An owned refusal of exact direct answers, retaining the original certificate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnedDirectnessRefusal {
+    certificate: DlCertificate,
+}
+
+impl OwnedDirectnessRefusal {
+    /// Retain a certificate only when it actually refuses exact direct answers.
+    ///
+    /// # Errors
+    /// Returns the original certificate when its completeness is fully decided.
+    pub fn try_from_certificate(certificate: DlCertificate) -> Result<Self, Box<DlCertificate>> {
+        if certificate.completeness() == DlCompleteness::Decided {
+            Err(Box::new(certificate))
+        } else {
+            Ok(Self { certificate })
+        }
+    }
+
+    /// The original certificate that prevents an exact direct answer.
+    #[must_use]
+    pub const fn certificate(&self) -> &DlCertificate {
+        &self.certificate
+    }
+}
+
+impl core::fmt::Display for OwnedDirectnessRefusal {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        DirectnessRefusal {
+            certificate: &self.certificate,
+        }
+        .fmt(f)
+    }
+}
+
+impl std::error::Error for OwnedDirectnessRefusal {}
+
+impl purrdf_hash::error::StructuredError for OwnedDirectnessRefusal {
+    purrdf_hash::error_visit! {
+        @record self { certificate } => "owl-directness-unavailable" {
+            "certificate" => Record(&self.certificate),
+        }
+    }
+}
+
 impl<T> Certified<T> {
     /// Pair an answer with its certificate and, when one was recorded, its proof term.
     pub(crate) const fn new(

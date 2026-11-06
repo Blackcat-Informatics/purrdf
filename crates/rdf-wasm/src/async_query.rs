@@ -2885,7 +2885,7 @@ impl AsyncJob {
             .and_then(JobError::canonicalization_json)
     }
 
-    /// Exact native fields from the retained canonicalization refusal.
+    /// Exact native fields from the original retained refusal.
     #[wasm_bindgen(getter, js_name = errorNativeCauseJson)]
     pub fn error_native_cause_json(&self) -> Result<Option<String>, JsError> {
         self.inner
@@ -2899,12 +2899,14 @@ impl AsyncJob {
 
     /// An owned native cause; its admission grant outlives the job handle.
     #[wasm_bindgen(getter, js_name = errorNativeCause)]
-    pub fn error_native_cause(&self) -> Option<crate::canonical::CanonicalCause> {
+    pub fn error_native_cause(&self) -> Result<Option<JsValue>, JsError> {
         self.inner
             .error
             .borrow()
             .as_ref()
-            .and_then(JobError::native_cause)
+            .map(JobError::native_cause)
+            .transpose()
+            .map(Option::flatten)
     }
 
     /// The effect the job is suspended on, once; `undefined` when there is none.

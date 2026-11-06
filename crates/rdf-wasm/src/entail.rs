@@ -41,8 +41,8 @@
 //! unchanged.
 
 use purrdf_validate::regime::{
-    MaterializeLimits, ReasonerSession, ReasoningAnswer as BoundaryAnswer, ReasoningText,
-    RegimeClosure as BoundaryClosure, RegimeHost, certain_answers_to_string,
+    MaterializeLimits, ReasonerSession, ReasoningAnswer as BoundaryAnswer, ReasoningError,
+    ReasoningText, RegimeClosure as BoundaryClosure, RegimeHost, certain_answers_to_string,
     check_absent_proof_is_not_verifiable, check_dl_proof, check_dl_proof_golden_vectors,
     check_inconsistent_refusal, check_regime_golden_vectors, classify_to_string,
     consistency_to_string, entails_to_string, explain_conclusion_to_string, extension_rules_string,
@@ -51,6 +51,20 @@ use purrdf_validate::regime::{
     prove_to_string, realize_to_string, rules_string, verify_entailment_to_string,
 };
 use wasm_bindgen::prelude::*;
+
+/// Preserve the original native fields with the existing plain rejection message.
+pub(crate) fn reasoning_error(error: ReasoningError) -> JsValue {
+    crate::operation::native_diagnostic_to_js_with_message(error.into_diagnostic())
+}
+
+/// Use the shared canonical executor with the native reasoning error mapper.
+fn run_reasoning<T>(
+    policy: &str,
+    cancel: Option<&crate::query::CancellationToken>,
+    operation: impl FnOnce(&mut purrdf_core::CanonicalizationControl<'_>) -> Result<T, ReasoningError>,
+) -> Result<(T, String), JsValue> {
+    crate::canonical::run_with(policy, cancel, operation, reasoning_error)
+}
 
 /// One closure of one document under one regime: the canonical N-Quads and the
 /// rendered reasoning report.
@@ -124,7 +138,7 @@ pub(crate) fn materialize_impl(
     max_join_steps: Option<u64>,
     max_term_arena_bytes: Option<u64>,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
-) -> Result<RegimeClosure, purrdf_validate::canonical::CanonicalServiceError> {
+) -> Result<RegimeClosure, ReasoningError> {
     let imports = import_pairs(import_iris, import_documents)?;
     let premise_iris: Vec<&str> = premise_iris.iter().map(String::as_str).collect();
     materialize_to_nquads_string_with(
@@ -199,27 +213,26 @@ pub fn entail_materialize(
     canonical_search: &str,
     cancel: Option<crate::query::CancellationToken>,
 ) -> Result<RegimeClosure, JsValue> {
-    let (mut value, receipts) =
-        crate::canonical::run(canonical_search, cancel.as_ref(), |control| {
-            materialize_impl(
-                document,
-                regime,
-                program,
-                &import_iris,
-                &import_documents,
-                &premise_iris,
-                max_stored_facts,
-                max_join_steps,
-                max_term_arena_bytes,
-                control,
-            )
-        })?;
+    let (mut value, receipts) = run_reasoning(canonical_search, cancel.as_ref(), |control| {
+        materialize_impl(
+            document,
+            regime,
+            program,
+            &import_iris,
+            &import_documents,
+            &premise_iris,
+            max_stored_facts,
+            max_join_steps,
+            max_term_arena_bytes,
+            control,
+        )
+    })?;
     value.canonicalization_json = receipts;
     Ok(value)
 }
 
 /// The rule table `regime` is *defined by*. See [`entail_rules`].
-pub(crate) fn rules_impl(regime: &str) -> Result<Vec<String>, String> {
+pub(crate) fn rules_impl(regime: &str) -> Result<Vec<String>, ReasoningError> {
     Ok(rules_string(regime)?.lines().map(str::to_owned).collect())
 }
 
@@ -234,12 +247,12 @@ pub(crate) fn rules_impl(regime: &str) -> Result<Vec<String>, String> {
 ///
 /// Throws for an unknown regime spelling, naming the accepted set.
 #[wasm_bindgen(js_name = entailRules)]
-pub fn entail_rules(regime: &str) -> Result<Vec<String>, JsError> {
-    rules_impl(regime).map_err(|e| JsError::new(&e))
+pub fn entail_rules(regime: &str) -> Result<Vec<String>, JsValue> {
+    rules_impl(regime).map_err(reasoning_error)
 }
 
 /// The subset of the rule table this build fires. See [`entail_implemented_rules`].
-pub(crate) fn implemented_rules_impl(regime: &str) -> Result<Vec<String>, String> {
+pub(crate) fn implemented_rules_impl(regime: &str) -> Result<Vec<String>, ReasoningError> {
     Ok(implemented_rules_string(regime)?
         .lines()
         .map(str::to_owned)
@@ -254,12 +267,12 @@ pub(crate) fn implemented_rules_impl(regime: &str) -> Result<Vec<String>, String
 ///
 /// Throws for an unknown regime spelling, naming the accepted set.
 #[wasm_bindgen(js_name = entailImplementedRules)]
-pub fn entail_implemented_rules(regime: &str) -> Result<Vec<String>, JsError> {
-    implemented_rules_impl(regime).map_err(|e| JsError::new(&e))
+pub fn entail_implemented_rules(regime: &str) -> Result<Vec<String>, JsValue> {
+    implemented_rules_impl(regime).map_err(reasoning_error)
 }
 
 /// The rules this build fires beyond the specification table. See [`entail_extensions`].
-pub(crate) fn extensions_impl(regime: &str) -> Result<Vec<String>, String> {
+pub(crate) fn extensions_impl(regime: &str) -> Result<Vec<String>, ReasoningError> {
     Ok(extension_rules_string(regime)?
         .lines()
         .map(str::to_owned)
@@ -279,8 +292,8 @@ pub(crate) fn extensions_impl(regime: &str) -> Result<Vec<String>, String> {
 ///
 /// Throws for an unknown regime spelling, naming the accepted set.
 #[wasm_bindgen(js_name = entailExtensions)]
-pub fn entail_extensions(regime: &str) -> Result<Vec<String>, JsError> {
-    extensions_impl(regime).map_err(|e| JsError::new(&e))
+pub fn entail_extensions(regime: &str) -> Result<Vec<String>, JsValue> {
+    extensions_impl(regime).map_err(reasoning_error)
 }
 
 /// `entailCheckGoldenVectors()` — run the committed tri-host golden vector
@@ -310,7 +323,7 @@ pub fn entail_check_golden_vectors(
     canonical_search: &str,
     cancel: Option<crate::query::CancellationToken>,
 ) -> Result<crate::canonical::CanonicalResult, JsValue> {
-    let ((), receipts) = crate::canonical::run(canonical_search, cancel.as_ref(), |control| {
+    let ((), receipts) = run_reasoning(canonical_search, cancel.as_ref(), |control| {
         check_regime_golden_vectors(control)
     })?;
     Ok(crate::canonical::CanonicalResult::new(
@@ -340,7 +353,7 @@ pub fn entail_check_inconsistent_refusal(
     canonical_search: &str,
     cancel: Option<crate::query::CancellationToken>,
 ) -> Result<crate::canonical::CanonicalResult, JsValue> {
-    let ((), receipts) = crate::canonical::run(canonical_search, cancel.as_ref(), |control| {
+    let ((), receipts) = run_reasoning(canonical_search, cancel.as_ref(), |control| {
         check_inconsistent_refusal(control)
     })?;
     Ok(crate::canonical::CanonicalResult::new(
@@ -461,7 +474,7 @@ pub(crate) fn consistency_impl(
     step_cap: u32,
     work_cap: u32,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
-) -> Result<ReasoningAnswer, purrdf_validate::canonical::CanonicalServiceError> {
+) -> Result<ReasoningAnswer, ReasoningError> {
     let imports = import_pairs(import_iris, import_documents)?;
     let premise_iris: Vec<&str> = premise_iris.iter().map(String::as_str).collect();
     consistency_to_string(
@@ -515,18 +528,17 @@ pub fn entail_consistency(
     canonical_search: &str,
     cancel: Option<crate::query::CancellationToken>,
 ) -> Result<ReasoningAnswer, JsValue> {
-    let (mut value, receipts) =
-        crate::canonical::run(canonical_search, cancel.as_ref(), |control| {
-            consistency_impl(
-                document,
-                &import_iris,
-                &import_documents,
-                &premise_iris,
-                step_cap,
-                work_cap,
-                control,
-            )
-        })?;
+    let (mut value, receipts) = run_reasoning(canonical_search, cancel.as_ref(), |control| {
+        consistency_impl(
+            document,
+            &import_iris,
+            &import_documents,
+            &premise_iris,
+            step_cap,
+            work_cap,
+            control,
+        )
+    })?;
     value.canonicalization_json = receipts;
     Ok(value)
 }
@@ -537,7 +549,7 @@ pub(crate) fn classify_impl(
     step_cap: u32,
     work_cap: u32,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
-) -> Result<ReasoningAnswer, purrdf_validate::canonical::CanonicalServiceError> {
+) -> Result<ReasoningAnswer, ReasoningError> {
     classify_to_string(document, step_cap, work_cap, control).map(ReasoningAnswer::from)
 }
 
@@ -564,10 +576,9 @@ pub fn entail_classify(
     canonical_search: &str,
     cancel: Option<crate::query::CancellationToken>,
 ) -> Result<ReasoningAnswer, JsValue> {
-    let (mut value, receipts) =
-        crate::canonical::run(canonical_search, cancel.as_ref(), |control| {
-            classify_impl(document, step_cap, work_cap, control)
-        })?;
+    let (mut value, receipts) = run_reasoning(canonical_search, cancel.as_ref(), |control| {
+        classify_impl(document, step_cap, work_cap, control)
+    })?;
     value.canonicalization_json = receipts;
     Ok(value)
 }
@@ -578,7 +589,7 @@ pub(crate) fn realize_impl(
     step_cap: u32,
     work_cap: u32,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
-) -> Result<ReasoningAnswer, purrdf_validate::canonical::CanonicalServiceError> {
+) -> Result<ReasoningAnswer, ReasoningError> {
     realize_to_string(document, step_cap, work_cap, control).map(ReasoningAnswer::from)
 }
 
@@ -599,10 +610,9 @@ pub fn entail_realize(
     canonical_search: &str,
     cancel: Option<crate::query::CancellationToken>,
 ) -> Result<ReasoningAnswer, JsValue> {
-    let (mut value, receipts) =
-        crate::canonical::run(canonical_search, cancel.as_ref(), |control| {
-            realize_impl(document, step_cap, work_cap, control)
-        })?;
+    let (mut value, receipts) = run_reasoning(canonical_search, cancel.as_ref(), |control| {
+        realize_impl(document, step_cap, work_cap, control)
+    })?;
     value.canonicalization_json = receipts;
     Ok(value)
 }
@@ -614,7 +624,7 @@ pub(crate) fn instances_impl(
     step_cap: u32,
     work_cap: u32,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
-) -> Result<ReasoningAnswer, purrdf_validate::canonical::CanonicalServiceError> {
+) -> Result<ReasoningAnswer, ReasoningError> {
     instances_to_string(document, class, step_cap, work_cap, control).map(ReasoningAnswer::from)
 }
 
@@ -640,10 +650,9 @@ pub fn entail_instances(
     canonical_search: &str,
     cancel: Option<crate::query::CancellationToken>,
 ) -> Result<ReasoningAnswer, JsValue> {
-    let (mut value, receipts) =
-        crate::canonical::run(canonical_search, cancel.as_ref(), |control| {
-            instances_impl(document, class, step_cap, work_cap, control)
-        })?;
+    let (mut value, receipts) = run_reasoning(canonical_search, cancel.as_ref(), |control| {
+        instances_impl(document, class, step_cap, work_cap, control)
+    })?;
     value.canonicalization_json = receipts;
     Ok(value)
 }
@@ -655,7 +664,7 @@ pub(crate) fn entails_impl(
     step_cap: u32,
     work_cap: u32,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
-) -> Result<ReasoningAnswer, purrdf_validate::canonical::CanonicalServiceError> {
+) -> Result<ReasoningAnswer, ReasoningError> {
     entails_to_string(document, axiom, step_cap, work_cap, control).map(ReasoningAnswer::from)
 }
 
@@ -688,16 +697,15 @@ pub fn entail_entails(
     canonical_search: &str,
     cancel: Option<crate::query::CancellationToken>,
 ) -> Result<ReasoningAnswer, JsValue> {
-    let (mut value, receipts) =
-        crate::canonical::run(canonical_search, cancel.as_ref(), |control| {
-            entails_impl(document, axiom, step_cap, work_cap, control)
-        })?;
+    let (mut value, receipts) = run_reasoning(canonical_search, cancel.as_ref(), |control| {
+        entails_impl(document, axiom, step_cap, work_cap, control)
+    })?;
     value.canonicalization_json = receipts;
     Ok(value)
 }
 
 /// OWL 2 profile certification. See [`entail_profile`].
-pub(crate) fn profile_impl(document: &str) -> Result<ReasoningAnswer, String> {
+pub(crate) fn profile_impl(document: &str) -> Result<ReasoningAnswer, ReasoningError> {
     profile_to_string(document).map(ReasoningAnswer::from)
 }
 
@@ -715,8 +723,8 @@ pub(crate) fn profile_impl(document: &str) -> Result<ReasoningAnswer, String> {
 ///
 /// Throws on a malformed document.
 #[wasm_bindgen(js_name = entailProfile)]
-pub fn entail_profile(document: &str) -> Result<ReasoningAnswer, JsError> {
-    profile_impl(document).map_err(|e| JsError::new(&e))
+pub fn entail_profile(document: &str) -> Result<ReasoningAnswer, JsValue> {
+    profile_impl(document).map_err(reasoning_error)
 }
 
 /// Locality-based module extraction. See [`entail_extract_module`].
@@ -725,7 +733,7 @@ pub(crate) fn extract_module_impl(
     signature: &str,
     method: &str,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
-) -> Result<ReasoningAnswer, purrdf_validate::canonical::CanonicalServiceError> {
+) -> Result<ReasoningAnswer, ReasoningError> {
     extract_module_to_string(document, signature, method, control).map(ReasoningAnswer::from)
 }
 
@@ -754,10 +762,9 @@ pub fn entail_extract_module(
     canonical_search: &str,
     cancel: Option<crate::query::CancellationToken>,
 ) -> Result<ReasoningAnswer, JsValue> {
-    let (mut value, receipts) =
-        crate::canonical::run(canonical_search, cancel.as_ref(), |control| {
-            extract_module_impl(document, signature, method, control)
-        })?;
+    let (mut value, receipts) = run_reasoning(canonical_search, cancel.as_ref(), |control| {
+        extract_module_impl(document, signature, method, control)
+    })?;
     value.canonicalization_json = receipts;
     Ok(value)
 }
@@ -767,7 +774,7 @@ pub(crate) fn justify_impl(
     document: &str,
     axiom: &str,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
-) -> Result<ReasoningAnswer, purrdf_validate::canonical::CanonicalServiceError> {
+) -> Result<ReasoningAnswer, ReasoningError> {
     justify_to_string(document, axiom, control).map(ReasoningAnswer::from)
 }
 
@@ -798,10 +805,9 @@ pub fn entail_justify(
     canonical_search: &str,
     cancel: Option<crate::query::CancellationToken>,
 ) -> Result<ReasoningAnswer, JsValue> {
-    let (mut value, receipts) =
-        crate::canonical::run(canonical_search, cancel.as_ref(), |control| {
-            justify_impl(document, axiom, control)
-        })?;
+    let (mut value, receipts) = run_reasoning(canonical_search, cancel.as_ref(), |control| {
+        justify_impl(document, axiom, control)
+    })?;
     value.canonicalization_json = receipts;
     Ok(value)
 }
@@ -811,7 +817,7 @@ pub(crate) fn explain_conclusion_impl(
     document: &str,
     regime: &str,
     conclusion: &str,
-) -> Result<ReasoningAnswer, String> {
+) -> Result<ReasoningAnswer, ReasoningError> {
     explain_conclusion_to_string(document, regime, conclusion).map(ReasoningAnswer::from)
 }
 
@@ -836,8 +842,8 @@ pub fn entail_explain_conclusion(
     document: &str,
     regime: &str,
     conclusion: &str,
-) -> Result<ReasoningAnswer, JsError> {
-    explain_conclusion_impl(document, regime, conclusion).map_err(|e| JsError::new(&e))
+) -> Result<ReasoningAnswer, JsValue> {
+    explain_conclusion_impl(document, regime, conclusion).map_err(reasoning_error)
 }
 
 // ── The conclusion-directed entailment services ─────────────────────────────────
@@ -849,7 +855,7 @@ pub(crate) fn entailment_import_map(
     import_iris: &[String],
     import_documents: &[String],
     premise_iris: &[String],
-) -> Result<purrdf::entail::ImportMap, String> {
+) -> Result<purrdf::entail::ImportMap, ReasoningError> {
     let imports = import_pairs(import_iris, import_documents)?;
     let premise_iris: Vec<&str> = premise_iris.iter().map(String::as_str).collect();
     purrdf_validate::premise_import_map(&imports, &premise_iris)
@@ -893,20 +899,22 @@ pub(crate) const fn wasm_limits(
 pub(crate) fn import_pairs<'a>(
     iris: &'a [String],
     documents: &'a [String],
-) -> Result<Vec<(&'a str, &'a str)>, String> {
+) -> Result<Vec<(&'a str, &'a str)>, purrdf_core::imports::ImportArrayError> {
     if iris.len() != documents.len() {
-        return Err(format!(
-            "the import table has {} ontology IRI(s) and {} document(s); an entry is a PAIR, \
-             so truncating to the shorter array would drop an import the caller supplied",
-            iris.len(),
-            documents.len()
-        ));
+        return Err(purrdf_core::imports::ImportArrayError::Length {
+            iris: iris.len(),
+            documents: documents.len(),
+        });
     }
-    Ok(iris
-        .iter()
-        .zip(documents)
-        .map(|(iri, document)| (iri.as_str(), document.as_str()))
-        .collect())
+    let mut pairs = Vec::new();
+    let mut resident = purrdf_lex::allocation::Resident;
+    purrdf_lex::allocation::Memory::new(&mut resident).reserve(&mut pairs, iris.len())?;
+    pairs.extend(
+        iris.iter()
+            .zip(documents)
+            .map(|(iri, document)| (iri.as_str(), document.as_str())),
+    );
+    Ok(pairs)
 }
 
 /// The certain answers of a basic graph pattern. See [`entail_certain_answers`].
@@ -918,7 +926,7 @@ pub(crate) fn certain_answers_impl(
     import_documents: &[String],
     premise_iris: &[String],
     limits: &MaterializeLimits,
-) -> Result<ReasoningAnswer, String> {
+) -> Result<ReasoningAnswer, ReasoningError> {
     let imports = import_pairs(import_iris, import_documents)?;
     let premise_iris: Vec<&str> = premise_iris.iter().map(String::as_str).collect();
     certain_answers_to_string(regime, document, pattern, &imports, &premise_iris, limits)
@@ -1001,7 +1009,7 @@ pub fn entail_certain_answers(
     max_stored_facts: Option<u64>,
     max_join_steps: Option<u64>,
     max_term_arena_bytes: Option<u64>,
-) -> Result<ReasoningAnswer, JsError> {
+) -> Result<ReasoningAnswer, JsValue> {
     certain_answers_impl(
         regime,
         document,
@@ -1011,7 +1019,7 @@ pub fn entail_certain_answers(
         &premise_iris,
         &wasm_limits(max_stored_facts, max_join_steps, max_term_arena_bytes),
     )
-    .map_err(|e| JsError::new(&e))
+    .map_err(reasoning_error)
 }
 
 /// Conclusion-directed entailment under a regime. See [`entail_graph_entails`].
@@ -1023,7 +1031,7 @@ pub(crate) fn graph_entails_impl(
     import_documents: &[String],
     premise_iris: &[String],
     limits: &MaterializeLimits,
-) -> Result<ReasoningAnswer, String> {
+) -> Result<ReasoningAnswer, ReasoningError> {
     let imports = import_pairs(import_iris, import_documents)?;
     let premise_iris: Vec<&str> = premise_iris.iter().map(String::as_str).collect();
     graph_entails_to_string(regime, premise, conclusion, &imports, &premise_iris, limits)
@@ -1072,7 +1080,7 @@ pub fn entail_graph_entails(
     max_stored_facts: Option<u64>,
     max_join_steps: Option<u64>,
     max_term_arena_bytes: Option<u64>,
-) -> Result<ReasoningAnswer, JsError> {
+) -> Result<ReasoningAnswer, JsValue> {
     graph_entails_impl(
         regime,
         premise,
@@ -1082,7 +1090,7 @@ pub fn entail_graph_entails(
         &premise_iris,
         &wasm_limits(max_stored_facts, max_join_steps, max_term_arena_bytes),
     )
-    .map_err(|e| JsError::new(&e))
+    .map_err(reasoning_error)
 }
 
 /// Entailment with its warrant RE-DECIDED. See [`entail_verify_entailment`].
@@ -1094,7 +1102,7 @@ pub(crate) fn verify_entailment_impl(
     import_documents: &[String],
     premise_iris: &[String],
     limits: &MaterializeLimits,
-) -> Result<ReasoningAnswer, String> {
+) -> Result<ReasoningAnswer, ReasoningError> {
     let imports = import_pairs(import_iris, import_documents)?;
     let premise_iris: Vec<&str> = premise_iris.iter().map(String::as_str).collect();
     verify_entailment_to_string(regime, premise, conclusion, &imports, &premise_iris, limits)
@@ -1136,7 +1144,7 @@ pub fn entail_verify_entailment(
     max_stored_facts: Option<u64>,
     max_join_steps: Option<u64>,
     max_term_arena_bytes: Option<u64>,
-) -> Result<ReasoningAnswer, JsError> {
+) -> Result<ReasoningAnswer, JsValue> {
     verify_entailment_impl(
         regime,
         premise,
@@ -1146,7 +1154,7 @@ pub fn entail_verify_entailment(
         &premise_iris,
         &wasm_limits(max_stored_facts, max_join_steps, max_term_arena_bytes),
     )
-    .map_err(|e| JsError::new(&e))
+    .map_err(reasoning_error)
 }
 
 // ── Proofs: opt-in to produce, and a checker to consume ─────────────────────────
@@ -1159,7 +1167,7 @@ pub(crate) fn prove_impl(
     step_cap: u32,
     work_cap: u32,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
-) -> Result<ReasoningAnswer, purrdf_validate::canonical::CanonicalServiceError> {
+) -> Result<ReasoningAnswer, ReasoningError> {
     prove_to_string(document, service, argument, step_cap, work_cap, control)
         .map(ReasoningAnswer::from)
 }
@@ -1200,10 +1208,9 @@ pub fn entail_prove(
     canonical_search: &str,
     cancel: Option<crate::query::CancellationToken>,
 ) -> Result<ReasoningAnswer, JsValue> {
-    let (mut value, receipts) =
-        crate::canonical::run(canonical_search, cancel.as_ref(), |control| {
-            prove_impl(document, service, argument, step_cap, work_cap, control)
-        })?;
+    let (mut value, receipts) = run_reasoning(canonical_search, cancel.as_ref(), |control| {
+        prove_impl(document, service, argument, step_cap, work_cap, control)
+    })?;
     value.canonicalization_json = receipts;
     Ok(value)
 }
@@ -1218,7 +1225,7 @@ pub(crate) fn check_proof_impl(
     certificate: &str,
     proof: &str,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
-) -> Result<String, purrdf_validate::canonical::CanonicalServiceError> {
+) -> Result<String, ReasoningError> {
     check_dl_proof(
         document,
         service,
@@ -1263,7 +1270,7 @@ pub fn entail_check_proof(
     canonical_search: &str,
     cancel: Option<crate::query::CancellationToken>,
 ) -> Result<crate::canonical::CanonicalResult, JsValue> {
-    let (value, receipts) = crate::canonical::run(canonical_search, cancel.as_ref(), |control| {
+    let (value, receipts) = run_reasoning(canonical_search, cancel.as_ref(), |control| {
         check_proof_impl(
             document,
             service,
@@ -1302,7 +1309,7 @@ pub fn entail_check_proof_golden_vectors(
     canonical_search: &str,
     cancel: Option<crate::query::CancellationToken>,
 ) -> Result<crate::canonical::CanonicalResult, JsValue> {
-    let ((), receipts) = crate::canonical::run(canonical_search, cancel.as_ref(), |control| {
+    let ((), receipts) = run_reasoning(canonical_search, cancel.as_ref(), |control| {
         check_dl_proof_golden_vectors(control)
     })?;
     Ok(crate::canonical::CanonicalResult::new(
@@ -1330,7 +1337,7 @@ pub fn entail_check_absent_proof(
     canonical_search: &str,
     cancel: Option<crate::query::CancellationToken>,
 ) -> Result<crate::canonical::CanonicalResult, JsValue> {
-    let ((), receipts) = crate::canonical::run(canonical_search, cancel.as_ref(), |control| {
+    let ((), receipts) = run_reasoning(canonical_search, cancel.as_ref(), |control| {
         check_absent_proof_is_not_verifiable(control)
     })?;
     Ok(crate::canonical::CanonicalResult::new(
@@ -1392,10 +1399,10 @@ impl Reasoner {
     ///
     /// Throws if `document` fails to parse.
     #[wasm_bindgen(constructor)]
-    pub fn new(document: &str, step_cap: u32, work_cap: u32) -> Result<Self, JsError> {
+    pub fn new(document: &str, step_cap: u32, work_cap: u32) -> Result<Self, JsValue> {
         ReasonerSession::open(document, step_cap, work_cap)
             .map(|session| Self { session })
-            .map_err(|e| JsError::new(&e))
+            .map_err(reasoning_error)
     }
 
     /// `Reasoner.withProofs(document, stepCap, workCap)` → a session that RECORDS a proof
@@ -1410,10 +1417,10 @@ impl Reasoner {
     ///
     /// Throws if `document` fails to parse.
     #[wasm_bindgen(js_name = withProofs)]
-    pub fn with_proofs(document: &str, step_cap: u32, work_cap: u32) -> Result<Self, JsError> {
+    pub fn with_proofs(document: &str, step_cap: u32, work_cap: u32) -> Result<Self, JsValue> {
         ReasonerSession::open_with_proofs(document, step_cap, work_cap)
             .map(|session| Self { session })
-            .map_err(|e| JsError::new(&e))
+            .map_err(reasoning_error)
     }
 
     /// Whether this session records proof terms — `true` only for `Reasoner.withProofs`.
@@ -1437,12 +1444,11 @@ impl Reasoner {
         canonical_search: &str,
         cancel: Option<crate::query::CancellationToken>,
     ) -> Result<ReasoningAnswer, JsValue> {
-        let (mut value, receipts) =
-            crate::canonical::run(canonical_search, cancel.as_ref(), |control| {
-                self.session
-                    .prove(service, argument, control)
-                    .map(ReasoningAnswer::from)
-            })?;
+        let (mut value, receipts) = run_reasoning(canonical_search, cancel.as_ref(), |control| {
+            self.session
+                .prove(service, argument, control)
+                .map(ReasoningAnswer::from)
+        })?;
         value.canonicalization_json = receipts;
         Ok(value)
     }
@@ -1457,10 +1463,9 @@ impl Reasoner {
         canonical_search: &str,
         cancel: Option<crate::query::CancellationToken>,
     ) -> Result<ReasoningAnswer, JsValue> {
-        let (mut value, receipts) =
-            crate::canonical::run(canonical_search, cancel.as_ref(), |control| {
-                self.session.consistency(control).map(ReasoningAnswer::from)
-            })?;
+        let (mut value, receipts) = run_reasoning(canonical_search, cancel.as_ref(), |control| {
+            self.session.consistency(control).map(ReasoningAnswer::from)
+        })?;
         value.canonicalization_json = receipts;
         Ok(value)
     }
@@ -1475,10 +1480,9 @@ impl Reasoner {
         canonical_search: &str,
         cancel: Option<crate::query::CancellationToken>,
     ) -> Result<ReasoningAnswer, JsValue> {
-        let (mut value, receipts) =
-            crate::canonical::run(canonical_search, cancel.as_ref(), |control| {
-                self.session.classify(control).map(ReasoningAnswer::from)
-            })?;
+        let (mut value, receipts) = run_reasoning(canonical_search, cancel.as_ref(), |control| {
+            self.session.classify(control).map(ReasoningAnswer::from)
+        })?;
         value.canonicalization_json = receipts;
         Ok(value)
     }
@@ -1493,10 +1497,9 @@ impl Reasoner {
         canonical_search: &str,
         cancel: Option<crate::query::CancellationToken>,
     ) -> Result<ReasoningAnswer, JsValue> {
-        let (mut value, receipts) =
-            crate::canonical::run(canonical_search, cancel.as_ref(), |control| {
-                self.session.realize(control).map(ReasoningAnswer::from)
-            })?;
+        let (mut value, receipts) = run_reasoning(canonical_search, cancel.as_ref(), |control| {
+            self.session.realize(control).map(ReasoningAnswer::from)
+        })?;
         value.canonicalization_json = receipts;
         Ok(value)
     }
@@ -1512,12 +1515,11 @@ impl Reasoner {
         canonical_search: &str,
         cancel: Option<crate::query::CancellationToken>,
     ) -> Result<ReasoningAnswer, JsValue> {
-        let (mut value, receipts) =
-            crate::canonical::run(canonical_search, cancel.as_ref(), |control| {
-                self.session
-                    .instances(class, control)
-                    .map(ReasoningAnswer::from)
-            })?;
+        let (mut value, receipts) = run_reasoning(canonical_search, cancel.as_ref(), |control| {
+            self.session
+                .instances(class, control)
+                .map(ReasoningAnswer::from)
+        })?;
         value.canonicalization_json = receipts;
         Ok(value)
     }
@@ -1533,12 +1535,11 @@ impl Reasoner {
         canonical_search: &str,
         cancel: Option<crate::query::CancellationToken>,
     ) -> Result<ReasoningAnswer, JsValue> {
-        let (mut value, receipts) =
-            crate::canonical::run(canonical_search, cancel.as_ref(), |control| {
-                self.session
-                    .entails(axiom, control)
-                    .map(ReasoningAnswer::from)
-            })?;
+        let (mut value, receipts) = run_reasoning(canonical_search, cancel.as_ref(), |control| {
+            self.session
+                .entails(axiom, control)
+                .map(ReasoningAnswer::from)
+        })?;
         value.canonicalization_json = receipts;
         Ok(value)
     }
@@ -1565,12 +1566,11 @@ impl Reasoner {
         canonical_search: &str,
         cancel: Option<crate::query::CancellationToken>,
     ) -> Result<ReasoningAnswer, JsValue> {
-        let (mut value, receipts) =
-            crate::canonical::run(canonical_search, cancel.as_ref(), |control| {
-                self.session
-                    .extract_module(signature, method, control)
-                    .map(ReasoningAnswer::from)
-            })?;
+        let (mut value, receipts) = run_reasoning(canonical_search, cancel.as_ref(), |control| {
+            self.session
+                .extract_module(signature, method, control)
+                .map(ReasoningAnswer::from)
+        })?;
         value.canonicalization_json = receipts;
         Ok(value)
     }
@@ -1586,12 +1586,11 @@ impl Reasoner {
         canonical_search: &str,
         cancel: Option<crate::query::CancellationToken>,
     ) -> Result<ReasoningAnswer, JsValue> {
-        let (mut value, receipts) =
-            crate::canonical::run(canonical_search, cancel.as_ref(), |control| {
-                self.session
-                    .justify(axiom, control)
-                    .map(ReasoningAnswer::from)
-            })?;
+        let (mut value, receipts) = run_reasoning(canonical_search, cancel.as_ref(), |control| {
+            self.session
+                .justify(axiom, control)
+                .map(ReasoningAnswer::from)
+        })?;
         value.canonicalization_json = receipts;
         Ok(value)
     }
@@ -1602,11 +1601,11 @@ impl Reasoner {
         &self,
         regime: &str,
         conclusion: &str,
-    ) -> Result<ReasoningAnswer, JsError> {
+    ) -> Result<ReasoningAnswer, JsValue> {
         self.session
             .explain_conclusion(regime, conclusion)
             .map(ReasoningAnswer::from)
-            .map_err(|e| JsError::new(&e))
+            .map_err(reasoning_error)
     }
 }
 
@@ -1884,7 +1883,7 @@ mod tests {
                 &wasm_limits(None, None, None),
             )
             .expect_err("defined by an input this signature does not carry");
-            assert!(refused.contains(regime), "{refused}");
+            assert!(refused.to_string().contains(regime), "{refused}");
         }
     }
 
@@ -1911,7 +1910,7 @@ mod tests {
             &[String],
             &[String],
             &MaterializeLimits,
-        ) -> Result<ReasoningAnswer, String>;
+        ) -> Result<ReasoningAnswer, ReasoningError>;
         let services: [(Service, &str); 3] = [
             (graph_entails_impl, conclusion),
             (verify_entailment_impl, conclusion),
@@ -1928,7 +1927,7 @@ mod tests {
                 &wasm_limits(None, None, None),
             )
             .expect_err("an undeclared self-import is unresolved");
-            assert!(refused.contains(IRI), "{refused}");
+            assert!(refused.to_string().contains(IRI), "{refused}");
             let answered = service(
                 "simple",
                 &premise,
@@ -1959,7 +1958,7 @@ mod tests {
             &[String],
             &[String],
             &MaterializeLimits,
-        ) -> Result<ReasoningAnswer, String>;
+        ) -> Result<ReasoningAnswer, ReasoningError>;
         let services: [(Service, &str); 3] = [
             (graph_entails_impl, document),
             (verify_entailment_impl, document),
@@ -1978,7 +1977,8 @@ mod tests {
                 )
                 .expect_err("a premise IRI that is not absolute");
                 assert!(
-                    refused.contains("premise IRI") && refused.contains(&format!("{bad:?}")),
+                    refused.to_string().contains("premise IRI")
+                        && refused.to_string().contains(&format!("{bad:?}")),
                     "{refused}"
                 );
             }
@@ -2025,7 +2025,7 @@ mod tests {
             &[String],
             &[String],
             &MaterializeLimits,
-        ) -> Result<ReasoningAnswer, String>;
+        ) -> Result<ReasoningAnswer, ReasoningError>;
         let services: [(Service, &str); 3] = [
             (graph_entails_impl, conclusion),
             (verify_entailment_impl, conclusion),
@@ -2043,8 +2043,8 @@ mod tests {
             )
             .expect_err("an entry nothing imports is refused");
             assert!(
-                refused.contains(&format!("<{LIB}>"))
-                    && refused.contains("would be read and never used"),
+                refused.to_string().contains(&format!("<{LIB}>"))
+                    && refused.to_string().contains("would be read and never used"),
                 "{refused}"
             );
             service(
@@ -2253,7 +2253,7 @@ mod tests {
             &[String],
             &[String],
             &MaterializeLimits,
-        ) -> Result<ReasoningAnswer, String>;
+        ) -> Result<ReasoningAnswer, ReasoningError>;
         let services: [(Service, &str, &str); 3] = [
             (certain_answers_impl, pattern, "entailCertainAnswers"),
             (graph_entails_impl, conclusion, "entailGraphEntails"),
@@ -2271,8 +2271,12 @@ mod tests {
             )
             .expect_err("one join step");
             assert!(
-                refused.contains("evaluation exceeded the join-step limit: ")
-                    && refused.ends_with(&format!("raise it with {name}'s maxJoinSteps")),
+                refused
+                    .to_string()
+                    .contains("evaluation exceeded the join-step limit: ")
+                    && refused
+                        .to_string()
+                        .ends_with(&format!("raise it with {name}'s maxJoinSteps")),
                 "{refused}"
             );
             let refused = service(
@@ -2286,7 +2290,9 @@ mod tests {
             )
             .expect_err("one stored fact");
             assert!(
-                refused.ends_with(&format!("raise it with {name}'s maxStoredFacts")),
+                refused
+                    .to_string()
+                    .ends_with(&format!("raise it with {name}'s maxStoredFacts")),
                 "{refused}"
             );
             service(
@@ -2515,8 +2521,10 @@ mod tests {
             )
             .map_err(|error| error.to_string())
             .expect_err("case-sensitive"),
-            rules_impl("rdfs-plus").expect_err("unknown"),
-            implemented_rules_impl("rdfs-plus").expect_err("unknown"),
+            rules_impl("rdfs-plus").expect_err("unknown").to_string(),
+            implemented_rules_impl("rdfs-plus")
+                .expect_err("unknown")
+                .to_string(),
         ] {
             assert!(error.contains("accepted: simple, rdf, rdfs"), "{error}");
         }
@@ -2895,7 +2903,10 @@ mod tests {
                 )
                 .map_err(|error| error.to_string()),
             ),
-            ("profile", profile_impl(TAXONOMY)),
+            (
+                "profile",
+                profile_impl(TAXONOMY).map_err(|error| error.to_string()),
+            ),
             (
                 "extract-module",
                 extract_module_impl(
@@ -2929,7 +2940,8 @@ mod tests {
                     "<http://example.org/x> \
                      <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
                      <http://example.org/C> .\n",
-                ),
+                )
+                .map_err(|error| error.to_string()),
             ),
         ];
         assert_eq!(services.len(), 9);
@@ -3135,6 +3147,6 @@ mod tests {
             .expect("rdfs derives the chain axiom by Datalog rules");
         assert!(proof.certificate().contains("\nchecked true\n"));
         let error = explain_conclusion_impl(TAXONOMY, "rdf", CHAIN_AXIOM).expect_err("existential");
-        assert!(error.contains("existential"), "{error}");
+        assert!(error.to_string().contains("existential"), "{error}");
     }
 }

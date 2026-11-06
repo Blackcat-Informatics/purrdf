@@ -333,7 +333,7 @@ pub(crate) fn run(
                 &premise_iris,
                 &options.limits,
             )
-            .map_err(CliError::Runtime)?
+            .map_err(CliError::native)?
         }
         Question::Pattern { path } => {
             let pattern = source::read_text(path, "--pattern")?;
@@ -345,7 +345,7 @@ pub(crate) fn run(
                 &premise_iris,
                 &options.limits,
             )
-            .map_err(CliError::Runtime)?
+            .map_err(CliError::native)?
         }
     };
 

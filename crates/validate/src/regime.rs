@@ -80,6 +80,14 @@
 //! and no dependency beyond `purrdf-entail` over what the crate already had.
 
 use core::fmt;
+mod error;
+pub use error::{EntailContext, InputError, InputRole, ReasoningError, RequestError, RequestName};
+mod proof_error;
+pub use proof_error::ProofDocumentError;
+mod fixture_error;
+pub use fixture_error::{FixtureError, FixtureGrammarError, FixtureInvariant, FixtureKind};
+mod certificate_error;
+pub use certificate_error::CertificateError;
 mod schema_vectors;
 use core::fmt::Write as _;
 use purrdf_core::TermBox;
@@ -196,9 +204,9 @@ pub const fn regime_name(regime: Regime) -> &'static str {
 ///
 /// assert_eq!(regime_name(parse_regime("owl-rl").expect("known")), "owl-rl");
 /// let error = parse_regime("OWL-RL").expect_err("case-sensitive");
-/// assert!(error.contains("owl-rl"), "{error}");
+/// assert!(error.to_string().contains("owl-rl"), "{error}");
 /// ```
-pub fn parse_regime(name: &str) -> Result<Regime, String> {
+pub fn parse_regime(name: &str) -> Result<Regime, ReasoningError> {
     match name {
         "simple" => Ok(Regime::Simple),
         "rdf" => Ok(Regime::Rdf),
@@ -207,10 +215,11 @@ pub fn parse_regime(name: &str) -> Result<Regime, String> {
         "owl-direct" => Ok(Regime::OwlDirect),
         "rif" => Ok(Regime::Rif),
         "d" => Ok(Regime::D),
-        other => Err(format!(
-            "unknown entailment regime \"{other}\"; accepted: {}",
-            REGIME_NAMES.join(", ")
-        )),
+        other => Err(RequestError::UnknownName {
+            kind: RequestName::Regime,
+            offered: other.to_owned(),
+        }
+        .into()),
     }
 }
 
@@ -338,7 +347,7 @@ pub fn materialize_to_nquads_string(
     document: &str,
     program: &str,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
-) -> Result<RegimeClosure, crate::canonical::CanonicalServiceError> {
+) -> Result<RegimeClosure, ReasoningError> {
     materialize_to_nquads_string_with(
         regime,
         document,
@@ -587,7 +596,7 @@ pub fn materialize_to_nquads_string_with(
     premise_iris: &[&str],
     limits: &MaterializeLimits,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
-) -> Result<RegimeClosure, crate::canonical::CanonicalServiceError> {
+) -> Result<RegimeClosure, ReasoningError> {
     let (parsed, map) = configuration(regime, imports, premise_iris)?;
     let dataset = parse_premise(document)?;
     // Bound here, outside the call below, because the plan BORROWS it: a rule set
@@ -600,7 +609,16 @@ pub fn materialize_to_nquads_string_with(
         &limits.eval_options(),
         None,
     )
-    .map_err(|error| render_entail_error_for(regime, &error, limits.host))?;
+    .map_err(|cause| {
+        ReasoningError::entail(
+            EntailContext::Regime {
+                spelling: regime.to_owned(),
+                host: limits.host,
+                service: RegimeService::Materialize,
+            },
+            cause,
+        )
+    })?;
     // The materialized closure is wholly caller-supplied (the document parsed above),
     // so it goes through the typed, non-panicking canonicalization entry point rather
     // than `purrdf_rdf::canonical_flat_nquads` (which panics on refusal): a
@@ -686,16 +704,21 @@ pub fn regime_plan(regime: Regime, rules: &RuleSet) -> Materialization<'_> {
 /// A non-empty `program` for a regime that takes none; a malformed RIF-in-XML
 /// document; or a rule document carrying an `Import` (resolving one is I/O this
 /// boundary does not perform).
-pub fn regime_rule_set(regime: Regime, spelling: &str, program: &str) -> Result<RuleSet, String> {
+pub fn regime_rule_set(
+    regime: Regime,
+    spelling: &str,
+    program: &str,
+) -> Result<RuleSet, ReasoningError> {
     if regime != Regime::Rif {
         return if program.trim().is_empty() {
             Ok(RuleSet::default())
         } else {
-            Err(format!(
-                "entailment regime \"{spelling}\" takes no rule document, and one was \
-                 supplied; its rule table is the specification's. Regimes that take one: {}",
-                PROGRAM_REGIME_NAMES.join(", ")
-            ))
+            Err(RequestError::UnexpectedProgram {
+                regime,
+                spelling: spelling.to_owned(),
+                program: program.to_owned(),
+            }
+            .into())
         };
     }
     // No caller base: `program` crossed a STRING boundary, so it has no retrieval IRI
@@ -703,15 +726,23 @@ pub fn regime_rule_set(regime: Regime, spelling: &str, program: &str) -> Result<
     // here refuses to invent one). An in-document `xml:base` still governs; without one,
     // a relative IRI reference in the rule document hard-fails rather than becoming a
     // silently-renamed predicate.
-    let parsed = parse_rif_xml(program, None)
-        .map_err(|error| format!("entailment regime \"{spelling}\": rule document: {error}"))?;
-    if let Some(import) = parsed.imports.first() {
-        return Err(format!(
-            "entailment regime \"{spelling}\": the rule document imports \
-             \"{}\", and resolving an import is I/O this boundary does not perform; \
-             resolve it in the caller and use purrdf_entail::materialize",
-            import.location
-        ));
+    let parsed = parse_rif_xml(program, None).map_err(|cause| {
+        ReasoningError::entail(
+            EntailContext::RuleDocument {
+                spelling: spelling.to_owned(),
+                program: program.to_owned(),
+            },
+            cause,
+        )
+    })?;
+    if let Some(import) = parsed.imports.into_iter().next() {
+        return Err(RequestError::RuleImport {
+            spelling: spelling.to_owned(),
+            program: program.to_owned(),
+            location: import.location,
+            profile: import.profile,
+        }
+        .into());
     }
     Ok(parsed.ruleset)
 }
@@ -737,7 +768,7 @@ pub fn regime_rule_set(regime: Regime, spelling: &str, program: &str) -> Result<
 /// // `simple` is the identity closure: no rule table at all.
 /// assert_eq!(rules_string("simple").expect("known"), "");
 /// ```
-pub fn rules_string(regime: &str) -> Result<String, String> {
+pub fn rules_string(regime: &str) -> Result<String, ReasoningError> {
     Ok(rule_lines(rules(parse_regime(regime)?)))
 }
 
@@ -767,7 +798,7 @@ pub fn rules_string(regime: &str) -> Result<String, String> {
 /// // gap is legitimately empty for a regime whose table is fully implemented.
 /// assert_eq!(missing.len(), defined.lines().count() - fired.lines().count());
 /// ```
-pub fn implemented_rules_string(regime: &str) -> Result<String, String> {
+pub fn implemented_rules_string(regime: &str) -> Result<String, ReasoningError> {
     Ok(rule_lines(implemented(parse_regime(regime)?)))
 }
 
@@ -802,7 +833,7 @@ pub fn implemented_rules_string(regime: &str) -> Result<String, String> {
 /// // Extending a lane is a decision taken per lane; RDFS has had none taken for it.
 /// assert_eq!(extension_rules_string("rdfs").expect("known"), "");
 /// ```
-pub fn extension_rules_string(regime: &str) -> Result<String, String> {
+pub fn extension_rules_string(regime: &str) -> Result<String, ReasoningError> {
     Ok(rule_lines(extensions(parse_regime(regime)?)))
 }
 
@@ -1203,7 +1234,7 @@ impl RegimeVector {
 /// A malformed artifact — an unknown directive, a case missing a section, a
 /// duplicate case name, or stray text outside a section — with the 1-based line
 /// number.
-pub fn regime_golden_vectors() -> Result<Vec<RegimeVector>, String> {
+pub fn regime_golden_vectors() -> Result<Vec<RegimeVector>, FixtureGrammarError> {
     parse_regime_vectors(REGIME_GOLDEN_VECTORS)
 }
 
@@ -1239,12 +1270,13 @@ pub const REGIME_GOLDEN_VECTOR_LIMITS: MaterializeLimits = MaterializeLimits {
 /// either output, or a regime the artifact no longer covers.
 pub fn check_regime_golden_vectors(
     control: &mut purrdf_core::CanonicalizationControl<'_>,
-) -> Result<(), crate::canonical::CanonicalServiceError> {
+) -> Result<(), ReasoningError> {
     let cases = regime_golden_vectors()?;
     if cases.is_empty() {
-        return Err("the regime golden vector artifact holds no cases"
-            .to_owned()
-            .into());
+        return Err(FixtureError::Empty {
+            kind: FixtureKind::Regime,
+        }
+        .into());
     }
     for case in &cases {
         let produced = materialize_to_nquads_string_with(
@@ -1256,31 +1288,35 @@ pub fn check_regime_golden_vectors(
             &REGIME_GOLDEN_VECTOR_LIMITS,
             control,
         )
-        .map_err(|error| format!("case \"{}\": {error}", case.name()))?;
+        .map_err(|cause| FixtureError::Case {
+            name: case.name().to_owned(),
+            cause: Box::new(cause),
+        })?;
         if produced.nquads() != case.closure() {
-            return Err(format!(
-                "case \"{}\": closure mismatch\n--- expected ---\n{}--- produced ---\n{}",
-                case.name(),
-                case.closure(),
-                produced.nquads()
-            )
+            return Err(FixtureError::Mismatch {
+                name: case.name().to_owned(),
+                field: "closure".into(),
+                expected: case.closure().to_owned(),
+                produced: produced.nquads().to_owned(),
+            }
             .into());
         }
         if produced.report() != case.report() {
-            return Err(format!(
-                "case \"{}\": report mismatch\n--- expected ---\n{}--- produced ---\n{}",
-                case.name(),
-                case.report(),
-                produced.report()
-            )
+            return Err(FixtureError::Mismatch {
+                name: case.name().to_owned(),
+                field: "report".into(),
+                expected: case.report().to_owned(),
+                produced: produced.report().to_owned(),
+            }
             .into());
         }
     }
     for regime in REGIME_NAMES {
         if !cases.iter().any(|case| case.regime() == regime) {
-            return Err(format!(
-                "the regime golden vector artifact no longer covers regime \"{regime}\""
-            )
+            return Err(FixtureError::Coverage {
+                kind: FixtureKind::Regime,
+                missing: regime.to_owned(),
+            }
             .into());
         }
     }
@@ -1322,14 +1358,17 @@ pub const INCONSISTENT_DOCUMENT: &str = concat!(
 /// banner, the witness rule, the graph whose closure refused, or all three premise triples.
 pub fn check_inconsistent_refusal(
     control: &mut purrdf_core::CanonicalizationControl<'_>,
-) -> Result<(), crate::canonical::CanonicalServiceError> {
-    let Err(refusal) = materialize_to_nquads_string("owl-rl", INCONSISTENT_DOCUMENT, "", control)
-    else {
-        return Err(
-            "two disjoint classes with a shared instance must be refused by cax-dw"
-                .to_owned()
-                .into(),
-        );
+) -> Result<(), ReasoningError> {
+    let refusal = match materialize_to_nquads_string("owl-rl", INCONSISTENT_DOCUMENT, "", control) {
+        Err(refusal) => refusal,
+        Ok(produced) => {
+            return Err(FixtureError::Invariant {
+                condition: FixtureInvariant::InconsistencyRefused,
+                actual: Some(format!("{}{}", produced.nquads(), produced.report())),
+                cause: None,
+            }
+            .into());
+        }
     };
     let required = [
         "knowledge base is inconsistent: cax-dw was satisfied by 3 asserted triples",
@@ -1349,9 +1388,11 @@ pub fn check_inconsistent_refusal(
     ];
     for fragment in required {
         if !refusal.to_string().contains(fragment) {
-            return Err(
-                format!("the refusal must carry {fragment:?}\n--- refusal ---\n{refusal}").into(),
-            );
+            return Err(FixtureError::RefusalEvidence {
+                expected: fragment.to_owned(),
+                cause: Box::new(refusal),
+            }
+            .into());
         }
     }
     Ok(())
@@ -1389,8 +1430,11 @@ struct CaseBuilder {
 
 impl CaseBuilder {
     /// Finish the case, or say which section is missing.
-    fn build(self, line: usize) -> Result<RegimeVector, String> {
-        let missing = |what: &str| format!("line {line}: @end before @{what}");
+    fn build(self, line: usize) -> Result<RegimeVector, FixtureGrammarError> {
+        let missing = |what: &str| FixtureGrammarError::MissingSection {
+            line,
+            section: what.to_owned(),
+        };
         Ok(RegimeVector {
             name: self.name.ok_or_else(|| missing("case"))?,
             regime: self.regime.ok_or_else(|| missing("regime"))?,
@@ -1428,7 +1472,7 @@ impl CaseBuilder {
 /// A body line may therefore never begin with `@`. Neither N-Quads (whose terms
 /// open with `<`, `_:` or `"`) nor a rendered report (whose lines open with a
 /// fixed keyword) ever does.
-fn parse_regime_vectors(text: &str) -> Result<Vec<RegimeVector>, String> {
+fn parse_regime_vectors(text: &str) -> Result<Vec<RegimeVector>, FixtureGrammarError> {
     let mut cases: Vec<RegimeVector> = Vec::new();
     let mut builder = CaseBuilder::default();
     let mut open: Option<Section> = None;
@@ -1443,7 +1487,12 @@ fn parse_regime_vectors(text: &str) -> Result<Vec<RegimeVector>, String> {
                     body.push('\n');
                 }
                 None if raw.trim().is_empty() || raw.starts_with('#') => {}
-                None => return Err(format!("line {line}: text outside any section: {raw}")),
+                None => {
+                    return Err(FixtureGrammarError::OutsideSection {
+                        line,
+                        text: raw.to_owned(),
+                    });
+                }
             }
             continue;
         };
@@ -1453,19 +1502,28 @@ fn parse_regime_vectors(text: &str) -> Result<Vec<RegimeVector>, String> {
         match keyword {
             "case" => {
                 if argument.is_empty() {
-                    return Err(format!("line {line}: @case needs a name"));
+                    return Err(FixtureGrammarError::MissingName {
+                        line,
+                        directive: "case".into(),
+                    });
                 }
                 if builder.name.is_some() {
-                    return Err(format!("line {line}: @case inside an unclosed case"));
+                    return Err(FixtureGrammarError::NestedCase { line });
                 }
                 if cases.iter().any(|case| case.name == argument) {
-                    return Err(format!("line {line}: duplicate case name \"{argument}\""));
+                    return Err(FixtureGrammarError::DuplicateCase {
+                        line,
+                        name: argument.to_owned(),
+                    });
                 }
                 builder.name = Some(argument.to_owned());
             }
             "regime" => {
                 if argument.is_empty() {
-                    return Err(format!("line {line}: @regime needs a name"));
+                    return Err(FixtureGrammarError::MissingName {
+                        line,
+                        directive: "regime".into(),
+                    });
                 }
                 builder.regime = Some(argument.to_owned());
             }
@@ -1484,12 +1542,21 @@ fn parse_regime_vectors(text: &str) -> Result<Vec<RegimeVector>, String> {
             "end" => {
                 cases.push(core::mem::take(&mut builder).build(line)?);
             }
-            other => return Err(format!("line {line}: unknown directive @{other}")),
+            other => {
+                return Err(FixtureGrammarError::Directive {
+                    line,
+                    keyword: other.to_owned(),
+                    misplaced: false,
+                });
+            }
         }
     }
 
-    if builder.name.is_some() {
-        return Err("the artifact ends inside an unclosed case (missing @end)".to_owned());
+    if let Some(name) = builder.name {
+        return Err(FixtureGrammarError::UnclosedCase {
+            line: text.lines().count(),
+            name,
+        });
     }
     Ok(cases)
 }
@@ -1720,18 +1787,38 @@ fn emit(term: &TermValue) -> String {
 ///
 /// A literal is refused by the codec itself, which is the right answer: a class, an
 /// individual and a property are all NAMES, and a literal is not a name.
-fn parse_one_term(text: &str) -> Result<TermValue, String> {
+fn parse_one_term(text: &str) -> Result<TermValue, ReasoningError> {
     let scaffold = format!("{} <{RDF_TYPE}> <{RDF_TYPE}> .\n", text.trim());
-    let dataset = purrdf_rdf::parse_dataset(scaffold.as_bytes(), INPUT_MEDIA_TYPE, None)
-        .map_err(|diagnostic| format!("\"{text}\" is not one N-Triples term: {diagnostic}"))?;
+    let dataset = match purrdf_rdf::parse_dataset(scaffold.as_bytes(), INPUT_MEDIA_TYPE, None) {
+        Ok(dataset) => dataset,
+        Err(cause) => {
+            return Err(InputError::Parse {
+                role: InputRole::Term,
+                offered: text.to_owned(),
+                parsed: Some(scaffold),
+                cause,
+            }
+            .into());
+        }
+    };
     let mut quads = dataset.quads();
     let Some(quad) = quads.next() else {
-        return Err(format!("\"{text}\" is not one N-Triples term: it is empty"));
+        return Err(InputError::Empty {
+            role: InputRole::Term,
+            offered: text.to_owned(),
+            parsed: Some(scaffold),
+        }
+        .into());
     };
     if quads.next().is_some() {
-        return Err(format!(
-            "\"{text}\" is not ONE N-Triples term: it parses as more than one"
-        ));
+        return Err(InputError::Multiple {
+            role: InputRole::Term,
+            offered: text.to_owned(),
+            parsed: Some(scaffold),
+            count: dataset.quads().count(),
+            scaffold_intact: None,
+        }
+        .into());
     }
     // The scaffold's own predicate, object and (absent) graph must come back
     // unchanged. They do not when `text` was more than one term: `<A> <B>` makes
@@ -1741,15 +1828,20 @@ fn parse_one_term(text: &str) -> Result<TermValue, String> {
         && dataset.term_value(quad.p).as_iri() == Some(RDF_TYPE)
         && dataset.term_value(quad.o).as_iri() == Some(RDF_TYPE);
     if !intact {
-        return Err(format!(
-            "\"{text}\" is not ONE N-Triples term: it parses as more than one"
-        ));
+        return Err(InputError::Multiple {
+            role: InputRole::Term,
+            offered: text.to_owned(),
+            parsed: Some(scaffold),
+            count: dataset.quads().count(),
+            scaffold_intact: Some(false),
+        }
+        .into());
     }
     Ok(dataset.term_value(quad.s))
 }
 
 /// Parse a newline-separated signature: one N-Triples term per non-blank line.
-fn parse_signature(text: &str) -> Result<Vec<TermValue>, String> {
+fn parse_signature(text: &str) -> Result<Vec<TermValue>, ReasoningError> {
     text.lines()
         .filter(|line| !line.trim().is_empty())
         .map(parse_one_term)
@@ -1759,19 +1851,34 @@ fn parse_signature(text: &str) -> Result<Vec<TermValue>, String> {
 /// Parse ONE N-Quads statement into `(graph, subject, predicate, object)`.
 fn parse_one_statement(
     text: &str,
-) -> Result<(Option<TermValue>, TermValue, TermValue, TermValue), String> {
-    let dataset = purrdf_rdf::parse_dataset(text.as_bytes(), INPUT_MEDIA_TYPE, None)
-        .map_err(|diagnostic| format!("\"{text}\" is not one N-Quads statement: {diagnostic}"))?;
+) -> Result<(Option<TermValue>, TermValue, TermValue, TermValue), ReasoningError> {
+    let dataset =
+        purrdf_rdf::parse_dataset(text.as_bytes(), INPUT_MEDIA_TYPE, None).map_err(|cause| {
+            InputError::Parse {
+                role: InputRole::Statement,
+                offered: text.to_owned(),
+                parsed: None,
+                cause,
+            }
+        })?;
     let mut quads = dataset.quads();
     let Some(quad) = quads.next() else {
-        return Err(format!(
-            "\"{text}\" is not one N-Quads statement: it is empty"
-        ));
+        return Err(InputError::Empty {
+            role: InputRole::Statement,
+            offered: text.to_owned(),
+            parsed: None,
+        }
+        .into());
     };
     if quads.next().is_some() {
-        return Err(format!(
-            "\"{text}\" is not ONE N-Quads statement: it parses as more than one"
-        ));
+        return Err(InputError::Multiple {
+            role: InputRole::Statement,
+            offered: text.to_owned(),
+            parsed: None,
+            count: dataset.quads().count(),
+            scaffold_intact: None,
+        }
+        .into());
     }
     Ok((
         quad.g.map(|g| dataset.term_value(g)),
@@ -1801,12 +1908,15 @@ fn parse_one_statement(
 ///
 /// An axiom names no graph, so a statement that does is refused rather than having
 /// its graph silently dropped.
-fn parse_axiom(text: &str) -> Result<DlAxiom, String> {
+fn parse_axiom(text: &str) -> Result<DlAxiom, ReasoningError> {
     let (graph, subject, predicate, object) = parse_one_statement(text)?;
-    if graph.is_some() {
-        return Err(format!(
-            "\"{text}\" names a graph; an axiom is one triple and is not graph-scoped"
-        ));
+    if let Some(graph) = graph {
+        return Err(InputError::Graph {
+            role: InputRole::Statement,
+            offered: text.to_owned(),
+            graph,
+        }
+        .into());
     }
     Ok(match predicate.as_iri() {
         Some(RDFS_SUBCLASS_OF) => DlAxiom::SubClassOf {
@@ -2074,7 +2184,7 @@ const fn proof_service_name(service: Service) -> &'static str {
 ///
 /// A spelling outside the accepted set, which the message names in full so a caller three
 /// language boundaries away can fix the call without reading this source.
-fn parse_proof_service(name: &str) -> Result<Service, String> {
+fn parse_proof_service(name: &str) -> Result<Service, ReasoningError> {
     match name {
         "consistency" => Ok(Service::Consistency),
         "class-satisfiability" => Ok(Service::ClassSatisfiability),
@@ -2083,22 +2193,21 @@ fn parse_proof_service(name: &str) -> Result<Service, String> {
         "instances" => Ok(Service::InstanceRetrieval),
         "entails" => Ok(Service::AxiomEntailment),
         "extract-module" => Ok(Service::ModuleExtraction),
-        other => Err(format!(
-            "unknown proof service \"{other}\"; accepted: {}",
-            PROOF_SERVICE_NAMES.join(", ")
-        )),
+        other => Err(RequestError::UnknownName {
+            kind: RequestName::ProofService,
+            offered: other.to_owned(),
+        }
+        .into()),
     }
 }
 
 /// A proof body line's bytes: its canonical lowercase hex read by
 /// [`purrdf_hash::hex::decode_canonical`], refused in this grammar's words.
-fn proof_body_bytes(text: &str) -> Result<Vec<u8>, String> {
-    purrdf_hash::hex::decode_canonical(text).map_err(|error| match error {
-        purrdf_hash::hex::HexError::InvalidDigit { byte, .. } => format!(
-            "a proof body carries {:?}, which is not a lowercase hex digit",
-            char::from(byte)
-        ),
-        _ => "a proof body line has an odd number of hex digits".to_owned(),
+fn proof_body_bytes(text: &str, line: usize) -> Result<Vec<u8>, ProofDocumentError> {
+    purrdf_hash::hex::decode_canonical(text).map_err(|cause| ProofDocumentError::Hex {
+        line,
+        offered: text.to_owned(),
+        cause,
     })
 }
 
@@ -2221,40 +2330,36 @@ pub fn render_dl_proof(proof: &ServiceProof) -> String {
 ///
 /// A document that is not this grammar, an unrecorded one, a body that is not lowercase hex,
 /// bytes that are not a [`ServiceProof`], or a header that does not match its own body.
-pub fn decode_dl_proof(document: &str) -> Result<ServiceProof, String> {
+pub fn decode_dl_proof(document: &str) -> Result<ServiceProof, ReasoningError> {
     let mut lines = document.lines();
-    if lines.next() != Some(DL_PROOF_BANNER) {
-        return Err(format!(
-            "a proof document opens with {DL_PROOF_BANNER:?}, and this one does not"
-        ));
+    let first = lines.next();
+    if first != Some(DL_PROOF_BANNER) {
+        return Err(ProofDocumentError::Banner {
+            offered: first.map(str::to_owned),
+        }
+        .into());
     }
     if document.contains("\navailability not-recorded\n") {
-        return Err(
-            "this answer carries no proof: nothing was recorded, because nobody asked. That \
-             is not the same as a proof with nothing in it, and it is not something a check \
-             can report as verified — ask for the proof (open the session with proofs, or \
-             call the `prove` entry point) and check that"
-                .to_owned(),
-        );
+        return Err(ProofDocumentError::NotRecorded.into());
     }
     let mut bytes = Vec::new();
-    for line in lines {
+    for (index, line) in lines.enumerate() {
         if let Some(hex) = line.strip_prefix("body ") {
-            bytes.extend_from_slice(&proof_body_bytes(hex)?);
+            bytes.extend_from_slice(&proof_body_bytes(hex, index + 2)?);
         }
     }
     if bytes.is_empty() {
-        return Err("a recorded proof document carries no `body` line".to_owned());
+        return Err(ProofDocumentError::MissingBody.into());
     }
     let proof = ServiceProof::decode(&bytes)
-        .map_err(|error| format!("the proof body is not a proof term: {error}"))?;
+        .map_err(|cause| ReasoningError::proof("the proof body is not a proof term", cause))?;
     let rendered = render_dl_proof(&proof);
     if rendered != document {
-        return Err(
-            "the proof document's header does not describe the proof its own body carries, \
-             so at least one of the two was rewritten after the proof was issued"
-                .to_owned(),
-        );
+        return Err(ProofDocumentError::HeaderMismatch {
+            offered: document.to_owned(),
+            expected: rendered,
+        }
+        .into());
     }
     Ok(proof)
 }
@@ -2375,7 +2480,7 @@ impl ReasonerSession {
     /// A malformed document (the native codec's own diagnostic). Nothing is reverse-mapped
     /// here, so an ontology whose knowledge base cannot be built still opens — and fails on
     /// the first service that needs one, with that service's own message.
-    pub fn open(document: &str, step_cap: u32, work_cap: u32) -> Result<Self, String> {
+    pub fn open(document: &str, step_cap: u32, work_cap: u32) -> Result<Self, ReasoningError> {
         Self::opened(document, step_cap, work_cap, false)
     }
 
@@ -2398,14 +2503,22 @@ impl ReasonerSession {
     /// # Errors
     ///
     /// As [`Self::open`].
-    pub fn open_with_proofs(document: &str, step_cap: u32, work_cap: u32) -> Result<Self, String> {
+    pub fn open_with_proofs(
+        document: &str,
+        step_cap: u32,
+        work_cap: u32,
+    ) -> Result<Self, ReasoningError> {
         Self::opened(document, step_cap, work_cap, true)
     }
 
     /// Parse `document` and open a session in the requested recording mode.
-    fn opened(document: &str, step_cap: u32, work_cap: u32, proofs: bool) -> Result<Self, String> {
-        let dataset = purrdf_rdf::parse_dataset(document.as_bytes(), INPUT_MEDIA_TYPE, None)
-            .map_err(|diagnostic| diagnostic.to_string())?;
+    fn opened(
+        document: &str,
+        step_cap: u32,
+        work_cap: u32,
+        proofs: bool,
+    ) -> Result<Self, ReasoningError> {
+        let dataset = parse_premise(document)?;
         Ok(Self {
             dataset,
             step_cap,
@@ -2445,10 +2558,11 @@ impl ReasonerSession {
         step_cap: u32,
         work_cap: u32,
         proofs: bool,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, ReasoningError> {
         let map = premise_import_map(imports, premise_iris)?;
         let premise = parse_premise(document)?;
-        let merged = resolve_imports(&premise, &map).map_err(|error| error.to_string())?;
+        let merged = resolve_imports(&premise, &map)
+            .map_err(|cause| ReasoningError::entail(EntailContext::Imports, cause))?;
         let resolved_imports = merged.is_some() || !map.imported_iris(&premise).is_empty();
         Ok(Self {
             dataset: merged.unwrap_or(premise),
@@ -2497,7 +2611,7 @@ impl ReasonerSession {
         certificate: &str,
         proof: &str,
         control: &mut purrdf_core::CanonicalizationControl<'_>,
-    ) -> Result<String, crate::canonical::CanonicalServiceError> {
+    ) -> Result<String, ReasoningError> {
         check_dl_proof_from_source(
             || Ok(std::sync::Arc::clone(&self.dataset)),
             self.resolved_imports,
@@ -2520,14 +2634,16 @@ impl ReasonerSession {
     fn kb(
         &mut self,
         control: &mut purrdf_core::CanonicalizationControl<'_>,
-    ) -> Result<&mut Reasoner, crate::canonical::CanonicalServiceError> {
+    ) -> Result<&mut Reasoner, ReasoningError> {
         if self.reasoner.is_none() {
             let reasoner = if self.proofs {
                 Reasoner::with_proofs(&self.dataset, control)
             } else {
                 Reasoner::new(&self.dataset)
             }
-            .map_err(|error| crate::canonical::CanonicalServiceError::entail("reasoner", error))?;
+            .map_err(|cause| {
+                ReasoningError::entail(EntailContext::Operation("reasoner".into()), cause)
+            })?;
             let reasoner = if self.resolved_imports {
                 reasoner.with_resolved_imports()
             } else {
@@ -2567,14 +2683,6 @@ fn service_error(service: &str, error: &EntailError) -> String {
     }
 }
 
-/// Carry the original certificate through the shared host refusal protocol.
-fn directness_error(service: &str, refusal: purrdf_entail::DirectnessRefusal<'_>) -> String {
-    format!(
-        "{refusal}\n{}",
-        render_dl_certificate(service, refusal.certificate())
-    )
-}
-
 /// The services, as methods on a session.
 ///
 /// Each one carries the doc comment of its free-function form rather than repeating it;
@@ -2593,7 +2701,7 @@ impl ReasonerSession {
     pub fn consistency(
         &mut self,
         control: &mut purrdf_core::CanonicalizationControl<'_>,
-    ) -> Result<ReasoningAnswer<String>, crate::canonical::CanonicalServiceError> {
+    ) -> Result<ReasoningAnswer<String>, ReasoningError> {
         let (verdict, certificate, proof) = self.kb(control)?.consistency().into_certified_parts();
         Ok(ReasoningAnswer {
             answer: format!("consistency {}\n", verdict_name(verdict)),
@@ -2611,14 +2719,20 @@ impl ReasonerSession {
     pub fn classify(
         &mut self,
         control: &mut purrdf_core::CanonicalizationControl<'_>,
-    ) -> Result<ReasoningAnswer<String>, crate::canonical::CanonicalServiceError> {
-        let certified = self
-            .kb(control)?
-            .classify()
-            .map_err(|error| service_error("classify", &error))?;
-        let direct = certified
-            .direct_subsumptions()
-            .map_err(|refusal| directness_error("classify", refusal))?;
+    ) -> Result<ReasoningAnswer<String>, ReasoningError> {
+        let certified = self.kb(control)?.classify().map_err(|cause| {
+            ReasoningError::entail(EntailContext::Service("classify".into()), cause)
+        })?;
+        let Ok(direct) = certified.direct_subsumptions() else {
+            let (_, certificate, _) = certified.into_certified_parts();
+            // The exact original certificate just refused the direct view above.
+            let cause = purrdf_entail::OwnedDirectnessRefusal::try_from_certificate(certificate)
+                .expect("the original classification certificate refused directness");
+            return Err(ReasoningError::Directness {
+                service: Service::Classification,
+                cause: Box::new(cause),
+            });
+        };
         let hierarchy = certified.answer();
         let mut answer = String::new();
         for (left, right) in hierarchy.equivalences() {
@@ -2650,14 +2764,20 @@ impl ReasonerSession {
     pub fn realize(
         &mut self,
         control: &mut purrdf_core::CanonicalizationControl<'_>,
-    ) -> Result<ReasoningAnswer<String>, crate::canonical::CanonicalServiceError> {
-        let certified = self
-            .kb(control)?
-            .realize()
-            .map_err(|error| service_error("realize", &error))?;
-        let direct = certified
-            .direct_types()
-            .map_err(|refusal| directness_error("realize", refusal))?;
+    ) -> Result<ReasoningAnswer<String>, ReasoningError> {
+        let certified = self.kb(control)?.realize().map_err(|cause| {
+            ReasoningError::entail(EntailContext::Service("realize".into()), cause)
+        })?;
+        let Ok(direct) = certified.direct_types() else {
+            let (_, certificate, _) = certified.into_certified_parts();
+            // The exact original certificate just refused the direct view above.
+            let cause = purrdf_entail::OwnedDirectnessRefusal::try_from_certificate(certificate)
+                .expect("the original realization certificate refused directness");
+            return Err(ReasoningError::Directness {
+                service: Service::Realization,
+                cause: Box::new(cause),
+            });
+        };
         let realization = certified.answer();
         let mut answer = String::new();
         for (individual, class) in realization.types() {
@@ -2684,12 +2804,14 @@ impl ReasonerSession {
         &mut self,
         class: &str,
         control: &mut purrdf_core::CanonicalizationControl<'_>,
-    ) -> Result<ReasoningAnswer<String>, crate::canonical::CanonicalServiceError> {
+    ) -> Result<ReasoningAnswer<String>, ReasoningError> {
         let term = parse_one_term(class)?;
         let (individuals, certificate, proof) = self
             .kb(control)?
             .instances(&term)
-            .map_err(|error| service_error("instances", &error))?
+            .map_err(|cause| {
+                ReasoningError::entail(EntailContext::Service("instances".into()), cause)
+            })?
             .into_certified_parts();
         let mut answer = String::new();
         for individual in &individuals {
@@ -2712,12 +2834,14 @@ impl ReasonerSession {
         &mut self,
         axiom: &str,
         control: &mut purrdf_core::CanonicalizationControl<'_>,
-    ) -> Result<ReasoningAnswer<String>, crate::canonical::CanonicalServiceError> {
+    ) -> Result<ReasoningAnswer<String>, ReasoningError> {
         let parsed = parse_axiom(axiom)?;
         let (verdict, certificate, proof) = self
             .kb(control)?
             .entails(&parsed)
-            .map_err(|error| service_error("entails", &error))?
+            .map_err(|cause| {
+                ReasoningError::entail(EntailContext::Service("entails".into()), cause)
+            })?
             .into_certified_parts();
         let mut answer = format!("entails {}\n", verdict_name(verdict));
         write_axiom(&parsed, &mut answer);
@@ -2750,8 +2874,7 @@ impl ReasonerSession {
         signature: &str,
         method: &str,
         control: &mut purrdf_core::CanonicalizationControl<'_>,
-    ) -> Result<ReasoningAnswer<purrdf_core::Canonicalized>, crate::canonical::CanonicalServiceError>
-    {
+    ) -> Result<ReasoningAnswer<purrdf_core::Canonicalized>, ReasoningError> {
         let notion = parse_module_method(method)?;
         let seed = parse_signature(signature)?;
         // Two producers, one for each recording mode: `extract_module_with_proofs` records a
@@ -2763,8 +2886,8 @@ impl ReasonerSession {
         } else {
             extract_module(&self.dataset, &seed, notion, control)
         }
-        .map_err(|error| {
-            crate::canonical::CanonicalServiceError::entail("extract-module", error)
+        .map_err(|cause| {
+            ReasoningError::entail(EntailContext::Operation("extract-module".into()), cause)
         })?;
         Ok(ReasoningAnswer {
             // `self.dataset` is `ReasonerSession::open`'s caller-supplied `document`
@@ -2785,11 +2908,10 @@ impl ReasonerSession {
         &self,
         axiom: &str,
         control: &mut purrdf_core::CanonicalizationControl<'_>,
-    ) -> Result<ReasoningAnswer<purrdf_core::Canonicalized>, crate::canonical::CanonicalServiceError>
-    {
+    ) -> Result<ReasoningAnswer<purrdf_core::Canonicalized>, ReasoningError> {
         let parsed = parse_axiom(axiom)?;
-        let justification =
-            justify(&self.dataset, &parsed).map_err(|error| format!("justify: {error}"))?;
+        let justification = justify(&self.dataset, &parsed)
+            .map_err(|cause| ReasoningError::explanation("justify", cause))?;
         Ok(ReasoningAnswer {
             // `self.dataset` is `ReasonerSession::open`'s caller-supplied `document`
             // (see `justify_to_string`), so the justification's ontology is
@@ -2810,13 +2932,14 @@ impl ReasonerSession {
         &self,
         regime: &str,
         conclusion: &str,
-    ) -> Result<ReasoningAnswer<String>, String> {
+    ) -> Result<ReasoningAnswer<String>, ReasoningError> {
         let parsed = parse_regime(regime)?;
         let (graph, subject, predicate, object) = parse_one_statement(conclusion)?;
         let proof = {
-            let mut active = self.explanation.lock().map_err(|_| {
-                "explain-conclusion: active explanation session lock is poisoned".to_owned()
-            })?;
+            let mut active = self
+                .explanation
+                .lock()
+                .map_err(|_| RequestError::ExplanationLock)?;
             // Native fixed rules, NoGuards and independent checking invoke no
             // caller callback or session method while this guard is held.
             let result = if let Some(session) = active
@@ -2840,7 +2963,7 @@ impl ReasonerSession {
                 })
             };
             drop(active);
-            result.map_err(|error| format!("explain-conclusion: {error}"))?
+            result.map_err(|cause| ReasoningError::explanation("explain-conclusion", cause))?
         };
         Ok(ReasoningAnswer {
             answer: render_chase_proof_answer(&proof),
@@ -2901,7 +3024,7 @@ pub fn consistency_to_string(
     step_cap: u32,
     work_cap: u32,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
-) -> Result<ReasoningAnswer<String>, crate::canonical::CanonicalServiceError> {
+) -> Result<ReasoningAnswer<String>, ReasoningError> {
     ReasonerSession::open_premise(document, imports, premise_iris, step_cap, work_cap, false)?
         .consistency(control)
 }
@@ -2934,7 +3057,7 @@ pub fn classify_to_string(
     step_cap: u32,
     work_cap: u32,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
-) -> Result<ReasoningAnswer<String>, crate::canonical::CanonicalServiceError> {
+) -> Result<ReasoningAnswer<String>, ReasoningError> {
     ReasonerSession::open(document, step_cap, work_cap)?.classify(control)
 }
 
@@ -2962,7 +3085,7 @@ pub fn realize_to_string(
     step_cap: u32,
     work_cap: u32,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
-) -> Result<ReasoningAnswer<String>, crate::canonical::CanonicalServiceError> {
+) -> Result<ReasoningAnswer<String>, ReasoningError> {
     ReasonerSession::open(document, step_cap, work_cap)?.realize(control)
 }
 
@@ -2984,7 +3107,7 @@ pub fn instances_to_string(
     step_cap: u32,
     work_cap: u32,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
-) -> Result<ReasoningAnswer<String>, crate::canonical::CanonicalServiceError> {
+) -> Result<ReasoningAnswer<String>, ReasoningError> {
     ReasonerSession::open(document, step_cap, work_cap)?.instances(class, control)
 }
 
@@ -3031,7 +3154,7 @@ pub fn entails_to_string(
     step_cap: u32,
     work_cap: u32,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
-) -> Result<ReasoningAnswer<String>, crate::canonical::CanonicalServiceError> {
+) -> Result<ReasoningAnswer<String>, ReasoningError> {
     ReasonerSession::open(document, step_cap, work_cap)?.entails(axiom, control)
 }
 
@@ -3085,7 +3208,7 @@ pub fn entails_to_string(
 /// assert_eq!(certified.answer().lines().next(), Some("certified EL"));
 /// assert!(certified.certificate().ends_with("one-directional true\n"));
 /// ```
-pub fn profile_to_string(document: &str) -> Result<ReasoningAnswer<String>, String> {
+pub fn profile_to_string(document: &str) -> Result<ReasoningAnswer<String>, ReasoningError> {
     Ok(ReasonerSession::open(document, 0, 0)?.profile())
 }
 
@@ -3166,20 +3289,21 @@ pub fn extract_module_to_string(
     signature: &str,
     method: &str,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
-) -> Result<ReasoningAnswer<purrdf_core::Canonicalized>, crate::canonical::CanonicalServiceError> {
+) -> Result<ReasoningAnswer<purrdf_core::Canonicalized>, ReasoningError> {
     ReasonerSession::open(document, 0, 0)?.extract_module(signature, method, control)
 }
 
 /// Parse a locality-module method from its CLI spelling.
-fn parse_module_method(name: &str) -> Result<ModuleMethod, String> {
+fn parse_module_method(name: &str) -> Result<ModuleMethod, ReasoningError> {
     match name {
         "bot" => Ok(ModuleMethod::Bot),
         "top" => Ok(ModuleMethod::Top),
         "star" => Ok(ModuleMethod::Star),
-        other => Err(format!(
-            "unknown locality-module method \"{other}\"; accepted: {}",
-            MODULE_METHOD_NAMES.join(", ")
-        )),
+        other => Err(RequestError::UnknownName {
+            kind: RequestName::ModuleMethod,
+            offered: other.to_owned(),
+        }
+        .into()),
     }
 }
 
@@ -3251,7 +3375,7 @@ pub fn justify_to_string(
     document: &str,
     axiom: &str,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
-) -> Result<ReasoningAnswer<purrdf_core::Canonicalized>, crate::canonical::CanonicalServiceError> {
+) -> Result<ReasoningAnswer<purrdf_core::Canonicalized>, ReasoningError> {
     ReasonerSession::open(document, 0, 0)?.justify(axiom, control)
 }
 
@@ -3290,13 +3414,19 @@ fn render_module_certificate(extraction: &ModuleExtraction) -> String {
 fn render_justification(
     justification: &Justification,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
-) -> Result<String, crate::canonical::CanonicalServiceError> {
-    let sufficient = justification
-        .is_sufficient()
-        .map_err(|error| format!("justify: re-deciding sufficiency: {error}"))?;
-    let minimal = justification
-        .is_minimal()
-        .map_err(|error| format!("justify: re-deciding minimality: {error}"))?;
+) -> Result<String, ReasoningError> {
+    let sufficient = justification.is_sufficient().map_err(|cause| {
+        ReasoningError::entail(
+            EntailContext::Prefix("justify: re-deciding sufficiency"),
+            cause,
+        )
+    })?;
+    let minimal = justification.is_minimal().map_err(|cause| {
+        ReasoningError::entail(
+            EntailContext::Prefix("justify: re-deciding minimality"),
+            cause,
+        )
+    })?;
     let digest = justification.digest_hex(control).map_err(|cause| {
         crate::canonical::CanonicalServiceError::Canonical {
             context: "justify: content identity".into(),
@@ -3383,7 +3513,7 @@ pub fn explain_conclusion_to_string(
     document: &str,
     regime: &str,
     conclusion: &str,
-) -> Result<ReasoningAnswer<String>, String> {
+) -> Result<ReasoningAnswer<String>, ReasoningError> {
     ReasonerSession::open(document, 0, 0)?.explain_conclusion(regime, conclusion)
 }
 
@@ -3552,7 +3682,7 @@ const QUERY_VAR_IRI: &str = "urn:purrdf-query-variable:purrdfQvar";
 ///
 /// A `?` with no name after it, a variable in a literal's datatype, or a document the
 /// N-Triples parser refuses.
-fn parse_bgp(text: &str) -> Result<Vec<purrdf_entail::QTriple>, String> {
+fn parse_bgp(text: &str) -> Result<Vec<purrdf_entail::QTriple>, ReasoningError> {
     // The one namespace the caller's own text does not contain — the IRI a variable is
     // rewritten INTO, so no IRI the caller wrote can be read back as a variable, in either
     // of the two ways N-Triples lets them write it (see the item docs).
@@ -3627,10 +3757,11 @@ fn parse_bgp(text: &str) -> Result<Vec<purrdf_entail::QTriple>, String> {
                     }
                 }
                 if name.is_empty() {
-                    return Err(format!(
-                        "a variable marker `{c}` with no name after it; a projected variable is \
-                         written `{c}name`"
-                    ));
+                    return Err(RequestError::VariableMarker {
+                        pattern: text.to_owned(),
+                        marker: c,
+                    }
+                    .into());
                 }
                 let index = names
                     .iter()
@@ -3645,8 +3776,14 @@ fn parse_bgp(text: &str) -> Result<Vec<purrdf_entail::QTriple>, String> {
         }
     }
 
-    let dataset = purrdf_rdf::parse_dataset(rewritten.as_bytes(), INPUT_MEDIA_TYPE, None)
-        .map_err(|diagnostic| format!("the basic graph pattern is not N-Triples: {diagnostic}"))?;
+    let dataset = purrdf_rdf::parse_dataset(rewritten.as_bytes(), INPUT_MEDIA_TYPE, None).map_err(
+        |cause| InputError::Parse {
+            role: InputRole::Pattern,
+            offered: text.to_owned(),
+            parsed: Some(rewritten.clone()),
+            cause,
+        },
+    )?;
     // The variable index a stand-in IRI carries, or `None` for an IRI the caller wrote.
     let slot = |iri: &str| -> Option<usize> {
         iri.strip_prefix(iri_prefix.as_str())
@@ -3656,19 +3793,20 @@ fn parse_bgp(text: &str) -> Result<Vec<purrdf_entail::QTriple>, String> {
     // One walk for all three positions and every depth below them: `restore_query_vars` is
     // total over the term, so no stand-in can survive into a returned pattern, and a nested
     // occurrence comes back as the SAME variable a top-level one does.
-    let node = |term: TermValue| -> Result<purrdf_entail::QNode, String> {
+    let node = |term: TermValue| -> Result<purrdf_entail::QNode, ReasoningError> {
         restore_query_vars(term, &slot, &names)
     };
     let mut bgp = Vec::new();
     // `quads()` yields interned ids in document order, so the pattern's own triple order —
     // and hence the column order `projected_vars` reads off it — is the caller's.
     for quad in dataset.quads() {
-        if quad.g.is_some() {
-            return Err(
-                "a basic graph pattern is matched against the DEFAULT graph, so a pattern that \
-                 names a graph is refused rather than having that graph silently dropped"
-                    .to_owned(),
-            );
+        if let Some(graph) = quad.g {
+            return Err(InputError::Graph {
+                role: InputRole::Pattern,
+                offered: text.to_owned(),
+                graph: dataset.term_value(graph),
+            }
+            .into());
         }
         bgp.push(purrdf_entail::QTriple {
             s: node(dataset.term_value(quad.s))?,
@@ -3730,7 +3868,7 @@ fn restore_query_vars(
     term: TermValue,
     slot: &impl Fn(&str) -> Option<usize>,
     names: &[String],
-) -> Result<purrdf_entail::QNode, String> {
+) -> Result<purrdf_entail::QNode, ReasoningError> {
     term.try_fold_owned(
         |term| match term {
             TermValue::Iri(ref iri) => Ok(match slot(iri) {
@@ -3742,12 +3880,12 @@ fn restore_query_vars(
                 ref datatype,
                 ..
             } => match slot(datatype) {
-                Some(index) => Err(format!(
-                    "a variable is not a datatype IRI: `?{}` stands in the datatype of the \
-                     literal \"{lexical_form}\", and a basic graph pattern admits a variable \
-                     only where a term can be bound",
-                    names[index]
-                )),
+                Some(index) => Err(RequestError::VariableDatatype {
+                    variable: names[index].clone(),
+                    lexical_form: lexical_form.clone(),
+                    datatype: datatype.clone(),
+                }
+                .into()),
                 None => Ok(purrdf_entail::QNode::Term(term)),
             },
             TermValue::Blank { .. } => Ok(purrdf_entail::QNode::Term(term)),
@@ -3824,18 +3962,18 @@ pub type ImportList<'a> = [(&'a str, &'a str)];
 /// never applies; or one ontology IRI declared twice, where keeping either document would be a
 /// choice this boundary made on the caller's behalf ([`ImportMap::try_insert`] is the one key
 /// policy).
-fn build_import_map(imports: &ImportList<'_>) -> Result<ImportMap, String> {
+fn build_import_map(imports: &ImportList<'_>) -> Result<ImportMap, ReasoningError> {
     let mut map = ImportMap::default();
-    let refuse = |error: purrdf_core::imports::ImportKeyError| {
-        format!("the import list is unusable: {error}")
-    };
     for (iri, document) in imports {
-        map.check_key(iri).map_err(refuse)?;
+        map.check_key(iri)?;
         let parsed = purrdf_rdf::parse_dataset(document.as_bytes(), INPUT_MEDIA_TYPE, None)
-            .map_err(|diagnostic| {
-                format!("the import document for <{iri}> is not N-Quads: {diagnostic}")
+            .map_err(|cause| InputError::Parse {
+                role: InputRole::Import((*iri).to_owned()),
+                offered: (*document).to_owned(),
+                parsed: None,
+                cause,
             })?;
-        map.try_insert(*iri, parsed).map_err(refuse)?;
+        map.try_insert(*iri, parsed)?;
     }
     Ok(map)
 }
@@ -3854,7 +3992,7 @@ fn configuration(
     regime: &str,
     imports: &ImportList<'_>,
     premise_iris: &[&str],
-) -> Result<(Regime, ImportMap), String> {
+) -> Result<(Regime, ImportMap), ReasoningError> {
     let parsed = parse_regime(regime)?;
     Ok((parsed, premise_import_map(imports, premise_iris)?))
 }
@@ -3999,8 +4137,8 @@ pub fn check_premise_iris(premise_iris: &[&str]) -> Result<(), PremiseIriError> 
 pub fn premise_import_map(
     imports: &ImportList<'_>,
     premise_iris: &[&str],
-) -> Result<ImportMap, String> {
-    check_premise_iris(premise_iris).map_err(|error| error.to_string())?;
+) -> Result<ImportMap, ReasoningError> {
+    check_premise_iris(premise_iris)?;
     let mut map = build_import_map(imports)?;
     for iri in premise_iris {
         map.declare_loaded(*iri);
@@ -4014,9 +4152,18 @@ pub fn premise_import_map(
 /// named first and the one a service with only one document has, so a prefix would be
 /// noise. A SECOND document — a conclusion, an import — says which one it is, because there
 /// the ambiguity is real.
-fn parse_premise(document: &str) -> Result<std::sync::Arc<purrdf_core::RdfDataset>, String> {
-    purrdf_rdf::parse_dataset(document.as_bytes(), INPUT_MEDIA_TYPE, None)
-        .map_err(|diagnostic| diagnostic.to_string())
+fn parse_premise(
+    document: &str,
+) -> Result<std::sync::Arc<purrdf_core::RdfDataset>, ReasoningError> {
+    purrdf_rdf::parse_dataset(document.as_bytes(), INPUT_MEDIA_TYPE, None).map_err(|cause| {
+        InputError::Parse {
+            role: InputRole::Premise,
+            offered: document.to_owned(),
+            parsed: None,
+            cause,
+        }
+        .into()
+    })
 }
 
 /// The CERTAIN ANSWERS of a basic graph pattern over `document` under `regime`.
@@ -4153,14 +4300,21 @@ pub fn certain_answers_to_string(
     imports: &ImportList<'_>,
     premise_iris: &[&str],
     limits: &MaterializeLimits,
-) -> Result<ReasoningAnswer<String>, String> {
+) -> Result<ReasoningAnswer<String>, ReasoningError> {
     let (parsed, map) = configuration(regime, imports, premise_iris)?;
     let bgp = parse_bgp(pattern)?;
     let premise = parse_premise(document)?;
     let answers =
         purrdf_entail::certain_answers_with(&premise, &bgp, parsed, &map, &limits.eval_options())
-            .map_err(|error| {
-            render_entail_error_in(regime, &error, limits.host, RegimeService::CertainAnswers)
+            .map_err(|cause| {
+            ReasoningError::entail(
+                EntailContext::Regime {
+                    spelling: regime.to_owned(),
+                    host: limits.host,
+                    service: RegimeService::CertainAnswers,
+                },
+                cause,
+            )
         })?;
     // The mechanism that ANSWERED, read off the answer set rather than asserted here. A
     // pattern with nothing to project routes through the same fold `graph_entails_to_string`
@@ -4255,10 +4409,16 @@ pub fn graph_entails_to_string(
     imports: &ImportList<'_>,
     premise_iris: &[&str],
     limits: &MaterializeLimits,
-) -> Result<ReasoningAnswer<String>, String> {
+) -> Result<ReasoningAnswer<String>, ReasoningError> {
     let (parsed, map) = configuration(regime, imports, premise_iris)?;
-    let target = purrdf_rdf::parse_dataset(conclusion.as_bytes(), INPUT_MEDIA_TYPE, None)
-        .map_err(|diagnostic| format!("the conclusion is not N-Quads: {diagnostic}"))?;
+    let target = purrdf_rdf::parse_dataset(conclusion.as_bytes(), INPUT_MEDIA_TYPE, None).map_err(
+        |cause| InputError::Parse {
+            role: InputRole::Conclusion,
+            offered: conclusion.to_owned(),
+            parsed: None,
+            cause,
+        },
+    )?;
     let parsed_premise = parse_premise(premise)?;
     let entailment = purrdf_entail::entails_with(
         &parsed_premise,
@@ -4267,8 +4427,15 @@ pub fn graph_entails_to_string(
         &map,
         &limits.eval_options(),
     )
-    .map_err(|error| {
-        render_entail_error_in(regime, &error, limits.host, RegimeService::GraphEntails)
+    .map_err(|cause| {
+        ReasoningError::entail(
+            EntailContext::Regime {
+                spelling: regime.to_owned(),
+                host: limits.host,
+                service: RegimeService::GraphEntails,
+            },
+            cause,
+        )
     })?;
     Ok(ReasoningAnswer {
         answer: render_entailment_answer(&entailment),
@@ -4370,10 +4537,16 @@ pub fn verify_entailment_to_string(
     imports: &ImportList<'_>,
     premise_iris: &[&str],
     limits: &MaterializeLimits,
-) -> Result<ReasoningAnswer<String>, String> {
+) -> Result<ReasoningAnswer<String>, ReasoningError> {
     let (parsed, map) = configuration(regime, imports, premise_iris)?;
-    let target = purrdf_rdf::parse_dataset(conclusion.as_bytes(), INPUT_MEDIA_TYPE, None)
-        .map_err(|diagnostic| format!("the conclusion is not N-Quads: {diagnostic}"))?;
+    let target = purrdf_rdf::parse_dataset(conclusion.as_bytes(), INPUT_MEDIA_TYPE, None).map_err(
+        |cause| InputError::Parse {
+            role: InputRole::Conclusion,
+            offered: conclusion.to_owned(),
+            parsed: None,
+            cause,
+        },
+    )?;
     let parsed_premise = parse_premise(premise)?;
     let entailment = purrdf_entail::entails_with(
         &parsed_premise,
@@ -4382,8 +4555,15 @@ pub fn verify_entailment_to_string(
         &map,
         &limits.eval_options(),
     )
-    .map_err(|error| {
-        render_entail_error_in(regime, &error, limits.host, RegimeService::VerifyEntailment)
+    .map_err(|cause| {
+        ReasoningError::entail(
+            EntailContext::Regime {
+                spelling: regime.to_owned(),
+                host: limits.host,
+                service: RegimeService::VerifyEntailment,
+            },
+            cause,
+        )
     })?;
     let mut answer = render_entailment_answer(&entailment);
     match entailment.warrant() {
@@ -4413,14 +4593,15 @@ pub fn verify_entailment_to_string(
 ///
 /// Never discarded silently: a caller who passed a class to `classify` believes it narrowed
 /// the question, and the answer they would get back is about every named class.
-fn refuse_argument(service: &str, argument: &str) -> Result<(), String> {
+fn refuse_argument(service: &str, argument: &str) -> Result<(), ReasoningError> {
     if argument.trim().is_empty() {
         return Ok(());
     }
-    Err(format!(
-        "service \"{service}\" takes no argument, and \"{argument}\" was supplied; the \
-         argument would have been discarded rather than narrowing the question"
-    ))
+    Err(RequestError::UnexpectedArgument {
+        service: service.to_owned(),
+        argument: argument.to_owned(),
+    }
+    .into())
 }
 
 /// Split `extract-module`'s argument into `(signature, method)`.
@@ -4429,14 +4610,15 @@ fn refuse_argument(service: &str, argument: &str) -> Result<(), String> {
 /// the module extractor's question is a PAIR, and every other service's argument is a single
 /// value, so the pair is spelled inside the one string every host already carries rather than
 /// by giving one service a second parameter four hosts would have to grow.
-fn parse_module_argument(argument: &str) -> Result<(String, String), String> {
+fn parse_module_argument(argument: &str) -> Result<(String, String), ReasoningError> {
     let (first, rest) = argument.split_once('\n').unwrap_or((argument, ""));
-    let method = first.trim().strip_prefix("method ").ok_or_else(|| {
-        format!(
-            "an `extract-module` argument opens with a `method <{}>` line",
-            MODULE_METHOD_NAMES.join("|")
-        )
-    })?;
+    let method =
+        first
+            .trim()
+            .strip_prefix("method ")
+            .ok_or_else(|| RequestError::ModuleArgument {
+                argument: argument.to_owned(),
+            })?;
     Ok((rest.to_owned(), method.trim().to_owned()))
 }
 
@@ -4467,12 +4649,14 @@ impl ReasonerSession {
         &mut self,
         class: &str,
         control: &mut purrdf_core::CanonicalizationControl<'_>,
-    ) -> Result<ReasoningAnswer<String>, crate::canonical::CanonicalServiceError> {
+    ) -> Result<ReasoningAnswer<String>, ReasoningError> {
         let term = parse_one_term(class)?;
         let (verdict, certificate, proof) = self
             .kb(control)?
             .class_satisfiability(&term)
-            .map_err(|error| service_error("class-satisfiability", &error))?
+            .map_err(|cause| {
+                ReasoningError::entail(EntailContext::Service("class-satisfiability".into()), cause)
+            })?
             .into_certified_parts();
         let mut answer = format!("class-satisfiability {}\n", verdict_name(verdict));
         let _ = writeln!(answer, "term {}", emit(&term));
@@ -4509,14 +4693,13 @@ impl ReasonerSession {
         service: &str,
         argument: &str,
         control: &mut purrdf_core::CanonicalizationControl<'_>,
-    ) -> Result<ReasoningAnswer<ReasoningText>, crate::canonical::CanonicalServiceError> {
+    ) -> Result<ReasoningAnswer<ReasoningText>, ReasoningError> {
         let asked = parse_proof_service(service)?;
         if !self.proofs {
-            return Err(format!(
-                "this session records nothing, so \"{service}\" has no proof to hand back. \
-                 Recording is opt-in and costs the traces it keeps: open the session with \
-                 proofs to ask for one"
-            )
+            return Err(RequestError::UnrecordedSession {
+                service: asked,
+                spelling: service.to_owned(),
+            }
             .into());
         }
         match asked {
@@ -4551,10 +4734,10 @@ impl ReasonerSession {
             }
             // `Service` is `#[non_exhaustive]`: a member added upstream is a member this
             // boundary cannot ask about, and saying so beats answering a different question.
-            other => Err(format!(
-                "service \"{}\" has no entry point at this boundary",
-                other.as_str()
-            )
+            other => Err(RequestError::UnsupportedService {
+                service: other,
+                operation: "entry point",
+            }
             .into()),
         }
     }
@@ -4609,7 +4792,7 @@ pub fn prove_to_string(
     step_cap: u32,
     work_cap: u32,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
-) -> Result<ReasoningAnswer<ReasoningText>, crate::canonical::CanonicalServiceError> {
+) -> Result<ReasoningAnswer<ReasoningText>, ReasoningError> {
     ReasonerSession::open_with_proofs(document, step_cap, work_cap)?
         .prove(service, argument, control)
 }
@@ -4636,12 +4819,20 @@ pub fn prove_to_string(
 ///
 /// Text that is not this grammar, a missing or repeated line, a counter that is not a `u64`,
 /// or a boundary naming no [`Construct`](purrdf_entail::Construct).
-fn parse_dl_certificate(text: &str) -> Result<DlCertificate, String> {
+fn parse_dl_certificate(text: &str) -> Result<DlCertificate, ReasoningError> {
+    read_dl_certificate(text).map_err(|cause| ReasoningError::Certificate {
+        offered: text.to_owned(),
+        cause: Box::new(cause),
+    })
+}
+
+fn read_dl_certificate(text: &str) -> Result<DlCertificate, CertificateError> {
     let mut lines = text.lines();
-    if lines.next() != Some(DL_CERTIFICATE_BANNER) {
-        return Err(format!(
-            "a DL certificate opens with {DL_CERTIFICATE_BANNER:?}, and this one does not"
-        ));
+    let first = lines.next();
+    if first != Some(DL_CERTIFICATE_BANNER) {
+        return Err(CertificateError::Banner {
+            offered: first.map(str::to_owned),
+        });
     }
     let mut exhausted = None;
     let mut schema_obstruction = None;
@@ -4668,27 +4859,27 @@ fn parse_dl_certificate(text: &str) -> Result<DlCertificate, String> {
                     storage_refused = true;
                     false
                 }
-                other => return Err(format!("unknown DL completeness \"{other}\"")),
+                other => return Err(CertificateError::Completeness(other.to_owned())),
             });
         } else if let Some(rest) = line.strip_prefix("schema-preparation ") {
             if schema_obstruction.is_some() {
-                return Err("the certificate states `schema-preparation` twice".to_owned());
+                return Err(CertificateError::Duplicate("schema-preparation"));
             }
             let mut words = rest.split_whitespace();
             let obstruction = match words.next() {
                 Some("work") => SchemaObstruction::Work {
-                    spent: read_schema_counter(words.next())?,
-                    limit: read_schema_counter(words.next())?,
+                    spent: read_schema_counter(words.next(), "schema-work-spent")?,
+                    limit: read_schema_counter(words.next(), "schema-work-limit")?,
                 },
                 Some("storage") => SchemaObstruction::Storage {
-                    requested: read_schema_counter(words.next())?,
-                    limit: read_schema_counter(words.next())?,
+                    requested: read_schema_counter(words.next(), "schema-storage-requested")?,
+                    limit: read_schema_counter(words.next(), "schema-storage-limit")?,
                 },
                 Some("allocation") => SchemaObstruction::Allocation,
-                _ => return Err("unknown schema preparation obstruction".to_owned()),
+                _ => return Err(CertificateError::SchemaObstruction(rest.to_owned())),
             };
             if words.next().is_some() {
-                return Err("extra schema preparation obstruction arguments".to_owned());
+                return Err(CertificateError::SchemaArguments(rest.to_owned()));
             }
             schema_obstruction = Some(obstruction);
         } else if let Some(value) = line.strip_prefix("storage-refusal ") {
@@ -4701,61 +4892,84 @@ fn parse_dl_certificate(text: &str) -> Result<DlCertificate, String> {
                 value if value.starts_with("capacity ") => {
                     use purrdf_lex::allocation::{CapacityError, CapacitySpace};
                     let mut fields = value.split_whitespace().skip(1);
-                    let space = fields
+                    let offered_space = fields.next();
+                    let space =
+                        offered_space
+                            .and_then(CapacitySpace::of_name)
+                            .ok_or_else(|| CertificateError::CapacitySpace {
+                                offered: offered_space.map(str::to_owned),
+                            })?;
+                    let attempted_text = fields
                         .next()
-                        .and_then(CapacitySpace::of_name)
-                        .ok_or_else(|| "unknown DL capacity space".to_owned())?;
-                    let attempted = fields
+                        .ok_or(CertificateError::MissingCapacityCounter { field: "attempted" })?;
+                    let attempted = attempted_text.parse::<u128>().map_err(|cause| {
+                        CertificateError::CapacityCounter {
+                            field: "attempted",
+                            offered: attempted_text.to_owned(),
+                            cause,
+                        }
+                    })?;
+                    let limit_text = fields
                         .next()
-                        .and_then(|v| v.parse::<u128>().ok())
-                        .ok_or_else(|| "invalid DL capacity attempted count".to_owned())?;
-                    let limit = fields
-                        .next()
-                        .and_then(|v| v.parse::<u128>().ok())
-                        .ok_or_else(|| "invalid DL capacity limit".to_owned())?;
-                    if fields.next().is_some() || attempted <= limit {
-                        return Err("invalid DL capacity refusal".to_owned());
+                        .ok_or(CertificateError::MissingCapacityCounter { field: "limit" })?;
+                    let limit = limit_text.parse::<u128>().map_err(|cause| {
+                        CertificateError::CapacityCounter {
+                            field: "limit",
+                            offered: limit_text.to_owned(),
+                            cause,
+                        }
+                    })?;
+                    let extra: Vec<String> = fields.map(str::to_owned).collect();
+                    if !extra.is_empty() || attempted <= limit {
+                        return Err(CertificateError::CapacityRefusal {
+                            space,
+                            attempted,
+                            limit,
+                            extra,
+                        });
                     }
                     StorageError::Capacity(CapacityError::new(space, attempted, limit))
                 }
-                other => return Err(format!("unknown DL storage refusal \"{other}\"")),
+                other => return Err(CertificateError::Storage(other.to_owned())),
             };
             if storage_refusal.replace(error).is_some() {
-                return Err("the certificate states storage-refusal twice".to_owned());
+                return Err(CertificateError::Duplicate("storage-refusal"));
             }
         } else if let Some(rest) = line.strip_prefix("boundary ") {
             let name = rest.split_once(' ').map_or(rest, |(name, _)| name);
             let construct = purrdf_entail::Construct::of_name(name)
-                .ok_or_else(|| format!("\"{name}\" names no construct this build knows"))?;
+                .ok_or_else(|| CertificateError::Construct(name.to_owned()))?;
             boundaries.push(purrdf_entail::Boundary::of(construct));
         } else if let Some((index, value)) = COUNTERS.iter().enumerate().find_map(|(at, name)| {
             line.strip_prefix(name)
                 .and_then(|rest| rest.strip_prefix(' '))
                 .map(|value| (at, value))
         }) {
-            let parsed = value.parse::<u64>().map_err(|error| {
-                format!("the certificate's `{}` line: {error}", COUNTERS[index])
-            })?;
+            let parsed = value
+                .parse::<u64>()
+                .map_err(|cause| CertificateError::Counter {
+                    field: COUNTERS[index],
+                    offered: value.to_owned(),
+                    cause,
+                })?;
             if counters[index].replace(parsed).is_some() {
-                return Err(format!(
-                    "the certificate states `{}` twice",
-                    COUNTERS[index]
-                ));
+                return Err(CertificateError::Duplicate(COUNTERS[index]));
             }
         }
     }
-    let exhausted = exhausted.ok_or_else(|| "the certificate states no completeness".to_owned())?;
+    let exhausted = exhausted.ok_or(CertificateError::Missing("completeness"))?;
     let mut read = [0_u64; 8];
     for (at, value) in counters.iter().enumerate() {
-        read[at] = value.ok_or_else(|| format!("the certificate states no `{}`", COUNTERS[at]))?;
+        read[at] = value.ok_or(CertificateError::Missing(COUNTERS[at]))?;
     }
-    if schema_obstruction.is_some() && !exhausted && !storage_refused {
-        return Err(
-            "a schema preparation obstruction requires incomplete certification".to_owned(),
-        );
+    if let Some(obstruction) = schema_obstruction.filter(|_| !exhausted && !storage_refused) {
+        return Err(CertificateError::ObstructedComplete { obstruction });
     }
     if storage_refused != storage_refusal.is_some() {
-        return Err("storage-refused completeness requires exactly one physical cause".to_owned());
+        return Err(CertificateError::StorageCompleteness {
+            storage_refused,
+            cause: storage_refusal,
+        });
     }
     let certificate = DlCertificate::stated(
         exhausted, false, boundaries, read[0], read[1], read[2], read[3], read[4], read[5],
@@ -4772,10 +4986,17 @@ fn parse_dl_certificate(text: &str) -> Result<DlCertificate, String> {
 }
 
 /// One precisely typed obstruction argument in the existing certificate grammar.
-fn read_schema_counter<T: core::str::FromStr>(word: Option<&str>) -> Result<T, String> {
-    word.ok_or_else(|| "missing schema preparation obstruction argument".to_owned())?
-        .parse()
-        .map_err(|_| "invalid schema preparation obstruction counter".to_owned())
+fn read_schema_counter<T: core::str::FromStr<Err = core::num::ParseIntError>>(
+    word: Option<&str>,
+    field: &'static str,
+) -> Result<T, CertificateError> {
+    let word = word.ok_or(CertificateError::MissingSchemaCounter { field })?;
+    word.parse()
+        .map_err(|cause| CertificateError::SchemaCounter {
+            field,
+            offered: word.to_owned(),
+            cause,
+        })
 }
 
 /// The two self-delimiting N-Triples terms a `<keyword> <s> <o>` answer line carries.
@@ -4783,19 +5004,25 @@ fn read_schema_counter<T: core::str::FromStr>(word: Option<&str>) -> Result<T, S
 /// Safe to split on the first space after the first term because every term this boundary
 /// puts on such a line is a NAME — an `<iri>` or a `_:label`, neither of which may carry an
 /// unescaped space — which is the same property that makes the answer grammars readable.
-fn two_terms(line: &str, keyword: &str) -> Result<(TermValue, TermValue), String> {
+fn two_terms(line: &str, keyword: &str) -> Result<(TermValue, TermValue), ReasoningError> {
     let rest = line
         .strip_prefix(keyword)
         .and_then(|rest| rest.strip_prefix(' '))
-        .ok_or_else(|| format!("a `{keyword}` line was expected, and this is {line:?}"))?;
+        .ok_or_else(|| ProofDocumentError::AnswerPrefix {
+            keyword: keyword.to_owned(),
+            offered: line.to_owned(),
+        })?;
     let (left, right) = rest
         .split_once(' ')
-        .ok_or_else(|| format!("a `{keyword}` line carries two terms, and this is {line:?}"))?;
+        .ok_or_else(|| ProofDocumentError::AnswerTerms {
+            keyword: keyword.to_owned(),
+            offered: line.to_owned(),
+        })?;
     Ok((parse_one_term(left)?, parse_one_term(right)?))
 }
 
 /// The three-valued verdict an answer's FIRST line reports about `keyword`.
-fn answer_verdict(answer: &str, keyword: &str) -> Result<Verdict, String> {
+fn answer_verdict(answer: &str, keyword: &str) -> Result<Verdict, ReasoningError> {
     let first = answer.lines().next().unwrap_or_default();
     match first
         .strip_prefix(keyword)
@@ -4804,9 +5031,11 @@ fn answer_verdict(answer: &str, keyword: &str) -> Result<Verdict, String> {
         Some("true") => Ok(Verdict::True),
         Some("false") => Ok(Verdict::False),
         Some("unknown") => Ok(Verdict::Unknown),
-        _ => Err(format!(
-            "a `{keyword}` answer opens `{keyword} true|false|unknown`, and this opens {first:?}"
-        )),
+        _ => Err(ProofDocumentError::AnswerVerdict {
+            keyword: keyword.to_owned(),
+            offered: first.to_owned(),
+        }
+        .into()),
     }
 }
 
@@ -4824,7 +5053,7 @@ fn answer_claims(
     argument: &str,
     answer: &str,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
-) -> Result<Vec<ClaimSubject>, crate::canonical::CanonicalServiceError> {
+) -> Result<Vec<ClaimSubject>, ReasoningError> {
     Ok(match service {
         Service::Consistency => {
             if answer_verdict(answer, "consistency")?.is_true() {
@@ -4848,7 +5077,7 @@ fn answer_claims(
             .map(|line| {
                 two_terms(line, "subclass").map(|(sub, sup)| ClaimSubject::Subsumption { sub, sup })
             })
-            .collect::<Result<Vec<_>, String>>()?,
+            .collect::<Result<Vec<_>, ReasoningError>>()?,
         Service::Realization => answer
             .lines()
             .filter(|line| line.starts_with("type "))
@@ -4856,7 +5085,7 @@ fn answer_claims(
                 two_terms(line, "type")
                     .map(|(individual, class)| ClaimSubject::Type { individual, class })
             })
-            .collect::<Result<Vec<_>, String>>()?,
+            .collect::<Result<Vec<_>, ReasoningError>>()?,
         Service::InstanceRetrieval => {
             let class = parse_one_term(argument)?;
             answer
@@ -4868,7 +5097,7 @@ fn answer_claims(
                         class: class.clone(),
                     })
                 })
-                .collect::<Result<Vec<_>, String>>()?
+                .collect::<Result<Vec<_>, ReasoningError>>()?
         }
         Service::AxiomEntailment => {
             if answer_verdict(answer, "entails")?.is_true() {
@@ -4889,7 +5118,12 @@ fn answer_claims(
             // come back as an `Err` value across the wasm/Python/C-ABI boundary, not abort
             // the process.
             let module = purrdf_rdf::parse_dataset(answer.as_bytes(), INPUT_MEDIA_TYPE, None)
-                .map_err(|diagnostic| format!("the module answer is not N-Quads: {diagnostic}"))?;
+                .map_err(|cause| InputError::Parse {
+                    role: InputRole::ModuleAnswer,
+                    offered: answer.to_owned(),
+                    parsed: None,
+                    cause,
+                })?;
             let digest =
                 purrdf_entail::try_ontology_identity(&module, control).map_err(|error| {
                     crate::canonical::CanonicalServiceError::Canonical {
@@ -4900,10 +5134,10 @@ fn answer_claims(
             vec![ClaimSubject::Module { digest }]
         }
         other => {
-            return Err(format!(
-                "service \"{}\" has no answer grammar at this boundary",
-                other.as_str()
-            )
+            return Err(RequestError::UnsupportedService {
+                service: other,
+                operation: "answer grammar",
+            }
             .into());
         }
     })
@@ -4922,7 +5156,7 @@ fn proof_question(
     reasoner: &Reasoner,
     service: Service,
     argument: &str,
-) -> Result<Question, String> {
+) -> Result<Question, ReasoningError> {
     Ok(match service {
         Service::Consistency => Question::Consistency,
         Service::ClassSatisfiability => Question::ClassSatisfiability {
@@ -4944,10 +5178,11 @@ fn proof_question(
             }
         }
         other => {
-            return Err(format!(
-                "service \"{}\" has no question at this boundary",
-                other.as_str()
-            ));
+            return Err(RequestError::UnsupportedService {
+                service: other,
+                operation: "question",
+            }
+            .into());
         }
     })
 }
@@ -5017,12 +5252,9 @@ pub fn check_dl_proof(
     certificate: &str,
     proof: &str,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
-) -> Result<String, crate::canonical::CanonicalServiceError> {
+) -> Result<String, ReasoningError> {
     check_dl_proof_from_source(
-        || {
-            purrdf_rdf::parse_dataset(document.as_bytes(), INPUT_MEDIA_TYPE, None)
-                .map_err(|diagnostic| diagnostic.to_string())
-        },
+        || parse_premise(document),
         false,
         service,
         argument,
@@ -5038,7 +5270,7 @@ pub fn check_dl_proof(
     reason = "the proof checks its original source, query, answer and certificate under caller control"
 )]
 fn check_dl_proof_from_source(
-    source: impl FnOnce() -> Result<std::sync::Arc<purrdf_rdf::RdfDataset>, String>,
+    source: impl FnOnce() -> Result<std::sync::Arc<purrdf_rdf::RdfDataset>, ReasoningError>,
     resolved_imports: bool,
     service: &str,
     argument: &str,
@@ -5046,24 +5278,25 @@ fn check_dl_proof_from_source(
     certificate: &str,
     proof: &str,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
-) -> Result<String, crate::canonical::CanonicalServiceError> {
+) -> Result<String, ReasoningError> {
     let asked = parse_proof_service(service)?;
     let term = decode_dl_proof(proof)?;
     let dataset = source()?;
     // The consumer's own reverse mapping, never the producer's: this is the step that rests on
     // the `refutation-encoding` and `reverse-mapping` entries the report names.
-    let mut reasoner = Reasoner::with_proofs(&dataset, control)
-        .map_err(|error| crate::canonical::CanonicalServiceError::entail("reasoner", error))?;
+    let mut reasoner = Reasoner::with_proofs(&dataset, control).map_err(|cause| {
+        ReasoningError::entail(EntailContext::Operation("reasoner".into()), cause)
+    })?;
     if resolved_imports {
         reasoner = reasoner.with_resolved_imports();
     }
     let question = proof_question(&reasoner, asked, argument)?;
-    reasoner
-        .prepare(&question)
-        .map_err(|error| format!("question preparation: {error}"))?;
-    let context = reasoner
-        .borrowed_proof_context()
-        .map_err(|error| format!("checking context: {error}"))?;
+    reasoner.prepare(&question).map_err(|cause| {
+        ReasoningError::entail(EntailContext::Prefix("question preparation"), cause)
+    })?;
+    let context = reasoner.borrowed_proof_context().map_err(|cause| {
+        ReasoningError::entail(EntailContext::Prefix("checking context"), cause)
+    })?;
     let read = if asked == Service::ModuleExtraction {
         // Locality extraction opens no tableau, so it issues no DL certificate at all — its
         // `purrdf-module-extraction 1` block is a different document with no search counters
@@ -5071,10 +5304,9 @@ fn check_dl_proof_from_source(
         // exactly this service, and a module proof arriving WITH a receipt is refused there
         // on the proof's own terms rather than admitted here.
         if !certificate.trim().is_empty() && !certificate.starts_with(MODULE_CERTIFICATE_BANNER) {
-            return Err(format!(
-                "`extract-module` issues a {MODULE_CERTIFICATE_BANNER:?} block and no DL \
-                 certificate; this is some other document"
-            )
+            return Err(ProofDocumentError::ModuleCertificate {
+                offered: certificate.to_owned(),
+            }
             .into());
         }
         None
@@ -5085,13 +5317,14 @@ fn check_dl_proof_from_source(
     };
     let replay = term
         .verify_prepared(&question, read.as_ref(), &context)
-        .map_err(|error| format!("the proof does not check: {error}"))?;
+        .map_err(|cause| ReasoningError::proof("the proof does not check", cause))?;
     let bound = if answer.trim().is_empty() {
         None
     } else {
         let claims = answer_claims(asked, argument, answer, control)?;
-        term.covers(&claims)
-            .map_err(|error| format!("the proof does not cover the answer beside it: {error}"))?;
+        term.covers(&claims).map_err(|cause| {
+            ReasoningError::proof("the proof does not cover the answer beside it", cause)
+        })?;
         let judgement = match asked {
             Service::Consistency => Some((ClaimSubject::Consistent, "consistency")),
             Service::ClassSatisfiability => Some((
@@ -5119,10 +5352,14 @@ fn check_dl_proof_from_source(
                 _ => {}
             }
             if answer.trim() != expected.trim() {
-                return Err("the proof does not cover the answer beside it: the answer describes a different subject or grammar".to_owned().into());
+                return Err(ProofDocumentError::AnswerMismatch {
+                    offered: answer.to_owned(),
+                    expected,
+                }
+                .into());
             }
-            term.covers_verdict(&subject, verdict).map_err(|error| {
-                format!("the proof does not cover the answer beside it: {error}")
+            term.covers_verdict(&subject, verdict).map_err(|cause| {
+                ReasoningError::proof("the proof does not cover the answer beside it", cause)
             })?;
         }
         Some(claims.len())
@@ -5252,7 +5489,7 @@ impl DlProofVector {
 /// # Errors
 ///
 /// A malformed artifact, with the 1-based line number.
-pub fn dl_proof_golden_vectors() -> Result<Vec<DlProofVector>, String> {
+pub fn dl_proof_golden_vectors() -> Result<Vec<DlProofVector>, FixtureGrammarError> {
     let mut cases: Vec<DlProofVector> = Vec::new();
     let mut open: Option<&'static str> = None;
     let mut name: Option<String> = None;
@@ -5270,7 +5507,12 @@ pub fn dl_proof_golden_vectors() -> Result<Vec<DlProofVector>, String> {
                     body.push('\n');
                 }
                 None if raw.trim().is_empty() || raw.starts_with('#') => {}
-                None => return Err(format!("line {line}: text outside any section: {raw}")),
+                None => {
+                    return Err(FixtureGrammarError::OutsideSection {
+                        line,
+                        text: raw.to_owned(),
+                    });
+                }
             }
             continue;
         };
@@ -5294,7 +5536,10 @@ pub fn dl_proof_golden_vectors() -> Result<Vec<DlProofVector>, String> {
                 open = Some(section);
             }
             "end" => {
-                let missing = |what: &str| format!("line {line}: @end before @{what}");
+                let missing = |what: &str| FixtureGrammarError::MissingSection {
+                    line,
+                    section: what.to_owned(),
+                };
                 cases.push(DlProofVector {
                     name: name.take().ok_or_else(|| missing("case"))?,
                     service: service.take().ok_or_else(|| missing("service"))?,
@@ -5307,14 +5552,19 @@ pub fn dl_proof_golden_vectors() -> Result<Vec<DlProofVector>, String> {
                 bodies.clear();
             }
             other => {
-                return Err(format!(
-                    "line {line}: unknown or misplaced directive @{other}"
-                ));
+                return Err(FixtureGrammarError::Directive {
+                    line,
+                    keyword: other.to_owned(),
+                    misplaced: true,
+                });
             }
         }
     }
-    if name.is_some() {
-        return Err("the artifact ends inside an unclosed case (missing @end)".to_owned());
+    if let Some(name) = name {
+        return Err(FixtureGrammarError::UnclosedCase {
+            line: DL_PROOF_GOLDEN_VECTORS.lines().count(),
+            name,
+        });
     }
     Ok(cases)
 }
@@ -5343,13 +5593,14 @@ pub fn dl_proof_golden_vectors() -> Result<Vec<DlProofVector>, String> {
 /// the three outputs, or a service the artifact no longer covers.
 pub fn check_dl_proof_golden_vectors(
     control: &mut purrdf_core::CanonicalizationControl<'_>,
-) -> Result<(), crate::canonical::CanonicalServiceError> {
+) -> Result<(), ReasoningError> {
     schema_vectors::check(control)?;
     let cases = dl_proof_golden_vectors()?;
     if cases.is_empty() {
-        return Err("the DL proof golden vector artifact holds no cases"
-            .to_owned()
-            .into());
+        return Err(FixtureError::Empty {
+            kind: FixtureKind::DlProof,
+        }
+        .into());
     }
     let mut causal_checked = false;
     for case in &cases {
@@ -5361,12 +5612,15 @@ pub fn check_dl_proof_golden_vectors(
             0,
             control,
         )
-        .map_err(|error| format!("case \"{}\": {error}", case.name()))?;
-        let differs = |what: &str, expected: &str, produced: &str| {
-            format!(
-                "case \"{}\": {what} mismatch\n--- expected ---\n{expected}--- produced ---\n{produced}",
-                case.name()
-            )
+        .map_err(|cause| FixtureError::Case {
+            name: case.name().to_owned(),
+            cause: Box::new(cause),
+        })?;
+        let differs = |what: &str, expected: &str, produced: &str| FixtureError::Mismatch {
+            name: case.name().to_owned(),
+            field: what.to_owned(),
+            expected: expected.to_owned(),
+            produced: produced.to_owned(),
         };
         if produced.answer() != case.answer() {
             return Err(differs("answer", case.answer(), produced.answer()).into());
@@ -5383,7 +5637,10 @@ pub fn check_dl_proof_golden_vectors(
             produced.proof_document(),
             control,
         )
-        .map_err(|error| format!("case \"{}\": {error}", case.name()))?;
+        .map_err(|cause| FixtureError::Case {
+            name: case.name().to_owned(),
+            cause: Box::new(cause),
+        })?;
         if checked != case.check() {
             return Err(differs("check", case.check(), &checked).into());
         }
@@ -5393,15 +5650,14 @@ pub fn check_dl_proof_golden_vectors(
         }
     }
     if !causal_checked {
-        return Err("the DL proof golden artifact is missing its causal NI case"
-            .to_owned()
-            .into());
+        return Err(FixtureError::MissingCausalCase.into());
     }
     for service in PROOF_SERVICE_NAMES {
         if !cases.iter().any(|case| case.service() == service) {
-            return Err(format!(
-                "the DL proof golden vector artifact no longer covers service \"{service}\""
-            )
+            return Err(FixtureError::Coverage {
+                kind: FixtureKind::DlProof,
+                missing: service.to_owned(),
+            }
             .into());
         }
     }
@@ -5414,7 +5670,7 @@ fn check_recursive_causal_vector(
     case: &DlProofVector,
     produced: &ReasoningAnswer<impl AsRef<str>>,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
-) -> Result<(), crate::canonical::CanonicalServiceError> {
+) -> Result<(), ReasoningError> {
     use purrdf_entail::proof_source::{
         ResolvedNode,
         causal::{CausalMutation, CausalObservation},
@@ -5425,14 +5681,21 @@ fn check_recursive_causal_vector(
     let context = consumer
         .kb(control)?
         .borrowed_proof_context()
-        .map_err(|error| format!("causal vector consumer: {error}"))?;
+        .map_err(|cause| {
+            ReasoningError::entail(EntailContext::Prefix("causal vector consumer"), cause)
+        })?;
     let checked = proof
         .verify_prepared_causal(&Question::Consistency, Some(&certificate), &context)
-        .map_err(|error| format!("causal vector replay: {error}"))?;
+        .map_err(|cause| ReasoningError::proof("causal vector replay", cause))?;
     let mut nested = false;
     for (_, refutation) in checked.refutations() {
         if !refutation.replay().is_closed() {
-            return Err("causal vector has an unclosed refutation".to_owned().into());
+            return Err(FixtureError::Invariant {
+                condition: FixtureInvariant::CausalClosed,
+                actual: Some(produced.proof_document().to_owned()),
+                cause: None,
+            }
+            .into());
         }
         for clash in refutation.clashes() {
             for step in clash.steps() {
@@ -5454,9 +5717,12 @@ fn check_recursive_causal_vector(
         }
     }
     if !nested {
-        return Err("causal vector lost its original nested reserved descriptor"
-            .to_owned()
-            .into());
+        return Err(FixtureError::Invariant {
+            condition: FixtureInvariant::CausalDescriptor,
+            actual: Some(produced.proof_document().to_owned()),
+            cause: None,
+        }
+        .into());
     }
     Ok(())
 }
@@ -5482,25 +5748,29 @@ fn check_recursive_causal_vector(
 /// Any of the three failing.
 pub fn check_absent_proof_is_not_verifiable(
     control: &mut purrdf_core::CanonicalizationControl<'_>,
-) -> Result<(), crate::canonical::CanonicalServiceError> {
+) -> Result<(), ReasoningError> {
     const DOCUMENT: &str = concat!(
         "<http://example.org/Cat> <http://www.w3.org/2000/01/rdf-schema#subClassOf> ",
         "<http://example.org/Animal> .\n"
     );
     let unrecorded = consistency_to_string(DOCUMENT, &[], &[], 0, 0, control)?;
     if unrecorded.proof().is_some() {
-        return Err("a session that records nothing must carry no proof term"
-            .to_owned()
-            .into());
-    }
-    if unrecorded.proof_document() != ABSENT_DL_PROOF {
-        return Err(format!(
-            "an unrecorded answer must carry the absent-proof document, and it carries:\n{}",
-            unrecorded.proof_document()
-        )
+        return Err(FixtureError::Invariant {
+            condition: FixtureInvariant::NoUnrecordedProof,
+            actual: Some(unrecorded.proof_document().to_owned()),
+            cause: None,
+        }
         .into());
     }
-    let refusal = check_dl_proof(
+    if unrecorded.proof_document() != ABSENT_DL_PROOF {
+        return Err(FixtureError::Invariant {
+            condition: FixtureInvariant::AbsentDocument,
+            actual: Some(unrecorded.proof_document().to_owned()),
+            cause: None,
+        }
+        .into());
+    }
+    let refusal = match check_dl_proof(
         DOCUMENT,
         "consistency",
         "",
@@ -5508,17 +5778,23 @@ pub fn check_absent_proof_is_not_verifiable(
         unrecorded.certificate(),
         unrecorded.proof_document(),
         control,
-    )
-    .err()
-    .ok_or_else(|| {
-        "checking an absent proof reported a result; an answer nobody recorded must never be \
-         presented as a verified one"
-            .to_owned()
-    })?;
+    ) {
+        Err(refusal) => refusal,
+        Ok(actual) => {
+            return Err(FixtureError::Invariant {
+                condition: FixtureInvariant::AbsentRefused,
+                actual: Some(actual),
+                cause: None,
+            }
+            .into());
+        }
+    };
     if !refusal.to_string().contains("nothing was recorded") {
-        return Err(format!(
-            "the refusal must say that nothing was recorded, and it says: {refusal}"
-        )
+        return Err(FixtureError::Invariant {
+            condition: FixtureInvariant::AbsentExplanation,
+            actual: None,
+            cause: Some(Box::new(refusal)),
+        }
         .into());
     }
     let recorded = prove_to_string(DOCUMENT, "consistency", "", 0, 0, control)?;
@@ -5526,7 +5802,12 @@ pub fn check_absent_proof_is_not_verifiable(
         .proof_document()
         .contains("\navailability recorded\n")
     {
-        return Err("a recorded answer must say so".to_owned().into());
+        return Err(FixtureError::Invariant {
+            condition: FixtureInvariant::RecordedAvailability,
+            actual: Some(recorded.proof_document().to_owned()),
+            cause: None,
+        }
+        .into());
     }
     check_dl_proof(
         DOCUMENT,
@@ -5821,7 +6102,10 @@ mod tests {
             ("@case a\n@input\n@closure\n@report\n@end\n", "@regime"),
         ] {
             let error = parse_regime_vectors(bad).expect_err("malformed");
-            assert!(error.contains(needle), "{error} (wanted {needle})");
+            assert!(
+                error.to_string().contains(needle),
+                "{error} (wanted {needle})"
+            );
         }
     }
 
@@ -5905,19 +6189,28 @@ mod tests {
         let mut control =
             purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
 
-        let error = parse_regime("rdfs-plus").expect_err("unknown");
-        assert!(error.contains("rdfs-plus"), "{error}");
+        let error = {
+            let offered = String::from("rdfs-plus");
+            parse_regime(&offered).expect_err("unknown")
+        };
+        let captured = crate::native_error::to_json(&error).expect("native request fields");
+        assert_eq!(captured["code"].as_str(), Some("reasoning-request"));
+        let request = &captured["fields"]["cause"]["value"];
+        assert_eq!(request["code"].as_str(), Some("reasoning-unknown-name"));
+        assert_eq!(
+            request["fields"]["offered"]["value"].as_str(),
+            Some("rdfs-plus")
+        );
+        assert!(error.to_string().contains("rdfs-plus"), "{error}");
         for name in REGIME_NAMES {
-            assert!(error.contains(name), "{error} omits {name}");
+            assert!(error.to_string().contains(name), "{error} omits {name}");
         }
         // The same message reaches the two string entry points.
         for error in [
             materialize_to_nquads_string("rdfs-plus", SCHEMA, "", &mut control)
                 .expect_err("unknown"),
-            rules_string("rdfs-plus").expect_err("unknown").into(),
-            implemented_rules_string("rdfs-plus")
-                .expect_err("unknown")
-                .into(),
+            rules_string("rdfs-plus").expect_err("unknown"),
+            implemented_rules_string("rdfs-plus").expect_err("unknown"),
         ] {
             assert!(
                 error.to_string().contains("accepted: simple, rdf, rdfs"),
@@ -6486,7 +6779,7 @@ mod tests {
         control: &mut purrdf_core::CanonicalizationControl<'_>,
     ) -> Vec<(
         &'static str,
-        Result<ReasoningAnswer<ReasoningText>, crate::canonical::CanonicalServiceError>,
+        Result<ReasoningAnswer<ReasoningText>, ReasoningError>,
     )> {
         vec![
             (
@@ -6516,9 +6809,7 @@ mod tests {
             ),
             (
                 "profile",
-                profile_to_string(document)
-                    .map(|answer| answer.map_answer(ReasoningText::from))
-                    .map_err(Into::into),
+                profile_to_string(document).map(|answer| answer.map_answer(ReasoningText::from)),
             ),
             (
                 "extract-module",
@@ -6539,8 +6830,7 @@ mod tests {
                      <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
                      <http://example.org/C> .\n",
                 )
-                .map(|answer| answer.map_answer(ReasoningText::from))
-                .map_err(Into::into),
+                .map(|answer| answer.map_answer(ReasoningText::from)),
             ),
         ]
     }
@@ -7061,9 +7351,19 @@ _:facet <http://www.w3.org/2001/XMLSchema#pattern> "[0-9]+"^^<http://www.w3.org/
                     "classify" => classify_to_string(document, steps, work, &mut control),
                     _ => realize_to_string(document, steps, work, &mut control),
                 };
-                assert_eq!(one_shot.expect_err("same refusal"), error);
+                assert_eq!(
+                    crate::native_error::to_json(&one_shot.expect_err("same refusal"))
+                        .expect("native fields"),
+                    crate::native_error::to_json(&error).expect("native fields")
+                );
                 let proved = prove_to_string(document, service, "", steps, work, &mut control);
-                assert_eq!(proved.expect_err("proof mode preserves refusal"), error);
+                assert_eq!(
+                    crate::native_error::to_json(
+                        &proved.expect_err("proof mode preserves refusal")
+                    )
+                    .expect("native fields"),
+                    crate::native_error::to_json(&error).expect("native fields")
+                );
             }
         }
     }
@@ -7515,7 +7815,7 @@ _:facet <http://www.w3.org/2001/XMLSchema#pattern> "[0-9]+"^^<http://www.w3.org/
             ("unknown", "", "unknown entailment regime"),
         ] {
             let error = session.explain_conclusion(regime, conclusion).unwrap_err();
-            assert!(error.contains(reason), "{error}");
+            assert!(error.to_string().contains(reason), "{error}");
             let active_guard = session.explanation.lock().unwrap();
             let active = active_guard.as_ref().unwrap();
             assert_eq!(active.regime(), Regime::OwlRl);
@@ -7559,10 +7859,14 @@ _:facet <http://www.w3.org/2001/XMLSchema#pattern> "[0-9]+"^^<http://www.w3.org/
             poisoned
                 .explain_conclusion("unknown", "")
                 .unwrap_err()
+                .to_string()
                 .starts_with("unknown entailment regime")
         );
         assert_eq!(
-            poisoned.explain_conclusion("owl-rl", &default).unwrap_err(),
+            poisoned
+                .explain_conclusion("owl-rl", &default)
+                .unwrap_err()
+                .to_string(),
             "explain-conclusion: active explanation session lock is poisoned"
         );
     }
@@ -7587,13 +7891,13 @@ _:facet <http://www.w3.org/2001/XMLSchema#pattern> "[0-9]+"^^<http://www.w3.org/
         );
         let error = explain_conclusion_to_string(TAXONOMY, "rdf", derived)
             .expect_err("rdf's three-rule table cannot derive it");
-        assert!(error.contains("existential"), "{error}");
+        assert!(error.to_string().contains("existential"), "{error}");
 
         let absent = "<http://example.org/nobody> \
 <http://example.org/nothing> <http://example.org/nowhere> .\n";
         let error =
             explain_conclusion_to_string(TAXONOMY, "owl-rl", absent).expect_err("not derived");
-        assert!(error.contains("no derivation"), "{error}");
+        assert!(error.to_string().contains("no derivation"), "{error}");
     }
 
     // ── The conclusion-directed service, at the string boundary ─────────────
@@ -8183,7 +8487,7 @@ _:facet <http://www.w3.org/2001/XMLSchema#pattern> "[0-9]+"^^<http://www.w3.org/
                         Ok(answers) => {
                             format!("{}{}", answers.answer(), answers.certificate())
                         }
-                        Err(refusal) => refusal,
+                        Err(refusal) => refusal.to_string(),
                     };
                     assert!(
                         !rendered.contains(QUERY_VAR_IRI),
@@ -8277,7 +8581,7 @@ _:facet <http://www.w3.org/2001/XMLSchema#pattern> "[0-9]+"^^<http://www.w3.org/
                          be refused rather than answered: {}",
                         answers.answer()
                     ),
-                    Err(refusal) => refusal,
+                    Err(refusal) => refusal.to_string(),
                 };
                 assert!(
                     refusal.contains("a variable is not a datatype IRI"),
@@ -8449,7 +8753,7 @@ _:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
             &MaterializeLimits::default(),
         )
         .expect_err("an import of an unnamed document refuses");
-        assert!(refused.contains(SELF), "{refused}");
+        assert!(refused.to_string().contains(SELF), "{refused}");
 
         let decided = graph_entails_to_string(
             "owl-rl",
@@ -8518,8 +8822,8 @@ _:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
             )
             .expect_err("an entry nothing imports is refused");
             assert!(
-                refused.contains("<http://example.org/schema>")
-                    && refused.contains("would be read and never used"),
+                refused.to_string().contains("<http://example.org/schema>")
+                    && refused.to_string().contains("would be read and never used"),
                 "{name}: {refused}"
             );
             service(
@@ -8542,7 +8846,7 @@ _:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
         &ImportList<'_>,
         &[&str],
         &MaterializeLimits,
-    ) -> Result<ReasoningAnswer<String>, String>;
+    ) -> Result<ReasoningAnswer<String>, ReasoningError>;
 
     /// ALL THREE conclusion-directed services take the caller's import table, and answer
     /// from the imports closure over the premise AS WRITTEN.
@@ -8663,7 +8967,7 @@ _:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
             .expect_err("unresolved"),
         ] {
             assert!(
-                refusal.contains("<http://example.org/schema>"),
+                refusal.to_string().contains("<http://example.org/schema>"),
                 "the refusal names the document it was not handed: {refusal}"
             );
         }
@@ -8812,7 +9116,9 @@ _:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
         )
         .expect_err("a document that is not N-Quads");
         assert!(
-            not_nquads.contains("the import document for <http://example.org/schema>"),
+            not_nquads
+                .to_string()
+                .contains("the import document for <http://example.org/schema>"),
             "{not_nquads}"
         );
 
@@ -8829,7 +9135,9 @@ _:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
         )
         .expect_err("one ontology IRI declared twice");
         assert!(
-            twice.contains("names <http://example.org/schema> twice"),
+            twice
+                .to_string()
+                .contains("names <http://example.org/schema> twice"),
             "{twice}"
         );
 
@@ -8842,7 +9150,10 @@ _:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
             &MaterializeLimits::default(),
         )
         .expect_err("the empty ontology IRI");
-        assert!(nameless.contains("empty ontology IRI"), "{nameless}");
+        assert!(
+            nameless.to_string().contains("empty ontology IRI"),
+            "{nameless}"
+        );
     }
 
     /// The three reasoning services report the SAME error when handed the same bad inputs.
@@ -8934,7 +9245,7 @@ _:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
                 ("verify_entailment_to_string", &verified),
             ] {
                 assert!(
-                    refusal.contains(expected),
+                    refusal.to_string().contains(expected),
                     "{service} must report {expected:?} for regime {regime:?}, not: {refusal}"
                 );
             }
@@ -8976,7 +9287,10 @@ _:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
             &MaterializeLimits::default(),
         )
         .expect_err("the second hop is unresolved");
-        assert!(refusal.contains("<http://example.org/upper>"), "{refusal}");
+        assert!(
+            refusal.to_string().contains("<http://example.org/upper>"),
+            "{refusal}"
+        );
     }
 
     // ── The boundary's term syntax ──────────────────────────────────────────
@@ -9703,6 +10017,22 @@ mod proof_tests {
                 &mut control,
             )
             .expect_err("a body that is not lowercase hex");
+            drop(forged);
+            let captured = crate::native_error::to_json(&refusal).expect("native proof fields");
+            let ReasoningError::ProofDocument(ProofDocumentError::Hex { offered, cause, .. }) =
+                &refusal
+            else {
+                panic!("the malformed body must retain its native hex refusal");
+            };
+            let body = &captured["fields"]["cause"]["value"];
+            assert_eq!(
+                body["fields"]["offered"]["value"].as_str(),
+                Some(offered.as_str())
+            );
+            assert_eq!(
+                body["fields"]["cause"]["value"],
+                crate::native_error::to_json(cause).expect("native hex fields")
+            );
             assert!(refusal.to_string().contains("hex"), "{refusal}");
         }
     }
@@ -10096,7 +10426,7 @@ mod term_walk_tests {
             let restored = restore_query_vars(value.clone(), &slot, &names);
             refused += usize::from(restored.is_err());
             assert_eq!(
-                format!("{restored:?}"),
+                format!("{:?}", restored.map_err(|error| error.to_string())),
                 format!("{:?}", reference_restore(value, &names)),
                 "seed {seed}"
             );

@@ -123,7 +123,9 @@ pub(crate) fn attach_evidence(
         )? {
             return Err(JsError::new("cannot attach canonicalization execution evidence").into());
         }
-        if let Some(cause) = cause {
+        if let Some(cause) = cause
+            && crate::host::reflect_get(&refused, "nativeCauseJson")?.is_undefined()
+        {
             let fields = purrdf_validate::native_error::to_json(cause)
                 .map_err(|failure| JsError::new(&failure.to_string()))?;
             if !set_property(

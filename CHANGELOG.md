@@ -8,6 +8,13 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Typed reasoning requests (breaking Rust API):** regime, session, proof,
+  profile, import and fixture operations retain owned native failures through
+  non-exhaustive errors. Facade request parsing shares the typed boundary;
+  directness refusals own their original certificate. Scope bindings and host
+  import-array pairing retain their original operands. CLI, Python, C and
+  JavaScript callers preserve native causes while rendering existing messages.
+
 - **Native retrieval refusals (breaking Rust API):**
   `purrdf_cli::file_retrieval_iri` returns the original `SliceError` instead of
   `String`, retaining the path and filesystem or IRI cause. The CLI keeps its

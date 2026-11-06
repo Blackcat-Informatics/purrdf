@@ -62,18 +62,6 @@ pub enum CanonicalServiceError {
     },
 }
 
-impl CanonicalServiceError {
-    pub(crate) fn entail(context: &str, error: purrdf_entail::EntailError) -> Self {
-        match error {
-            purrdf_entail::EntailError::Canonicalization(cause) => Self::Canonical {
-                context: context.to_owned(),
-                cause: Box::new(cause),
-            },
-            error => Self::Text(format!("{context}: {error}")),
-        }
-    }
-}
-
 impl std::fmt::Display for CanonicalServiceError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

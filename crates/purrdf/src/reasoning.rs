@@ -52,7 +52,7 @@ use purrdf_sparql_eval::{
 /// let hierarchy = session.classify(&mut canonical).expect("decides"); // no second parse
 /// assert!(hierarchy.certificate().starts_with("purrdf-dl-certificate 1\n"));
 /// ```
-pub use purrdf_validate::regime::ReasonerSession;
+pub use purrdf_validate::regime::{ReasonerSession, ReasoningError as ReasoningRequestError};
 
 /// Entailment behavior applied before evaluating one SPARQL query.
 ///
@@ -125,7 +125,7 @@ impl QueryEntailmentPlan {
     ///
     /// Returns the shared boundary diagnostic for an unknown regime, an invalid program,
     /// a missing RIF program, or a program supplied to a regime whose calculus is fixed.
-    pub fn parse(regime: &str, program: &str) -> Result<Self, String> {
+    pub fn parse(regime: &str, program: &str) -> Result<Self, ReasoningRequestError> {
         let parsed = purrdf_validate::regime::parse_regime(regime)?;
         let rules = purrdf_validate::regime::regime_rule_set(parsed, regime, program)?;
         Ok(Self {
@@ -2321,18 +2321,21 @@ mod tests {
         let wrong_program = QueryEntailmentPlan::parse("rdfs", "not ignored")
             .expect_err("a fixed calculus cannot silently discard caller rules");
         assert!(
-            wrong_program.contains("takes no rule document"),
+            wrong_program.to_string().contains("takes no rule document"),
             "{wrong_program}"
         );
 
         let missing_rif = QueryEntailmentPlan::parse("rif", "")
             .expect_err("RIF has no caller-independent rule table");
-        assert!(missing_rif.contains("rule document"), "{missing_rif}");
+        assert!(
+            missing_rif.to_string().contains("rule document"),
+            "{missing_rif}"
+        );
 
         let unknown =
             QueryEntailmentPlan::parse("RDFS", "").expect_err("the cross-host spelling is exact");
         assert!(
-            unknown.contains("owl-direct") && unknown.contains("rif"),
+            unknown.to_string().contains("owl-direct") && unknown.to_string().contains("rif"),
             "{unknown}"
         );
     }

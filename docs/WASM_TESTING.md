@@ -3,6 +3,14 @@
 
 # Native ownership and WASM execution
 
+The exact package case `reasoning errors retain native handles across direct and query exports`
+in `reasoning-host-error.test.mjs` checks actual JavaScript exception prototypes,
+native-cause JSON properties and retained wasm-bindgen cause handles across direct,
+synchronous query and asynchronous query exports. Handles remain readable after
+the engine and dataset are freed. Run only this named case with
+`node --test --test-name-pattern`; native Rust owns request grammar and reasoning
+semantics.
+
 The exact package case `document operation exports preserve byte transport and native error ownership`
 in `document-expansion-interface.test.mjs` exercises the shipped expansion,
 compaction, flattening and two-document framing exports

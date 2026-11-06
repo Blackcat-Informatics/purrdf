@@ -154,6 +154,19 @@ impl From<&purrdf_validate::ShapesImportError> for ShaclImportError {
 /// [`shapes_error_message`] for anything else.
 fn shapes_rejection(error: ShapesError) -> JsValue {
     match error {
+        ShapesError::ImportArrays(cause) => {
+            let diagnostic = purrdf_validate::native_error::diagnostic(
+                "import-array-refused",
+                cause,
+                cause.storage_error(),
+            );
+            crate::operation::native_diagnostic_to_js_with_message(diagnostic)
+        }
+        ShapesError::ScopeBinding(cause) => {
+            let diagnostic =
+                purrdf_validate::native_error::diagnostic("scope-binding-refused", cause, None);
+            crate::operation::native_diagnostic_to_js_with_message(diagnostic)
+        }
         ShapesError::RuleExecution(error) => {
             let receipt = purrdf_validate::query::rule_execution_receipt_json(&error.coordinates);
             let rejection = match error.into_cause() {
@@ -172,6 +185,8 @@ fn shapes_rejection(error: ShapesError) -> JsValue {
 /// synchronous and the asynchronous lane alike.
 pub(crate) fn shapes_error_message(error: &ShapesError) -> String {
     match error {
+        ShapesError::ScopeBinding(error) => error.to_string(),
+        ShapesError::ImportArrays(error) => error.to_string(),
         ShapesError::Canonical(error) => error.to_string(),
         ShapesError::RuleExecution(error) => error.to_string(),
         ShapesError::Storage(error) => purrdf_core::RdfDiagnostic::from(*error).to_string(),
@@ -252,7 +267,7 @@ fn shapes_import_pairs<'a>(
     iris: &'a [String],
     documents: &'a [String],
 ) -> Result<Vec<(&'a str, &'a str)>, ShapesError> {
-    crate::entail::import_pairs(iris, documents).map_err(ShapesError::Invalid)
+    crate::entail::import_pairs(iris, documents).map_err(ShapesError::from)
 }
 
 /// Validate `data_nt` against `shapes_ttl` and render the report to SARIF 2.1.0.
@@ -2236,6 +2251,12 @@ impl ShaclFailure for ShapesError {
 
     fn into_outcome(self) -> JobOutcome {
         match self {
+            Self::ImportArrays(cause) => JobOutcome::Failed(JobError::diagnostic_message(
+                purrdf_validate::native_error::diagnostic(SHACL_CODE, cause, cause.storage_error()),
+            )),
+            Self::ScopeBinding(cause) => JobOutcome::Failed(JobError::diagnostic_message(
+                purrdf_validate::native_error::diagnostic(SHACL_CODE, cause, None),
+            )),
             Self::RuleExecution(error) => {
                 let receipt =
                     purrdf_validate::query::rule_execution_receipt_json(&error.coordinates);

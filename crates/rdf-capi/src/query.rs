@@ -1359,8 +1359,7 @@ unsafe fn query_entailment_governed_entry(
         let base_iri = opt_cstr_to_str(base_iri)?;
         let regime = cstr_to_str(regime)?;
         let program = cstr_to_str(program)?;
-        let plan = QueryEntailmentPlan::parse(regime, program)
-            .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?;
+        let plan = QueryEntailmentPlan::parse(regime, program).map_err(PurrdfError::reasoning)?;
         let imports = crate::entail::import_pairs(
             import_iris,
             import_documents,
@@ -1374,7 +1373,7 @@ unsafe fn query_entailment_governed_entry(
             "purrdf_query_entailment_governed",
         )?;
         let imports = purrdf_validate::premise_import_map(&imports, &premise_iris)
-            .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?;
+            .map_err(PurrdfError::reasoning)?;
         let limits =
             crate::entail::c_limits(max_stored_facts, max_join_steps, max_term_arena_bytes);
         let governors = decode_governors(governors)?;
@@ -1408,16 +1407,32 @@ unsafe fn query_entailment_governed_entry(
             purrdf_rs::ReasoningError::Query(diagnostic) => query_error(&diagnostic),
             // Rendered by the shared boundary, so a passed evaluation limit names THIS
             // function's parameter rather than a Rust type the caller cannot reach.
-            purrdf_rs::ReasoningError::Entailment(error) => PurrdfError::new(
-                PurrdfStatus::QueryError,
-                purrdf_validate::render_entail_error_in(
-                    regime,
-                    &error,
-                    purrdf_validate::RegimeHost::CAbi,
-                    purrdf_validate::RegimeService::Query,
-                ),
-            ),
-            other => PurrdfError::new(PurrdfStatus::QueryError, other.to_string()),
+            purrdf_rs::ReasoningError::Entailment(error) => {
+                let error = purrdf_validate::regime::ReasoningError::entail(
+                    purrdf_validate::regime::EntailContext::Regime {
+                        spelling: regime.to_owned(),
+                        host: purrdf_validate::RegimeHost::CAbi,
+                        service: purrdf_validate::RegimeService::Query,
+                    },
+                    error,
+                );
+                let message = error.to_string();
+                PurrdfError::from_owned_diagnostic_with_message(
+                    PurrdfStatus::QueryError,
+                    error.into_diagnostic(),
+                    &message,
+                )
+            }
+            other => {
+                let message = other.to_string();
+                let diagnostic =
+                    purrdf_validate::native_error::diagnostic("reasoning-refused", other, None);
+                PurrdfError::from_owned_diagnostic_with_message(
+                    PurrdfStatus::QueryError,
+                    diagnostic,
+                    &message,
+                )
+            }
         })
         .map_err(|error| captured_error(error, &capture))?;
 

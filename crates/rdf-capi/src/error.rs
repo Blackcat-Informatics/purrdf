@@ -69,6 +69,17 @@ pub(crate) struct ImportRefusal {
 }
 
 impl PurrdfError {
+    /// Retain a reasoning request's complete native cause and existing plain text.
+    pub(crate) fn reasoning(error: purrdf_validate::regime::ReasoningError) -> Self {
+        let code = if purrdf_validate::canonical::native_canonical_cause(&error).is_some() {
+            PurrdfStatus::CanonicalizationError
+        } else {
+            PurrdfStatus::ParseError
+        };
+        let message = error.to_string();
+        Self::from_owned_diagnostic_with_message(code, error.into_diagnostic(), &message)
+    }
+
     /// Preserve the original native canonicalization cause while mapping host text.
     pub(crate) fn service(error: impl std::error::Error + 'static) -> Self {
         Self::new(PurrdfStatus::ParseError, error.to_string()).retaining_cause(&error)
@@ -103,6 +114,29 @@ impl PurrdfError {
     /// as a `ParseError` with the engine's message.
     pub(crate) fn shapes(error: purrdf_validate::ShapesError) -> Self {
         match error {
+            purrdf_validate::ShapesError::ImportArrays(cause) => {
+                let message = cause.to_string();
+                let diagnostic = purrdf_validate::native_error::diagnostic(
+                    "import-array-refused",
+                    cause,
+                    cause.storage_error(),
+                );
+                Self::from_owned_diagnostic_with_message(
+                    PurrdfStatus::ParseError,
+                    diagnostic,
+                    &message,
+                )
+            }
+            purrdf_validate::ShapesError::ScopeBinding(cause) => {
+                let message = cause.to_string();
+                let diagnostic =
+                    purrdf_validate::native_error::diagnostic("scope-binding-refused", cause, None);
+                Self::from_owned_diagnostic_with_message(
+                    PurrdfStatus::ParseError,
+                    diagnostic,
+                    &message,
+                )
+            }
             purrdf_validate::ShapesError::Canonical(cause) => Self::service(cause),
             purrdf_validate::ShapesError::RuleExecution(error) => {
                 let receipt =
@@ -197,6 +231,23 @@ impl PurrdfError {
     /// A broken inspection protocol becomes an explicit failure while its
     /// original diagnostic remains owned; it cannot become partial success.
     pub(crate) fn from_owned_diagnostic(code: PurrdfStatus, diagnostic: RdfDiagnostic) -> Self {
+        Self::from_owned_diagnostic_text(code, diagnostic, None)
+    }
+
+    /// Retain the original diagnostic with a boundary's existing plain message.
+    pub(crate) fn from_owned_diagnostic_with_message(
+        code: PurrdfStatus,
+        diagnostic: RdfDiagnostic,
+        message: &str,
+    ) -> Self {
+        Self::from_owned_diagnostic_text(code, diagnostic, Some(message))
+    }
+
+    fn from_owned_diagnostic_text(
+        code: PurrdfStatus,
+        diagnostic: RdfDiagnostic,
+        message: Option<&str>,
+    ) -> Self {
         let code = if diagnostic.storage_error().is_some() {
             PurrdfStatus::StorageError
         } else {
@@ -207,6 +258,11 @@ impl PurrdfError {
             .map(|cause| purrdf_validate::native_error::to_json(cause))
             .transpose();
         let mut error = Self::from_diagnostic(code, &diagnostic);
+        if let Some(message) = message {
+            error.message = diagnostic
+                .storage_error()
+                .map_or_else(|| sanitized(message), |cause| sanitized(&cause.to_string()));
+        }
         match inspected {
             Ok(record) => {
                 let details = error.details.get_or_insert_with(Box::default);
@@ -235,8 +291,12 @@ impl PurrdfError {
         let canonical = self.details.get_or_insert_with(Box::default);
         canonical.canonicalization_json = Some(sanitized(receipts));
         if let Some((original, json)) = cause {
-            canonical.original_cause = Some(OriginalCause::Canonical(original));
-            canonical.native_cause_json = Some(sanitized(&json));
+            if canonical.original_cause.is_none() {
+                canonical.original_cause = Some(OriginalCause::Canonical(original));
+            }
+            if canonical.native_cause_json.is_none() && canonical.inspection_failure.is_none() {
+                canonical.native_cause_json = Some(sanitized(&json));
+            }
         }
         self
     }

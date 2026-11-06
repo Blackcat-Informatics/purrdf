@@ -90,7 +90,7 @@ fn materialize_to_nquads_bytes(
     premise_iris: &[&str],
     limits: &MaterializeLimits,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
-) -> Result<(PurrdfBuffer, PurrdfBuffer), purrdf_validate::canonical::CanonicalServiceError> {
+) -> Result<(PurrdfBuffer, PurrdfBuffer), purrdf_validate::regime::ReasoningError> {
     let (nquads, report) = materialize_to_nquads_string_with(
         regime,
         document,
@@ -228,7 +228,7 @@ pub unsafe extern "C" fn purrdf_entail_materialize_to_nquads(
                     &c_limits(max_stored_facts, max_join_steps, max_term_arena_bytes),
                     control,
                 )
-                .map_err(PurrdfError::service)?;
+                .map_err(PurrdfError::reasoning)?;
                 *out_nquads = into_handle(nquads);
                 *out_report = into_handle(report);
                 Ok(PurrdfStatus::Ok)
@@ -239,7 +239,7 @@ pub unsafe extern "C" fn purrdf_entail_materialize_to_nquads(
 
 /// The rule table `regime` is *defined by*, one name per line. Native-testable,
 /// pointer-free core.
-fn rules_bytes(regime: &str) -> Result<Vec<u8>, String> {
+fn rules_bytes(regime: &str) -> Result<Vec<u8>, purrdf_validate::regime::ReasoningError> {
     Ok(rules_string(regime)?.into_bytes())
 }
 
@@ -275,8 +275,7 @@ pub unsafe extern "C" fn purrdf_entail_rules(
                 ));
             }
             let regime = cstr_to_str(regime)?;
-            let bytes = rules_bytes(regime)
-                .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?;
+            let bytes = rules_bytes(regime).map_err(PurrdfError::reasoning)?;
             *out_buffer = into_handle(PurrdfBuffer::from(bytes));
             Ok(PurrdfStatus::Ok)
         })
@@ -285,7 +284,9 @@ pub unsafe extern "C" fn purrdf_entail_rules(
 
 /// The subset of the rule table this build fires, one name per line.
 /// Native-testable, pointer-free core.
-fn implemented_rules_bytes(regime: &str) -> Result<Vec<u8>, String> {
+fn implemented_rules_bytes(
+    regime: &str,
+) -> Result<Vec<u8>, purrdf_validate::regime::ReasoningError> {
     Ok(implemented_rules_string(regime)?.into_bytes())
 }
 
@@ -315,8 +316,7 @@ pub unsafe extern "C" fn purrdf_entail_implemented_rules(
                 ));
             }
             let regime = cstr_to_str(regime)?;
-            let bytes = implemented_rules_bytes(regime)
-                .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?;
+            let bytes = implemented_rules_bytes(regime).map_err(PurrdfError::reasoning)?;
             *out_buffer = into_handle(PurrdfBuffer::from(bytes));
             Ok(PurrdfStatus::Ok)
         })
@@ -325,7 +325,7 @@ pub unsafe extern "C" fn purrdf_entail_implemented_rules(
 
 /// The rules this build fires beyond the specification table, one name per line.
 /// Native-testable, pointer-free core.
-fn extensions_bytes(regime: &str) -> Result<Vec<u8>, String> {
+fn extensions_bytes(regime: &str) -> Result<Vec<u8>, purrdf_validate::regime::ReasoningError> {
     Ok(extension_rules_string(regime)?.into_bytes())
 }
 
@@ -358,8 +358,7 @@ pub unsafe extern "C" fn purrdf_entail_extensions(
                 ));
             }
             let regime = cstr_to_str(regime)?;
-            let bytes = extensions_bytes(regime)
-                .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?;
+            let bytes = extensions_bytes(regime).map_err(PurrdfError::reasoning)?;
             *out_buffer = into_handle(PurrdfBuffer::from(bytes));
             Ok(PurrdfStatus::Ok)
         })
@@ -390,14 +389,14 @@ pub unsafe extern "C" fn purrdf_entail_extensions(
 /// writes happen only after every fallible step has succeeded.
 unsafe fn store_answer<
     A: AsRef<str> + Into<PurrdfBuffer>,
-    E: Into<purrdf_validate::canonical::CanonicalServiceError>,
+    E: Into<purrdf_validate::regime::ReasoningError>,
 >(
     produced: Result<ReasoningAnswer<A>, E>,
     out_answer: *mut *mut PurrdfBuffer,
     out_certificate: *mut *mut PurrdfBuffer,
 ) -> Result<PurrdfStatus, PurrdfError> {
     let (answer, certificate) = produced
-        .map_err(|error| PurrdfError::service(error.into()))?
+        .map_err(|error| PurrdfError::reasoning(error.into()))?
         .into_parts();
     // SAFETY: the caller's contract above — both pointers are non-null and
     // writable, and nothing fallible remains between here and the two writes.
@@ -1377,12 +1376,14 @@ pub unsafe extern "C" fn purrdf_entail_verify_entailment(
 /// `out_answer`, `out_certificate` and `out_proof` must be non-null, writable pointers.
 /// All three writes happen only after every fallible step has succeeded.
 unsafe fn store_proved_answer<A: AsRef<str> + Into<PurrdfBuffer>>(
-    produced: Result<ReasoningAnswer<A>, purrdf_validate::canonical::CanonicalServiceError>,
+    produced: Result<ReasoningAnswer<A>, purrdf_validate::regime::ReasoningError>,
     out_answer: *mut *mut PurrdfBuffer,
     out_certificate: *mut *mut PurrdfBuffer,
     out_proof: *mut *mut PurrdfBuffer,
 ) -> Result<PurrdfStatus, PurrdfError> {
-    let (answer, certificate, proof) = produced.map_err(PurrdfError::service)?.into_proved_parts();
+    let (answer, certificate, proof) = produced
+        .map_err(PurrdfError::reasoning)?
+        .into_proved_parts();
     // SAFETY: the caller's contract above — all three pointers are non-null and writable,
     // and nothing fallible remains between here and the three writes.
     unsafe {
@@ -1544,7 +1545,7 @@ pub unsafe extern "C" fn purrdf_entail_check_proof(
                     cstr_to_str(proof)?,
                     control,
                 )
-                .map_err(PurrdfError::service)?;
+                .map_err(PurrdfError::reasoning)?;
                 *out_report = into_handle(PurrdfBuffer::from(report.into_bytes()));
                 Ok(PurrdfStatus::Ok)
             }
@@ -1625,7 +1626,7 @@ pub unsafe extern "C" fn purrdf_reasoner_open(
             }
             let document = cstr_to_str(document)?;
             let session = ReasonerSession::open(document, step_cap, work_cap)
-                .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?;
+                .map_err(PurrdfError::reasoning)?;
             *out_reasoner = into_handle(PurrdfReasoner(session));
             Ok(PurrdfStatus::Ok)
         })
@@ -1926,7 +1927,7 @@ pub unsafe extern "C" fn purrdf_reasoner_profile(
                 return Err(null_argument("purrdf_reasoner_profile"));
             }
             store_answer(
-                Ok::<_, purrdf_validate::canonical::CanonicalServiceError>((*reasoner).0.profile()),
+                Ok::<_, purrdf_validate::regime::ReasoningError>((*reasoner).0.profile()),
                 out_answer,
                 out_certificate,
             )
@@ -2335,6 +2336,31 @@ mod tests {
 
     #[test]
     fn an_unknown_regime_names_the_accepted_set() {
+        let regime = CString::new("RDFS").expect("no NUL");
+        let mut output = std::ptr::null_mut();
+        let mut error = std::ptr::null_mut();
+        // SAFETY: the input and writable output slots live throughout this call.
+        let status =
+            unsafe { purrdf_entail_rules(regime.as_ptr(), &raw mut output, &raw mut error) };
+        drop(regime);
+        assert_eq!(status, PurrdfStatus::ParseError as i32);
+        assert!(output.is_null());
+        assert!(!error.is_null());
+        let expected = purrdf_validate::native_error::to_json(
+            &purrdf_validate::regime::parse_regime("RDFS").expect_err("unknown"),
+        )
+        .expect("native fields")
+        .to_string();
+        // SAFETY: the error owns the returned C string until it is freed below.
+        unsafe {
+            let json = crate::error::purrdf_error_native_cause_json(error);
+            assert!(!json.is_null());
+            assert_eq!(
+                std::ffi::CStr::from_ptr(json).to_str().expect("UTF-8"),
+                expected
+            );
+            crate::error::purrdf_error_free(error);
+        }
         for error in [
             materialize_to_nquads_bytes(
                 SCHEMA,
@@ -2353,8 +2379,10 @@ mod tests {
             )
             .expect_err("case-sensitive")
             .to_string(),
-            rules_bytes("rdfs-plus").expect_err("unknown"),
-            implemented_rules_bytes("rdfs-plus").expect_err("unknown"),
+            rules_bytes("rdfs-plus").expect_err("unknown").to_string(),
+            implemented_rules_bytes("rdfs-plus")
+                .expect_err("unknown")
+                .to_string(),
         ] {
             assert!(error.contains("accepted: simple, rdf, rdfs"), "{error}");
         }

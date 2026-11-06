@@ -554,17 +554,7 @@ impl NodeExprInputs {
     }
 }
 
-/// Split one `NAME=TERM` scope binding at its first `=` — the spelling the CLI's
-/// `--scope` and the WASM and C-ABI scope arrays share.
-///
-/// # Errors
-///
-/// A binding with no `=`.
-pub fn parse_scope_binding(binding: &str) -> Result<(&str, &str), String> {
-    binding
-        .split_once('=')
-        .ok_or_else(|| format!("scope binding `{binding}` is not NAME=TERM: it has no `=`"))
-}
+pub use purrdf_shapes::scope_binding::{ScopeBindingError, parse_scope_binding};
 
 /// Certify a Turtle shapes graph — its whole `owl:imports` closure, resolved against
 /// `imports`: the loader's verdict, its `shacl-shacl.ttl` results and its function-call

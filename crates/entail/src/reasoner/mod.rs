@@ -122,7 +122,9 @@ mod borrowed_tests;
 
 pub use analysis::ClassAnalysis;
 pub use axiom::DlAxiom;
-pub use certificate::{Certified, DirectnessRefusal, DlCertificate, DlCompleteness, Verdict};
+pub use certificate::{
+    Certified, DirectnessRefusal, DlCertificate, DlCompleteness, OwnedDirectnessRefusal, Verdict,
+};
 pub use classify::ClassHierarchy;
 pub use module::{
     ConservativeKeep, ModuleExtraction, ModuleMethod, extract_module, extract_module_with_proofs,

@@ -66,18 +66,40 @@ use pyo3::prelude::*;
 
 use purrdf_validate::check_premise_iris;
 use purrdf_validate::regime::{
-    MaterializeLimits, PROOF_SERVICE_NAMES, REGIME_NAMES, ReasonerSession, RegimeHost,
-    certain_answers_to_string, check_dl_proof, classify_to_string, consistency_to_string,
-    entails_to_string, explain_conclusion_to_string, extension_rules_string,
-    extract_module_to_string, graph_entails_to_string, implemented_rules_string,
-    instances_to_string, justify_to_string, materialize_to_nquads_string_with, parse_regime,
-    premise_import_map, profile_to_string, prove_to_string, realize_to_string, regime_name,
-    regime_plan, regime_rule_set, render_entail_error_for, render_reasoning_report, rules_string,
-    verify_entailment_to_string,
+    EntailContext, MaterializeLimits, PROOF_SERVICE_NAMES, REGIME_NAMES, ReasonerSession,
+    ReasoningError, RegimeHost, RegimeService, certain_answers_to_string, check_dl_proof,
+    classify_to_string, consistency_to_string, entails_to_string, explain_conclusion_to_string,
+    extension_rules_string, extract_module_to_string, graph_entails_to_string,
+    implemented_rules_string, instances_to_string, justify_to_string,
+    materialize_to_nquads_string_with, parse_regime, premise_import_map, profile_to_string,
+    prove_to_string, realize_to_string, regime_name, regime_plan, regime_rule_set,
+    render_reasoning_report, rules_string, verify_entailment_to_string,
 };
 
 use crate::entail::{Regime, materialize_with_imports};
 use crate::py_gts_dataset::PyRdfDataset;
+
+/// Preserve the original native request fields with the existing ValueError text.
+pub(crate) fn reasoning_error(error: ReasoningError) -> PyErr {
+    let message = error.to_string();
+    let diagnostic = error.into_diagnostic();
+    Python::attach(|py| {
+        crate::py_store::presentation::native_error_with_message(py, message, &diagnostic)
+    })
+}
+
+/// Use the shared canonical executor with the native reasoning error mapper.
+fn run_reasoning<T: Send>(
+    py: Python<'_>,
+    policy: &str,
+    cancel: Option<&crate::py_store::PyCancellationToken>,
+    operation: impl FnOnce(&mut purrdf_core::CanonicalizationControl<'_>) -> Result<T, ReasoningError>
+    + Send,
+) -> PyResult<(T, String)> {
+    crate::py_canonical::run_with(py, policy, cancel, operation, |_, error| {
+        reasoning_error(error)
+    })
+}
 
 // ── The regime enum ─────────────────────────────────────────────────────────────
 
@@ -147,7 +169,7 @@ fn native_regime(regime: &Bound<'_, PyAny>) -> PyResult<Regime> {
             REGIME_NAMES.join(", ")
         ))
     })?;
-    parse_regime(&spelling).map_err(PyValueError::new_err)
+    parse_regime(&spelling).map_err(reasoning_error)
 }
 
 // ── Materialization ─────────────────────────────────────────────────────────────
@@ -273,10 +295,19 @@ fn materialize(
                 &limits.eval_options(),
                 None,
             )
-            .map_err(|error| render_entail_error_for(name, &error, limits.host))?;
-            Ok::<_, String>((closure, render_reasoning_report(&report)))
+            .map_err(|cause| {
+                ReasoningError::entail(
+                    EntailContext::Regime {
+                        spelling: name.to_owned(),
+                        host: limits.host,
+                        service: RegimeService::Materialize,
+                    },
+                    cause,
+                )
+            })?;
+            Ok::<_, ReasoningError>((closure, render_reasoning_report(&report)))
         })
-        .map_err(PyValueError::new_err)?;
+        .map_err(reasoning_error)?;
     Ok((PyRdfDataset::from_frozen(closure), report))
 }
 
@@ -339,7 +370,7 @@ fn materialize_nt(
     // (GIL released).
     let table = import_list(&imports);
     let premise_iris = premise_iri_refs(&premise_iris)?;
-    let (closure, receipts) = crate::py_canonical::run(py, canonical_search, cancel, |control| {
+    let (closure, receipts) = run_reasoning(py, canonical_search, cancel, |control| {
         materialize_to_nquads_string_with(
             name,
             data,
@@ -370,7 +401,7 @@ fn materialize_nt(
 fn rules(regime: &Bound<'_, PyAny>) -> PyResult<Vec<String>> {
     // A lookup of a `&'static` table, not a compute path: there is nothing heavy
     // here for the GIL to be released around.
-    let table = rules_string(regime_name(native_regime(regime)?)).map_err(PyValueError::new_err)?;
+    let table = rules_string(regime_name(native_regime(regime)?)).map_err(reasoning_error)?;
     Ok(table.lines().map(str::to_owned).collect())
 }
 
@@ -386,8 +417,8 @@ fn rules(regime: &Bound<'_, PyAny>) -> PyResult<Vec<String>> {
 #[pyo3(signature = (regime))]
 fn implemented_rules(regime: &Bound<'_, PyAny>) -> PyResult<Vec<String>> {
     // As in `rules`: a static-table lookup, so no GIL release.
-    let table = implemented_rules_string(regime_name(native_regime(regime)?))
-        .map_err(PyValueError::new_err)?;
+    let table =
+        implemented_rules_string(regime_name(native_regime(regime)?)).map_err(reasoning_error)?;
     Ok(table.lines().map(str::to_owned).collect())
 }
 
@@ -406,8 +437,8 @@ fn implemented_rules(regime: &Bound<'_, PyAny>) -> PyResult<Vec<String>> {
 #[pyo3(signature = (regime))]
 fn extensions(regime: &Bound<'_, PyAny>) -> PyResult<Vec<String>> {
     // As in `rules`: a static-table lookup, so no GIL release.
-    let table = extension_rules_string(regime_name(native_regime(regime)?))
-        .map_err(PyValueError::new_err)?;
+    let table =
+        extension_rules_string(regime_name(native_regime(regime)?)).map_err(reasoning_error)?;
     Ok(table.lines().map(str::to_owned).collect())
 }
 
@@ -474,7 +505,7 @@ fn consistency(
 ) -> PyResult<crate::py_canonical::PyCanonicalResult> {
     let table = import_list(&imports);
     let premise_iris = premise_iri_refs(&premise_iris)?;
-    let (answer, receipts) = crate::py_canonical::run(py, canonical_search, cancel, |control| {
+    let (answer, receipts) = run_reasoning(py, canonical_search, cancel, |control| {
         consistency_to_string(data, &table, &premise_iris, step_cap, work_cap, control)
     })?;
     crate::py_canonical::finish(py, (answer.answer(), answer.certificate()), receipts)
@@ -505,7 +536,7 @@ fn classify(
     canonical_search: &str,
     cancel: Option<&crate::py_store::PyCancellationToken>,
 ) -> PyResult<crate::py_canonical::PyCanonicalResult> {
-    let (answer, receipts) = crate::py_canonical::run(py, canonical_search, cancel, |control| {
+    let (answer, receipts) = run_reasoning(py, canonical_search, cancel, |control| {
         classify_to_string(data, step_cap, work_cap, control)
     })?;
     crate::py_canonical::finish(py, (answer.answer(), answer.certificate()), receipts)
@@ -529,7 +560,7 @@ fn realize(
     canonical_search: &str,
     cancel: Option<&crate::py_store::PyCancellationToken>,
 ) -> PyResult<crate::py_canonical::PyCanonicalResult> {
-    let (answer, receipts) = crate::py_canonical::run(py, canonical_search, cancel, |control| {
+    let (answer, receipts) = run_reasoning(py, canonical_search, cancel, |control| {
         realize_to_string(data, step_cap, work_cap, control)
     })?;
     crate::py_canonical::finish(py, (answer.answer(), answer.certificate()), receipts)
@@ -556,7 +587,7 @@ fn instances(
     canonical_search: &str,
     cancel: Option<&crate::py_store::PyCancellationToken>,
 ) -> PyResult<crate::py_canonical::PyCanonicalResult> {
-    let (answer, receipts) = crate::py_canonical::run(py, canonical_search, cancel, |control| {
+    let (answer, receipts) = run_reasoning(py, canonical_search, cancel, |control| {
         instances_to_string(data, class_, step_cap, work_cap, control)
     })?;
     crate::py_canonical::finish(py, (answer.answer(), answer.certificate()), receipts)
@@ -588,7 +619,7 @@ fn entails(
     canonical_search: &str,
     cancel: Option<&crate::py_store::PyCancellationToken>,
 ) -> PyResult<crate::py_canonical::PyCanonicalResult> {
-    let (answer, receipts) = crate::py_canonical::run(py, canonical_search, cancel, |control| {
+    let (answer, receipts) = run_reasoning(py, canonical_search, cancel, |control| {
         entails_to_string(data, axiom, step_cap, work_cap, control)
     })?;
     crate::py_canonical::finish(py, (answer.answer(), answer.certificate()), receipts)
@@ -614,7 +645,7 @@ fn entails(
 fn profile(py: Python<'_>, data: &str) -> PyResult<(String, String)> {
     let answer = py
         .detach(|| profile_to_string(data))
-        .map_err(PyValueError::new_err)?;
+        .map_err(reasoning_error)?;
     Ok(answer.into_parts())
 }
 
@@ -641,7 +672,7 @@ fn extract_module(
     canonical_search: &str,
     cancel: Option<&crate::py_store::PyCancellationToken>,
 ) -> PyResult<crate::py_canonical::PyCanonicalResult> {
-    let (answer, receipts) = crate::py_canonical::run(py, canonical_search, cancel, |control| {
+    let (answer, receipts) = run_reasoning(py, canonical_search, cancel, |control| {
         extract_module_to_string(data, signature, method, control)
     })?;
     crate::py_canonical::finish(py, (answer.answer(), answer.certificate()), receipts)
@@ -676,7 +707,7 @@ fn justify(
     canonical_search: &str,
     cancel: Option<&crate::py_store::PyCancellationToken>,
 ) -> PyResult<crate::py_canonical::PyCanonicalResult> {
-    let (answer, receipts) = crate::py_canonical::run(py, canonical_search, cancel, |control| {
+    let (answer, receipts) = run_reasoning(py, canonical_search, cancel, |control| {
         justify_to_string(data, axiom, control)
     })?;
     crate::py_canonical::finish(py, (answer.answer(), answer.certificate()), receipts)
@@ -709,7 +740,7 @@ fn explain_conclusion(
     let name = regime_name(native_regime(regime)?);
     let answer = py
         .detach(|| explain_conclusion_to_string(data, name, conclusion))
-        .map_err(PyValueError::new_err)?;
+        .map_err(reasoning_error)?;
     Ok(answer.into_parts())
 }
 
@@ -756,7 +787,7 @@ pub(crate) fn entailment_import_map(
     let imports = imports.unwrap_or_default();
     let premise_iris = premise_iris.unwrap_or_default();
     let premise_iris = premise_iri_refs(&premise_iris)?;
-    premise_import_map(&import_list(&imports), &premise_iris).map_err(PyValueError::new_err)
+    premise_import_map(&import_list(&imports), &premise_iris).map_err(reasoning_error)
 }
 
 /// The caller's premise IRIs, borrowed for the shared boundary, once
@@ -771,10 +802,14 @@ pub(crate) fn entailment_import_map(
 fn premise_iri_refs(premise_iris: &[String]) -> PyResult<Vec<&str>> {
     let borrowed: Vec<&str> = premise_iris.iter().map(String::as_str).collect();
     check_premise_iris(&borrowed).map_err(|error| {
-        crate::py_store::presentation::presented_value_error(
-            error.to_string(),
-            Some(&error.presentation()),
-        )
+        let message = error.to_string();
+        let presentation = error.presentation();
+        let diagnostic =
+            purrdf_validate::native_error::diagnostic("premise-iri-not-absolute", error, None)
+                .with_presentation(presentation);
+        Python::attach(|py| {
+            crate::py_store::presentation::native_error_with_message(py, message, &diagnostic)
+        })
     })?;
     Ok(borrowed)
 }
@@ -894,7 +929,7 @@ fn certain_answers(
                 &python_limits(max_stored_facts, max_join_steps, max_term_arena_bytes),
             )
         })
-        .map_err(PyValueError::new_err)?;
+        .map_err(reasoning_error)?;
     Ok(answer.into_parts())
 }
 
@@ -957,7 +992,7 @@ fn graph_entails(
                 &python_limits(max_stored_facts, max_join_steps, max_term_arena_bytes),
             )
         })
-        .map_err(PyValueError::new_err)?;
+        .map_err(reasoning_error)?;
     Ok(answer.into_parts())
 }
 
@@ -1012,7 +1047,7 @@ fn verify_entailment(
                 &python_limits(max_stored_facts, max_join_steps, max_term_arena_bytes),
             )
         })
-        .map_err(PyValueError::new_err)?;
+        .map_err(reasoning_error)?;
     Ok(answer.into_parts())
 }
 
@@ -1060,7 +1095,7 @@ fn prove(
     canonical_search: &str,
     cancel: Option<&crate::py_store::PyCancellationToken>,
 ) -> PyResult<crate::py_canonical::PyCanonicalResult> {
-    let (answer, receipts) = crate::py_canonical::run(py, canonical_search, cancel, |control| {
+    let (answer, receipts) = run_reasoning(py, canonical_search, cancel, |control| {
         prove_to_string(data, service, argument, step_cap, work_cap, control)
     })?;
     crate::py_canonical::finish(
@@ -1114,7 +1149,7 @@ fn check_proof(
     canonical_search: &str,
     cancel: Option<&crate::py_store::PyCancellationToken>,
 ) -> PyResult<crate::py_canonical::PyCanonicalResult> {
-    let (answer, receipts) = crate::py_canonical::run(py, canonical_search, cancel, |control| {
+    let (answer, receipts) = run_reasoning(py, canonical_search, cancel, |control| {
         check_dl_proof(data, service, argument, answer, certificate, proof, control)
     })?;
     crate::py_canonical::finish(py, answer, receipts)
@@ -1191,7 +1226,7 @@ impl PyReasoner {
                     ReasonerSession::open(data, step_cap, work_cap)
                 }
             })
-            .map_err(PyValueError::new_err)?;
+            .map_err(reasoning_error)?;
         Ok(Self { session })
     }
 
@@ -1217,10 +1252,9 @@ impl PyReasoner {
         canonical_search: &str,
         cancel: Option<&crate::py_store::PyCancellationToken>,
     ) -> PyResult<crate::py_canonical::PyCanonicalResult> {
-        let (answer, receipts) =
-            crate::py_canonical::run(py, canonical_search, cancel, |control| {
-                self.session.prove(service, argument, control)
-            })?;
+        let (answer, receipts) = run_reasoning(py, canonical_search, cancel, |control| {
+            self.session.prove(service, argument, control)
+        })?;
         crate::py_canonical::finish(
             py,
             (
@@ -1240,10 +1274,9 @@ impl PyReasoner {
         canonical_search: &str,
         cancel: Option<&crate::py_store::PyCancellationToken>,
     ) -> PyResult<crate::py_canonical::PyCanonicalResult> {
-        let (answer, receipts) =
-            crate::py_canonical::run(py, canonical_search, cancel, |control| {
-                self.session.consistency(control)
-            })?;
+        let (answer, receipts) = run_reasoning(py, canonical_search, cancel, |control| {
+            self.session.consistency(control)
+        })?;
         crate::py_canonical::finish(py, (answer.answer(), answer.certificate()), receipts)
     }
 
@@ -1255,10 +1288,9 @@ impl PyReasoner {
         canonical_search: &str,
         cancel: Option<&crate::py_store::PyCancellationToken>,
     ) -> PyResult<crate::py_canonical::PyCanonicalResult> {
-        let (answer, receipts) =
-            crate::py_canonical::run(py, canonical_search, cancel, |control| {
-                self.session.classify(control)
-            })?;
+        let (answer, receipts) = run_reasoning(py, canonical_search, cancel, |control| {
+            self.session.classify(control)
+        })?;
         crate::py_canonical::finish(py, (answer.answer(), answer.certificate()), receipts)
     }
 
@@ -1270,10 +1302,9 @@ impl PyReasoner {
         canonical_search: &str,
         cancel: Option<&crate::py_store::PyCancellationToken>,
     ) -> PyResult<crate::py_canonical::PyCanonicalResult> {
-        let (answer, receipts) =
-            crate::py_canonical::run(py, canonical_search, cancel, |control| {
-                self.session.realize(control)
-            })?;
+        let (answer, receipts) = run_reasoning(py, canonical_search, cancel, |control| {
+            self.session.realize(control)
+        })?;
         crate::py_canonical::finish(py, (answer.answer(), answer.certificate()), receipts)
     }
 
@@ -1286,10 +1317,9 @@ impl PyReasoner {
         canonical_search: &str,
         cancel: Option<&crate::py_store::PyCancellationToken>,
     ) -> PyResult<crate::py_canonical::PyCanonicalResult> {
-        let (answer, receipts) =
-            crate::py_canonical::run(py, canonical_search, cancel, |control| {
-                self.session.instances(class_, control)
-            })?;
+        let (answer, receipts) = run_reasoning(py, canonical_search, cancel, |control| {
+            self.session.instances(class_, control)
+        })?;
         crate::py_canonical::finish(py, (answer.answer(), answer.certificate()), receipts)
     }
 
@@ -1302,10 +1332,9 @@ impl PyReasoner {
         canonical_search: &str,
         cancel: Option<&crate::py_store::PyCancellationToken>,
     ) -> PyResult<crate::py_canonical::PyCanonicalResult> {
-        let (answer, receipts) =
-            crate::py_canonical::run(py, canonical_search, cancel, |control| {
-                self.session.entails(axiom, control)
-            })?;
+        let (answer, receipts) = run_reasoning(py, canonical_search, cancel, |control| {
+            self.session.entails(axiom, control)
+        })?;
         crate::py_canonical::finish(py, (answer.answer(), answer.certificate()), receipts)
     }
 
@@ -1327,10 +1356,9 @@ impl PyReasoner {
         canonical_search: &str,
         cancel: Option<&crate::py_store::PyCancellationToken>,
     ) -> PyResult<crate::py_canonical::PyCanonicalResult> {
-        let (answer, receipts) =
-            crate::py_canonical::run(py, canonical_search, cancel, |control| {
-                self.session.extract_module(signature, method, control)
-            })?;
+        let (answer, receipts) = run_reasoning(py, canonical_search, cancel, |control| {
+            self.session.extract_module(signature, method, control)
+        })?;
         crate::py_canonical::finish(py, (answer.answer(), answer.certificate()), receipts)
     }
 
@@ -1343,10 +1371,9 @@ impl PyReasoner {
         canonical_search: &str,
         cancel: Option<&crate::py_store::PyCancellationToken>,
     ) -> PyResult<crate::py_canonical::PyCanonicalResult> {
-        let (answer, receipts) =
-            crate::py_canonical::run(py, canonical_search, cancel, |control| {
-                self.session.justify(axiom, control)
-            })?;
+        let (answer, receipts) = run_reasoning(py, canonical_search, cancel, |control| {
+            self.session.justify(axiom, control)
+        })?;
         crate::py_canonical::finish(py, (answer.answer(), answer.certificate()), receipts)
     }
 
@@ -1361,7 +1388,7 @@ impl PyReasoner {
         let name = regime_name(native_regime(regime)?);
         let answer = py
             .detach(|| self.session.explain_conclusion(name, conclusion))
-            .map_err(PyValueError::new_err)?;
+            .map_err(reasoning_error)?;
         Ok(answer.into_parts())
     }
 

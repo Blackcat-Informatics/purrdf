@@ -2100,6 +2100,19 @@ create_exception!(
 /// `.kind` and `.iris` always present, and `ValueError` for anything else.
 fn shapes_error(py: Python<'_>, error: purrdf_validate::ShapesError) -> PyErr {
     match error {
+        purrdf_validate::ShapesError::ScopeBinding(error) => {
+            let message = error.to_string();
+            let diagnostic =
+                purrdf_validate::native_error::diagnostic("shapes-refused", error, None);
+            crate::py_store::presentation::native_error_with_message(py, message, &diagnostic)
+        }
+        purrdf_validate::ShapesError::ImportArrays(error) => {
+            let message = error.to_string();
+            let storage = error.storage_error();
+            let diagnostic =
+                purrdf_validate::native_error::diagnostic("shapes-refused", error, storage);
+            crate::py_store::presentation::native_error_with_message(py, message, &diagnostic)
+        }
         purrdf_validate::ShapesError::Canonical(error) => {
             crate::py_canonical::error_to_python(py, &error, "[]")
         }
