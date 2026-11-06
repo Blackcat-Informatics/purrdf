@@ -387,6 +387,7 @@ pub(crate) fn write_rdf<D: DatasetView>(
         // for the caller who reaches the sink by some other route.
         SourceFormat::Gts => Err(format::refuse_gts_target(target, "the output target")
             .expect_err("refuse_gts_target rejects SourceFormat::Gts")),
+        _ => Err(format::unsupported_format(target, "the output target")),
     }
 }
 

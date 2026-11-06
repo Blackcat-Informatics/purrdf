@@ -8,6 +8,11 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Extensible format and glob refusals (breaking Rust API):** `SourceFormat`
+  and `purrdf_glob::SyntaxReason` are non-exhaustive. External matches need an
+  unsupported-case arm; the CLI refuses unknown source kinds rather than
+  routing them through an existing syntax or container.
+
 - **Fresh OWL refutation witnesses:** generated symbols are checked against the
   current term interner, including caller terms introduced after preparation.
   Repeated role-inclusion queries preserve distinct witness identities.

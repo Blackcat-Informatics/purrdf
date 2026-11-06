@@ -733,6 +733,10 @@ pub(crate) fn run_over_input_with_transport<Op: ViewOp>(
             let (dataset, _envelope_ledger) = load_gts(path, policy)?;
             op.run(&*dataset, canonical)
         }
+        _ => Err(crate::format::unsupported_format(
+            format,
+            "the input source",
+        )),
     }
 }
 
@@ -790,6 +794,10 @@ pub(crate) fn load_dataset_reporting(
             Ok((dataset_from_view(&view)?, LossLedger::new()))
         }
         SourceFormat::Gts => load_gts(path, policy),
+        _ => Err(crate::format::unsupported_format(
+            format,
+            "the input source",
+        )),
     }
 }
 
