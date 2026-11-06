@@ -8,6 +8,14 @@ the PurRDF crates together when adopting them.
 
 ## At a glance
 
+The USTAR reader, borrowed-member iterator and writer functions now return
+`purrdf::ustar::UstarError` instead of `String`. Match its non-exhaustive variants
+with a wildcard or inspect the borrowed structured fields. Refusals retain their
+original byte offsets, declared and available lengths, raw size fields and native
+UTF-8 causes. Use `Display` only for presentation; projection-package failures
+also retain the archive error in their standard source chain. Current valid
+archive bytes and member ordering are unchanged.
+
 GTS transport decoding retains original native Zstandard frame errors through
 `TransportError::cause` and the standard I/O source chain. Inspect structured
 causes for decoder fields; `message()` remains an explicit presentation accessor.

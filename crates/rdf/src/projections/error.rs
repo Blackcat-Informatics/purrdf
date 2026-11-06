@@ -57,6 +57,7 @@ pub struct ProjectionError {
 enum ProjectionCause {
     Storage(purrdf_lex::allocation::StorageError),
     Xsd(Box<purrdf_xsd::XsdError>),
+    Ustar(crate::ustar::UstarError),
 }
 
 impl ProjectionError {
@@ -109,6 +110,7 @@ impl ProjectionError {
         match &self.cause {
             Some(ProjectionCause::Storage(error)) => Some(error),
             Some(ProjectionCause::Xsd(error)) => Some(error.as_ref()),
+            Some(ProjectionCause::Ustar(error)) => Some(error),
             None => None,
         }
     }
@@ -138,7 +140,7 @@ impl ProjectionError {
     pub const fn storage_error(&self) -> Option<purrdf_lex::allocation::StorageError> {
         match &self.cause {
             Some(ProjectionCause::Storage(error)) => Some(*error),
-            Some(ProjectionCause::Xsd(_)) | None => None,
+            Some(ProjectionCause::Xsd(_) | ProjectionCause::Ustar(_)) | None => None,
         }
     }
 }
@@ -168,6 +170,14 @@ impl From<purrdf_lex::allocation::StorageError> for ProjectionError {
     fn from(error: purrdf_lex::allocation::StorageError) -> Self {
         let mut result = Self::new(ProjectionErrorKind::Storage, error.to_string());
         result.cause = Some(ProjectionCause::Storage(error));
+        result
+    }
+}
+
+impl From<crate::ustar::UstarError> for ProjectionError {
+    fn from(error: crate::ustar::UstarError) -> Self {
+        let mut result = Self::package(error.to_string());
+        result.cause = Some(ProjectionCause::Ustar(error));
         result
     }
 }
