@@ -152,6 +152,7 @@ use crate::report::Construct;
 
 // ── The wire format's fixed vocabulary ──────────────────────────────────────────
 
+mod inspect;
 /// Domain-separation tag leading every [`DlProof::encode`]d proof.
 ///
 /// Bumped whenever the encoding changes shape, so bytes written under an older layout can
@@ -7178,10 +7179,22 @@ mod tests {
             ),
         )
         .expect("reverse-maps");
-        assert!(matches!(
-            proof.replay_clash(0, &ctx),
-            Err(DlProofError::InputMismatch { .. })
-        ));
+        let error = proof.replay_clash(0, &ctx).unwrap_err();
+        drop(proof);
+        drop(ctx);
+        drop(other);
+        let DlProofError::InputMismatch { expected, stated } = &error else {
+            panic!("the consumer and producer identities differ");
+        };
+        assert_ne!(expected, stated);
+        let captured = purrdf_testkit::error_capture::Capture::read(&error);
+        assert_eq!(captured.code, "owl-proof-input-mismatch");
+        assert!(
+            matches!(captured.field("expected"), purrdf_hash::error::ErrorValue::Text(value) if value == expected)
+        );
+        assert!(
+            matches!(captured.field("stated"), purrdf_hash::error::ErrorValue::Text(value) if value == stated)
+        );
     }
 
     /// Forging the INPUT identity to match a different ontology does not help: the contract is
@@ -7255,6 +7268,10 @@ mod tests {
     #[test]
     fn a_tampered_witness_atom_is_rejected() {
         let (_, mut proof, ctx) = refutation();
+        let original = match &proof.clashes[0].witness[0] {
+            ProofFact::Concept { concept, .. } => *concept,
+            other => panic!("a concept fixture: {other:?}"),
+        };
         let forged = match &proof.clashes[0].witness[0] {
             ProofFact::Concept { node, concept } => ProofFact::Concept {
                 node: node.clone(),
@@ -7263,10 +7280,25 @@ mod tests {
             other => panic!("the fixture's first body atom is a concept atom: {other:?}"),
         };
         proof.clashes[0].witness[0] = forged;
+        let error = proof.replay_clash(0, &ctx).unwrap_err();
+        drop(proof);
+        drop(ctx);
+        let captured = purrdf_testkit::error_capture::Capture::read(&error);
+        assert_eq!(captured.code, "owl-proof-witness-mismatch");
         assert!(matches!(
-            proof.replay_clash(0, &ctx),
-            Err(DlProofError::WitnessMismatch { position: 0, .. })
+            captured.field("position"),
+            purrdf_hash::error::ErrorValue::Unsigned(0)
         ));
+        let derived = captured.child("derived");
+        let stated = captured.child("stated");
+        assert_eq!(derived.code, "owl-proof-fact-concept");
+        assert_eq!(stated.code, derived.code);
+        assert!(
+            matches!(derived.field("concept"), purrdf_hash::error::ErrorValue::Unsigned(value) if value == u128::from(original))
+        );
+        assert!(
+            matches!(stated.field("concept"), purrdf_hash::error::ErrorValue::Unsigned(value) if value == u128::from(original.wrapping_add(1)))
+        );
     }
 
     /// Dropping a witness atom is caught by the length comparison, so a forger cannot shrink a
@@ -8001,10 +8033,13 @@ mod tests {
         let (_, proof, _) = refutation();
         let mut bytes = proof.encode();
         bytes.push(0);
-        assert!(matches!(
-            DlProof::decode(&bytes),
-            Err(DlProofError::Malformed { .. })
-        ));
+        let error = DlProof::decode(&bytes).unwrap_err();
+        drop(bytes);
+        let captured = purrdf_testkit::error_capture::Capture::read(&error);
+        assert_eq!(captured.code, "owl-proof-malformed");
+        assert!(
+            matches!(captured.field("detail"), purrdf_hash::error::ErrorValue::Message(value) if !value.is_empty())
+        );
     }
 
     /// Every single-byte corruption either decodes to a DIFFERENT proof or is refused — never
@@ -8372,6 +8407,11 @@ mod tests {
     #[test]
     fn a_rewritten_alternative_atom_is_rejected() {
         let (mut proof, ctx) = branching_refutation();
+        let atoms = proof.branches[0].alternatives[0].atoms.len();
+        let original = match &proof.branches[0].alternatives[0].atoms[0] {
+            ProofGround::Concept { concept, .. } => *concept,
+            other => panic!("a concept fixture: {other:?}"),
+        };
         let forged = match &proof.branches[0].alternatives[0].atoms[0] {
             ProofGround::Concept { node, concept } => ProofGround::Concept {
                 node: node.clone(),
@@ -8380,10 +8420,25 @@ mod tests {
             other => panic!("the fixture's alternatives are concept atoms: {other:?}"),
         };
         proof.branches[0].alternatives[0].atoms[0] = forged;
+        let error = proof.replay_branch(0, &ctx).unwrap_err();
+        drop(proof);
+        drop(ctx);
+        let captured = purrdf_testkit::error_capture::Capture::read(&error);
+        assert_eq!(captured.code, "owl-proof-alternative-mismatch");
         assert!(matches!(
-            proof.replay_branch(0, &ctx),
-            Err(DlProofError::AlternativeMismatch { position: 0, .. })
+            captured.field("position"),
+            purrdf_hash::error::ErrorValue::Unsigned(0)
         ));
+        let derived = captured.child("derived").records("atoms");
+        let stated = captured.child("stated").records("atoms");
+        assert_eq!((derived.len(), stated.len()), (atoms, atoms));
+        assert_eq!(derived[0].code, "owl-proof-ground-concept");
+        assert!(
+            matches!(derived[0].field("concept"), purrdf_hash::error::ErrorValue::Unsigned(value) if value == u128::from(original))
+        );
+        assert!(
+            matches!(stated[0].field("concept"), purrdf_hash::error::ErrorValue::Unsigned(value) if value == u128::from(original.wrapping_add(1)))
+        );
     }
 
     /// A branch point re-pointed at a clause that generates NO disjunction is rejected: the
