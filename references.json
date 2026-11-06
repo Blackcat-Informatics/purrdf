@@ -1,0 +1,25 @@
+{
+  "paths": [],
+  "identifiers": [
+    {
+      "name": "SnapshotBuilder::add_dataset",
+      "files": 3
+    },
+    {
+      "name": "GtsIngestError",
+      "files": 6
+    },
+    {
+      "name": "emit_gts",
+      "files": 8
+    }
+  ],
+  "packages": [],
+  "urls": [
+    "https://github.com/Blackcat-Informatics/purrdf/blob/05d1e3550752d8f185710da0b00459651955d9f1/crates/rdf/src/gts_compose.rs#L408",
+    "https://github.com/Blackcat-Informatics/purrdf/blob/05d1e3550752d8f185710da0b00459651955d9f1/crates/rdf/src/gts_compose.rs#L1195",
+    "https://github.com/Blackcat-Informatics/purrdf/blob/05d1e3550752d8f185710da0b00459651955d9f1/crates/rdf/src/gts_compose.rs#L1427",
+    "https://github.com/Blackcat-Informatics/purrdf/blob/05d1e3550752d8f185710da0b00459651955d9f1/crates/rdf/src/gts_view.rs#L720"
+  ],
+  "truncated": []
+}

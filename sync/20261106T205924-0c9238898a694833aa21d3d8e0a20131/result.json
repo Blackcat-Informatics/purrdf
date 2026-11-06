@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1107-v4-api-retain-native-gts-composition",
+  "branch": "paudley/1107-v4-api-retain-native-gts-composition",
+  "base_ref": "origin/main",
+  "head": "7316026d139e3c0e9cdce976060c5c6d282325bf",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/1107-v4-api-retain-native-gts-composition/.stage/v4-api-retain-native-gts-composition/sync/20261106T205924-0c9238898a694833aa21d3d8e0a20131",
+  "conflicts": [],
+  "status": "completed",
+  "base": "6d72ead553f125c96951784424a932e56ecdf5c4",
+  "merge_bases": [
+    "18c290fe385457942c242a5f65db4a425600e0e7"
+  ],
+  "merge_index": "03353fc376d4d44bd280e4a1cb63ef5b5c32621a6fffe3a1be68062fb61ba403",
+  "candidate_tree": "886a1e2d18b2afbd9b047e32060c78014dc8f5b4",
+  "candidate_patch": "candidate-2cadbf95ea3b47c28783a16d0353e4bd.patch",
+  "validation_records": [],
+  "commit": "d70c24bfdcc38f2fec80781e1c32d2788b04ad49",
+  "tree": "886a1e2d18b2afbd9b047e32060c78014dc8f5b4"
+}

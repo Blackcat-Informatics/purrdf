@@ -1,0 +1,15 @@
+issue      /home/paudley/Active/purrdf/.worktrees/1107-v4-api-retain-native-gts-composition/.stage/v4-api-retain-native-gts-composition/issue.md
+prior art  /home/paudley/Active/purrdf/.worktrees/1107-v4-api-retain-native-gts-composition/.stage/v4-api-retain-native-gts-composition/prior-art.md
+reqs       /home/paudley/Active/purrdf/.worktrees/1107-v4-api-retain-native-gts-composition/.stage/v4-api-retain-native-gts-composition/requirements-candidates.md
+references /home/paudley/Active/purrdf/.worktrees/1107-v4-api-retain-native-gts-composition/.stage/v4-api-retain-native-gts-composition/references.md
+machine    /home/paudley/Active/purrdf/.worktrees/1107-v4-api-retain-native-gts-composition/.stage/v4-api-retain-native-gts-composition/brief.json  (+ requirements.json, references.json)
+knowledge  /home/paudley/Active/purrdf/.worktrees/1107-v4-api-retain-native-gts-composition/.stage/v4-api-retain-native-gts-composition/knowledge-brief.md
+
+  - issue #1107 + 0 comment(s) via github
+  - link crawl: 45 issue(s) within 2 hop(s) of `#N` references
+  - forge search on ['retain', 'native', 'composition']: 14 other item(s)
+  - GhpRsq-Defect-Class trailers: 1 distinct class(es) in the last 200 commits
+  - prior attempts: 0 commit(s) citing #1107 (second parents walked), 0 other branch(es) named for it
+  - PRs citing #1107: 0
+  - requirement candidates: 6 line(s); 0 comment(s) matched no rule
+  - referenced artifacts: 0 path(s) (0 on disk), 3 identifier(s), 0 workspace package(s), 4 URL(s)
