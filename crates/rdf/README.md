@@ -284,6 +284,31 @@ on `purrdf-rdf` directly only when you want the RDF layer alone.
 There are deliberately no Cargo feature flags anywhere in the workspace. MSRV
 follows the workspace `rust-version` (currently 1.98, stable toolchain only).
 
+## GTS composition errors
+
+`SnapshotBuilder::add_dataset` and `add_dataset_scoped` return
+`Result<(), GtsIngestError>`; view ingestion returns its original `IngestReport`
+with the same error type. Source reads and readiness checkpoints retain their
+native owned causes through borrowed structured inspection and standard error
+sources. Retaining diagnostic storage may itself return `GtsIngestError::Storage`.
+The error remains cloneable by sharing erased native causes; it no longer provides
+value equality over heterogeneous native failures.
+
+`UnrepresentableTerm` carries `OffendingTerm`, a bounded diagnostic snapshot
+with original lexical, blank scope, language, direction and constituent evidence.
+The traversal follows at most eight terms and marks deeper or cyclic paths with
+`Cutoff`. This is not a complete RDF value: language-tagged literals retain the
+original diagnostic policy of not following their datatype. Display renders this
+single evidence tree, including its ellipsis. Failed ingestion rolls back and
+poisons the builder; later ingestion and emission retain the original refusal.
+
+`emit_gts` returns `GtsEmitError`, retaining native writer failures and typed
+configuration operands. Retaining poison can return its explicit storage refusal.
+Signing diagnostics retain field presence without secret bytes. Both relational projection doors return `RelationalProjectionError` with
+the original blob digest and native codec cause; no partial rows are returned.
+These public errors are non-exhaustive. Python keeps its existing `ValueError`
+messages and attaches the native fields as `native_cause` and `native_cause_json`.
+
 ## Selected GTS payloads
 
 `import_gts_events_with_blobs` returns the native dataset and an explicitly

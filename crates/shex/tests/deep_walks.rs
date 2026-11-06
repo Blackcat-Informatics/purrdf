@@ -32,8 +32,10 @@ fn large_neighbourhood_backtracks_without_using_the_native_call_stack() {
         purrdf_core::TermValue::iri("http://example.org/focus"),
         purrdf_shex::ShapeSelector::Label(SHAPE.to_owned()),
     )];
-    let report =
-        purrdf_stack::on_stack_scoped(256 * 1024, || validate(&schema, &data, &map)).unwrap();
+    let report = purrdf_stack::on_stack_scoped(256 * 1024, || {
+        validate(&schema, &data, &map).expect("validation finishes")
+    })
+    .unwrap();
     assert_eq!(report.entries.len(), 1);
     assert_eq!(
         report.entries[0].status,
@@ -141,7 +143,7 @@ fn deep_preparation_census_runs_on_the_caller_small_stack() {
         let prepared = purrdf_stack::on_stack_scoped(256 * 1024, || {
             // An empty shape map still prepares the complete schema. Evaluating
             // a deep shape is a different operation, not claimed by this test.
-            validate(&schema, &data, &[])
+            validate(&schema, &data, &[]).expect("validation finishes")
         })
         .unwrap();
         assert_eq!(prepared.entries, [] as [purrdf_shex::ResultEntry; 0]);

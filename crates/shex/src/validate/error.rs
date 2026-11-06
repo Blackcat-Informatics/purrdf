@@ -8,7 +8,7 @@ use purrdf_core::xsd_regex::xpath;
 #[derive(Debug, Clone)]
 pub(super) enum CheckError {
     Violation(String),
-    Operational(xpath::Error),
+    Operational(crate::ValidationError),
 }
 
 impl purrdf_hash::error::StructuredError for CheckError {
@@ -18,12 +18,12 @@ impl purrdf_hash::error::StructuredError for CheckError {
     }
 }
 
-purrdf_lex::variant_from!(CheckError { Violation(String) });
+purrdf_lex::variant_from!(CheckError { Violation(String), Operational(crate::ValidationError) });
 
 impl CheckError {
     pub(super) fn pattern(error: xpath::Error, pattern: &str, flags: &str) -> Self {
         if error.is_operational() {
-            Self::Operational(error)
+            Self::Operational(error.into())
         } else {
             Self::Violation(format!("invalid pattern /{pattern}/{flags}: {error}"))
         }

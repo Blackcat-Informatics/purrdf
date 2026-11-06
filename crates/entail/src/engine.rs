@@ -1363,6 +1363,12 @@ pub(crate) struct Terms {
     by_surface: BTreeMap<String, TermValue>,
 }
 
+impl purrdf_datalog::resolve_fol::FolRdfSource for Terms {
+    fn resolve(&self, original_identity: &str) -> Option<&TermValue> {
+        self.by_surface.get(original_identity)
+    }
+}
+
 impl Terms {
     /// Record `value` and return its surface.
     pub(crate) fn record(&mut self, value: &TermValue) -> String {

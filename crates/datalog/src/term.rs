@@ -44,6 +44,11 @@
 //! variable — and a [`NodeData::Meta`] is the third, unifiable kind:
 //! [`crate::unify`] binds metavariables and never touches `Free` or `Bound` nodes.
 //!
+//! Native RDF constants use [`NodeData::Rdf`], preserving the original
+//! [`TermValue`] identity, including every literal component, blank scope and
+//! quoted triple. Quoted RDF constants are atomic to unification; pattern
+//! metavariables still live in this arena's compound-term structure.
+//!
 //! # Free-metavariable caching
 //!
 //! Every node caches the sorted, deduplicated set of [`MetaId`]s it mentions,
@@ -52,25 +57,83 @@
 //! ([`crate::unify`]'s `occurs_through`) a binary-searchable fast path instead of a
 //! structural walk on every call.
 
-use core::hash::BuildHasher;
+use core::hash::{BuildHasher, Hash, Hasher};
 
+use purrdf_core::TermValue;
 use purrdf_core::hash::table::HashTable;
 use purrdf_hash::fixed::FixedState;
-use purrdf_lex::allocation::{Memory, Resident, StorageError};
+use purrdf_lex::allocation::{Memory, Resident, Shared, StorageError};
 
 use crate::id::{MetaId, NodeId, SymId};
 
 mod retained;
-pub use retained::RetainedTerm;
+pub use retained::{RetainedGraph, RetainedTerm};
+
+/// Shared immutable ownership of one native RDF value, including all original
+/// literal components, blank scope and quoted triple components.
+#[derive(Debug, Clone)]
+pub struct RdfAtom(Shared<TermValue>);
+
+impl RdfAtom {
+    /// The original structural RDF value; display is never its identity key.
+    #[must_use]
+    pub fn value(&self) -> &TermValue {
+        &self.0
+    }
+}
+
+impl PartialEq for RdfAtom {
+    fn eq(&self, other: &Self) -> bool {
+        self.value() == other.value()
+    }
+}
+impl Eq for RdfAtom {}
+impl PartialOrd for RdfAtom {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for RdfAtom {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.value().cmp(other.value())
+    }
+}
+impl Hash for RdfAtom {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.value().hash(state);
+    }
+}
+
+/// Read-only term inspection shared by the mutable arena and its retained graph.
+/// Handles and symbol IDs are local to this one reader.
+pub trait TermRead {
+    /// The complete node at this reader's local handle.
+    fn data(&self, node: NodeId) -> &NodeData;
+    /// The original text of this reader's local symbol.
+    fn symbol(&self, id: SymId) -> &str;
+}
 
 /// One node's shape.
 ///
-/// A `Leaf`/`Free`/`Meta`/`Bound` node is a LEAF of the term structure (it has no
+/// An `Rdf`/`Leaf`/`Free`/`Meta`/`Bound` node is a leaf of the term structure (it has no
 /// children in this enum's own sense, though a `Meta` may later be bound to
 /// arbitrary structure by [`crate::unify`]); `App` and `Binder` are the two ways
 /// this arena builds compound structure.
+///
+/// This enum is non-exhaustive so additional term forms can be introduced.
+/// External inspection must return an explicit unsupported-form error from its
+/// wildcard arm, retaining the source [`NodeId`] and relevant context; it must
+/// not silently drop the node or substitute another term. Recognizing a stored
+/// form does not imply that a reasoning strategy supports it.
+///
+/// [`TermDag::data`] borrows the complete node. The arena's `intern_leaf`,
+/// `intern_free`, `fresh_meta`, `intern_bound`, `intern_app` and `intern_binder`
+/// methods construct all current forms with their existing payloads and meaning.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
 pub enum NodeData {
+    /// An original RDF value. Its native components, not its display, define identity.
+    Rdf(RdfAtom),
     /// An interned atomic constant (an IRI or a rendered literal surface) — not
     /// unifiable, but comparable and shareable.
     Leaf(SymId),
@@ -129,8 +192,10 @@ fn merge_free_meta(left: &[MetaId], right: &[MetaId]) -> Result<Vec<MetaId>, Sto
 /// [`crate::clause`]'s flat quad IR. Owned, never global: two callers building
 /// unrelated terms use two arenas, exactly as two [`crate::proof::ProofArena`]s
 /// never share ids.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub struct TermDag {
+    /// Local authentication capability, minted only when checking evidence is produced.
+    source: Option<TermSource>,
     /// The interned nodes, indexed by [`NodeId`] slot.
     nodes: Vec<NodeData>,
     /// Content hash → id, for O(1) node interning. Probed, never iterated.
@@ -155,7 +220,110 @@ pub struct TermDag {
     symbol_limit: Option<u64>,
 }
 
+/// Private live-arena capability. It is never a persisted or structural identity.
+#[derive(Debug, Clone)]
+pub(crate) struct TermSource(Shared<()>);
+
+impl TermSource {
+    pub(crate) fn same(&self, other: &Self) -> bool {
+        core::ptr::eq(&raw const *self.0, &raw const *other.0)
+    }
+}
+
+impl Clone for TermDag {
+    /// A copied arena starts a distinct local checking source, even when all
+    /// its initial structural values and numeric handles are identical.
+    fn clone(&self) -> Self {
+        Self {
+            source: None,
+            nodes: self.nodes.clone(),
+            by_content: self.by_content.clone(),
+            free_meta: self.free_meta.clone(),
+            symbols: self.symbols.clone(),
+            symbols_by_content: self.symbols_by_content.clone(),
+            next_meta: self.next_meta,
+            #[cfg(test)]
+            node_limit: self.node_limit,
+            #[cfg(test)]
+            symbol_limit: self.symbol_limit,
+        }
+    }
+}
+
+/// Roll back checking scratch on ordinary failure, success and unwinding.
+pub(crate) struct TermTransaction<'a> {
+    dag: &'a mut TermDag,
+    nodes: usize,
+    symbols: usize,
+    next_meta: u64,
+}
+
+impl TermTransaction<'_> {
+    pub(crate) fn dag(&mut self) -> &mut TermDag {
+        self.dag
+    }
+}
+
+impl Drop for TermTransaction<'_> {
+    fn drop(&mut self) {
+        while self.dag.nodes.len() > self.nodes {
+            let index = self.dag.nodes.len() - 1;
+            let id = NodeId::from_address(index).expect("the resident node has a valid address");
+            let hash = FixedState::new().hash_one(&self.dag.nodes[index]);
+            self.dag
+                .by_content
+                .find_entry(hash, |&key| key == id)
+                .expect("a checking scratch node retains its intern entry")
+                .remove();
+            self.dag.nodes.pop();
+            self.dag.free_meta.pop();
+        }
+        while self.dag.symbols.len() > self.symbols {
+            let index = self.dag.symbols.len() - 1;
+            let id = SymId::from_address(index).expect("the resident symbol has a valid address");
+            let hash = FixedState::new().hash_one(&self.dag.symbols[index]);
+            self.dag
+                .symbols_by_content
+                .find_entry(hash, |&key| key == id)
+                .expect("a checking scratch symbol retains its intern entry")
+                .remove();
+            self.dag.symbols.pop();
+        }
+        self.dag.next_meta = self.next_meta;
+    }
+}
+
 impl TermDag {
+    pub(crate) fn source(&mut self) -> Result<TermSource, StorageError> {
+        if self.source.is_none() {
+            self.source = Some(TermSource(
+                Shared::try_new(()).map_err(|_| StorageError::AllocationFailed)?,
+            ));
+        }
+        Ok(self
+            .source
+            .as_ref()
+            .expect("the source was just minted")
+            .clone())
+    }
+
+    pub(crate) fn has_source(&self, source: &TermSource) -> bool {
+        self.source
+            .as_ref()
+            .is_some_and(|current| current.same(source))
+    }
+
+    pub(crate) fn transaction(&mut self) -> TermTransaction<'_> {
+        let nodes = self.nodes.len();
+        let symbols = self.symbols.len();
+        let next_meta = self.next_meta;
+        TermTransaction {
+            dag: self,
+            nodes,
+            symbols,
+            next_meta,
+        }
+    }
     /// The number of interned nodes.
     pub fn len(&self) -> usize {
         self.nodes.len()
@@ -166,7 +334,15 @@ impl TermDag {
         self.nodes.is_empty()
     }
 
-    /// The node at `node`.
+    /// Whether this arena has minted the metavariable's local slot.
+    pub(crate) fn has_meta(&self, meta: MetaId) -> bool {
+        meta.index() < self.next_meta
+    }
+
+    /// The complete borrowed node at `node`.
+    ///
+    /// External matches must explicitly refuse unsupported future forms; see
+    /// [`NodeData`] for inspection and construction requirements.
     ///
     /// # Panics
     ///
@@ -246,6 +422,15 @@ impl TermDag {
         self.intern_named(symbol, NodeData::Leaf)
     }
 
+    /// Intern an owned native RDF value by structural identity.
+    ///
+    /// # Errors
+    /// Returns the original physical storage or arena capacity refusal.
+    pub fn intern_rdf(&mut self, value: TermValue) -> Result<NodeId, StorageError> {
+        let owner = Shared::try_new(value).map_err(|_| StorageError::AllocationFailed)?;
+        self.intern(NodeData::Rdf(RdfAtom(owner)))
+    }
+
     /// Intern a [`NodeData::Free`] naming `symbol`.
     pub fn intern_free(&mut self, symbol: &str) -> Result<NodeId, StorageError> {
         self.intern_named(symbol, NodeData::Free)
@@ -305,7 +490,9 @@ impl TermDag {
         let mut resident = Resident;
         let mut memory = Memory::new(&mut resident);
         Ok(match data {
-            NodeData::Leaf(_) | NodeData::Free(_) | NodeData::Bound { .. } => Vec::new(),
+            NodeData::Rdf(_) | NodeData::Leaf(_) | NodeData::Free(_) | NodeData::Bound { .. } => {
+                Vec::new()
+            }
             NodeData::Meta(meta) => memory.collect([*meta])?,
             NodeData::App { op, args } => {
                 let mut acc = memory.collect(self.free_meta(*op).iter().copied())?;
@@ -364,9 +551,81 @@ impl TermDag {
     }
 }
 
+impl TermRead for TermDag {
+    fn data(&self, node: NodeId) -> &NodeData {
+        self.data(node)
+    }
+    fn symbol(&self, id: SymId) -> &str {
+        self.symbol(id)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn checking_scratch_refusal_rolls_back_nodes_and_metavariables() {
+        use crate::resolve_fol::{
+            FolAnswerContract, FolBudget, FolClause, FolControl, FolProgram, FolProofError,
+            check_fol_proof, resolve_fol,
+        };
+        use crate::unify::SortContext;
+        use std::collections::BTreeMap;
+        let mut dag = TermDag::default();
+        let p = dag.intern_leaf("p").unwrap();
+        let a = dag.intern_leaf("a").unwrap();
+        let b = dag.intern_leaf("b").unwrap();
+        let (_, x) = dag.fresh_meta().unwrap();
+        let (_, y) = dag.fresh_meta().unwrap();
+        let head = dag.intern_app(p, vec![x, y]).unwrap();
+        let goal = dag.intern_app(p, vec![a, b]).unwrap();
+        let program = FolProgram::new(
+            &dag,
+            vec![FolClause::new(&dag, head, vec![]).unwrap()],
+            goal,
+            vec![],
+            BTreeMap::new(),
+        )
+        .unwrap();
+        let FolControl::Decided(outcome) = resolve_fol(
+            &mut dag,
+            &program,
+            &SortContext::default(),
+            FolAnswerContract::GroundOnly,
+            &FolBudget { max_steps: 100 },
+        )
+        .unwrap() else {
+            panic!("a ground assertion must decide");
+        };
+        let nodes = dag.len();
+        let metas = dag.next_meta;
+        dag.node_limit = Some(nodes as u64 + 1);
+        assert!(matches!(
+            check_fol_proof(
+                &mut dag,
+                outcome.answers[0].proof(),
+                outcome.checking_evidence()
+            ),
+            Err(FolProofError::Storage(StorageError::Capacity(_)))
+        ));
+        assert_eq!(dag.len(), nodes);
+        assert_eq!(dag.by_content.len(), nodes);
+        assert_eq!(dag.free_meta.len(), nodes);
+        assert_eq!(dag.next_meta, metas);
+        dag.node_limit = None;
+        assert_eq!(
+            check_fol_proof(
+                &mut dag,
+                outcome.answers[0].proof(),
+                outcome.checking_evidence()
+            )
+            .unwrap(),
+            goal
+        );
+        assert_eq!(dag.len(), nodes);
+        assert_eq!(dag.next_meta, metas);
+    }
 
     #[test]
     fn named_node_capacity_rolls_back_only_new_symbols_and_preserves_hits() {

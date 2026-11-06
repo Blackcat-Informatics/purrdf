@@ -268,7 +268,7 @@ fn resolve_then_validate() {
         parse_shape_map(&format!("{{FOCUS <{P1}> _}}@<http://a.example/S>"), None).expect("map");
     let associations = resolve_shape_map(&map, &data);
     assert_eq!(associations.len(), 2);
-    let result = validate(&schema, &data, &associations);
+    let result = validate(&schema, &data, &associations).expect("validation finishes");
     assert!(result.all_conformant());
     assert!(
         result
@@ -445,7 +445,13 @@ fn a_map_naming_an_undeclared_shape_is_refused_not_answered_nonconformant() {
         &ValidationOptions::default(),
     )
     .expect_err("an undeclared shape is refused");
-    assert!(matches!(err, ShexError::UnknownShape(_)), "{err:?}");
+    assert!(
+        matches!(
+            err,
+            purrdf_shex::ValidationError::ShapeMap(ShexError::UnknownShape(_))
+        ),
+        "{err:?}"
+    );
     assert!(
         err.to_string()
             .contains("<http://a.example/Missing>, which the schema does not declare"),
@@ -477,7 +483,13 @@ fn a_map_naming_start_on_a_startless_schema_is_refused() {
         &ValidationOptions::default(),
     )
     .expect_err("no start shape to decide against");
-    assert!(matches!(err, ShexError::UnknownShape(_)), "{err:?}");
+    assert!(
+        matches!(
+            err,
+            purrdf_shex::ValidationError::ShapeMap(ShexError::UnknownShape(_))
+        ),
+        "{err:?}"
+    );
     assert!(err.to_string().contains("START"), "{err}");
 
     let with_start = parse_shexc("start = {}", None).expect("schema with a start");
@@ -509,7 +521,13 @@ fn an_undeclared_shape_is_refused_even_when_the_selector_matches_nothing() {
         &ValidationOptions::default(),
     )
     .expect_err("refused before the selector is expanded");
-    assert!(matches!(err, ShexError::UnknownShape(_)), "{err:?}");
+    assert!(
+        matches!(
+            err,
+            purrdf_shex::ValidationError::ShapeMap(ShexError::UnknownShape(_))
+        ),
+        "{err:?}"
+    );
 }
 
 /// A label an IMPORTED schema declares counts as declared, because
