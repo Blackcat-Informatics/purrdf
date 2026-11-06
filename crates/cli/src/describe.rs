@@ -191,8 +191,12 @@ fn refuse_uncarriable_named_graphs<D: DatasetView>(
     description: &D,
     target: SourceFormat,
 ) -> Result<(), CliError> {
-    let SourceFormat::Native(format) = target else {
-        return Ok(());
+    let format = match target {
+        SourceFormat::Native(format) => format,
+        SourceFormat::Pack | SourceFormat::Gts => return Ok(()),
+        _ => {
+            return Err(format::unsupported_format(target, "the output target"));
+        }
     };
     if format.supports_datasets() {
         return Ok(());
@@ -322,5 +326,6 @@ fn subject_base(
     match source_format {
         SourceFormat::Native(native) => source::effective_base(options.input, native, options.base),
         SourceFormat::Pack | SourceFormat::Gts => Ok(options.base.map(ToOwned::to_owned)),
+        _ => Err(format::unsupported_format(source_format, "the data input")),
     }
 }

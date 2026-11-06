@@ -49,6 +49,18 @@ division, WKT and GeoJSON parsing resource policies, the SPARQL pre-binding rewr
 SPARQL diagnostic codes.
 Each has its own section below.
 
+## Extensible source formats and glob refusals
+
+`SourceFormat` and `purrdf_glob::SyntaxReason` are now non-exhaustive.
+External matches must include an unsupported-case arm. Keep known variants'
+behavior explicit; an unknown source format must produce an actionable refusal
+rather than acquire the behavior of a native syntax or container. The CLI
+refuses unknown kinds when reading, writing or resolving a document base.
+
+Existing format routing, glob matching and refusal payloads remain unchanged.
+Future language or compiled-plan laws must preserve existing valid patterns and
+readable 4.0 portable descriptions, or use explicitly selected versioned forms.
+
 ## Planner estimates
 
 `PlanEstimate` is non-exhaustive. Replace struct literals with
