@@ -363,6 +363,21 @@ its `reason` field is a borrowed nested cause, and `at` retains the original byt
 offset. Native Unicode-escape and language-tag causes are also available through
 the standard error-source chain. Human messages and byte offsets are unchanged.
 
+## Native import and proof refusals
+
+`purrdf_core::imports::ImportKeyError` is non-exhaustive. Include a wildcard
+when matching it. `NotAbsolute.reason` now holds `Option<purrdf_iri::IriError>`
+instead of `Option<String>`; borrow that original cause or use its standard
+source chain and structured visitor. Relative references retain an absent parser
+cause. Existing empty-key, malformed-key and duplicate-key messages and ordering
+are unchanged, and cloning and equality preserve native error fields.
+
+`DlProofError` and its proof evidence support borrowed structured inspection,
+including original node identities, roles, witness atoms, alternatives, counts,
+source failures and canonicalization causes. Inspection preserves the original
+field and list ordering without rendering or cloning evidence. Proof encoding,
+calculus identities and decision rules are unchanged.
+
 ## Certified direct OWL answers
 
 Call `direct_subsumptions()` on `Certified<ClassHierarchy>` and `direct_types()`

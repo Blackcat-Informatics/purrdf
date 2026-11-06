@@ -177,6 +177,7 @@ use purrdf_iri::vocab::owl::VERSION_IRI as OWL_VERSIONIRI;
 
 /// Why [`ImportMap::try_insert`] refused a key.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ImportKeyError {
     /// The key is not an absolute IRI (`reason` carries the IRI parser's complaint when it is
     /// not an IRI at all), so no `owl:imports` object can ever equal it.
@@ -184,7 +185,7 @@ pub enum ImportKeyError {
         /// The refused key.
         iri: String,
         /// The IRI parser's complaint, when the key is not an IRI at all.
-        reason: Option<String>,
+        reason: Option<purrdf_iri::IriError>,
     },
     /// The key already names a document.
     Duplicate {
@@ -218,7 +219,27 @@ impl std::fmt::Display for ImportKeyError {
     }
 }
 
-impl std::error::Error for ImportKeyError {}
+impl std::error::Error for ImportKeyError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::NotAbsolute {
+                reason: Some(reason),
+                ..
+            } => Some(reason),
+            _ => None,
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for ImportKeyError {
+    purrdf_hash::error_visit! {
+        NotAbsolute { iri, reason } => "imports-key-not-absolute" {
+            "iri" => Text(iri),
+            "reason" => Value(reason.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent, |reason| purrdf_hash::error::ErrorValue::Cause(reason))),
+        },
+        Duplicate { iri } => "imports-key-duplicate" { "iri" => Text(iri) },
+    }
+}
 
 /// The documents an `owl:imports` resolves to, and the IRIs the importing graph was read
 /// from.
@@ -321,7 +342,7 @@ impl ImportMap {
             Err(error) => {
                 return Err(ImportKeyError::NotAbsolute {
                     iri: iri.to_owned(),
-                    reason: Some(error.to_string()),
+                    reason: Some(error),
                 });
             }
         }
@@ -1300,6 +1321,51 @@ mod tests {
         OWL_ONTOLOGY, RDF_TYPE, RDFS_SUB_CLASS_OF, SH_DATA_GRAPH, SH_RULES_GRAPH, SH_SHAPES_GRAPH,
     };
     use crate::ir::{BlankScope, RdfDataset, RdfDatasetBuilder, TermValue};
+
+    #[test]
+    fn import_key_refusals_retain_native_iri_causes_and_key_policy() {
+        use super::ImportKeyError;
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+
+        let mut map = ImportMap::default();
+        for offered in ["", "http://exa mple.org/library"] {
+            let offered = offered.to_owned();
+            let original = purrdf_iri::is_absolute(&offered).unwrap_err();
+            let error = map.check_key(&offered).unwrap_err();
+            drop(offered);
+            let ImportKeyError::NotAbsolute {
+                iri,
+                reason: Some(reason),
+            } = &error
+            else {
+                panic!("the original IRI parser refusal is retained");
+            };
+            assert_eq!(reason, &original);
+            assert_eq!(
+                std::error::Error::source(&error)
+                    .unwrap()
+                    .downcast_ref::<purrdf_iri::IriError>(),
+                Some(&original),
+            );
+            let captured = Capture::read(&error);
+            assert_eq!(captured.code, "imports-key-not-absolute");
+            assert!(matches!(captured.field("iri"), ErrorValue::Text(value) if value == iri));
+            assert_eq!(captured.child("reason").code, Capture::read(&original).code);
+        }
+        let relative = map.check_key("relative/library").unwrap_err();
+        assert!(std::error::Error::source(&relative).is_none());
+        assert!(matches!(
+            Capture::read(&relative).field("reason"),
+            ErrorValue::Absent
+        ));
+        map.try_insert(LIB, triples(&[])).unwrap();
+        let duplicate = map.try_insert(LIB, triples(&[])).unwrap_err();
+        let captured = Capture::read(&duplicate);
+        assert_eq!(captured.code, "imports-key-duplicate");
+        assert!(matches!(captured.field("iri"), ErrorValue::Text(value) if value == LIB));
+        assert!(map.check_key("http://example.org/another-library").is_ok());
+    }
 
     #[test]
     fn public_import_closure_preserves_exact_scope_capacity_and_original_inputs() {

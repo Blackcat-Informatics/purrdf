@@ -88,6 +88,12 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   empty-role law as ontology parsing. Querying an unmentioned bottom object
   property now preserves its empty extension and native proof origin.
 
+- **Native import and proof refusals (breaking import error payload):**
+  `ImportKeyError` is non-exhaustive and retains the original `IriError` in
+  `NotAbsolute.reason`. Its native source and structured fields preserve the
+  original key. `DlProofError` exposes its native proof evidence through borrowed
+  inspection without changing proof bytes, calculus identities or decisions.
+
 - **Certified direct OWL answers (breaking Rust API and incomplete outcomes):**
   direct class subsumptions and most-specific types are read from the certified
   result and require a fully decided supplied ontology. Typed refusals retain
