@@ -14,6 +14,27 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   consecutive references without disabling cycle detection or descent resets.
   Existing convenience methods retain their defaults.
 
+- **Scoped structured truth (breaking Rust API):** `truth_of` distinguishes
+  established WFS values from unevaluated, incomplete and nonground probes.
+  Completion is read through `status()`; `confirms_not_false` is removed.
+  Negative dependencies now participate in budgeted demand discovery, fixing
+  incorrect successful answers when a negated fact was never visited. Internal
+  negative proofs require established absence in that same completed scope;
+  partial positive proofs and WFS negative cycles retain their meaning.
+
+- **Validated structured programs (breaking Rust API):** `FolClause` and
+  `FolProgram` use validated constructors and read-only inspection. Original
+  handles, projection names and positions survive typed construction failures;
+  clause positions replace the unused `FolClause::rule` field. The production
+  Datalog lowering path uses this API. `FolLit` is non-exhaustive and no longer
+  `Copy`; `FolUnsupported` and `FolError` are non-exhaustive. Current term,
+  clause and proof identity laws retain their meaning.
+
+- **Extensible Datalog terms (breaking Rust API):** `NodeData` is
+  non-exhaustive. External inspection must explicitly refuse unsupported forms
+  while retaining the source node and context. Current payloads, constructors,
+  term identities, binder behavior and artifacts retain their existing meaning.
+
 - **Typed reasoning requests (breaking Rust API):** regime, session, proof,
   profile, import and fixture operations retain owned native failures through
   non-exhaustive errors. Facade request parsing shares the typed boundary;

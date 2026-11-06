@@ -1768,7 +1768,9 @@ class shex:
     # schema and data. Typed engine errors raise ValueError. `xpath_regex` selects
     # the dated XPath law pattern facets match under (see `XPATH_REGEX_PROFILES`):
     # a pattern the law refuses makes its entry nonconformant, and a native resource
-    # refusal raises ValueError for the whole map.
+    # refusal raises ValueError for the whole map. `matcher_maximum_states` admits
+    # assignment-prefix states per ambiguous neighbourhood (default 200,000); refusal
+    # reports shex-matcher-work with exact unsigned attempted/maximum parameters.
     @staticmethod
     def validate(
         schema: str,
@@ -1779,6 +1781,7 @@ class shex:
         data_format: str = ...,
         base: str | None = ...,
         xpath_regex: str | None = ...,
+        matcher_maximum_states: int = ...,
     ) -> list[ShexResultEntry]: ...
     # Parse a ShEx schema ("shexc" or "shexj") and return its canonical ShExJ
     # JSON text, for schema tooling and cross-syntax round-trips.

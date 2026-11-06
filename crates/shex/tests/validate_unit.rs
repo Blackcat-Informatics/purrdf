@@ -51,7 +51,7 @@ fn check(
     } else {
         ShapeSelector::Label(shape.to_owned())
     };
-    let result = validate(&schema, data, &[(focus, selector)]);
+    let result = validate(&schema, data, &[(focus, selector)]).expect("validation finishes");
     let entry = &result.entries[0];
     match entry.status {
         ConformanceStatus::Conformant => Ok(()),
@@ -246,7 +246,8 @@ fn pattern_facet_xsd_dialect_through_shexj() {
                 TermValue::iri("http://a.example/s1"),
                 ShapeSelector::Label(S1.to_owned()),
             )],
-        );
+        )
+        .expect("validation finishes");
         result.entries[0].status == ConformanceStatus::Conformant
     };
 
@@ -819,7 +820,7 @@ fn external_shapes_use_the_resolver_hook() {
         ShapeSelector::Label("http://a.example/Sext".to_owned()),
     )];
     // Without a resolver the EXTERNAL shape fails.
-    let result = validate(&schema, &data, &map);
+    let result = validate(&schema, &data, &map).expect("validation finishes");
     assert_eq!(result.entries[0].status, ConformanceStatus::Nonconformant);
     // With one, the resolved definition is enforced.
     let external = parse_shexc("<Sext> { <p2> . }", Some("http://a.example/")).expect("external");
@@ -830,11 +831,8 @@ fn external_shapes_use_the_resolver_hook() {
             .find(|d| d.id == label)
             .map(|d| d.expr.clone())
     };
-    let options = ValidationOptions {
-        external_resolver: Some(&resolver),
-        ..ValidationOptions::default()
-    };
-    let result = validate_with(&schema, &data, &map, &options);
+    let options = ValidationOptions::default().with_external_resolver(&resolver);
+    let result = validate_with(&schema, &data, &map, &options).expect("validation finishes");
     assert_eq!(result.entries[0].status, ConformanceStatus::Conformant);
 }
 

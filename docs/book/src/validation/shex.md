@@ -87,7 +87,7 @@ results = shex.validate(my_schema_shexc, my_data_ttl,
 
 Names match exactly, so `xpath-3.1` is refused with a list of the accepted
 names. With no selection, `validate`, `validate_with` and `validate_shape_map`
-keep the compatibility behaviour exactly. ShExJ hands the pattern and flag text
+keep the compatibility pattern behaviour. ShExJ hands the pattern and flag text
 over as written. ShExC keeps its own concrete-syntax escape grammar, which has
 no `\1`, so a backreference is written in ShExJ.
 
@@ -98,6 +98,30 @@ with the resource's
 [`xpath-*` code](../project/diagnostic-codes.md#xpath---dated-native-xpath-regular-expressions-purrdf-core).
 Negation, alternatives and previously decided entries cannot turn that refusal
 into a nonconformant entry or a partial result map.
+
+Every validation entry point is fallible. `ValidationError::ShapeMap` retains
+shape-map admission errors, `Regex` retains the native XPath cause, and
+`MatcherWork { attempted, maximum }` means assignment search could not finish.
+No verdict or partial result map is returned on refusal, including under
+`NOT`, `AND` or `OR`.
+
+Rust callers select `ValidationOptions::matcher_limits` with
+`MatcherLimits::new(maximum_states)`. Python uses `matcher_maximum_states=`;
+the CLI uses `--matcher-maximum-states COUNT`. The default admits 200,000 states
+per ambiguous neighbourhood. Each entered assignment prefix costs one state,
+including its terminal cardinality check; rollback and resuming a candidate
+cost nothing. Unique predicate assignments require no search allowance.
+Zero refuses the first ambiguous state. A refusal reports the attempted state
+as maximum plus one, represented exactly even at the largest `u64` limit.
+A later validation may admit more work; refused operations are never memoized
+as conformance results. Python raises `ValueError` with message identity
+`shex-matcher-work` and unsigned `attempted` and `maximum` presentation parameters.
+
+`ValidationOptions` is non-exhaustive. Construct it with `Default` and select
+policy with `with_matcher_limits`, `with_external_resolver`, `with_sem_acts`
+or `with_extern_start_acts`; its existing fields can also be updated individually.
+For example, `ValidationOptions::default().with_matcher_limits(MatcherLimits::new(1_000_000))`
+admits a larger assignment search without selecting a different pattern law.
 
 ## Conformance
 

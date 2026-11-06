@@ -121,7 +121,8 @@ fn bench_pattern_validate(c: &mut Bench) {
 
     // Untimed sanity: the valid fixtures must conform, the bad-pattern fixture
     // must report a violation for every node, and no fixture may be empty.
-    let valid = validate(&shared_valid.schema, &shared_valid.data, &shared_valid.map);
+    let valid = validate(&shared_valid.schema, &shared_valid.data, &shared_valid.map)
+        .expect("validation finishes");
     assert!(
         valid.all_conformant(),
         "shared_valid fixture must conform for every node"
@@ -131,13 +132,15 @@ fn bench_pattern_validate(c: &mut Bench) {
         &shared_invalid.schema,
         &shared_invalid.data,
         &shared_invalid.map,
-    );
+    )
+    .expect("validation finishes");
     assert_eq!(invalid.entries.len(), NODE_COUNT);
     assert!(
         !invalid.all_conformant(),
         "shared_invalid fixture must report the non-compiling pattern"
     );
-    let distinct_report = validate(&distinct.schema, &distinct.data, &distinct.map);
+    let distinct_report =
+        validate(&distinct.schema, &distinct.data, &distinct.map).expect("validation finishes");
     assert!(
         distinct_report.all_conformant(),
         "distinct_patterns fixture must conform for every node"
@@ -155,7 +158,8 @@ fn bench_pattern_validate(c: &mut Bench) {
                 black_box(&shared_valid.schema),
                 black_box(&shared_valid.data),
                 black_box(&shared_valid.map),
-            );
+            )
+            .expect("validation finishes");
             assert!(result.all_conformant());
             black_box(result);
         });
@@ -166,7 +170,8 @@ fn bench_pattern_validate(c: &mut Bench) {
                 black_box(&shared_invalid.schema),
                 black_box(&shared_invalid.data),
                 black_box(&shared_invalid.map),
-            );
+            )
+            .expect("validation finishes");
             assert!(!result.all_conformant());
             black_box(result);
         });
@@ -181,7 +186,8 @@ fn bench_pattern_validate(c: &mut Bench) {
                 black_box(&distinct.schema),
                 black_box(&distinct.data),
                 black_box(&distinct.map),
-            );
+            )
+            .expect("validation finishes");
             assert!(result.all_conformant());
             black_box(result);
         });

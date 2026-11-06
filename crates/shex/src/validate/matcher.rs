@@ -302,9 +302,6 @@ pub(crate) struct ArcOptions {
     pub extra_allowed: bool,
 }
 
-/// Search state budget: candidate-assignment steps before giving up.
-const SEARCH_BUDGET: u64 = 200_000;
-
 /// A winning assignment search result: per-slot `(lo, hi)` counts, plus the
 /// slot each arc was routed to (`None` when diverted to `EXTRA`).
 pub(crate) type Assignment = (Vec<(u64, u64)>, Vec<Option<usize>>);
@@ -319,11 +316,19 @@ pub(crate) type Assignment = (Vec<(u64, u64)>, Vec<Option<usize>>);
 pub(crate) fn assignment_search(
     compiled: &Compiled<'_>,
     arcs: &[ArcOptions],
-) -> Result<Option<Assignment>, String> {
+    limits: super::MatcherLimits,
+) -> Result<Option<Assignment>, crate::ValidationError> {
     let mut counts = vec![(0u64, 0u64); compiled.slots.len()];
     let mut assignment = vec![None; arcs.len()];
-    let mut budget = SEARCH_BUDGET;
-    let found = search(compiled, arcs, &mut counts, &mut assignment, &mut budget)?;
+    let mut budget = limits.maximum_states();
+    let found = search(
+        compiled,
+        arcs,
+        &mut counts,
+        &mut assignment,
+        &mut budget,
+        limits.maximum_states(),
+    )?;
     Ok(found.then_some((counts, assignment)))
 }
 
@@ -336,7 +341,8 @@ fn search(
     counts: &mut [(u64, u64)],
     assignment: &mut [Option<usize>],
     budget: &mut u64,
-) -> Result<bool, String> {
+    maximum: u64,
+) -> Result<bool, crate::ValidationError> {
     enum Frame {
         Enter(usize),
         NextCandidate(usize, usize),
@@ -348,10 +354,12 @@ fn search(
                 // A step is charged exactly where the recursive search entered
                 // a call, including its terminal count check. Resuming a choice
                 // and undoing it do not consume additional work.
-                if *budget == 0 {
-                    return Err("triple-expression matcher budget exhausted".to_owned());
-                }
-                *budget -= 1;
+                *budget = budget
+                    .checked_sub(1)
+                    .ok_or(crate::ValidationError::MatcherWork {
+                        attempted: u128::from(maximum) + 1,
+                        maximum,
+                    })?;
                 if index == arcs.len() {
                     if counts_match(compiled, counts) {
                         return Ok(true);
@@ -415,7 +423,14 @@ mod tests {
             let mut counts = [(0, 0); 2];
             let mut assignment = [None];
             let mut budget = allowed;
-            let result = search(&compiled, &arcs, &mut counts, &mut assignment, &mut budget);
+            let result = search(
+                &compiled,
+                &arcs,
+                &mut counts,
+                &mut assignment,
+                &mut budget,
+                allowed,
+            );
             if allowed == 3 {
                 assert_eq!(result, Ok(true));
                 assert_eq!(counts, [(0, 0), (1, 1)]);
@@ -423,11 +438,32 @@ mod tests {
             } else {
                 assert_eq!(
                     result,
-                    Err("triple-expression matcher budget exhausted".to_owned())
+                    Err(crate::ValidationError::MatcherWork {
+                        attempted: u128::from(allowed) + 1,
+                        maximum: allowed
+                    })
                 );
             }
             assert_eq!(budget, 0);
         }
+        // The refused next state remains exact at the counter's upper boundary.
+        let mut counts = [(0, 0); 2];
+        let mut assignment = [None];
+        let mut exhausted = 0;
+        assert_eq!(
+            search(
+                &compiled,
+                &arcs,
+                &mut counts,
+                &mut assignment,
+                &mut exhausted,
+                u64::MAX
+            ),
+            Err(crate::ValidationError::MatcherWork {
+                attempted: u128::from(u64::MAX) + 1,
+                maximum: u64::MAX,
+            })
+        );
     }
 
     #[test]
@@ -448,7 +484,14 @@ mod tests {
         let mut assignment = [None; 2];
         let mut budget = 3;
         assert_eq!(
-            search(&compiled, &arcs, &mut counts, &mut assignment, &mut budget),
+            search(
+                &compiled,
+                &arcs,
+                &mut counts,
+                &mut assignment,
+                &mut budget,
+                3
+            ),
             Ok(true)
         );
         assert_eq!(counts, [(1, 1)]);
@@ -532,7 +575,7 @@ mod tests {
             },
         ];
         assert_eq!(
-            assignment_search(&compiled, &arcs),
+            assignment_search(&compiled, &arcs, crate::MatcherLimits::default()),
             Ok(Some((vec![(1, 1), (1, 1)], vec![Some(0), Some(1)])))
         );
         // Both arcs only fit slot 0 → slot 1 starves.
@@ -546,6 +589,9 @@ mod tests {
                 extra_allowed: false,
             },
         ];
-        assert_eq!(assignment_search(&compiled, &arcs), Ok(None));
+        assert_eq!(
+            assignment_search(&compiled, &arcs, crate::MatcherLimits::default()),
+            Ok(None)
+        );
     }
 }

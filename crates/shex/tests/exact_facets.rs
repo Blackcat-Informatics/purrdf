@@ -35,7 +35,10 @@ fn verdict_of(schema: &ExactSchema, shape: &str, value: &str) -> ConformanceStat
         TermValue::Iri(format!("{EX}x")),
         ShapeSelector::Label(format!("{EX}{shape}")),
     )];
-    validate_exact(schema, &data, &map, &ValidationOptions::default()).entries[0].status
+    validate_exact(schema, &data, &map, &ValidationOptions::default())
+        .expect("validation finishes")
+        .entries[0]
+        .status
 }
 
 /// The verdict against the one shape `ex:S`.
@@ -270,7 +273,10 @@ fn the_lossy_ast_path_is_unchanged_and_the_shape_map_path_is_exact() {
         ShapeSelector::Label(format!("{EX}S")),
     )];
     assert_eq!(
-        validate(exact.schema(), &data, &map).entries[0].status,
+        validate(exact.schema(), &data, &map)
+            .expect("validation finishes")
+            .entries[0]
+            .status,
         Conformant
     );
     assert_eq!(verdict(&exact, "100000000000000000000"), Nonconformant);
@@ -722,7 +728,7 @@ fn exact_shape_maps_hold_under_a_selected_xpath_law() {
     );
     assert!(matches!(
         undeclared,
-        Err(purrdf_shex::XPathValidationError::ShapeMap(
+        Err(purrdf_shex::ValidationError::ShapeMap(
             ShexError::UnknownShape(_)
         ))
     ));
