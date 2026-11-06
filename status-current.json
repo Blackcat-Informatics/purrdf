@@ -1,0 +1,816 @@
+{
+  "issue": 1117,
+  "pr_number": 1138,
+  "branch": "paudley/1117-v4-api-expose-typed-loss-ledger",
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger/.stage/v4-api-expose-typed-loss-ledger",
+  "observed_at": "2026-11-06T12:33:18.348797+00:00",
+  "completed": [
+    "pr",
+    "checks",
+    "reviews"
+  ],
+  "blocked": [
+    {
+      "code": "ci_pending",
+      "message": "CI state is pending"
+    },
+    {
+      "code": "review_debt",
+      "message": "1 new or changed review items need disposition"
+    },
+    {
+      "code": "artifacts",
+      "message": "Required merge artifacts are missing or have invalid fields/verdicts"
+    },
+    {
+      "code": "validation_stale",
+      "message": "cargo clippy --release --locked -p purrdf-core --lib -- -D warnings"
+    },
+    {
+      "code": "validation_failed",
+      "message": "cargo clippy --release --locked -p purrdf-core -p purrdf-rdf -p purrdf-shapes -p purrdf-validate -p purrdf-cli -p purrdf --lib --bins -- -D warnings"
+    },
+    {
+      "code": "validation_stale",
+      "message": "cargo clippy --release --locked -p purrdf-core -p purrdf-rdf -p purrdf-shapes --lib --test loss_profiles --test loss_ledger_soundness --example graphql_oracle_fixture --example linkml_oracle_fixture --example pydantic_oracle_fixture --example schema_reverse --example typescript_oracle_fixture -- -D warnings"
+    },
+    {
+      "code": "validation_stale",
+      "message": "cargo clippy --release --locked -p purrdf-core -p purrdf-rdf -p purrdf-shapes -p purrdf-validate -p purrdf-cli -p purrdf --lib --bins -- -D warnings"
+    },
+    {
+      "code": "validation_stale",
+      "message": "cargo test --locked -p purrdf-core --lib -- --exact loss::tests::check_ledger_complete_passes_when_all_expected_codes_present loss::tests::check_ledger_complete_flags_missing_code loss::tests::check_ledger_complete_flags_unexpected_extra_code loss::tests::assert_ledger_complete_panics_on_missing_code loss::tests::check_ledger_sound_passes_for_a_known_contract_ledger loss::tests::check_ledger_sound_flags_out_of_profile_code loss::tests::assert_ledger_sound_panics_on_out_of_profile_code"
+    },
+    {
+      "code": "validation_stale",
+      "message": "cargo test --locked -p purrdf-core --test loss_profiles downstream_projection_checks_soundness_and_intent -- --exact"
+    },
+    {
+      "code": "validation_stale",
+      "message": "cargo test --locked -p purrdf-rdf --lib projections::loss::tests::soundness_refusals_retain_native_fields_after_input_destruction -- --exact"
+    },
+    {
+      "code": "validation_stale",
+      "message": "cargo test --locked -p purrdf-shapes --lib -- --exact linkml::tests::native_loss_causes_survive_importer_context_and_input_destruction schema_import::tests::valid_unrepresentable_keywords_are_all_located_and_sound schema_import::tests::emitted_json_schema_round_trips_byte_exactly linkml::importer::tests::native_classes_slots_types_and_enums_import_deterministically linkml::importer::tests::accepted_native_omissions_are_located_and_malformed_fields_fail_closed"
+    }
+  ],
+  "unavailable": [],
+  "next_actions": [
+    "Wait for CI changes",
+    "Read pr-comments.md and record each disposition with review-disposition",
+    "Complete: review-debt.md, validation.md, pr-checks.txt",
+    "Reconsider/rerun the affected qualification; see /home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger/.stage/v4-api-expose-typed-loss-ledger/validation-runs/20261106T065022-c3a34a9a78/result.json",
+    "Reconsider/rerun the affected qualification; see /home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger/.stage/v4-api-expose-typed-loss-ledger/validation-runs/20261106T065441-028900f5c4/result.json",
+    "Reconsider/rerun the affected qualification; see /home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger/.stage/v4-api-expose-typed-loss-ledger/validation-runs/20261106T070149-d35c5ad6ce/result.json",
+    "Reconsider/rerun the affected qualification; see /home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger/.stage/v4-api-expose-typed-loss-ledger/validation-runs/20261106T121659-f4cbb142cc/result.json",
+    "Reconsider/rerun the affected qualification; see /home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger/.stage/v4-api-expose-typed-loss-ledger/validation-runs/20261106T070438-c2a7579bad/result.json",
+    "Reconsider/rerun the affected qualification; see /home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger/.stage/v4-api-expose-typed-loss-ledger/validation-runs/20261106T070643-7423338d18/result.json",
+    "Reconsider/rerun the affected qualification; see /home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger/.stage/v4-api-expose-typed-loss-ledger/validation-runs/20261106T070746-50b9bf7a2e/result.json",
+    "Reconsider/rerun the affected qualification; see /home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger/.stage/v4-api-expose-typed-loss-ledger/validation-runs/20261106T121337-5547d13d29/result.json"
+  ],
+  "artifacts": {
+    "ci_failures": "/home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger/.stage/v4-api-expose-typed-loss-ledger/ci-failures.md",
+    "reviews": "/home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger/.stage/v4-api-expose-typed-loss-ledger/pr-comments.md",
+    "status": "/home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger/.stage/v4-api-expose-typed-loss-ledger/status.json",
+    "checks": "/home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger/.stage/v4-api-expose-typed-loss-ledger/pr-checks.txt",
+    "review_evidence": "/home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger/.stage/v4-api-expose-typed-loss-ledger/review-evidence.json"
+  },
+  "limits": [
+    "Mechanical evidence only; artifact presence does not establish a passing review or acceptance verdict."
+  ],
+  "pr": {
+    "baseRefName": "main",
+    "baseRefOid": "b0f4a8715ca21bcedf11d277021a7c3cf6d9e302",
+    "headRefName": "paudley/1117-v4-api-expose-typed-loss-ledger",
+    "headRefOid": "9f58ce93e09d3dabd2a7593195814b46e29f099b",
+    "isDraft": false,
+    "mergeCommit": null,
+    "mergedAt": null,
+    "number": 1138,
+    "state": "OPEN",
+    "title": "Preserve native loss-ledger failures through public callers",
+    "url": "https://github.com/Blackcat-Informatics/purrdf/pull/1138"
+  },
+  "checks": {
+    "state": "pending",
+    "checks": [
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/runs/127893567222",
+        "name": "CodeQL",
+        "state": "NEUTRAL"
+      },
+      {
+        "link": "https://app.coderabbit.ai/change-stack/Blackcat-Informatics/purrdf/pull/1138",
+        "name": "CodeRabbit",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218154648/job/127893254288",
+        "name": "test (integration-5)",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218154648/job/127893253806",
+        "name": "conformance (core)",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218154648/job/127893253578",
+        "name": "aarch64",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218154648/job/127893254462",
+        "name": "cross-arch-riscv64 (determinism-serial)",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218154648/job/127893253846",
+        "name": "conformance (sparql)",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218154648/job/127893253813",
+        "name": "conformance (shapes)",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218154648/job/127893253817",
+        "name": "simd-asm-config (aarch64)",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218154648/job/127893254222",
+        "name": "miri",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218154648/job/127893253961",
+        "name": "test (lib)",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218154648/job/127893254070",
+        "name": "python-publisher",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218154648/job/127893255070",
+        "name": "test (doc)",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218154648/job/127893253954",
+        "name": "test (integration-1)",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218154648/job/127893254096",
+        "name": "test (integration-2)",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218154648/job/127893253649",
+        "name": "test (integration-3)",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218154648/job/127893253968",
+        "name": "test (integration-4)",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218154648/job/127893254064",
+        "name": "pytest",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218154648/job/127893253722",
+        "name": "projection-oracles",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218154648/job/127893253809",
+        "name": "capi",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218154648/job/127893254017",
+        "name": "avx512-sde",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218154648/job/127893253738",
+        "name": "msrv",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218154648/job/127893254247",
+        "name": "wasm",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218154648/job/127893254100",
+        "name": "wasm-package",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218154648/job/127893254034",
+        "name": "wasm-exec",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218154648/job/127893254177",
+        "name": "cross-arch-riscv64 (determinism-one-worker)",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218154648/job/127893254303",
+        "name": "wasm-schema-oracles",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218154648/job/127893253632",
+        "name": "workspace",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218154648/job/127893253783",
+        "name": "simd-asm-config (x86_64-v3)",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218154648/job/127893254785",
+        "name": "cross-arch-riscv64 (suites)",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218154648/job/127893253716",
+        "name": "simd-asm-config (x86_64-v4)",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218154648/job/127893253768",
+        "name": "simd-asm-config (aarch64-neoverse-v1)",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218154648/job/127893253698",
+        "name": "simd-asm-config (wasm32)",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218154648/job/127893253667",
+        "name": "simd-asm-config (wasm32-simd128)",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218154648/job/127893254243",
+        "name": "windows-mtime",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218154648/job/127893254813",
+        "name": "cross-arch",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218154648/job/127893253362",
+        "name": "doc",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218154648/job/127893253637",
+        "name": "conformance (python)",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218150419/job/127893245632",
+        "name": "Analyze (python)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218154648/job/127893253678",
+        "name": "simd-asm-config (x86_64)",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218154648/job/127893253697",
+        "name": "geo-determinism",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218154648/job/127893253633",
+        "name": "cross-arch-riscv64 (determinism-more-workers)",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218150419/job/127893245436",
+        "name": "Analyze (javascript-typescript)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218150419/job/127893245844",
+        "name": "Analyze (rust)",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218150419/job/127893245559",
+        "name": "Analyze (c-cpp)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218150419/job/127893245398",
+        "name": "Analyze (actions)",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218154648/job/127893255814",
+        "name": "simd-asm-projection",
+        "state": "SKIPPED"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218154648/job/127893255598",
+        "name": "native-profile-admission",
+        "state": "SKIPPED"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218154648/job/127893255924",
+        "name": "native-profile",
+        "state": "SKIPPED"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218154648/job/127893256309",
+        "name": "native-profile-comparison",
+        "state": "SKIPPED"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218098075/job/127893067743",
+        "name": "WASM coordinate ownership and host isolation",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218098075/job/127893068152",
+        "name": "Native query_coordinates",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218098075/job/127893067968",
+        "name": "Native rule_coordinates",
+        "state": "IN_PROGRESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218098075/job/127893068151",
+        "name": "Native exact_governance",
+        "state": "SUCCESS"
+      },
+      {
+        "link": "https://github.com/Blackcat-Informatics/purrdf/actions/runs/42218098076/job/127893067545",
+        "name": "Native role reasoning and refusal inspection",
+        "state": "IN_PROGRESS"
+      }
+    ]
+  },
+  "reviews": {
+    "head": "9f58ce93e09d3dabd2a7593195814b46e29f099b",
+    "coverage": {
+      "comments": "complete",
+      "reviews": "complete",
+      "inline_comments": "complete",
+      "threads": "complete"
+    },
+    "items": 1,
+    "change_token": "bc82e6e8e74698d023308684c41445f33341adb3f8c4bd232ba61e86b1b2afa1"
+  },
+  "local": {
+    "head": "9f58ce93e09d3dabd2a7593195814b46e29f099b",
+    "branch": "paudley/1117-v4-api-expose-typed-loss-ledger",
+    "dirty_paths": []
+  },
+  "ci_logs": {
+    "pr": 1138,
+    "jobs": [],
+    "ok": true,
+    "summary": "# PR #1138 failed CI logs\n\nNo failed checks in this snapshot.\n"
+  },
+  "review_debt": [
+    {
+      "id": "github:comment:IC_kwDOTKq-Ms8AAAABjnL0GA",
+      "url": "https://github.com/Blackcat-Informatics/purrdf/pull/1138#issuecomment-6684865560",
+      "kind": "comment"
+    }
+  ],
+  "unresolved_threads": [],
+  "missing_artifacts": [
+    "review-debt.md",
+    "validation.md",
+    "pr-checks.txt"
+  ],
+  "validation": {
+    "results": [
+      {
+        "command": [
+          "cargo",
+          "clippy",
+          "--release",
+          "--locked",
+          "-p",
+          "purrdf-core",
+          "--lib",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "scopes": [
+          "crates/rdf-core/src/loss.rs",
+          "crates/rdf-core/src/loss",
+          "crates/rdf-core/src/lib.rs"
+        ],
+        "status": "stale",
+        "changed_paths": [
+          "crates/rdf-core/src/lib.rs",
+          "crates/rdf-core/src/loss.rs",
+          "crates/rdf-core/src/loss/completeness.rs",
+          "crates/rdf-core/src/loss/profile.rs"
+        ],
+        "record": "/home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger/.stage/v4-api-expose-typed-loss-ledger/validation-runs/20261106T065022-c3a34a9a78/result.json",
+        "log": "/home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger/.stage/v4-api-expose-typed-loss-ledger/validation-runs/20261106T065022-c3a34a9a78/output.log"
+      },
+      {
+        "command": [
+          "cargo",
+          "clippy",
+          "--release",
+          "--locked",
+          "-p",
+          "purrdf-core",
+          "-p",
+          "purrdf-rdf",
+          "-p",
+          "purrdf-shapes",
+          "-p",
+          "purrdf-validate",
+          "-p",
+          "purrdf-cli",
+          "-p",
+          "purrdf",
+          "--lib",
+          "--bins",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "scopes": [
+          "crates/rdf-core/src",
+          "crates/rdf/src",
+          "crates/shapes/src",
+          "crates/validate",
+          "crates/cli"
+        ],
+        "status": "failed",
+        "changed_paths": [
+          "crates/cli/src/source.rs",
+          "crates/rdf-core/src/ir/canon.rs",
+          "crates/rdf-core/src/ir/canon/memo.rs",
+          "crates/rdf-core/src/loss.rs",
+          "crates/rdf/src/gts_compose.rs",
+          "crates/rdf/src/native_codecs/jsonld.rs",
+          "crates/rdf/src/native_codecs/jsonld/carrier.rs",
+          "crates/rdf/src/native_codecs/jsonld/carrier/projection.rs",
+          "crates/rdf/src/native_codecs/jsonld/compaction.rs",
+          "crates/rdf/src/native_codecs/jsonld/context/mod.rs",
+          "crates/rdf/src/native_codecs/jsonld/expand.rs",
+          "crates/rdf/src/native_codecs/jsonld/framing.rs",
+          "crates/rdf/src/native_codecs/jsonld/node_map.rs",
+          "crates/rdf/src/native_codecs/jsonld/structural.rs",
+          "crates/rdf/src/native_codecs/mod.rs",
+          "crates/rdf/src/projections/research_object/json.rs",
+          "crates/shapes/src/linkml.rs",
+          "crates/shapes/src/schema_import.rs",
+          "crates/validate/src/regime.rs",
+          "crates/validate/tests/premise_iri_policy.rs"
+        ],
+        "record": "/home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger/.stage/v4-api-expose-typed-loss-ledger/validation-runs/20261106T065441-028900f5c4/result.json",
+        "log": "/home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger/.stage/v4-api-expose-typed-loss-ledger/validation-runs/20261106T065441-028900f5c4/output.log"
+      },
+      {
+        "command": [
+          "cargo",
+          "clippy",
+          "--release",
+          "--locked",
+          "-p",
+          "purrdf-core",
+          "-p",
+          "purrdf-rdf",
+          "-p",
+          "purrdf-shapes",
+          "--lib",
+          "--test",
+          "loss_profiles",
+          "--test",
+          "loss_ledger_soundness",
+          "--example",
+          "graphql_oracle_fixture",
+          "--example",
+          "linkml_oracle_fixture",
+          "--example",
+          "pydantic_oracle_fixture",
+          "--example",
+          "schema_reverse",
+          "--example",
+          "typescript_oracle_fixture",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "scopes": [
+          "crates/rdf-core/src/loss.rs",
+          "crates/rdf-core/src/loss",
+          "crates/rdf-core/tests/loss_profiles.rs",
+          "crates/rdf/src/projections",
+          "crates/shapes/src/linkml.rs",
+          "crates/shapes/src/schema_import.rs",
+          "crates/shapes/tests/loss_ledger_soundness.rs",
+          "crates/shapes/examples"
+        ],
+        "status": "stale",
+        "changed_paths": [
+          "crates/rdf-core/src/loss.rs",
+          "crates/rdf/src/projections/research_object/json.rs",
+          "crates/shapes/src/linkml.rs",
+          "crates/shapes/src/schema_import.rs"
+        ],
+        "record": "/home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger/.stage/v4-api-expose-typed-loss-ledger/validation-runs/20261106T070149-d35c5ad6ce/result.json",
+        "log": "/home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger/.stage/v4-api-expose-typed-loss-ledger/validation-runs/20261106T070149-d35c5ad6ce/output.log"
+      },
+      {
+        "command": [
+          "cargo",
+          "clippy",
+          "--release",
+          "--locked",
+          "-p",
+          "purrdf-core",
+          "-p",
+          "purrdf-rdf",
+          "-p",
+          "purrdf-shapes",
+          "-p",
+          "purrdf-validate",
+          "-p",
+          "purrdf-cli",
+          "-p",
+          "purrdf",
+          "--lib",
+          "--bins",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "scopes": [
+          "crates/rdf-core/src/loss.rs",
+          "crates/rdf-core/src/loss",
+          "crates/rdf-core/src/lib.rs",
+          "crates/rdf/src/projections",
+          "crates/rdf/src/lib.rs",
+          "crates/shapes/src/linkml.rs",
+          "crates/shapes/src/linkml/importer.rs",
+          "crates/shapes/src/schema_import.rs"
+        ],
+        "status": "stale",
+        "changed_paths": [
+          "crates/shapes/src/linkml.rs",
+          "crates/shapes/src/schema_import.rs"
+        ],
+        "record": "/home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger/.stage/v4-api-expose-typed-loss-ledger/validation-runs/20261106T121659-f4cbb142cc/result.json",
+        "log": "/home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger/.stage/v4-api-expose-typed-loss-ledger/validation-runs/20261106T121659-f4cbb142cc/output.log"
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "-p",
+          "purrdf-core",
+          "--lib",
+          "--",
+          "--exact",
+          "loss::tests::check_ledger_complete_passes_when_all_expected_codes_present",
+          "loss::tests::check_ledger_complete_flags_missing_code",
+          "loss::tests::check_ledger_complete_flags_unexpected_extra_code",
+          "loss::tests::assert_ledger_complete_panics_on_missing_code",
+          "loss::tests::check_ledger_sound_passes_for_a_known_contract_ledger",
+          "loss::tests::check_ledger_sound_flags_out_of_profile_code",
+          "loss::tests::assert_ledger_sound_panics_on_out_of_profile_code"
+        ],
+        "scopes": [
+          "crates/rdf-core/src/loss.rs",
+          "crates/rdf-core/src/loss",
+          "crates/rdf-core/src/lib.rs"
+        ],
+        "status": "stale",
+        "changed_paths": [
+          "crates/rdf-core/src/loss.rs"
+        ],
+        "record": "/home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger/.stage/v4-api-expose-typed-loss-ledger/validation-runs/20261106T070438-c2a7579bad/result.json",
+        "log": "/home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger/.stage/v4-api-expose-typed-loss-ledger/validation-runs/20261106T070438-c2a7579bad/output.log"
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "-p",
+          "purrdf-core",
+          "--test",
+          "loss_profiles",
+          "downstream_projection_checks_soundness_and_intent",
+          "--",
+          "--exact"
+        ],
+        "scopes": [
+          "crates/rdf-core/src/loss.rs",
+          "crates/rdf-core/src/loss",
+          "crates/rdf-core/tests/loss_profiles.rs"
+        ],
+        "status": "stale",
+        "changed_paths": [
+          "crates/rdf-core/src/loss.rs"
+        ],
+        "record": "/home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger/.stage/v4-api-expose-typed-loss-ledger/validation-runs/20261106T070643-7423338d18/result.json",
+        "log": "/home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger/.stage/v4-api-expose-typed-loss-ledger/validation-runs/20261106T070643-7423338d18/output.log"
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "-p",
+          "purrdf-rdf",
+          "--lib",
+          "projections::loss::tests::soundness_refusals_retain_native_fields_after_input_destruction",
+          "--",
+          "--exact"
+        ],
+        "scopes": [
+          "crates/rdf-core/src/loss.rs",
+          "crates/rdf-core/src/loss",
+          "crates/rdf/src/projections"
+        ],
+        "status": "stale",
+        "changed_paths": [
+          "crates/rdf-core/src/loss.rs",
+          "crates/rdf/src/projections/research_object/json.rs"
+        ],
+        "record": "/home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger/.stage/v4-api-expose-typed-loss-ledger/validation-runs/20261106T070746-50b9bf7a2e/result.json",
+        "log": "/home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger/.stage/v4-api-expose-typed-loss-ledger/validation-runs/20261106T070746-50b9bf7a2e/output.log"
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "-p",
+          "purrdf-shapes",
+          "--lib",
+          "--",
+          "--exact",
+          "linkml::tests::native_loss_causes_survive_importer_context_and_input_destruction",
+          "schema_import::tests::valid_unrepresentable_keywords_are_all_located_and_sound",
+          "schema_import::tests::emitted_json_schema_round_trips_byte_exactly",
+          "linkml::importer::tests::native_classes_slots_types_and_enums_import_deterministically",
+          "linkml::importer::tests::accepted_native_omissions_are_located_and_malformed_fields_fail_closed"
+        ],
+        "scopes": [
+          "crates/shapes/src",
+          "crates/rdf-core/src/loss.rs",
+          "crates/rdf-core/src/loss"
+        ],
+        "status": "stale",
+        "changed_paths": [
+          "crates/shapes/src/linkml.rs",
+          "crates/shapes/src/schema_import.rs"
+        ],
+        "record": "/home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger/.stage/v4-api-expose-typed-loss-ledger/validation-runs/20261106T121337-5547d13d29/result.json",
+        "log": "/home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger/.stage/v4-api-expose-typed-loss-ledger/validation-runs/20261106T121337-5547d13d29/output.log"
+      },
+      {
+        "command": [
+          "cargo",
+          "clippy",
+          "--release",
+          "--locked",
+          "-p",
+          "purrdf-core",
+          "-p",
+          "purrdf-rdf",
+          "-p",
+          "purrdf-shapes",
+          "--lib",
+          "--test",
+          "loss_profiles",
+          "--test",
+          "loss_ledger_soundness",
+          "--example",
+          "graphql_oracle_fixture",
+          "--example",
+          "linkml_oracle_fixture",
+          "--example",
+          "pydantic_oracle_fixture",
+          "--example",
+          "schema_reverse",
+          "--example",
+          "typescript_oracle_fixture",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "scopes": [
+          "crates/rdf-core/src/loss",
+          "crates/rdf-core/tests/loss_profiles.rs",
+          "crates/shapes/examples",
+          "crates/shapes/tests/loss_ledger_soundness.rs"
+        ],
+        "status": "scope_unchanged",
+        "changed_paths": [],
+        "record": "/home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger/.stage/v4-api-expose-typed-loss-ledger/validation-runs/20261106T122241-7bb637599d/result.json",
+        "log": "/home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger/.stage/v4-api-expose-typed-loss-ledger/validation-runs/20261106T122241-7bb637599d/output.log"
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "-p",
+          "purrdf-shapes",
+          "--test",
+          "loss_ledger_soundness"
+        ],
+        "scopes": [
+          "crates/shapes/tests/loss_ledger_soundness.rs",
+          "crates/rdf-core/src/loss.rs",
+          "crates/rdf-core/src/loss"
+        ],
+        "status": "scope_unchanged",
+        "changed_paths": [],
+        "record": "/home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger/.stage/v4-api-expose-typed-loss-ledger/validation-runs/20261106T122304-6da7edf5d1/result.json",
+        "log": "/home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger/.stage/v4-api-expose-typed-loss-ledger/validation-runs/20261106T122304-6da7edf5d1/output.log"
+      },
+      {
+        "command": [
+          "cargo",
+          "clippy",
+          "--release",
+          "--locked",
+          "-p",
+          "purrdf-core",
+          "-p",
+          "purrdf-rdf",
+          "-p",
+          "purrdf-shapes",
+          "-p",
+          "purrdf-validate",
+          "-p",
+          "purrdf-cli",
+          "-p",
+          "purrdf",
+          "--lib",
+          "--bins",
+          "--test",
+          "loss_profiles",
+          "--test",
+          "loss_ledger_soundness",
+          "--example",
+          "graphql_oracle_fixture",
+          "--example",
+          "linkml_oracle_fixture",
+          "--example",
+          "pydantic_oracle_fixture",
+          "--example",
+          "schema_reverse",
+          "--example",
+          "typescript_oracle_fixture",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "scopes": [
+          "crates/lex/src/constructors.rs",
+          "crates/rdf-core/src/loss.rs",
+          "crates/rdf-core/src/loss",
+          "crates/rdf/src/projections",
+          "crates/shapes/src/linkml.rs",
+          "crates/shapes/src/schema_import.rs",
+          "crates/shapes/examples"
+        ],
+        "status": "scope_unchanged",
+        "changed_paths": [],
+        "record": "/home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger/.stage/v4-api-expose-typed-loss-ledger/validation-runs/20261106T122521-9bb071c1f6/result.json",
+        "log": "/home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger/.stage/v4-api-expose-typed-loss-ledger/validation-runs/20261106T122521-9bb071c1f6/output.log"
+      }
+    ],
+    "limits": "Scopes are caller-selected. Unchanged scope is reusable evidence, not a gate waiver; environment capture is not exhaustive."
+  }
+}

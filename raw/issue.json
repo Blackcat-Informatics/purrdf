@@ -1,0 +1,32 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "Release gate: #1104. Final compatibility audit: #1115. Original structured-error contract: #558.\n\n## Verified gap\n\nAt main `05d1e3550752d8f185710da0b00459651955d9f1`, public [check_ledger_complete](https://github.com/Blackcat-Informatics/purrdf/blob/05d1e3550752d8f185710da0b00459651955d9f1/crates/rdf-core/src/loss.rs#L2321) formats missing/unexpected code lists into `String`. Public [check_ledger_sound](https://github.com/Blackcat-Informatics/purrdf/blob/05d1e3550752d8f185710da0b00459651955d9f1/crates/rdf-core/src/loss.rs#L2363) renders the already-typed `LossSoundnessError` returned by `check_ledger_sound_in`.\n\nThese helpers are re-exported through Core/RDF/facade. They have real schema-import and LinkML production callers in addition to native tests and shipped examples. Their testing-oriented names do not make the public signatures exempt from semver.\n\n## Required delivery\n\n- Finalize a typed extensible completeness refusal retaining the actual missing and unexpected code sets as structured lists, with deterministic ordering and current set/duplicate semantics.\n- Return the native typed soundness refusal through the built-in-profile helper instead of rendering it. Reuse the existing explicit-profile implementation; preserve original pair/code fields and first offending entry.\n- Settle owned/borrowed result contracts now and document any necessary lifetime/ownership changes. Keep panicking assert helpers as explicit presentation/invariant boundaries over the same typed checks.\n- Migrate real schema-import/LinkML callers, native tests and shipped examples. Preserve native causes in caller error owners rather than wrapping the rendered message in another typed error.\n- Preserve current success behavior, empty-ledger/profile rules and human diagnostics at presentation boundaries. Add no new loss-profile policy or serialization format.\n\n## Acceptance\n\n- [ ] Actual missing/unexpected-code failures expose complete original lists through generic structured inspection.\n- [ ] Pair mismatch and unregistered-code failures retain original native fields through both explicit- and built-in-profile checks and their production callers.\n- [ ] Existing valid, duplicate/order, empty-ledger and neighboring refusal cases retain their semantics and presentation.\n- [ ] Affected production callers/examples compile with required warnings/profile; focused native checks pass and migration guidance covers changed public signatures and ownership.\n\nThis is an additional pre-v4 child discovered by #1115. The remaining compatible #558 producer/visitor work stays open. Source inspection is not runtime qualification; no broad suite, new test dependency or duplicate WASM semantics execution is required by this child.\n\n",
+  "closedAt": null,
+  "comments": [],
+  "createdAt": "2026-11-06T02:32:57Z",
+  "labels": [
+    {
+      "id": "LA_kwDOTKq-Ms8AAAACpuNxAw",
+      "name": "enhancement",
+      "description": "New feature or request",
+      "color": "a2eeef"
+    }
+  ],
+  "milestone": {
+    "number": 4,
+    "title": "v4.0",
+    "description": "",
+    "dueOn": "2026-10-12T00:00:00Z"
+  },
+  "number": 1117,
+  "state": "OPEN",
+  "title": "v4 API: expose typed loss-ledger completeness and soundness failures",
+  "updatedAt": "2026-11-06T02:33:39Z",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/issues/1117"
+}

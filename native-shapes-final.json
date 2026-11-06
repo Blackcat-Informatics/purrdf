@@ -1,0 +1,539 @@
+{
+  "completed": [
+    "validation"
+  ],
+  "blocked": [],
+  "unavailable": [],
+  "validation": {
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "-p",
+      "purrdf-shapes",
+      "--lib",
+      "--",
+      "--exact",
+      "linkml::tests::native_loss_causes_survive_importer_context_and_input_destruction",
+      "schema_import::tests::valid_unrepresentable_keywords_are_all_located_and_sound",
+      "schema_import::tests::emitted_json_schema_round_trips_byte_exactly",
+      "linkml::importer::tests::native_classes_slots_types_and_enums_import_deterministically",
+      "linkml::importer::tests::accepted_native_omissions_are_located_and_malformed_fields_fail_closed"
+    ],
+    "scopes": [
+      "crates/shapes/src",
+      "crates/rdf-core/src/loss.rs",
+      "crates/rdf-core/src/loss"
+    ],
+    "started_at": "2026-11-06T12:13:37.271548+00:00",
+    "head": "3a5e05675502c4b7e7377a9ddee7021698c6ca89",
+    "inputs": {
+      "crates/rdf-core/src/loss.rs": {
+        "sha256": "c913945502722879e0e25d7efb6262b16525210ed47ff02e82c376ed6276413b",
+        "executable": false
+      },
+      "crates/rdf-core/src/loss/completeness.rs": {
+        "sha256": "e3419b17fa0c8ad81d959691bf0a4b7508c9e1cab488d564084847c70a28047d",
+        "executable": false
+      },
+      "crates/rdf-core/src/loss/profile.rs": {
+        "sha256": "36a713757f59d9184ddeceb4c06d14545ca5083e98ce50e5797a086f477fa246",
+        "executable": false
+      },
+      "crates/shapes/src/class_membership.rs": {
+        "sha256": "9330a1cc49d7b6de0ed84bdd3aa50d5e06754ab6c20e172af3a85ff6a574970b",
+        "executable": false
+      },
+      "crates/shapes/src/components.rs": {
+        "sha256": "37b41b9f53e7df80b534ca2362e91529ba420a215c05af7d2a2cd7b48f85e1dd",
+        "executable": false
+      },
+      "crates/shapes/src/components/parameters.rs": {
+        "sha256": "cd7c071c49d6dea74f3f4cd585a0d2a1cb8b86922dbb13ffd816d94c92fd8ba7",
+        "executable": false
+      },
+      "crates/shapes/src/constraints.rs": {
+        "sha256": "37075131350f118c5193fb046a3b745922daabaf88c26be1be7e593cc770d8ee",
+        "executable": false
+      },
+      "crates/shapes/src/constraints/fixed_point.rs": {
+        "sha256": "39ff9afa122bd992ae13360805370d1567922e45440a35c3df9ba2c33108194a",
+        "executable": false
+      },
+      "crates/shapes/src/constraints/fixed_point/occurrence.rs": {
+        "sha256": "24713c4731bcf84d57c4c5377e6ef46b5127c2c1e5d4a1251b453dce16d9b202",
+        "executable": false
+      },
+      "crates/shapes/src/constraints/fixed_point/runtime.rs": {
+        "sha256": "bcedf33e02170d08d7c6377049512e9e059390e6d694f487677430b61fa87669",
+        "executable": false
+      },
+      "crates/shapes/src/data.rs": {
+        "sha256": "4b092fa578744cc97a5b38386027ed3c515ec762c8b888ba97f2cd7e07786084",
+        "executable": false
+      },
+      "crates/shapes/src/data_view.rs": {
+        "sha256": "dc693f1f35effcc7c846a2ef9c90e13453fe43e4cbeaa57ac7061b315afa9431",
+        "executable": false
+      },
+      "crates/shapes/src/engine.rs": {
+        "sha256": "4dc899529155b2a5cf7ae44ec6e3e0c6699ed89e08d6cc5e02ae9a4ff482b6f2",
+        "executable": false
+      },
+      "crates/shapes/src/engine/complete_reports.rs": {
+        "sha256": "a550fe59e2a34be0e24308d1259419174ecb12a56efd1120be0a72903058b032",
+        "executable": false
+      },
+      "crates/shapes/src/error.rs": {
+        "sha256": "93d4ddeedb13d7ff122f0742cbdebecfa3b319767a32a5519f67ce1b6f274ed1",
+        "executable": false
+      },
+      "crates/shapes/src/expression.rs": {
+        "sha256": "683a1f2d14b3e3897079fbe075ad526cbcd583a0f6c1e375bd19188fc1e3d915",
+        "executable": false
+      },
+      "crates/shapes/src/expression/named_outputs.rs": {
+        "sha256": "1c869f6bfad1cfc1545b1ec3646021ec28b30826f55c226257ba126c5236eb55",
+        "executable": false
+      },
+      "crates/shapes/src/extension_usage.rs": {
+        "sha256": "31e3a97779759b32c222e667e5de0c512e7d37b133f1d390d9194d0bcbafb896",
+        "executable": false
+      },
+      "crates/shapes/src/footprint.rs": {
+        "sha256": "679015e63015f37574f4b2767d02096fc9b9024f61804166d1d2ef709b61a7f0",
+        "executable": false
+      },
+      "crates/shapes/src/footprint/references.rs": {
+        "sha256": "27335f9744246cc6bbd2252f0f92da989213048a4ed4af80a32477402b9e7de7",
+        "executable": false
+      },
+      "crates/shapes/src/free_expression.rs": {
+        "sha256": "d3c35d34cccb5209660eaaaea9f9a762eca70f6c6a7b13b92804ccb5b0b9780b",
+        "executable": false
+      },
+      "crates/shapes/src/function_resolution.rs": {
+        "sha256": "7f71425b48647ce3bdfd0302c4de558d7afb40ae6d1628b5376f131fc4caf099",
+        "executable": false
+      },
+      "crates/shapes/src/graphql.rs": {
+        "sha256": "1725b681c76a785cfddfe1074e2e7d730ffae73d76a84b5539915c6011bbf9f9",
+        "executable": false
+      },
+      "crates/shapes/src/imports.rs": {
+        "sha256": "8c9affe9f3d20168122bc032329e37512ff7a5ddfc987545205c7ec8d9904ef6",
+        "executable": false
+      },
+      "crates/shapes/src/instance.rs": {
+        "sha256": "ca74b1b973c4546d47ca41515bf7eac7aab078226c41dcc46c7d343cf3f56123",
+        "executable": false
+      },
+      "crates/shapes/src/json_model.rs": {
+        "sha256": "abc75a7e298135744f0ccfa7865bb3a053313275757789899ebe78460836df24",
+        "executable": false
+      },
+      "crates/shapes/src/json_schema.rs": {
+        "sha256": "238177e19842f762d414fec4359d038475fb36f9f7f6ad0c88d9bed33e8acd1d",
+        "executable": false
+      },
+      "crates/shapes/src/json_schema/numeric_order.rs": {
+        "sha256": "f488e26cc49f2f6e738f92e3b369116816ff976e93e5417c64a7beadfe2d07e5",
+        "executable": false
+      },
+      "crates/shapes/src/json_schema/temporal_order.rs": {
+        "sha256": "41ca8be7b6c662a429720996ed594fc36cb6e13c7313bff549b6b33891a5e8a0",
+        "executable": false
+      },
+      "crates/shapes/src/json_schema/tool_arguments.rs": {
+        "sha256": "b6f733ddd24e1769c7c9ef0c1d79f5c372a7a4419a21742e1f9e381bf90337a0",
+        "executable": false
+      },
+      "crates/shapes/src/json_schema/tool_arguments/emission.rs": {
+        "sha256": "34b5699e6e9f691740ee73b239264928d0fbc5d468c3cec3bbb83a6cbfff6670",
+        "executable": false
+      },
+      "crates/shapes/src/json_schema/tool_arguments/numeric.rs": {
+        "sha256": "04bc8c54e68bccd4c060e0e60d1ae48cf15d9eecfda172133519575ca45ddd95",
+        "executable": false
+      },
+      "crates/shapes/src/lib.rs": {
+        "sha256": "43366ff190f9605c9913212fb2d43d93d7138726422c0af38e20955b0a0d9b40",
+        "executable": false
+      },
+      "crates/shapes/src/limits.rs": {
+        "sha256": "39dc71006f543ab8c9e68c81855a954c4649c5d72209cca6089895739aad3733",
+        "executable": false
+      },
+      "crates/shapes/src/linkml.rs": {
+        "sha256": "af77b8dadd0de858a5ef608e381c87d38f62f324ac3106be8074451d6a173faa",
+        "executable": false
+      },
+      "crates/shapes/src/linkml/importer.rs": {
+        "sha256": "09d18fcc6f29ecf4a70e3d724ab8124d3dbb70ee1957318fb913f15289b3b2ff",
+        "executable": false
+      },
+      "crates/shapes/src/linkml/projection.rs": {
+        "sha256": "3f8fe198f0b60c43b78fd8fad5a74105630c64761bc15f130f5d07c52575555d",
+        "executable": false
+      },
+      "crates/shapes/src/lint.rs": {
+        "sha256": "5441424d729f2589173ad5a29eeed627f14f0e5ffa550c43f8d223973423c741",
+        "executable": false
+      },
+      "crates/shapes/src/model.rs": {
+        "sha256": "440d8a430e4cedb4af2cb785d6a419d7c272ee90fd0df0fd18e445bd00e1e1bf",
+        "executable": false
+      },
+      "crates/shapes/src/owl_value_space.rs": {
+        "sha256": "bd630f544217548d83207cf8c12cc0790976897c82b4ec1989e04652375d2873",
+        "executable": false
+      },
+      "crates/shapes/src/parallel.rs": {
+        "sha256": "8702e51327d6745e6fe34cf0b79aa37fe9d1f42a763f802b1f06ed754bee5d01",
+        "executable": false
+      },
+      "crates/shapes/src/path.rs": {
+        "sha256": "80a5074c67d369ba531bc8ebcb131ca0c9d8d3cd42b6283c366ffe5bcda38252",
+        "executable": false
+      },
+      "crates/shapes/src/plan.rs": {
+        "sha256": "6a959f492aab2f9cc2d47d09fe5f065592872854f0b7003c9d15c9b5e447de4b",
+        "executable": false
+      },
+      "crates/shapes/src/prebinding.rs": {
+        "sha256": "7b5d90e3ee0e81edddcc2845a548a3f053a5dc3e4fbc31cd745c8500ceb01046",
+        "executable": false
+      },
+      "crates/shapes/src/product/ast.rs": {
+        "sha256": "2b7cdf7ee5e3b69e6bfe0c71e0c41f12a4a0b59cd3fd62c4f06aa311d74ac95c",
+        "executable": false
+      },
+      "crates/shapes/src/product/ast/ownership.rs": {
+        "sha256": "c370f0d3d0e441fe8dc7ae17c5b8e07b76be9f4be11fa4d622344c34bb1ea7e8",
+        "executable": false
+      },
+      "crates/shapes/src/product/ast/tests.rs": {
+        "sha256": "8130eebfcd0682906073d1e68a8549a9b9409add19dc3272ec636c95faee02c2",
+        "executable": false
+      },
+      "crates/shapes/src/product/certified.rs": {
+        "sha256": "66d73870df8483ac8558754f400afe8a63a5dee9207e4f0e8d159bbf7b932b42",
+        "executable": false
+      },
+      "crates/shapes/src/product/dataset.rs": {
+        "sha256": "46fcb47a9e6ff43bf0155146ba8bda315f1084b4c6585d453e02a3784363453c",
+        "executable": false
+      },
+      "crates/shapes/src/product/error.rs": {
+        "sha256": "a46f8f436ae8e01a63ec77c90e04e48da6c92476cdfb781b11ad9d13bc8a3b9e",
+        "executable": false
+      },
+      "crates/shapes/src/product/identity.rs": {
+        "sha256": "960f7861b694f231f29a57b6423e43fb00a5261b8e4307a52829bc4af893514b",
+        "executable": false
+      },
+      "crates/shapes/src/product/mod.rs": {
+        "sha256": "dfac815e601258a74cc0e10b57abab1cf292c3b2c9ef672b8995f8776f067442",
+        "executable": false
+      },
+      "crates/shapes/src/product/tests.rs": {
+        "sha256": "44cdfb04ecea79905c8773b0afaa71defc0f52ebbec88bb8bc78df5e98729e16",
+        "executable": false
+      },
+      "crates/shapes/src/product_fixture.rs": {
+        "sha256": "0a2628f29742d68195002c599f93497026a9adffdfa03d707bcade3fe6cddf85",
+        "executable": false
+      },
+      "crates/shapes/src/profile.rs": {
+        "sha256": "0e24a408694dda5993f823d23374f65aa653a545de1b340d4206626844fbe694",
+        "executable": false
+      },
+      "crates/shapes/src/provenance.rs": {
+        "sha256": "c753ce48d0ff5d58b8fc5280e101dff78dc008a03347817eeb1add15c650f217",
+        "executable": false
+      },
+      "crates/shapes/src/pydantic.rs": {
+        "sha256": "3cd5a6fed378ca0d3533e82445b51b0425ecff1e4829cbcd984474009d548627",
+        "executable": false
+      },
+      "crates/shapes/src/pydantic/config.rs": {
+        "sha256": "eb255092e5dc835069be81a3bc4e0731a55f63aa6d7ceb0d0be5a432c0f4a767",
+        "executable": false
+      },
+      "crates/shapes/src/pydantic/linker.rs": {
+        "sha256": "f1eba28babff148e2f620730a70f11ffa494bc45d3ed28b0b1a4d73795473d26",
+        "executable": false
+      },
+      "crates/shapes/src/query_law.rs": {
+        "sha256": "8522604e22cf2c5563e304706401c7248ab53e76eaa13a9d03e3e92fc7dbe8cc",
+        "executable": false
+      },
+      "crates/shapes/src/recursion.rs": {
+        "sha256": "65c5f1971791386b3e0de31145543ef755fd087790f4b5e4477e09605504cd18",
+        "executable": false
+      },
+      "crates/shapes/src/recursion/cache.rs": {
+        "sha256": "f10f77c233caa99cbd5ca44cdde3978cb5de1902bd663cff68c9246ca6567f3e",
+        "executable": false
+      },
+      "crates/shapes/src/recursion/closed.rs": {
+        "sha256": "b9e56db0b04cbb2afcf524dc5717b11ffe0b8a4f1441babe67b7d2a3f462c1ce",
+        "executable": false
+      },
+      "crates/shapes/src/recursion/evidence.rs": {
+        "sha256": "8f56fa73b43c9039dbea4f2a03e8b9a5a0b9565141cf5109aee54381b116bcc6",
+        "executable": false
+      },
+      "crates/shapes/src/recursion/graph.rs": {
+        "sha256": "7bd13878fa5c994d592841cd6214bfad3c470eaa212d5efbe97833f59b7db87d",
+        "executable": false
+      },
+      "crates/shapes/src/recursion/guards.rs": {
+        "sha256": "159a7a11c3fec997b2c325b278474a1ca5a50533e336059f877fa4fd2d24ba53",
+        "executable": false
+      },
+      "crates/shapes/src/recursion/model.rs": {
+        "sha256": "0a4de04550b3fb6d86ad43cab9ab07dd8b462f1e00a04232832236493ed3d646",
+        "executable": false
+      },
+      "crates/shapes/src/report.rs": {
+        "sha256": "e264fbfe6b75d4914213faf1168aeaf89ee9786ce97f375948a3af5492cd7033",
+        "executable": false
+      },
+      "crates/shapes/src/result_annotations.rs": {
+        "sha256": "7261ba145cd59bd70b4e31c456fcaee961bb9436dc8b2e62e49c34c3386f81f6",
+        "executable": false
+      },
+      "crates/shapes/src/rules.rs": {
+        "sha256": "37a497717d812579492c8ad6caf39312371be9b4da049f031ab648254f5e3fa0",
+        "executable": false
+      },
+      "crates/shapes/src/schema_catalog.rs": {
+        "sha256": "744debd235cb7c86e0330e9fa967541e56dbb894f242484eb93318f69e7b3e18",
+        "executable": false
+      },
+      "crates/shapes/src/schema_import.rs": {
+        "sha256": "c0b4e7bec27f3b9b505f2ad19a567452e0f685369fb72fbf9518e860405e9e00",
+        "executable": false
+      },
+      "crates/shapes/src/schema_surface.rs": {
+        "sha256": "5d17b028d634fd69ac29e80f33ae4c05914bb30a9de762baa166a4c2d1195b07",
+        "executable": false
+      },
+      "crates/shapes/src/shacl_corpora/mod.rs": {
+        "sha256": "58e8c9adc2ba126d13ac5ab7aa5c157d341ccddcae8340064c1921adfb6f6277",
+        "executable": false
+      },
+      "crates/shapes/src/shacl_corpora/node_expr_grading.rs": {
+        "sha256": "31e5993e2f4ab6162813e86a3cc91298c66395e9e7387de94477c35422b8a748",
+        "executable": false
+      },
+      "crates/shapes/src/shacl_corpora/report_grading.rs": {
+        "sha256": "ec57689495ffa1015ddbb27e8ed8be4943e7f12cdca7465f08e7a7363fdbbf66",
+        "executable": false
+      },
+      "crates/shapes/src/shacl_corpora/shacl12.rs": {
+        "sha256": "8bd845136e0e88b08d0fc86677054505082e54b826f080e7bca4cd1ade0b84cf",
+        "executable": false
+      },
+      "crates/shapes/src/shape_union.rs": {
+        "sha256": "ffed4c486f7c687f2f6c9e737094a1c9d1ecab0f9ffc9c5236223250f7d9f0fa",
+        "executable": false
+      },
+      "crates/shapes/src/shapes.rs": {
+        "sha256": "1933be912a30556ac366705d045f305a3a29e77bfc535f215a8e05e60c24ea90",
+        "executable": false
+      },
+      "crates/shapes/src/shapes/link.rs": {
+        "sha256": "19836783674e09ec2f8e088664b0be9c64e44a70f2b94f8537c4eef9708b67d6",
+        "executable": false
+      },
+      "crates/shapes/src/shapes/link/tests.rs": {
+        "sha256": "7f0e8e97ec25c316a7c949198766b674ff4c55dada6c29da255d0d9027c5ae2b",
+        "executable": false
+      },
+      "crates/shapes/src/shapes/parser/admission.rs": {
+        "sha256": "cf8c2cdceea49af336ba3ac90c51819bdc179fb257d20504d23d132374910c23",
+        "executable": false
+      },
+      "crates/shapes/src/shapes/parser/annotations.rs": {
+        "sha256": "474986764c6a10050ef44bfe7f7844bf9b87bfbde75e41fec8573eb3aa1458c7",
+        "executable": false
+      },
+      "crates/shapes/src/shapes/parser/cardinality.rs": {
+        "sha256": "838f7c63697767c6a734078d4948e42a042300e71ce153e702ae00278621df9e",
+        "executable": false
+      },
+      "crates/shapes/src/shapes/parser/closed_by_types.rs": {
+        "sha256": "c0c56f230443a3e2de2106152ec91e044ac19ec98a51cf54a5d74b51424b6ad3",
+        "executable": false
+      },
+      "crates/shapes/src/shapes/parser/custom_fn.rs": {
+        "sha256": "082a754c22995ba8650d5206787cf514e5840b7ccd3a71a51e6cfa9c53529341",
+        "executable": false
+      },
+      "crates/shapes/src/shapes/parser/functions.rs": {
+        "sha256": "35bd8fe016bd60a9b15ced83922109d8c170a18b43c2a9c6d6a4c7af68c5f3d2",
+        "executable": false
+      },
+      "crates/shapes/src/shapes/parser/mod.rs": {
+        "sha256": "7c69f5f014623e65f1e1493b484be2ae4fb48497c3de6e84646b3531a2ccb49f",
+        "executable": false
+      },
+      "crates/shapes/src/shapes/parser/node_expr.rs": {
+        "sha256": "39c4da6c5789e403c9abd80ceda5f5ae23cbf28ac6c8f60b36add418516e917f",
+        "executable": false
+      },
+      "crates/shapes/src/shapes/parser/recursion.rs": {
+        "sha256": "fb33e6a69c2ba8d09aaef02ba065129503000f69a1c75fb0601cc96c6a5ed1b1",
+        "executable": false
+      },
+      "crates/shapes/src/shapes/parser/rule_parse.rs": {
+        "sha256": "961cf41b7c619cb4d61442a8bc019a3470cfac822dd40ea46746cffac03f0542",
+        "executable": false
+      },
+      "crates/shapes/src/shapes/parser/shacl_instance.rs": {
+        "sha256": "b385fb419925b2fd4971e653702d3eb4bc236cf4ce4a7af5f18f52356588d08a",
+        "executable": false
+      },
+      "crates/shapes/src/shapes/parser/target_types.rs": {
+        "sha256": "ae470c4e1ff41b205b484f48996bf63d444c053179de2c36f743613e98653745",
+        "executable": false
+      },
+      "crates/shapes/src/shapes/parser/wellformed.rs": {
+        "sha256": "8dd042deaec3b0b56cf990f8c6c289dff77aaced6b5f65434ab6211886c37f7c",
+        "executable": false
+      },
+      "crates/shapes/src/shapes/prefixes.rs": {
+        "sha256": "d7e941aff7cf24220b6e8e5ee4c6f48b7dd1ff5eba7757c3128ce0bbee93e275",
+        "executable": false
+      },
+      "crates/shapes/src/sparql.rs": {
+        "sha256": "41672a46a690096d6e0761926d79ea613654416a87c73de0976b6653590ffbc1",
+        "executable": false
+      },
+      "crates/shapes/src/sparql/coordinates.rs": {
+        "sha256": "8de9adc30195048714df843692782dd712412aef1545884a8e9895dd1e447814",
+        "executable": false
+      },
+      "crates/shapes/src/spec/census.rs": {
+        "sha256": "1b4d53c136b76dc10025b12842e210ae2d91074bce8d98ef48aab7a2539d63a0",
+        "executable": false
+      },
+      "crates/shapes/src/spec/link.rs": {
+        "sha256": "f3e68293bf6ab183e85487eb3a457ce425eeb81e60a5999de2520471c75b9225",
+        "executable": false
+      },
+      "crates/shapes/src/spec/mod.rs": {
+        "sha256": "69a33d4c8746c2b6e6332c4c043f9bbc97b21234773b942df8ab45f5be3d289c",
+        "executable": false
+      },
+      "crates/shapes/src/spec/table.rs": {
+        "sha256": "2f9e98d91672ae19c589ad403f24fb394739972e8cf4caaf1ffe06f571567401",
+        "executable": false
+      },
+      "crates/shapes/src/spec/vocab.rs": {
+        "sha256": "3671d997c3241748966fc3ba6044d91c4438539707289dff5c15d039794afa03",
+        "executable": false
+      },
+      "crates/shapes/src/srl/depend.rs": {
+        "sha256": "28d7ffefc890f492541479c750da9df8f6536d64d9c9839b2b3b6c4cfd905b16",
+        "executable": false
+      },
+      "crates/shapes/src/srl/document.rs": {
+        "sha256": "64e8361eba97a5528c818a94694d150c124e86eec81b4e3116eeec04ed53b462",
+        "executable": false
+      },
+      "crates/shapes/src/srl/equivalence_tests.rs": {
+        "sha256": "09e1a7138ca333ba284dc5f9213c598772d1ff516aa29ae9f3e52ee3dba8c6c4",
+        "executable": false
+      },
+      "crates/shapes/src/srl/eval.rs": {
+        "sha256": "f9b64e1df3d43b95bd035b79877952ea4d7706282a5566eb8d9f24750c49f2f3",
+        "executable": false
+      },
+      "crates/shapes/src/srl/identity.rs": {
+        "sha256": "23f0ce0611eb940711cb8bfb787d00730d9ba7debdbe2201fd5be015834571a8",
+        "executable": false
+      },
+      "crates/shapes/src/srl/ir.rs": {
+        "sha256": "493a8bc2fe72b0419b1514f685e446c9a41e8836f917f1985c9e15c5cfd81757",
+        "executable": false
+      },
+      "crates/shapes/src/srl/lower.rs": {
+        "sha256": "224c1cf47199052b24b416242eb5f3b2396f2c7b9d31b3b97f70fa7b35fca58e",
+        "executable": false
+      },
+      "crates/shapes/src/srl/mod.rs": {
+        "sha256": "d8222930975f2a88143e86f0b359266b8df75c2cf78733bb63a02c6332769cba",
+        "executable": false
+      },
+      "crates/shapes/src/srl/reads.rs": {
+        "sha256": "3c8bd696d0d6c2a2e2f5e01e6b1052a5a16ebdd2e9324bd82c6f1eb3b8c18b68",
+        "executable": false
+      },
+      "crates/shapes/src/srl/sparql_rule.rs": {
+        "sha256": "d25f7b5a4f3bda97127775ac19bd0ade14d888d3b316b2eb2fa07f65da5aaf16",
+        "executable": false
+      },
+      "crates/shapes/src/srl/syntax.rs": {
+        "sha256": "642e36d2ba767bd39ab7337ee1558a6a00cc6c86c31119db27322c3e1a771e2a",
+        "executable": false
+      },
+      "crates/shapes/src/target_eval.rs": {
+        "sha256": "a05958c849e2d86b8b29eebab5264221f92681c47c6feeb342c1f03741cc97d4",
+        "executable": false
+      },
+      "crates/shapes/src/term.rs": {
+        "sha256": "124336dea37f99f3d1c9dddb06d3a576feb4678de67c0c741bc6f9293a095946",
+        "executable": false
+      },
+      "crates/shapes/src/text_ingest.rs": {
+        "sha256": "ec0d6b4cd8dc553147cf1bfacc08419645316e4d4c26a945b3dafb7b49001b9b",
+        "executable": false
+      },
+      "crates/shapes/src/typescript.rs": {
+        "sha256": "3eaea6cbd5425d13c68b52fd4b29e4b15f2f228cffe401edff92d2e82c2586b8",
+        "executable": false
+      },
+      "crates/shapes/src/unique_values.rs": {
+        "sha256": "169a3695ceaa810f4147ae50cd8fd6aefbca5a6132ed723ccdb260e58872e812",
+        "executable": false
+      },
+      "crates/shapes/src/validator_alternatives.rs": {
+        "sha256": "d5b2cdec1e1763903ce3b48163c299774a5618720c64e86c2db30b52dc66fbac",
+        "executable": false
+      },
+      "crates/shapes/src/xpath.rs": {
+        "sha256": "390bbc043fed70b07483789e4f185a301286b663d0d09cb2e4985111ebb3ab0a",
+        "executable": false
+      },
+      "crates/shapes/src/xpath/declarations.rs": {
+        "sha256": "e287e69b2c5b63a9a4e023acc45ced53da809f7831bf014cffeec60c227ddbf2",
+        "executable": false
+      },
+      "crates/shapes/src/xpath/tests.rs": {
+        "sha256": "0fd5cb99b5932b4960fce7b22ee46a23f81f4f178514b67ce70d3bdcc1c7654d",
+        "executable": false
+      }
+    },
+    "environment": {
+      "RUSTFLAGS": null,
+      "RUSTUP_TOOLCHAIN": "/home/paudley/stage/packages/rustup/active-toolchain",
+      "CARGO_REAL": null,
+      "CARGO_BUILD_TARGET": null,
+      "CC": null,
+      "CXX": null
+    },
+    "completed": true,
+    "log": "/home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger/.stage/v4-api-expose-typed-loss-ledger/validation-runs/20261106T121337-5547d13d29/output.log",
+    "excerpt": [],
+    "exit_code": 0,
+    "inputs_changed_during_run": false,
+    "finished_at": "2026-11-06T12:22:55.214619+00:00"
+  },
+  "artifacts": {
+    "log": "/home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger/.stage/v4-api-expose-typed-loss-ledger/validation-runs/20261106T121337-5547d13d29/output.log"
+  },
+  "next_actions": []
+}

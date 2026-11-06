@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger",
+  "branch": "paudley/1117-v4-api-expose-typed-loss-ledger",
+  "base_ref": "origin/main",
+  "head": "bcb0e49d3cf472182bb34d10376e30a826b85137",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger/.stage/v4-api-expose-typed-loss-ledger/sync/20261106T120625-35e60f36aba04b08a370c648394aa631",
+  "conflicts": [
+    "CHANGELOG.md"
+  ],
+  "status": "completed",
+  "base": "b0f4a8715ca21bcedf11d277021a7c3cf6d9e302",
+  "merge_bases": [
+    "9be0479391422f9aee9a2336ee2639f93442d480"
+  ],
+  "merge_index": "9d6193638c646441e378f220388b47ecee0a1ab3835f4a359fd5818d7e6517fb",
+  "reused_paths": [],
+  "rerere_output": "Recorded preimage for 'CHANGELOG.md'\n",
+  "candidate_tree": "b884dfe5b315d06030236486c59e6f9eddb5e844",
+  "candidate_patch": "candidate-af4592be1a914233931a0b8e85081634.patch",
+  "validation_records": [
+    "validation-runs/20261106T065022-c3a34a9a78/result.json",
+    "validation-runs/20261106T065441-028900f5c4/result.json",
+    "validation-runs/20261106T065606-bf33134540/result.json",
+    "validation-runs/20261106T065742-525ec70866/result.json",
+    "validation-runs/20261106T070149-d35c5ad6ce/result.json",
+    "validation-runs/20261106T070438-c2a7579bad/result.json",
+    "validation-runs/20261106T070643-7423338d18/result.json",
+    "validation-runs/20261106T070746-50b9bf7a2e/result.json"
+  ],
+  "commit": "3a5e05675502c4b7e7377a9ddee7021698c6ca89",
+  "tree": "b884dfe5b315d06030236486c59e6f9eddb5e844"
+}

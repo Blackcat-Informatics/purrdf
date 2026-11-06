@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "issue": 1117,
+  "repo": "purrdf",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrdf",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrdf",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger",
+  "branch": "paudley/1117-v4-api-expose-typed-loss-ledger",
+  "slug": "v4-api-expose-typed-loss-ledger",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger/.stage/v4-api-expose-typed-loss-ledger",
+  "stage_tracked": true,
+  "base": "origin/main",
+  "base_oid": "9be0479391422f9aee9a2336ee2639f93442d480",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger",
+    "branch:paudley/1117-v4-api-expose-typed-loss-ledger",
+    "ignored:31241 files (31238 reflinked, 0 written)",
+    "rust-caches:reflinked /home/paudley/Active/purrdf/.worktrees/1119-fix-expanded-json-ld-type-entries-that caches into /home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger plus 177 dependency units from 2 other checkouts in 24.9s; 20484 unchanged files keep their built mtimes; 359 units naming another checkout rebuild",
+    "stage:/home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger/.stage/v4-api-expose-typed-loss-ledger",
+    "issue:/home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger/.stage/v4-api-expose-typed-loss-ledger/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-11-06T00:46:39-0600",
+  "seed_error": ""
+}

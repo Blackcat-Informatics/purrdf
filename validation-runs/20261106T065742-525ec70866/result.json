@@ -1,0 +1,309 @@
+{
+  "command": [
+    "cargo",
+    "clippy",
+    "--release",
+    "--locked",
+    "-p",
+    "purrdf-core",
+    "-p",
+    "purrdf-rdf",
+    "-p",
+    "purrdf-shapes",
+    "-p",
+    "purrdf-validate",
+    "-p",
+    "purrdf-cli",
+    "-p",
+    "purrdf",
+    "--lib",
+    "--bins",
+    "--",
+    "-D",
+    "warnings"
+  ],
+  "scopes": [
+    "crates/rdf-core/src/loss.rs",
+    "crates/rdf-core/src/loss",
+    "crates/rdf-core/src/lib.rs",
+    "crates/rdf/src/projections",
+    "crates/rdf/src/lib.rs",
+    "crates/shapes/src/linkml.rs",
+    "crates/shapes/src/linkml/importer.rs",
+    "crates/shapes/src/schema_import.rs"
+  ],
+  "started_at": "2026-11-06T06:57:42.463388+00:00",
+  "head": "9be0479391422f9aee9a2336ee2639f93442d480",
+  "inputs": {
+    "crates/rdf-core/src/lib.rs": {
+      "sha256": "fd4cd3b6912fb482ac43802639ef49935bddc25372d82b30b32ed09692fc8a05",
+      "executable": false
+    },
+    "crates/rdf-core/src/loss.rs": {
+      "sha256": "24bce81125ca104ba77bd844e0db5d4d4a81228828cdc4fc9c317b92e5b13a90",
+      "executable": false
+    },
+    "crates/rdf-core/src/loss/completeness.rs": {
+      "sha256": "e3419b17fa0c8ad81d959691bf0a4b7508c9e1cab488d564084847c70a28047d",
+      "executable": false
+    },
+    "crates/rdf-core/src/loss/profile.rs": {
+      "sha256": "36a713757f59d9184ddeceb4c06d14545ca5083e98ce50e5797a086f477fa246",
+      "executable": false
+    },
+    "crates/rdf/src/lib.rs": {
+      "sha256": "b07524ec067ecca43e9e9e6a4e6237781d8f34b010409063bbcf7a11858746d9",
+      "executable": false
+    },
+    "crates/rdf/src/projections/carrier.rs": {
+      "sha256": "a6ca17347356f94a7be3615322c755e222750e0d2abde49c7129610df5e48aa5",
+      "executable": false
+    },
+    "crates/rdf/src/projections/csvw/config.rs": {
+      "sha256": "aec62e2bfdb62ce1378de2c3fe88255f3120102d7cf1aa58d28a4e8ca161df02",
+      "executable": false
+    },
+    "crates/rdf/src/projections/csvw/engine.rs": {
+      "sha256": "705177795144bbc54229ff751e99c60beaff41ce4cc81c0c195494509df90ec8",
+      "executable": false
+    },
+    "crates/rdf/src/projections/csvw/exact.rs": {
+      "sha256": "be04d5b009eb5cb76a9e30940c1837cbc9346d727c85400b80292eda63b8b812",
+      "executable": false
+    },
+    "crates/rdf/src/projections/csvw/input.rs": {
+      "sha256": "26cdaec9e31eb798188c8e613a477066cd17067b46271d53873dcbc861c2c0b0",
+      "executable": false
+    },
+    "crates/rdf/src/projections/csvw/metadata.rs": {
+      "sha256": "b7250a40e7e36447d5c9cd92b5bb3fc53600e12b6104b0af3ff7ab90cc9a1d17",
+      "executable": false
+    },
+    "crates/rdf/src/projections/csvw/mod.rs": {
+      "sha256": "93eba2adb76fe22491217bdf31af4947a7dd5f2177c1b040964ad32b65899482",
+      "executable": false
+    },
+    "crates/rdf/src/projections/csvw/model.rs": {
+      "sha256": "1d06b7831466d0177f1956c2b2901a8105729206d9cc9a4b6b4edcd10072c41c",
+      "executable": false
+    },
+    "crates/rdf/src/projections/csvw/rdf.rs": {
+      "sha256": "97c2789f4007c60778eedd96cdde9ac29e7384dc49f337c9e2c9d4619496fb6b",
+      "executable": false
+    },
+    "crates/rdf/src/projections/csvw/table.rs": {
+      "sha256": "4b1297f29f7fe3653a750cf333de52113d3b64936c1cb13f33e8e7e281a62469",
+      "executable": false
+    },
+    "crates/rdf/src/projections/csvw/terms.rs": {
+      "sha256": "37a09a970134cb23807f8555efeb6dd89c29521cc87937b66726cb8959dcc62f",
+      "executable": false
+    },
+    "crates/rdf/src/projections/csvw/writer.rs": {
+      "sha256": "ad61d2e2fc879e6951311d8df59ba921e15315f07b44edce50669a96c6173e17",
+      "executable": false
+    },
+    "crates/rdf/src/projections/dataset_description.rs": {
+      "sha256": "2931711db53fad47eb2a0da5eb5b134a45b9079aeec6926d8e3a812d68b41418",
+      "executable": false
+    },
+    "crates/rdf/src/projections/dcat_rdf.rs": {
+      "sha256": "7e64a8707e0aedd366d3729f5d2f4e6d4418e6a05bf402d5a91e98681d3d521e",
+      "executable": false
+    },
+    "crates/rdf/src/projections/error.rs": {
+      "sha256": "62c4c0858d99fb7f1835b7787a64e1ff711329a21563c3e4a0099a042ecec621",
+      "executable": false
+    },
+    "crates/rdf/src/projections/json_codec.rs": {
+      "sha256": "a3d0b082d202c301b76edd0acc33aa0a3e2dbaf413a2a7f95ad756e889e944b6",
+      "executable": false
+    },
+    "crates/rdf/src/projections/loss.rs": {
+      "sha256": "5c2fada0f2b7870d939817efe5c51d947e35b27e2612dac5e12989da08cc9fb8",
+      "executable": false
+    },
+    "crates/rdf/src/projections/lpg/carrier_util.rs": {
+      "sha256": "810af36af04cff6a0c57bdeb710ac4603c4e5fa45f7d9fb8dfa6691b94bfb8fc",
+      "executable": false
+    },
+    "crates/rdf/src/projections/lpg/csv.rs": {
+      "sha256": "281460be2fe0f718a0ccce4f44bda55064ba3a2f1524f47ff86b3e807f61407a",
+      "executable": false
+    },
+    "crates/rdf/src/projections/lpg/cypher.rs": {
+      "sha256": "bc16737439a7304b5a9f922dad97ad5cba4646b0bb069307f90479d03bd75ada",
+      "executable": false
+    },
+    "crates/rdf/src/projections/lpg/graphml.rs": {
+      "sha256": "5463702c2f06733e21832f4e6ddfa7d5c84fb9c887cc62739357aac18b6f8804",
+      "executable": false
+    },
+    "crates/rdf/src/projections/lpg/mapping.rs": {
+      "sha256": "3ad1b840a86030cf6e38fdcd6cf7d59d6381913388bc31ed362134708d296263",
+      "executable": false
+    },
+    "crates/rdf/src/projections/lpg/mod.rs": {
+      "sha256": "7859594ccdafd1ce50fb6fe557582fe5c6a1084ceb1808ae0903b48478495d58",
+      "executable": false
+    },
+    "crates/rdf/src/projections/lpg/model.rs": {
+      "sha256": "2d1b4c94d3080a9832edec2513766b5e3e34cfd81a29fa74aeb1a3187b3f718e",
+      "executable": false
+    },
+    "crates/rdf/src/projections/lpg/stream.rs": {
+      "sha256": "46f21539ebbc6013f5e898b6e65f67888814da62245db8765b79c3148df8edd1",
+      "executable": false
+    },
+    "crates/rdf/src/projections/mod.rs": {
+      "sha256": "cb38cf59c519e6913475e018feadefee7241d8fdaec1ccb626b998e1063dd75c",
+      "executable": false
+    },
+    "crates/rdf/src/projections/obo_graphs/config.rs": {
+      "sha256": "a224995729a708c553981e2fad43aa7175b61c2078a79d3ffb1489cc8e3b9f23",
+      "executable": false
+    },
+    "crates/rdf/src/projections/obo_graphs/mapping.rs": {
+      "sha256": "472299fe0af6f0cb3b466ef23037bf35ac76766b536e26e96c830464f085bcd4",
+      "executable": false
+    },
+    "crates/rdf/src/projections/obo_graphs/mod.rs": {
+      "sha256": "6f9c61889311580baad3157e24ac33d72fcfc91216f40c827b70a1a24cb41efa",
+      "executable": false
+    },
+    "crates/rdf/src/projections/obo_graphs/model.rs": {
+      "sha256": "22e734e02fb52678491dc6c32f64c9fde6752cceae21599af28ca051737fcd86",
+      "executable": false
+    },
+    "crates/rdf/src/projections/okf/config.rs": {
+      "sha256": "5bcf8dd400f101432c3038d32bf39a9415ba4728b873e6732da27d26118eeaff",
+      "executable": false
+    },
+    "crates/rdf/src/projections/okf/mapping.rs": {
+      "sha256": "c02fc754198479fb7f69f88180474daf9158fccb1663b3ebeafbe01e8a8d69a1",
+      "executable": false
+    },
+    "crates/rdf/src/projections/okf/mod.rs": {
+      "sha256": "bc74d6d8367219b5dbe1b81a0ef922a14adb6e4756b831c763266665b17d17f3",
+      "executable": false
+    },
+    "crates/rdf/src/projections/package.rs": {
+      "sha256": "96f45e5c46dbc9cccd8a3515936c6654388ed74b7b2e18280296caf03c333b95",
+      "executable": false
+    },
+    "crates/rdf/src/projections/research_object/config.rs": {
+      "sha256": "d92add7afeab5c135bd2e9228f6a2147750b61c24dfdb32555b085df2d5be7c4",
+      "executable": false
+    },
+    "crates/rdf/src/projections/research_object/croissant.rs": {
+      "sha256": "e2969f8c88153c66a0eec554f1a008235eaaad24ca54f3087fc1f02880ca9ff7",
+      "executable": false
+    },
+    "crates/rdf/src/projections/research_object/datacite.rs": {
+      "sha256": "b8c78bac8692fa9db6893ba80be3aa1f7850ebfcc330ea8a6d1a2582c9516eea",
+      "executable": false
+    },
+    "crates/rdf/src/projections/research_object/dcat.rs": {
+      "sha256": "fd5853bab27c4a4e667522bc5af27430823a46a0a259000ec7722b4e259895fc",
+      "executable": false
+    },
+    "crates/rdf/src/projections/research_object/frictionless.rs": {
+      "sha256": "c4b72501525750572d34b45a557ca732636c87719548cacfd26aac33f6e41b2a",
+      "executable": false
+    },
+    "crates/rdf/src/projections/research_object/json.rs": {
+      "sha256": "e42fdc1473f8cd596800a0fd90f45f07dcb4afc4bacb69973f6aa8c1efc5017d",
+      "executable": false
+    },
+    "crates/rdf/src/projections/research_object/jsonld.rs": {
+      "sha256": "6a8df320596513494231a074f425384431efa18fc2b3b212e1ae29d6eb0f41b9",
+      "executable": false
+    },
+    "crates/rdf/src/projections/research_object/mapping.rs": {
+      "sha256": "2b03ad1fe4b049d0d178595bf21aeb025c2e2a980991019b41d41538458ee2db",
+      "executable": false
+    },
+    "crates/rdf/src/projections/research_object/mod.rs": {
+      "sha256": "cab8e782bed222291ec5ceb7f16760805299824c753efce8c0821092fbaad0e9",
+      "executable": false
+    },
+    "crates/rdf/src/projections/research_object/model.rs": {
+      "sha256": "e6302c35ae435c51b8861fa874ea10b0880dc49aa7bb45a6bbc08b7aecfe1d8c",
+      "executable": false
+    },
+    "crates/rdf/src/projections/research_object/ro_crate.rs": {
+      "sha256": "67a968b7a042a5cd3db8cda3d7fbf6098b4f01733c7052b3790e3a5efa0b8913",
+      "executable": false
+    },
+    "crates/rdf/src/projections/selection.rs": {
+      "sha256": "a3fe6c9e3e45f8823d7240791ec6bf8e14ef34013eb9d2ee701b5d1745a92cbb",
+      "executable": false
+    },
+    "crates/rdf/src/projections/sink.rs": {
+      "sha256": "633dc0d1d31652ff5d43fb45d6667232856f0bd4aea8692808e8acf4524b6361",
+      "executable": false
+    },
+    "crates/rdf/src/projections/skos/config.rs": {
+      "sha256": "5f96795b56e8f2429c52b37f031571202eb926864cda0d58fd7e0bad10650a8b",
+      "executable": false
+    },
+    "crates/rdf/src/projections/skos/mapping.rs": {
+      "sha256": "dc780d5ef72efaf8ccfac5a1d586b86ac7b7fa90930cced063da7f50bbb4a967",
+      "executable": false
+    },
+    "crates/rdf/src/projections/skos/mod.rs": {
+      "sha256": "9aa479db3d64b45e6af1d61f591ea2d10dfc989938e140ba5317cdb06278730e",
+      "executable": false
+    },
+    "crates/rdf/src/projections/source_rows.rs": {
+      "sha256": "2af4a5c55c86b9cdc395d183c57b72e9e6beadcf608d51515278c4a04a174f34",
+      "executable": false
+    },
+    "crates/rdf/src/projections/term.rs": {
+      "sha256": "fd98b84ed53267d1e5a614996e0b7b3b1fab43b6f07bdafa7abb0e1ca9ab360a",
+      "executable": false
+    },
+    "crates/rdf/src/projections/util.rs": {
+      "sha256": "c1b4c26628b5626e41dc4a9917eb97e21d205d1437a8fc565413192f106ea5a3",
+      "executable": false
+    },
+    "crates/rdf/src/projections/void/config.rs": {
+      "sha256": "80b180d3061606ef0c052167176c340290cb664c2c0fa0dfd42971dc30b8fb8c",
+      "executable": false
+    },
+    "crates/rdf/src/projections/void/mapping.rs": {
+      "sha256": "646b03c3d18b2eed7ff61cc57e67c654249f7ca5e5a7d952488d8c9ea29a90a7",
+      "executable": false
+    },
+    "crates/rdf/src/projections/void/mod.rs": {
+      "sha256": "61ff67943b3a16b42e4a5ffcc41af13005d3de03d4ee63006e44b40ff8c82102",
+      "executable": false
+    },
+    "crates/shapes/src/linkml.rs": {
+      "sha256": "af77b8dadd0de858a5ef608e381c87d38f62f324ac3106be8074451d6a173faa",
+      "executable": false
+    },
+    "crates/shapes/src/linkml/importer.rs": {
+      "sha256": "09d18fcc6f29ecf4a70e3d724ab8124d3dbb70ee1957318fb913f15289b3b2ff",
+      "executable": false
+    },
+    "crates/shapes/src/schema_import.rs": {
+      "sha256": "c0b4e7bec27f3b9b505f2ad19a567452e0f685369fb72fbf9518e860405e9e00",
+      "executable": false
+    }
+  },
+  "environment": {
+    "RUSTFLAGS": null,
+    "RUSTUP_TOOLCHAIN": "/home/paudley/stage/packages/rustup/active-toolchain",
+    "CARGO_REAL": null,
+    "CARGO_BUILD_TARGET": null,
+    "CC": null,
+    "CXX": null
+  },
+  "completed": true,
+  "log": "/home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger/.stage/v4-api-expose-typed-loss-ledger/validation-runs/20261106T065742-525ec70866/output.log",
+  "excerpt": [],
+  "exit_code": 0,
+  "inputs_changed_during_run": false,
+  "finished_at": "2026-11-06T06:58:26.423794+00:00"
+}

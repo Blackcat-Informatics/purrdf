@@ -1,0 +1,71 @@
+{
+  "command": [
+    "cargo",
+    "clippy",
+    "--release",
+    "--locked",
+    "-p",
+    "purrdf-core",
+    "-p",
+    "purrdf-rdf",
+    "-p",
+    "purrdf-shapes",
+    "--lib",
+    "--tests",
+    "--",
+    "-D",
+    "warnings"
+  ],
+  "scopes": [
+    "crates/rdf-core/src/loss.rs",
+    "crates/rdf-core/src/loss",
+    "crates/shapes/src/linkml.rs",
+    "crates/shapes/src/schema_import.rs"
+  ],
+  "started_at": "2026-11-06T12:37:57.708576+00:00",
+  "head": "9f58ce93e09d3dabd2a7593195814b46e29f099b",
+  "inputs": {
+    "crates/rdf-core/src/loss.rs": {
+      "sha256": "ef5fb6ac327328439a143c163e55db99a910674dea153a9bd16c56d4bb754efb",
+      "executable": false
+    },
+    "crates/rdf-core/src/loss/completeness.rs": {
+      "sha256": "e3419b17fa0c8ad81d959691bf0a4b7508c9e1cab488d564084847c70a28047d",
+      "executable": false
+    },
+    "crates/rdf-core/src/loss/profile.rs": {
+      "sha256": "36a713757f59d9184ddeceb4c06d14545ca5083e98ce50e5797a086f477fa246",
+      "executable": false
+    },
+    "crates/shapes/src/linkml.rs": {
+      "sha256": "b258a378144af28b12ef8cb702958039e414c2ee986ad4833f29e412e30f7822",
+      "executable": false
+    },
+    "crates/shapes/src/schema_import.rs": {
+      "sha256": "6192e1ea0d272d1a8c6b1f5f90dce71b351c646eb8147aaa500b846ce9a4e14e",
+      "executable": false
+    }
+  },
+  "environment": {
+    "RUSTFLAGS": null,
+    "RUSTUP_TOOLCHAIN": "/home/paudley/stage/packages/rustup/active-toolchain",
+    "CARGO_REAL": null,
+    "CARGO_BUILD_TARGET": null,
+    "CC": null,
+    "CXX": null
+  },
+  "completed": true,
+  "log": "/home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger/.stage/v4-api-expose-typed-loss-ledger/validation-runs/20261106T123757-55094215fe/output.log",
+  "excerpt": [
+    "5:     Checking purrdf-conformance-kit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger/crates/conformance-kit)",
+    "6: error[E0282]: type annotations needed",
+    "7:     --> crates/rdf-core/src/loss.rs:3288:9",
+    "8:      |",
+    "12: For more information about this error, try `rustc --explain E0282`.",
+    "13: error: could not compile `purrdf-core` (lib test) due to 1 previous error",
+    "14: warning: build failed, waiting for other jobs to finish..."
+  ],
+  "exit_code": 101,
+  "inputs_changed_during_run": false,
+  "finished_at": "2026-11-06T12:39:15.408070+00:00"
+}

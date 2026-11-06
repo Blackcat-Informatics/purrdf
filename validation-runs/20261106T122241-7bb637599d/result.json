@@ -1,0 +1,136 @@
+{
+  "command": [
+    "cargo",
+    "clippy",
+    "--release",
+    "--locked",
+    "-p",
+    "purrdf-core",
+    "-p",
+    "purrdf-rdf",
+    "-p",
+    "purrdf-shapes",
+    "--lib",
+    "--test",
+    "loss_profiles",
+    "--test",
+    "loss_ledger_soundness",
+    "--example",
+    "graphql_oracle_fixture",
+    "--example",
+    "linkml_oracle_fixture",
+    "--example",
+    "pydantic_oracle_fixture",
+    "--example",
+    "schema_reverse",
+    "--example",
+    "typescript_oracle_fixture",
+    "--",
+    "-D",
+    "warnings"
+  ],
+  "scopes": [
+    "crates/rdf-core/src/loss",
+    "crates/rdf-core/tests/loss_profiles.rs",
+    "crates/shapes/examples",
+    "crates/shapes/tests/loss_ledger_soundness.rs"
+  ],
+  "started_at": "2026-11-06T12:22:41.560171+00:00",
+  "head": "3a5e05675502c4b7e7377a9ddee7021698c6ca89",
+  "inputs": {
+    "crates/rdf-core/src/loss/completeness.rs": {
+      "sha256": "e3419b17fa0c8ad81d959691bf0a4b7508c9e1cab488d564084847c70a28047d",
+      "executable": false
+    },
+    "crates/rdf-core/src/loss/profile.rs": {
+      "sha256": "36a713757f59d9184ddeceb4c06d14545ca5083e98ce50e5797a086f477fa246",
+      "executable": false
+    },
+    "crates/rdf-core/tests/loss_profiles.rs": {
+      "sha256": "def5960d3dd04b330df87edc84b8ec225a78d5cf1c70546fff437bfd86992f46",
+      "executable": false
+    },
+    "crates/shapes/examples/gen_shapes_loss_ledger.rs": {
+      "sha256": "7f3e9af36dd8a39e83a0849a2ffd65e9ca4fa39b0d3a19c1aa40fd3e2e1578b2",
+      "executable": false
+    },
+    "crates/shapes/examples/graphql_oracle_fixture.rs": {
+      "sha256": "8444096edb821b9f70715e75733a7d02c66239a4bf6dead8e780abdce3cf95f9",
+      "executable": false
+    },
+    "crates/shapes/examples/graphql_package.rs": {
+      "sha256": "6ef538a01fa9849874b9115da6f2e06f47f64c9801c995ef96d30e6ec7b19b93",
+      "executable": false
+    },
+    "crates/shapes/examples/linkml_oracle_fixture.rs": {
+      "sha256": "af38cb8acb88c356d09e9a3d3ee0207ce826ae4d32f7f929c7bfc9d9ecd7a386",
+      "executable": false
+    },
+    "crates/shapes/examples/ontology_schema_surface.rs": {
+      "sha256": "3f758641f775d319b949b122202a2f319c0a49105beeaff935cd56808ef85c8e",
+      "executable": false
+    },
+    "crates/shapes/examples/pydantic_allocations.rs": {
+      "sha256": "5a93da4aa383afca9142d89b91e7b5e269b8812b9d509268dda07fcc2c3004fd",
+      "executable": false
+    },
+    "crates/shapes/examples/pydantic_oracle_fixture.rs": {
+      "sha256": "f3d0ebb563c0cda42b03758957fb1e3bb6e4267bf602317ed773c7674a693971",
+      "executable": false
+    },
+    "crates/shapes/examples/schema_reverse.rs": {
+      "sha256": "a77ed986b6d0edbc99933b0d9e70c38334486e4d4a8ac16685327cf5b744003e",
+      "executable": false
+    },
+    "crates/shapes/examples/support/holder.rs": {
+      "sha256": "779eafc02b0e58b6d6c120c5a01efdf4346be31d9db9d829e276b3fab85edfed",
+      "executable": false
+    },
+    "crates/shapes/examples/support/json_text.rs": {
+      "sha256": "95b5fc06a186812d43e09910e2680ff70e1f91faf63defede12bf7c0e3e9cf7f",
+      "executable": false
+    },
+    "crates/shapes/examples/support/metaschemas.rs": {
+      "sha256": "045b57f55f0237c4a9009093bd33e899a317ffb15304d6abb49bd2367b4a20e2",
+      "executable": false
+    },
+    "crates/shapes/examples/support/oracle.rs": {
+      "sha256": "6b5a94d4ff289b080c885a9d9d16ab23298af22e4eda425964257a42173cfe13",
+      "executable": false
+    },
+    "crates/shapes/examples/support/shacl_lists.rs": {
+      "sha256": "2f59d48311e9bc61013e6001d496184acf78d600315f461a8b87c14d0daa3395",
+      "executable": false
+    },
+    "crates/shapes/examples/support/shacl_temporal.rs": {
+      "sha256": "6f91a3303e7f832058c4524d4e04788ab361f4a8b20299aa68b5d5232cbb188d",
+      "executable": false
+    },
+    "crates/shapes/examples/support/shacl_value_shapes.rs": {
+      "sha256": "938d316528168c39e9f30d19c1e2794f96eda499887807786b939cdff75139d3",
+      "executable": false
+    },
+    "crates/shapes/examples/typescript_oracle_fixture.rs": {
+      "sha256": "082e83bb1ba3da01ccc6bd7d275aeb055c86c05bc8cbe7eb55b0102f5fcd46a1",
+      "executable": false
+    },
+    "crates/shapes/tests/loss_ledger_soundness.rs": {
+      "sha256": "6021b0e4a4e6962c3ab3e6b801e44c5c68aa6e942ab32a2a4f1aa06c48f70ee8",
+      "executable": false
+    }
+  },
+  "environment": {
+    "RUSTFLAGS": null,
+    "RUSTUP_TOOLCHAIN": "/home/paudley/stage/packages/rustup/active-toolchain",
+    "CARGO_REAL": null,
+    "CARGO_BUILD_TARGET": null,
+    "CC": null,
+    "CXX": null
+  },
+  "completed": true,
+  "log": "/home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger/.stage/v4-api-expose-typed-loss-ledger/validation-runs/20261106T122241-7bb637599d/output.log",
+  "excerpt": [],
+  "exit_code": 0,
+  "inputs_changed_during_run": false,
+  "finished_at": "2026-11-06T12:22:51.999708+00:00"
+}

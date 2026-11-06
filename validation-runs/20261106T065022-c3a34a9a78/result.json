@@ -1,0 +1,53 @@
+{
+  "command": [
+    "cargo",
+    "clippy",
+    "--release",
+    "--locked",
+    "-p",
+    "purrdf-core",
+    "--lib",
+    "--",
+    "-D",
+    "warnings"
+  ],
+  "scopes": [
+    "crates/rdf-core/src/loss.rs",
+    "crates/rdf-core/src/loss",
+    "crates/rdf-core/src/lib.rs"
+  ],
+  "started_at": "2026-11-06T06:50:22.610614+00:00",
+  "head": "9be0479391422f9aee9a2336ee2639f93442d480",
+  "inputs": {
+    "crates/rdf-core/src/lib.rs": {
+      "sha256": "ea01e8ac25359e596e3a29fd8fe68ee6069f20fbd05479f9da8d5be49d49b17f",
+      "executable": false
+    },
+    "crates/rdf-core/src/loss.rs": {
+      "sha256": "3f1e80c836fcd40aadb70b0fd42ff3a10aad4c428c2b5dbc4ac889d6a34793e0",
+      "executable": false
+    },
+    "crates/rdf-core/src/loss/completeness.rs": {
+      "sha256": "9651ed384bf0cc744b6b788783a18910480dc715477593de565e0a341774d79d",
+      "executable": false
+    },
+    "crates/rdf-core/src/loss/profile.rs": {
+      "sha256": "effea9baf49d44da91f0f920874e02f9c1c12e08c7df42b4587a1cb8d9c3e5d1",
+      "executable": false
+    }
+  },
+  "environment": {
+    "RUSTFLAGS": null,
+    "RUSTUP_TOOLCHAIN": "/home/paudley/stage/packages/rustup/active-toolchain",
+    "CARGO_REAL": null,
+    "CARGO_BUILD_TARGET": null,
+    "CC": null,
+    "CXX": null
+  },
+  "completed": true,
+  "log": "/home/paudley/Active/purrdf/.worktrees/1117-v4-api-expose-typed-loss-ledger/.stage/v4-api-expose-typed-loss-ledger/validation-runs/20261106T065022-c3a34a9a78/output.log",
+  "excerpt": [],
+  "exit_code": 0,
+  "inputs_changed_during_run": true,
+  "finished_at": "2026-11-06T06:50:56.639569+00:00"
+}
