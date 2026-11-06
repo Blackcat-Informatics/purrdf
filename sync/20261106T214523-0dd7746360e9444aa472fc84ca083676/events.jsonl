@@ -1,0 +1,6 @@
+{"time": "2026-11-06T21:45:23.675020+00:00", "status": "started"}
+{"time": "2026-11-06T21:45:25.475554+00:00", "status": "merging"}
+{"time": "2026-11-06T21:45:27.777995+00:00", "status": "conflicted"}
+{"time": "2026-11-06T21:45:27.905767+00:00", "status": "review_required", "reused_paths": [], "rerere_output": "Recorded preimage for 'CHANGELOG.md'\nRecorded preimage for 'docs/MIGRATION-4.0.md'\n"}
+{"time": "2026-11-06T21:53:46.389916+00:00", "status": "committing", "candidate_tree": "fdf4f44dd8cd36b2f17e8f0ef314974f6b187b26", "candidate_patch": "candidate-2d1119bec8a94bbaaf2160b66aac6770.patch", "validation_records": []}
+{"time": "2026-11-06T21:57:45.909400+00:00", "status": "completed", "commit": "6d3421df737eb0f7c50f4fcc5aded8158c03ad63", "tree": "fdf4f44dd8cd36b2f17e8f0ef314974f6b187b26"}

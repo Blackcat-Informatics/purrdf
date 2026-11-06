@@ -1,0 +1,7 @@
+RDF ingress, prepared/change validation and configuration paths previously reduced operational SHACL failures to text. They now retain ordered original diagnostics and source coordinates, typed term/selector/SPARQL-call/configuration causes, native processor operands and complete validation refusals. Python, C and WASM transport retains native fields, including specialized import failures and execution receipts.
+
+This is the completed ingress/prepared-validation slice of #1106. Public helper contracts discovered by the final export audit are tracked in #1202; #1106 and the final API-freeze audit remain open until their full requirements are complete.
+
+Focused normal-profile checks passed: 20 ingress cases, eight selector cases, the native arity and prepared processor regressions, 18 incremental-change cases, namespace/conformance/stack cases and the actual C import-host case. An actual Python extension smoke passed for native import/text causes and the valid neighbor. Strict release Clippy passed for affected native and host consumers. Independent substantive review found no actionable findings; normal signed hooks passed. Root synchronization preserved both release-note/migration conflict inputs. Integrated strict release Shapes/Validate/Python/C/WASM/CLI library compilation passed. Hosted CI has not run on this branch.
+
+The selected landing archive contains the complete synchronization journal only. No release or package publication is included.

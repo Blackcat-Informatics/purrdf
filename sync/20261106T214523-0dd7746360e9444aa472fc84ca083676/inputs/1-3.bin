@@ -1,0 +1,1671 @@
+<!-- SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca> -->
+<!-- SPDX-License-Identifier: CC-BY-4.0 -->
+
+# Migrating to PurRDF 4.0
+
+The breaking Rust API changes below belong to the 4.0 major release. Upgrade
+the PurRDF crates together when adopting them.
+
+## At a glance
+
+### Immutable MIME documents
+
+`purrdf::mime::Document` keeps its analyzed source and occurrence tables private.
+Replace direct field reads with these read-only methods:
+
+| Previous field | Method | Returned view |
+| --- | --- | --- |
+| `source` | `source()` | `SourceDocument<'a>` |
+| `cover` | `cover()` | `&ByteCover<'a>` |
+| `parts` | `parts()` | `&[Part]` |
+| `headers` | `headers()` | `&[Header]` |
+| `structures` | `structures()` | `&[Structure]` |
+| `problems` | `problems()` | `&[Problem]` |
+
+Construct documents through `analyze`; edited bytes require a new analysis.
+Standalone part and header values can still be edited as snapshots, but they
+cannot change the analyzed document. Attachment decoding, part covers and RDF
+projection reuse its established invariants. Unknown parts, transfer refusals,
+profile checks and strict verification of external RDF remain enforced.
+
+### Other API migrations
+
+The USTAR reader, borrowed-member iterator and writer functions now return
+`purrdf::ustar::UstarError` instead of `String`. Match its non-exhaustive variants
+with a wildcard or inspect the borrowed structured fields. Refusals retain their
+original byte offsets, declared and available lengths, raw size fields and native
+UTF-8 causes. Use `Display` only for presentation; projection-package failures
+also retain the archive error in their standard source chain. Current valid
+archive bytes and member ordering are unchanged.
+
+GTS transport decoding retains original native Zstandard frame errors through
+`TransportError::cause` and the standard I/O source chain. Inspect structured
+causes for decoder fields; `message()` remains an explicit presentation accessor.
+Transport error equality follows retained cause identity for native errors and
+no longer renders messages to compare independently produced failures.
+
+Caller ordering is explicit: select `FusionProfile::with_ordering` and plan
+with `ReadBound::CallerOrdered(k)`. The law compares optional leading bytes,
+score descending, caller tie bytes and canonical term; the default law and its
+canonical bytes remain unchanged. Producers supply immutable keys, pinned
+key-snapshot evidence and sound unread bounds. Native `search_ordered` accepts
+an `OrderCatalog` and selects the read bound before planning.
+
+Python `retrieval.search` and `compile` accept `ordering={"semantics": iri,
+"leading": bool, "keys": {canonical_term: (leading_bytes, tie_bytes)}}`.
+`plan(..., caller_ordered=True)` selects the corresponding planning license.
+Ordering on `compile` requires all arithmetic-law arguments. Returned rows carry
+`order_witness`; keyed answers carry source `ordering` evidence and
+`unemitted_order`. Missing keys and insufficient proof raise `ValueError`.
+
+Regenerate or recompute these stored artifacts; 4.0 readers refuse or miss the
+3.x forms:
+
+- Segmented stores written with an earlier data profile: rebuild them from the
+  original RDF input.
+- Independent Datalog proof bytes in encoding version 1: regenerate them from
+  the original inputs and rule program.
+- Cached Datalog plans and reasoning-contract results: the plan solver
+  (`purrdf-datalog-plan-v6`) and calculus (`purrdf-datalog-calculus-v3`)
+  identities changed.
+- Full-text profile, index and source fingerprints: the ranking identity is now
+  `purrdf-bm25f-fixed-v2` and the text identity domains are revised.
+- Developer-schema compilations cached under an earlier `SchemaCompilation.key`.
+
+Rebuild C clients against the regenerated `purrdf.h`; the 4.0 libraries declare
+C ABI 0.16.0. Several defaults change behavior without a signature change:
+remembered empty named graphs, model-only Datalog output, exact decimal
+division, WKT and GeoJSON parsing resource policies, the SPARQL pre-binding rewrite and specific
+SPARQL diagnostic codes.
+Each has its own section below.
+
+## Typed reasoning request failures
+
+The public operations in `purrdf_validate::regime` now return owned,
+non-exhaustive `ReasoningError` values. This includes regime and service parsing,
+rule construction and listing, materialization, sessions, proof decoding and
+verification, profiles, conclusion queries and import configuration. The facade's
+`QueryEntailmentPlan::parse` returns the same type, re-exported as
+`purrdf::reasoning::ReasoningRequestError`; the facade's existing generic
+`ReasoningError<E>` still describes query execution.
+
+Match the semantic variants with a wildcard, inspect their borrowed structured
+fields, or follow their standard error sources. Original spellings, supplied
+programs, RDF input roles, native parser failures and proof causes remain owned by
+the error. A directness refusal owns its original certificate. Render `Display`
+at the presentation boundary; the human renderers such as
+`render_entail_error_in` remain available for callers that already hold a native
+error. Valid answers, certificate bytes and request precedence are unchanged.
+
+Shipping fixture readers and checkers also return typed grammar, comparison and
+case failures. They retain line numbers, directives, expected and produced text,
+and original case causes. Update function-pointer aliases and `?` conversions
+that previously required `String` or `CanonicalServiceError`.
+
+`parse_scope_binding` returns `ScopeBindingError`, which owns the original
+binding. Its implementation lives in `purrdf_shapes::scope_binding` and remains
+re-exported through Validate. It still splits at the first equals sign and leaves
+empty names and values to their existing downstream interpretation. Parallel
+host import arrays use Core's `ImportArrayError`, retaining both lengths or the
+original storage refusal.
+
+Python reasoning failures keep their existing `ValueError` messages and expose
+`native_cause` and `native_cause_json`. C errors retain the corresponding native
+record through `purrdf_error_native_cause_json`; query, canonicalization and
+storage classification remain available. JavaScript reasoning errors carry the
+retained native fields and diagnostic record on both synchronous and
+asynchronous query paths. Attaching canonical-search receipts preserves the
+complete request cause. Hosts must read structured fields rather than parse
+message text.
+
+## Extensible source formats and glob refusals
+
+`SourceFormat` and `purrdf_glob::SyntaxReason` are now non-exhaustive.
+External matches must include an unsupported-case arm. Keep known variants'
+behavior explicit; an unknown source format must produce an actionable refusal
+rather than acquire the behavior of a native syntax or container. The CLI
+refuses unknown kinds when reading, writing or resolving a document base.
+
+Existing format routing, glob matching and refusal payloads remain unchanged.
+Future language or compiled-plan laws must preserve existing valid patterns and
+readable 4.0 portable descriptions, or use explicitly selected versioned forms.
+
+## YAML reader refusals
+
+`purrdf_lex::yaml::ErrorKind` is non-exhaustive. Include a wildcard when matching
+it. Both `ErrorKind` and `Error` now own context and are no longer `Copy`;
+`Error::kind()` borrows the kind and `into_kind()` consumes the error. Move the
+original error through native and host wrappers instead of relying on copies.
+
+Repeated scalar-key failures retain the decoded key text and the first and
+repeated occurrence offsets. Lexical collection-key duplicates retain their
+original occurrence spans. Disabled anchor and alias failures distinguish the
+indicator and retain the name span, excluding that indicator. Unknown and cyclic
+aliases retain the alias occurrence's name span rather than the target's range.
+Escape failures retain their original escape span; unfinished quote, unfinished
+flow and trailing-content failures have stable native categories and ranges.
+`TrailingContext` distinguishes a completed node, document or explicit end marker.
+
+Every span refers to the original UTF-8 source, including stream offsets. Keep
+that source if its verbatim name or escape bytes are needed; failure construction
+does not allocate a second copy of lexical names. Decoded repeated-key text is
+owned by the error and remains available after the source is dropped. Borrowed
+structured inspection exposes these fields without rendering messages. Existing
+parser messages, refusal positions, successful values and emitter bytes are unchanged.
+
+Physical lexical allocation failures now expose their original storage cause
+through the standard source chain. The shared YAML source host adapter classifies
+these as `rdf-storage-refused` or `rdf-capacity-exhausted`, rather than
+`yaml-source-native`; the C transport returns `StorageError` rather than
+`ParseError`, and Python/JavaScript expose the corresponding storage diagnostic.
+Explicit configured allocation-limit refusals keep their existing classification.
+The separate JSON-LD adapter retains its `native-yaml-storage` code.
+
+## Planner estimates
+
+`PlanEstimate` is non-exhaustive. Replace struct literals with
+`PlanEstimate::new(rows, peak_rows, columns)`, and include `..` when destructuring
+the record. Its public fields remain readable. Row and peak-row estimates, and
+the cell estimate returned by `peak_cells()`, are predictions rather than
+guaranteed output bounds; their meaning and EXPLAIN representation are unchanged.
+
+## Streaming GTS payloads
+
+`BlobPayload::bytes` now uses `BlobContent`: source-backed CBOR chunks,
+a replay reader, or `Absent`. Consume it during the callback with `reader()`;
+use `chunks()` only when the source supports borrowed chunks. Payload events
+are no longer `Copy` or `Clone`. `digest_computed` distinguishes a verified
+identity from a declared digest that the consumer must verify.
+Streaming codec failures retain their original native causes through the
+standard I/O bridge; inspect that source chain for codec-specific fields.
+
+`prepare_gts_columnar_to` accepts a `GtsBlobStager` for provisional payloads
+and seekable transformed-snapshot scratch. Implement `begin`, `write`, `discard`
+and `scratch`; scratch implements `cbor::ReplayStorage::finish`. Successful
+imports return selected handles. Superseded payloads, recoverable omissions
+and successfully interpreted snapshot scratch are released during import.
+On failure, dispose of the remaining provisional storage.
+
+Python SQLite, DuckDB and Parquet GTS exports use provisional files and bounded
+payload I/O. Existing explicit limits, unbounded admission and typed omission
+reports still apply. The native dataset, term/reference state, metadata and
+output descriptors remain resident; streaming payloads does not establish a
+process-wide memory ceiling. The explicit resident row/file APIs still
+materialize their returned payloads.
+
+Streamed Parquet blobs use one uncompressed row group per selected digest in
+canonical SHA-256 order. Their physical bytes differ from the resident writer's
+page grouping; the native five-table schema and logical contents are unchanged.
+`write_with_blob_sources_to` verifies source length and digest while writing.
+Its output stays provisional until it returns success.
+
+## Controlled native RDF parsing
+
+`parse_dataset_controlled` accepts Turtle and TriG with caller-owned storage,
+work and cancellation controls. Success retains the dataset, original source,
+ordered exact occurrences and document directives under one admission owner.
+Its views borrow that owner; query workspace must be admitted separately.
+`ParseRefusal` retains the original typed failure and input, with the directives
+read before refusal, and exposes no partial dataset. Other formats refuse
+explicitly. Existing resident parser entry points use the same implementation.
+
+Source-directory sealing now uses one fallible digest sorter in both resident
+and controlled parsing. Equal-digest records can have a different encoded
+source-local address permutation from earlier releases. Rebuild persisted
+source images; RDF meaning, encounter order and value-derived identities are
+unchanged. Controlled buffer growth also admits its actual relocation work.
+
+## Native table allocation errors
+
+`QueryIndexAllocationError::StatementHistogram` carries
+`purrdf_core::hash::table::TryReserveError` in 4.0, replacing the distinct
+`hashbrown::TryReserveError` type. Update payload annotations, constructors and
+conversions to the Core type. Code that only matches
+`QueryIndexAllocationError::StatementHistogram(_)` needs no payload-type change.
+The ordinal-array `Permutation` variant retains its existing storage error.
+
+## Fallible blank-node counts
+
+`blank_count` and `blank_count_view` now return `Result<usize, CanonError>`.
+`try_blank_count_view` returns `Result<u64, CanonError<D::ReadError>>`.
+Propagate the result with `?` or handle source, scratch admission and storage
+failures before using the count. Traversal buffers and the distinct ID table
+now use the source's scratch admission, preserving its original refusal.
+
+## Admitted term-fold ownership
+
+`try_fold_nested_with_memory` now takes `discard_answer(ctx, answer, memory)`
+before `storage_error`. `try_fold_term_with_memory` similarly takes
+`discard_answer(answer, memory)` after `read_error`. The shared traversal
+releases only its work-list spill and answer-array backing allocations.
+Callbacks retain responsibility for their payloads: discard abandoned completed
+answers, and destroy/refund partial locals or moved triple operands when a
+callback fails. Disposal must not poll work or replace the original failure.
+Persistent callback state and error payloads retain their original grants.
+The storage error factory runs once after scratch cleanup. Native order remains
+subject, predicate, object, then triple assembly.
+
+The native `TermValue` and dataset copying adapters continue to refund their
+closed partial-copy payloads before constructing public storage errors. Scratch
+admission alone does not establish a bound on vector relocation work.
+
+`TermValue::release_with_memory` returns
+`Result<(), (Option<TermValue>, StorageError)>`. A failed pre-destruction census
+returns `Some(original_term)` with its original grant. A refund refusal after
+destruction returns `None`. Keep or explicitly release a returned owner; do not
+discard it while treating its grant as refunded. SPARQL results errors retain
+these payloads in `Error::TermRelease { term, cause }`.
+
+SPARQL results cleanup errors retain their original row, preceding rows and
+parser scratch in the opaque `JsonRelease` owner. Its `release_with_memory`
+method retries disposal under the same original account. Earlier semantic
+refusals remain primary; the cleanup cause remains independently available.
+`Error`, `ReadError` and `JsonRelease` are move-only: remove calls to `clone()`
+on errors and move the original error across input disposal instead. Cloning
+an admitted residual owner would duplicate its payload without acquiring a
+second grant and could refund the same account twice.
+
+## Declared retrieval ranks
+
+`RankedDeclaration` now requires `rank_source: RankSource`. Existing native
+producers declare `RankSource::Ordinal`. Producers whose distinct subjects
+share a literal rank declare `RankSource::Shared { position }`, naming an
+unbound integer-family output argument. Native execution retains those values
+instead of assigning new subject ranks. Caller-supplied shared-rank query text
+must project `?rank`. Zero, descending, unbound and ill-typed ranks are refused.
+
+`StreamContract::new` takes an explicit `RankLaw` first. Ordinal producers keep
+the contiguous distinct law; shared producers declare positive nondecreasing
+ranks. Duplicate identities remain independent of repeated rank values.
+
+Depths and row bounds still count rows. `DepthReached`, `RowBoundReached` and
+`SuppliedQueryEnded` report the last emitted rank; `Exhausted` counts emitted
+rows. `UnionProducer::last_rank` and `StratumResolution::ranks_pulled` retain
+rank progress separately from `rows_pulled`. The fusion trailer also reports
+`shared_ranks_observed`, excluding those intentional ties from
+`collisions_observed`. Registry fingerprints use schema version 3, so registry
+and dependent plan identities change, including those of empty registries.
+The explicit rank declaration participates in that identity.
+Candidate-union canonical bytes use layout version 3 and
+include the producer's last rank and rank law.
+
+## Explicit unsigned retrieval precision
+
+Fusion uses `Score` and `Precision`, independently of the signed `Fixed` values
+used for numeric request endpoints and BM25. Construct `Precision::new(digits)`
+with zero through 38 decimal fractional digits, then use `precision.score(raw)`
+for unsigned raw weights. `FusionProfile::with_decay(weights, decay, precision)`
+requires the precision explicitly and refuses weights carrying different units.
+The admitted ceiling is the exact checked sum of rank-one contributions, so
+representable full-width scores are accepted even when the raw weight sum would
+overflow. Both decay rules compute directly at the selected scale.
+
+Standalone scores and derived weights retain their raw units and precision.
+The inverse depth helper now takes `weight_for_depth(precision, depth)`; the
+threshold and crossing helpers also take explicit precision, including for empty
+weight lists. Frontier cells retain raw unsigned values under the owning profile.
+`FusionTrailer::certain_prefix` returns `Result<usize, FusionError>` and refuses
+supplied rows or bounds with mismatched precision or invalid interval arithmetic.
+
+Python fusion calls require `scale_digits`; optional compile-time laws require
+all four of `weights`, `k`, `decay` and `scale_digits`, or none. Returned scores,
+contributions, ceiling bounds and derived weights are `{raw, scale_digits}`
+dictionaries. Raw Python weights span `u128`; floats, negative integers and
+integers outside that range are refused. Arithmetic depth/count results remain
+integers or absence. Signed numeric request endpoints retain their existing units.
+
+Regenerate fusion profiles: canonical layout version 2 carries an unsigned
+weight representation and explicit precision and refuses version 1. Candidate
+union layout version 3 carries the precision of every ceiling status. Profile
+identities change with precision. Pure plan identities remain independent of a
+fusion law; reproducible answers carry the separate plan and profile identities.
+
+## Execution coordinates and receipt migration
+
+`QueryCoordinates::Started` retains the actual context time and initial entropy
+seed, including sampled defaults. Use `effective_now()` and
+`effective_entropy_seed()` for those values; `now()` and `entropy_seed()` still
+identify independently supplied inputs. Clones share the original admitted
+exact timestamp owner. `NotStarted` means no evaluation context was constructed,
+not that preparation or storage reads did no work.
+
+`GovernedOutcome::Complete`, `InternedGoverned::Complete`, `BudgetExhausted`,
+`GovernedEvidence`, and both `GovernedUpdateOutcome` arms carry
+`coordinates: QueryCoordinates`. Preserve that field when reconstructing an
+outcome. Ordinary and prepared callers can install an
+`ExecutionCoordinateObserver` through `QueryOptions::with_coordinate_observer`
+to retain the actual receipt on success or failure. EXPLAIN uses the same capture.
+
+UPDATE captures its first WHERE context before random draws and retains that
+receipt across rollback. Observers see each context in program order. Data-only,
+LOAD and graph operations do not construct WHERE contexts, so an UPDATE may
+apply with `NotStarted`. Rule receipts bind the typed program, shapes and data
+snapshots, execution options, and ordered query-context receipts.
+
+Execution identities bind the request, effective coordinates, source snapshot,
+and known execution policies. Opaque callbacks, producers and external sources
+leave the execution identity absent unless the Rust caller certifies their code
+and captured sources with `QueryOptions::with_implementation_identity`. Native
+snapshot identities include retained dictionary content because blank-name
+collision avoidance observes unused terms. Missing identity is explicit; it is
+never inferred from output bytes. Query-text provenance remains separate.
+
+JavaScript package results own `executionReceipt`. `ask` returns an object with
+`boolean`; `construct` and `describe` return an object with `dataset`; `update`
+returns `{ dataset, executionReceipt }`. Raw query methods, `Dataset.query` and
+EXPLAIN return `{ body, executionReceipt }`; async twins use the same envelopes.
+`queryRawBytesAsync` places bytes in `body`. Low-level handles expose
+`executionReceiptJson`; serialized jobs use `takeRawResult()` instead of
+`takeRawBytes()`. Free that result handle after reading it. Running async jobs
+reject cancellation with an error carrying the original signal reason as
+`cause`, beside the receipt and evidence. An already-aborted signal still
+rejects before job creation with its original reason.
+
+Python query results and outcomes expose `execution_receipt_json`.
+`MutableDataset.update` now returns an owned `UpdateOutcome` instead of `None`;
+its ordinary ungoverned lane has `evidence is None`. Rule dictionaries carry
+`execution_receipt_json`. Failed executions retain receipts on their original
+exception classes. CLI execution records use stderr, leaving RDF stdout intact.
+
+## C query, UPDATE and rule coordinates
+
+ABI 0.16.0 requires a separate `PurrdfBuffer **out_receipt` immediately after
+`entropy_seed` on ordinary, JSON, governed and entailment queries, governed
+UPDATE, and rule execution, including their XPath and geographic variants.
+Recompile all affected callers. Initialize a receipt pointer to `NULL`, pass its
+address, inspect the returned JSON with `purrdf_buffer_data`, and release it
+with `purrdf_buffer_free`. Payload and receipt have independent ownership.
+The receipt slot is written only on success. Use
+`purrdf_error_execution_receipt_json(error)` after failure for a receipt borrowed until the
+error handle is freed.
+
+The preceding `now` and `entropy_seed` inputs remain independently nullable.
+Time accepts an exact `xsd:dateTime` lexical form, including negative years,
+fractional seconds and timezone. A pointer to zero supplies seed zero. Each
+call owns its parsed inputs before evaluation; outputs retain no caller memory.
+Effective seeds cross receipt JSON as decimal strings and unavailable identities
+as JSON nulls. Malformed coordinates keep the existing argument-error classes.
+
+## WKT and GeoJSON parsing resource policies
+
+`wkt::parse`, `geojson::parse` and their compatibility carriers through `geometry_arg` now apply
+`ExecutionPolicy::geometry()`. Input scanning, aggregate exact-decimal
+construction and coordinate count can exhaust that policy even for valid input.
+Refusals retain their original `WorkExhausted`, `MemoryExhausted` or
+`OutputExhausted` reason. Accepted coordinates and CRS metadata remain exact.
+
+Use `wkt::parse_in_policy`, `geojson::parse_in_policy` or `geometry_arg_in_policy`
+for caller-selected limits. Use `wkt::parse_unbounded` or
+`geojson::parse_unbounded` when the caller accepts unrestricted construction.
+Large exponents or trusted generated text with hundreds of decimal places can
+require either route. Producing a value under one operation's budget does not
+guarantee that a separately budgeted parse can reconstruct it.
+
+Existing supplied-policy, metered and storage ingress keeps its original account.
+Collections still use a heap stack with no separate nesting-depth ceiling;
+their scanning and construction consume the selected policy's resources.
+GeoJSON foreign members and coordinates preceding their type share that scan
+allowance. With sufficient resources, malformed JSON still takes priority over
+deferred shape errors. The inherited rational exponent ceiling is unchanged.
+These limits admit conservative logical source, work, construction and output
+costs; they do not promise exact retained-heap accounting or cancellation.
+
+## Shape-map syntax refusals and Unicode positions
+
+Compact shape-map grammar errors now use `ShexError::ShapeMapSyntax`, with a
+native `ShapeMapReason` and the structured identity `shex-shape-map-syntax`.
+The original Unicode-escape and language-tag causes, owned lexical data and
+role/context fields are available through borrowed inspection and standard
+error sources. Schema-parser and exact-alignment `Syntax` reasons are separate.
+
+`byte_offset()` and `locate()` now use true UTF-8 positions for shape-map errors.
+For example, the missing association separator in `"é"!` is at byte four; the old
+scalar cursor incorrectly reported three. The original cursor remains available
+as `scalar_offset`. ASCII positions, grammar and human reason text are unchanged;
+Unicode position numbers are intentionally corrected. Byte positions are computed
+only on refusal from the existing characters, with no added success allocation.
+
+## ShExJ language refusals
+
+All six ShExJ language-tag and stem positions now return
+`ShexError::LanguageTag` with a native `LanguageMember`, original owned value and
+`LanguageTagError`. The structured identity is `shex-json-language-tag`; its
+borrowed fields retain the member, value, fixed profile policy and native cause.
+`SHEXJ_LANGUAGE_PROFILE` exposes the shared native profile, and its policy name
+is bound to that profile at compilation. Standard `source()` lends the original
+language error. Human messages and outer offset behavior are unchanged.
+
+Empty stems remain admitted, including the existing empty exclusion stem. Its
+ShExC conversion remains outside the current round-trip coverage.
+
+## ShExJ JSON reader refusals
+
+ShExJ ingress now returns `ShexError::JsonRead` with the original native JSON
+error. Its structured identity is `shex-json-read`, and its borrowed `cause`
+retains the JSON kind, byte offset and nested fields. Standard `source()` lends
+that same native error. Human `Display`/`Debug` and outer `byte_offset()`/`locate()`
+behavior are unchanged. ShExJ schema and value-grammar reasons remain separate
+`ShexError::Shexj` values with the existing `shex-json` identity.
+
+## ShExC lexical refusals
+
+`ShexError::Lex.reason` and `ShexError::lex` now use `LexicalReason` instead of
+message strings. Match native reasons or inspect the existing `shex-lex` record:
+its `reason` field is a borrowed nested cause, and `at` retains the original byte
+offset. Native Unicode-escape and language-tag causes are also available through
+the standard error-source chain. Human messages and byte offsets are unchanged.
+
+## Native retrieval, import and proof refusals
+
+`purrdf_cli::file_retrieval_iri` now returns
+`Result<String, purrdf::slice::SliceError>` instead of `Result<String, String>`.
+Match the native refusal or inspect its structured fields and standard source
+chain. Call `to_string()` when presenting it. The public helper renders the
+native slice error; the CLI adds its existing path display and `--base` hint
+at its presentation boundary. Successful file IRIs are unchanged.
+
+`PremiseIriError` supports borrowed structured inspection of its original `iri`
+and native IRI `cause`, alongside its existing accessors and source chain.
+
+`purrdf_core::imports::ImportKeyError` is non-exhaustive. Include a wildcard
+when matching it. `NotAbsolute.reason` now holds `Option<purrdf_iri::IriError>`
+instead of `Option<String>`; borrow that original cause or use its standard
+source chain and structured visitor. Relative references retain an absent parser
+cause. Existing empty-key, malformed-key and duplicate-key messages and ordering
+are unchanged, and cloning and equality preserve native error fields.
+
+`DlProofError` and its proof evidence support borrowed structured inspection,
+including original node identities, roles, witness atoms, alternatives, counts,
+source failures and canonicalization causes. Inspection preserves the original
+field and list ordering without rendering or cloning evidence. Proof encoding,
+calculus identities and decision rules are unchanged.
+
+## Certified direct OWL answers
+
+Call `direct_subsumptions()` on `Certified<ClassHierarchy>` and `direct_types()`
+on `Certified<Realization>`, before discarding or splitting the certificate.
+The raw hierarchy and realization no longer expose direct candidates, including
+in debug output. Their established positive facts remain available.
+
+Both accessors return a `DirectnessRefusal` unless the original certificate is
+exactly `DlCompleteness::Decided`. Its `certificate()` borrows the original full
+certificate, also exposed through structured inspection. A completely searched
+fragment with omitted axioms cannot establish directness for the supplied
+ontology: those axioms could add an intermediate class or a more-specific type.
+
+Shared classification and realization calls now refuse incomplete directness
+before emitting answer rows. Their error message starts with
+`owl-directness-unavailable` and retains the existing complete certificate block.
+One-shot, session and proof calls use the same path across language wrappers.
+Fully decided answer, certificate and proof bytes remain unchanged. The shared
+host methods accept no stop input; native refusals retain native cancellation
+evidence without adding a new host protocol claim.
+
+## Justification decision refusals
+
+Justification shrinking and its sufficiency/minimality checks now require a
+fully decided native certificate for every negative answer. Unsupported ontology
+boundaries, exhausted search and native solver failures propagate instead of
+being interpreted as evidence that an axiom is necessary. Positive evidence
+within a supported fragment remains usable.
+
+The unit `ExplainError::Undecided` variant is removed. Incomplete decisions now
+use `ExplainError::Entail` with `EntailError::Decision`, retaining the original
+certificate, including boundaries, resource refusal and cancellation evidence.
+The boolean check methods return that original `EntailError::Decision` directly.
+
+## Canonical reserved-vocabulary refusals
+
+`ReservedVocabulary` now lends its original IRI and position through `iri()` and
+`position()`. Cloning shares the immutable payload and its original admission
+owner. The refusal remains readable after its source is destroyed.
+
+Sources must provide `DatasetView::reserve_owned_workspace` when an offending
+IRI requires ownership. A missing capability returns
+`CanonError::OwnedWorkspaceUnavailable`; an unknown live ceiling does not grant
+permission. Original admission and source failures remain native causes.
+Verified resident carriers explicitly provide unbounded admission.
+`check_admissible` and `check_admissible_view` now return `CanonError`, including
+physical allocation refusal. Flat boundaries retain native causes through
+`ViewCanonError::Refused(CanonError<E>)`.
+
+This admission covers the retained refusal and its publication control. It does
+not certify canonicalization scratch or successful canonical result ownership.
+
+## Canonical Function Ontology catalogs
+
+Build `FnoCatalogInput` and pass it to `FnoCatalog::try_new`. The admitted
+`FnoCatalog` is immutable; `as_input()` borrows its fields. Admission checks RDF
+values, conflicting node descriptions and references before changing the input.
+An `FnoAdmissionError` owns the original rejected input and native reason.
+
+Labels, document banners and descriptions now use literal `TermValue` owners,
+preserving datatype, language and RDF 1.2 base direction. Use `FnBlank { label,
+scope }` for mapping identities instead of a sanitized `bnode_label` string.
+The existing term conversion and blank-label codec preserve those native scopes
+at RDF egress.
+
+Set-valued vectors sort canonically and indistinguishable duplicates collapse;
+compatible roles on one subject share their canonical facts. `expects` keeps
+its original list order. Emission preserves the admitted RDF
+facts while canonical order and collision-free list identities intentionally
+change output bytes. Distinct mapping labels and function IRIs no longer merge
+through sanitization. Slice's `list_functions_catalog` and `emit_list_functions`
+now return admission results and retain their explicit language retagging.
+
+Read a catalog with `FnoCatalog::from_dataset(&view, ontology_iri)`. The ontology
+IRI is explicit; the document is the unique subject whose `dcterms:isPartOf`
+names it. The reader uses the same admission path as caller-built catalogs and
+returns boxed `FnoReadError` values carrying original field operands, strict list
+causes or source-read failures. A source failure discards the entire result.
+
+The strict profile covers the complete default graph. Every statement must be
+represented by the admitted model or its RDF lists. Named graphs, reifiers,
+annotations, disconnected outputs or child mappings, unknown properties and
+extra list-cell facts are refused. Parameters and implementations may stand
+alone. Lists have disjoint blank cells; shared `rdf:nil` represents empty lists.
+Labels and descriptions preserve literal facets. Implementation formats and
+binding names are plain strings; required flags use the exact boolean spellings
+`true` and `false`. These boundaries preserve both catalog equality after a
+write/read and graph isomorphism after a read/write.
+
+## Caller-owned loss profiles
+
+Select `purrdf_core::loss::LossProfile::builtin()` and extend it with
+`LossDefinition` rows to declare caller-owned projection pairs and loss codes.
+Pass that profile to `check_ledger_sound_in` and `LossLedger::render_json_in`.
+Registration descriptions define code meanings; runtime entry notes describe
+particular losses and need not repeat those descriptions. Conflicting registered
+meanings return `LossProfileError` with the original rejected definition.
+
+Soundness now also checks that each entry belongs to the requested conversion
+pair. A reused code can no longer hide a mismatched pair. The explicit check
+returns a borrowed `LossSoundnessError<&str>` naming the first offending entry's
+code and pair operands. The builtin `check_ledger_sound` wrapper returns the same
+native error type; see [Typed loss-ledger checks](#typed-loss-ledger-checks).
+Existing builtin render methods and generated loss matrices retain their schema
+and bytes. Custom profiles have no
+ambient registration and do not affect another caller's builtin profile.
+
+## Retrieval canonical UTF-8 errors
+
+`purrdf_retrieval::PlanError::InvalidUtf8` now carries `source: core::str::Utf8Error`
+beside `what`. Update explicit constructions and exhaustive field patterns.
+Borrowed structured inspection and the standard error source retain the original
+valid-prefix offset and invalid-sequence length, independently of the input buffer.
+The human message and `invalid-utf8` refusal identity are unchanged.
+
+`FusionError::MalformedProfile` now carries `Box<ProfileRefusal>` instead of a
+rendered string. Its closed native reasons retain canonical/IRI decoder causes,
+profile fields and original candidate owners. The inspected `reason` field is now
+a borrowed cause with its own code and fields, replacing its former text value.
+Use `StructuredError` inspection to recover fields and `Display` for presentation.
+The outer
+`fusion-malformed-profile` inspection identity and human messages are unchanged.
+
+## Columnar projection errors
+
+`purrdf::columnar::project` and `write` return
+`ColumnarWriteError<D::ReadError>`. Update explicit return types and source-error
+matches: `ColumnarWriteError::SourceRead` carries the original read error rather
+than a formatted `ColumnarError::SourceRead` detail. Codec refusals are retained
+as `ColumnarWriteError::Codec(ColumnarError)`. Human message prefixes are
+preserved, and inspection borrows the original cause. Reading prepared Parquet
+files and encoding an existing projection still use `ColumnarError`.
+
+Match native content integrity failures through `ColumnarError::ContentStore`
+and `BlobContent { row, cause }`, and RDF reconstruction failures through
+`Reconstruction(RdfDiagnostic)`. These replace formatted `Malformed` details;
+the complete original cause, digest bytes and zero-based row remain inspectable.
+Storage-bearing reconstruction diagnostics retain their enclosing fields and
+attachments. Human prefixes and `Clone` remain. `ColumnarError` and
+`ColumnarWriteError` no longer implement `PartialEq` or `Eq`: original native
+codec and I/O causes do not define value equality. Inspect typed fields instead.
+
+The final generic `Malformed { context, detail }` variant is removed. Canonical
+row-shape failures use `Canonical(CanonicalReason)`, retaining original counts,
+column kind and nullability. Zstandard failures use `Zstd { context, reason }`,
+whose fallible shared owner retains the complete original codec error. Empty
+frame streams use `PageBodyReason::EmptyFrameStream` without allocating a
+diagnostic owner. The local `purrdf-zstd` provider exposes borrowed native error
+inspection; no downstream registry patch or formatted cause is needed.
+
+`purrdf_gts::dict::trained_dict` now accepts only the corpus and target length.
+`DictSeed` is removed: the actual FastCOVER trainer has no RNG, so seeding and
+restoring a thread-local generator never affected dictionary bytes. The unused
+legacy COVER and reservoir APIs are omitted from the local codec provider.
+
+The four dictionary authoring APIs in `purrdf_zstd::dictionary` now return
+`dictionary::Error` directly. It retains original I/O and Huffman causes,
+entropy counts, size/header operands and actual tuned training parameters.
+GTS `DictError::Authoring` and `DictError::Decode` retain those original provider
+and dictionary-decoder owners in place of `External.message`. Inspect their
+borrowed `cause` fields or standard error sources. `DictError` no longer has
+`Clone`, whole-error equality or `detail()`; `Display` preserves its human text.
+Dictionary training choices, canonical corpus ordering and previously successful
+bytes are unchanged. Unwritable Huffman descriptions, including uniform full
+alphabets, now receive bounded deterministic rebalancing before serialization
+instead of panicking. A remaining unrepresentable table retains its actual
+statistics in `dictionary::Error::UnrepresentableHuffman`.
+
+The shared error visitor now also inspects `std::io::Error` by borrowing the
+original kind, OS code and any typed cause supplied through `io_error`. Raw
+opaque messages remain absent from that view; explicit `Display` still uses the
+original owner. `IoFailure` retains its existing captured-message presentation
+API. Use the typed bridge for custom causes whose native fields must cross an
+I/O boundary without formatting.
+
+Compaction certificates now expose every `CertifyError` through the same borrowed
+visitor. `Refused` retains the original `CompactRefusedError`; `Cbor` retains a
+`CertificateCborError` with the original decoder or a typed certificate-shape
+reason. Inspect its field, expected shape, original CBOR value and zero-based
+array index where applicable. Standard error sources retain the native causes.
+`Invariant` now holds named `pre_refold_digest` and `post_refold_digest` operands.
+Certificate parsing keeps its first-match field behavior and accepted CBOR
+forms. Successful certificate bytes and human messages are unchanged.
+
+`purrdf_gts::codec::CodecFailure` now owns native Zstandard causes instead of
+rendered strings. Dictionary refusals distinguish `ZstdDecodeDictionary` from
+`ZstdEncodeDictionary`; `ZstdAllocation` carries the original `TryReserveError`
+as `cause` alongside its requested `capacity`. `ZstdDecode`, `ZstdHeader` and
+`ZstdTruncated` retain their original provider error types. Inspect their
+borrowed `cause` fields or standard error sources; human prefixes and the
+frame extent's Debug presentation are preserved.
+
+
+Freeze failures previously returned as `ColumnarError::Storage` now also return
+`Reconstruction(RdfDiagnostic)`. Update `Storage` matches for freeze failures to
+handle `Reconstruction` and inspect its diagnostic's `storage_error()` instead.
+
+## Literal component refusals
+
+`RdfLiteral::validate_components` returns `Result<(), LiteralComponentError>`
+instead of `Result<(), &'static str>`. The non-exhaustive error distinguishes
+native `LanguageTag(LanguageTagError)` failures from datatype mismatch,
+direction without language and language-string datatype without language.
+Its `diagnostic_code()` and `message()` preserve the existing codes and plain
+wording. Match typed variants with an unsupported-case arm, or inspect borrowed
+fields through the shared visitor and standard error source chain.
+
+The error is allocation-free and `Copy`; it borrows no caller text.
+`into_diagnostic_with_memory` admits diagnostic presentation and attachments
+through the supplied account while retaining the original cause under its
+independent shared owner. `into_diagnostic` uses resident diagnostic storage.
+Both conversions return the original `StorageError` on physical refusal.
+Builder checkpoints and freeze retain the first component failure; controlled
+validation preserves the original progress and storage refusal channels.
+
+`PackDictError::LiteralComponents` and `EmbeddingError::LiteralComponents`
+carry the native component cause under their existing outer malformed-input
+presentation. Embedding's earlier strict language parser retains its own
+original grammar cause and still checks lowercase identity afterward.
+
+Python literal exceptions keep their plain messages and expose `code`,
+`diagnostic_json`, `native_cause` and `native_cause_json`. C term-input errors
+retain the diagnostic through `purrdf_error_free`; the existing native-cause
+JSON accessor borrows that owner. WASM Rust callers of
+`DataFactory::checked_literal` and `directional_literal` now receive
+`Result<Term, JsValue>` instead of `Result<Term, JsError>`. The JavaScript
+exception keeps its plain message and carries `nativeCauseJson` plus a retained
+`nativeCause` owner, whose `json` getter remains usable after the throwing call.
+Free that owner when done. The explicitly unchecked Rust `literal` constructor
+keeps its existing behavior.
+
+Geographic strict-record responses retain `invalid-record`, the original pointer
+and message, and now include `error.cause` when the record refused an original
+native component cause. The shared native field codec constructs this metadata
+under the existing physical account and admits its complete output/work/scratch
+bound before construction. `native_error::to_json_with_memory` returns owned JSON
+under that account; `to_json_with_admission` additionally lets the caller refuse
+its layout through the original control channel. Drop the returned value before
+refunding its grant. `InspectionError::storage_error()` exposes a physical
+refusal directly, while existing protocol messages remain unchanged.
+
+## Visualization codec refusals
+
+`purrdf_rdf::viz::VizError::Serialize` now retains the original
+`xml_escape::InvalidXmlChar`; `Decode` retains the original
+`purrdf_lex::json::record::DecodeError`. Inspect their borrowed causes for the
+Unicode scalar and relative byte offset, or private JSON pointer, reason,
+found/expected values and nested reader/storage causes. Standard error sources
+borrow those same owners. Clone and equality operate on the native fields.
+
+`VizError::Layout` now owns a non-exhaustive `VizLayoutError` instead of a
+rendered string. Inspect its original node, edge, rank, component, anchor and
+parent identities, counts, rectangles, route points and arithmetic operands.
+Checked coordinate and region-depth conversions retain their original
+`TryFromIntError`. Layout errors and their geometry records support borrowed
+structured inspection and standard error sources.
+
+`VizPresentationIssue` is non-exhaustive. Replace `VizPresentationError` struct
+literals with `VizPresentationError::new(issue, instruction, message)` and field
+access with `issue()`, `instruction()` and `message()`. Navigation parsing keeps
+the original `IriError` through `native_cause()`, the shared visitor and standard
+source chain. Clones share that cause; compatibility equality still compares
+the original issue, instruction and message. Physical failure to retain a
+native cause returns `VizError::Storage` with the original `StorageError`.
+
+Navigation refusals nested in presentation JSON retain their native cause and
+RFC 6901 pointer through `DecodeError::native`. Record consumers can use
+`native_with_allocation` to admit presentation and pointers through their
+original `RecordAllocation`; the cause has its own independent Resident owner.
+`DecodeReason` is non-exhaustive and its borrowed `Native` case shares an already
+retained owner. Record equality still compares the original pointer, message
+and failure, independently of supplemental provenance. Genuine authored
+messages continue through `custom`; native presentation is exposed as
+`native_cause` rather than `external_message` during inspection. Physical
+retention or record admission failures keep the existing typed storage channel.
+
+Parsing, refusal priority, escaping, successful SVG/JSON bytes and human
+messages are unchanged.
+
+## Visualization specification refusals
+
+`purrdf_rdf::viz::VizError::InvalidVocabulary` now owns a `VizVocabularyError`:
+an empty mapping or a prefix/namespace conflict with the original lexical
+values and mapping positions. A conflict retains the most recent preceding
+mapping, including a repeated identical mapping. `InvalidSpec` now owns a
+`VizSpecError`: the first empty graph selector or the first repeated table
+field, its occurrence positions and the original total/distinct field counts.
+
+Inspect these native causes through standard error sources and the shared
+borrowed visitor. Table-field values retain their original enum; the visitor
+reports their existing human heading as text. Human messages, validation order,
+accepted repeated identical mappings, successful projections and export bytes
+are unchanged.
+
+## Visualization predicate and term-kind refusals
+
+`purrdf_rdf::viz::VizError::InvalidPredicate` now owns a `VizPredicateError`.
+Its five reasons retain the original non-IRI predicate, non-triple reification
+object or triple value rejected at an ordinary-term boundary. Already owned
+values move into the reason; dataset boundaries capture their semantic value
+through the existing native conversion.
+
+Quad predicate reasons also retain a sealed `VizResolvedPredicate`. Its
+`actual()` borrows the dataset-independent `TermValue`; structured inspection
+reports that native term and the original shallow datatype/component IDs.
+Source predicate IDs and component IDs are reported as dataset-local,
+zero-based dense indices, never cross-dataset value identities.
+
+Standard sources borrow the typed reason. The shared visitor exposes term
+data through the existing native `Term` protocol, without formatting or
+allocating during inspection. Construction does not render or cache a key.
+Explicit display retains the original canonical-key, shallow native-debug
+or static-reason spelling and quoted-predicate wrapper. Clone, equality and
+drop use the native term home. Rejection order, graph filtering, successful
+projection/export behavior and the nominal IRI-kind check are unchanged;
+this boundary does not add IRI grammar parsing or normalization.
+
+## Visualization focus and identity evidence
+
+`VizError::AmbiguousFocus` now owns a `VizFocusAmbiguity`: the original selector
+and separate sorted/deduplicated term and statement identity lists. The existing
+candidate vectors move into the reason. `VizError::IdCollision` now owns a
+`VizIdentityCollision` with the computed identity, original prefix, existing raw
+registry key and incoming raw key. These keys are comparison data; inspection
+does not parse them or reconstruct them from the identity.
+
+Standard sources and the shared borrowed visitor expose these native reasons,
+including named lists with their original order and explicit empty boundaries.
+Unknown-focus errors still retain their genuine caller-supplied selector text;
+there is no additional cause or discarded nonempty candidate set at that site.
+Human messages, validation/matching order, unique-match role assignment,
+same-key registration, conflict-state preservation and identity hashing are
+unchanged. Clone and equality operate on the retained native fields.
+
+## Visualization scene refusal evidence
+
+`VizError::Scene` now owns a `VizSceneError` rather than rendered text. Duplicate
+identities retain total and distinct node/edge counts. Unbound elements retain
+their original identity. Missing node, port, edge and anchor errors retain the
+original typed `VizEndpoint`; port failures also retain ordered native ports
+and their kinds, while anchor failures retain the actual optional anchor ID.
+
+Standard sources and the shared borrowed visitor expose the native reason,
+endpoint fields and port records. An absent anchor remains distinct from a
+different anchor identity. Inspection does not render or materialize a list.
+Only refusal copies the borrowed evidence; successful scenes are not cloned.
+Human messages, duplicate/edge/node and source/target validation order, scene
+construction and successful projection/export behavior are unchanged.
+
+## Explicit capacity limits
+
+`purrdf_shapes::srl::infer_until` and `infer_triples_until` accept a borrowed
+`Option<&dyn StopSignal>`. `Inference::usage()` retains the complete original
+`BudgetReport`; `RuleLimitExceeded::usage()` exposes it after exhaustion.
+`SrlError::LimitExceeded` and `RulesError::LimitExceeded` now carry
+`Box<RuleLimitExceeded>`. Update explicit constructions and exhaustive matches;
+method access through a borrowed payload remains unchanged. Their standard
+error sources still borrow the original `RuleLimitExceeded` directly.
+Handle the new `Stopped { cause }` variants separately from resource limits.
+Their native cause owns the stopped evaluator's usage report. Cancellation is
+cooperative between work boundaries, including within scheduled rule groups;
+it never returns an unfinished inference result or changes contract identity.
+
+Unstated Datalog stored-fact, join-step and term-arena settings now impose no
+logical ceiling on every target. Physical storage admission and counter
+representation still apply. Select finite limits explicitly; effective settings
+remain part of contract identity. The calculus version advances to v3 because
+chase work-counter overflow now refuses rather than permitting further work.
+All contract identities change, including explicitly finite profiles; cached
+results must be recomputed. Shared report vectors change their contract-hash
+lines while canonical model bytes stay unchanged. Historical fixture capacity
+values remain explicit; they do not retain the previous calculus identity.
+Target-specific capacity default constants have been removed.
+`EvalOptions::without_stored_fact_limit`,
+`without_join_step_limit` and `without_term_arena_limit` remove selected ceilings.
+
+## Prepared chase certificates
+
+`PreparedChase::certificate()` now borrows an opaque `ChaseCertificate`, which
+retains the original verified evidence and its allocation owner. Inspect its
+`criterion()`, `law_version()`, `program_identity()`, `report()` and `summary()`
+without copying the proof. `weakly_acyclic()` returns an optional borrowed
+`WaCertificate` for WA-specific positions and ranks. The `certify` and
+`certify_with` functions still produce owned WA evidence with independent
+verification before preparation. Explicit
+`close()` still owns evidence destruction and the original fallible grant refund.
+
+`ChaseTermination`, `TerminationError` and `TerminationCriterion` are
+non-exhaustive. Match known variants with a future-case arm; use the native
+criterion classification rather than treating an unfamiliar certified summary
+as an absent certificate. The implemented criterion remains weak acyclicity
+under law version 1; the chase, witnesses and model identities are unchanged.
+
+Entailment's `TerminationCertificate` retains the native certified summary and
+criterion and implements `Clone` without `Copy`. `ReasoningReport::termination()`
+returns `Option<&TerminationCertificate>`. Borrow it for inspection or explicitly
+clone it when an owned value is required. `positions()` and `existential_edges()`
+return `Option<usize>` because these counts belong to WA evidence. Structured
+inspection exposes the original `summary` and `criterion` records with the law
+version. Display delegates to the original native summary, and current WA report
+bytes remain unchanged. A lane that invents no term still reports no certificate.
+
+## HNSW arithmetic refusals
+
+Shared distance pair and batch APIs now return `Result<f64, NonFinite>` instead
+of `Option<f64>`. `Bounded::NonFinite` carries that same native cause. Inspection
+retains the original checked `binary64` bits, including a partial sum refused at
+an existing checkpoint. Update output buffers and refusal patterns accordingly.
+
+`HnswError::NonFiniteDistance` adds `cause` beside `row`; its standard error
+source and structured inspection borrow the original shared distance refusal.
+Exact kNN data errors also retain query and candidate rows, the metric and that
+cause. Successful values, checkpoint order and outer human messages are unchanged.
+
+`HnswError::ArithmeticOverflow` now carries `ArithmeticRefusal`. Update unit
+matches to `HnswError::ArithmeticOverflow(cause)`. Borrowed inspection keeps the
+outer error code and exposes the failed operation, original operands, byte/count
+units and destination limit through its cause. Integer-conversion failures retain
+their original native source. Successful calculations, refusal order and human
+messages are unchanged.
+
+## Extensible governor dimensions and request parts
+
+`ResourceDimension` and `GovernorParts` are now non-exhaustive. Construct
+request parts with `GovernorParts::new()` or `Default::default()`, then assign
+the public settings you need. Unspecified settings retain the metered base and
+its logical UDF depth of 32; requesting no ceiling remains explicit.
+
+`ResourceDimension::ALL` is a static slice. Iterate by reference, or use
+`.iter().copied()` when values are needed. Use `ResourceDimension::index()`
+for this build's local counters. The index and `COUNT` are not persisted or
+wire identities; stable labels and explicit host mappings retain that role.
+Current dimension order, labels, accounting and refusal priority are unchanged.
+
+The C resource and evidence structs retain their eight named fields and stable
+discriminants. An unrepresented trip dimension is `-1`, with the original
+budget/refusal kind and counts retained. Complete future-dimensional evidence
+needs an additive native-owned carrier; the existing projection cannot recover
+measurements omitted from its fixed fields.
+
+## Regime term arena controls
+
+`MaterializeLimits` adds `max_term_arena_bytes: Option<u64>`; use `None` to
+apply no logical arena ceiling. `RegimeHost::limit_knobs` and `service_knobs`
+return three names, in stored-facts, join-steps, term-arena-bytes order.
+
+Materialization, conclusion-directed services and entailment queries expose
+`max_term_arena_bytes` in Python, `maxTermArenaBytes` in JavaScript, and
+`--max-term-arena-bytes` in the CLI. JavaScript free functions take the new
+optional argument immediately after `maxJoinSteps`; query methods accept it
+in their options. An arena refusal preserves the observed and permitted byte
+counts and names the calling surface's control.
+
+The corresponding C entry points declare ABI 0.12.0 and add a nullable `const uint64_t *` immediately
+after `max_join_steps`. Rebuild C clients against the regenerated `purrdf.h`;
+pass `NULL` to retain the default. A refusal leaves result buffers untouched.
+
+## Closed recursive SHACL catalogs
+
+Native callers can select `RecursionSemantics::Lfp` or `Gfp` through
+`ValidationOptions::with_recursion`, with explicit original-pair and round
+limits. The same closed structural evaluator serves parse, prepare, bind, direct
+conformance, reports and restored products. No selection still refuses cycles;
+negative/nonmonotone recursive components refuse both selected laws.
+The direct expression `shnex:conformsToShape ( sh:this :Target )` has a positive
+dependency when its static shape operand is a canonical IRI or blank-node
+reference in the same original catalog, including recognized anonymous node and
+property shapes. Typed empty shapes remain static; untyped empty and path-only
+operands keep their computed-expression classification. Its conformance question
+shares the active fixed point and original binding, including property-value
+focuses and restored products. The node operand can also be a composition of
+pure native expressions that cannot inspect conformance, including constants,
+paths, variables, sequence/set operations, conditionals, aggregates, paging,
+mapping and instance selection. Every child is checked, including untaken
+branches and ordering keys. Its zero/single/multiple-result behavior matches
+ordinary conformance expressions; reports retain the original judged focus,
+value and path. The book lists the complete admitted constructor family.
+Computed shape operands also participate when constants, lists, empty
+expressions, unions, concatenations and conditionals prove every possible
+output, with pure native conditions and the original index. Each possible
+original shape contributes a positive dependency. The actual selection retains
+ordinary lazy evaluation, singleton requirements and missing-shape failures;
+an empty focus skips the shape operand entirely. Path-derived shape operands
+and other computations without a complete output proof remain unqualified.
+`sh:nodeByExpression` uses the same finite-output proof and original index.
+Every value node is checked against each selected shape in the active fixed
+point, duplicates are judged once, and an empty output adds no checks. Its
+positive dependency edges participate in admission without an implicit mode;
+invalid selected outputs keep their ordinary lazy runtime failure. Existing
+checks for explicitly named shapes still apply.
+Original function bodies, conformance-dependent focus expressions and general
+expression callbacks remain outside this proved surface.
+`PreparationRefusal::UnqualifiedRecursion` retains the original definition,
+parameter and model/index scope when an expression, query/computed target or
+overlay has no closed dependency proof. The broader dynamic-expression contract
+remains outside this closed catalog surface.
+
+`sh:targetWhere :Target` also admits an original canonical IRI or blank-node operand. Target
+discovery reuses the original lowering and fresh dataset binding, with one
+fixed-point execution for every candidate root and its dependencies. Pair and
+round limits apply cumulatively within that sweep; they do not bound raw graph
+scans. A refusal publishes no partial target set. Anonymous node and property
+operands retain their original focus domains; replaced operands remain refused.
+Restored products rebind target
+answers to their new data; they never carry a resolved target set or request.
+
+Read `RecursiveValidationReport` for the settled answer and native finite cycle
+evidence alongside ordinary SHACL results. `RecursionPosition::focus()` returns
+a fallible native term copy; retained original shape/property projections and
+shared cycle positions survive dropping the source preparation. The derived
+product stage identity binds the new admission meaning while the serialized
+`purrdf-shacl-core-v1` profile stays stable. Rebuild older-stage products from
+their carried original inputs under the current request.
+
+## SHACL processor recursion failures
+
+Exhaustive matches on `ProcessorFailure` must handle
+`ValidationDepth { shape, depth, limit }`. Nested filter/exists validation that
+crosses its recursion bound now returns this typed processor failure instead
+of `ShapesError::Invalid`. Its human-readable message is unchanged. It remains
+a hard failure through SPARQL node-expression calls, including COALESCE and IF.
+
+## Structured Horn program construction
+
+Replace every `FolClause { head, body, rule }` literal with
+`FolClause::new(&dag, head, body)?`. The unused `rule` field is removed: a clause's
+position in `FolProgram::clauses()` is its authored rule index, as it already was
+for resolution and proof checking. Read a clause through `head()` and `body()`.
+
+Replace every `FolProgram { clauses, goal, goal_vars, meta_sorts }` literal with
+`FolProgram::new(&dag, clauses, goal, goal_vars, meta_sorts)?`. The corresponding
+read-only accessors are `clauses()`, `goal()`, `goal_vars()` and `meta_sorts()`.
+To edit a program, construct and validate its replacement. The program owns its
+records and names; its handles still refer to the caller's one term arena, which
+must remain available for inspection and execution. Validation checks resident
+addresses and does not authenticate overlapping local handles from another arena.
+
+Construction returns `FolConstructionError` with the original offending handles,
+names and authored positions. It refuses unaddressable terms, unminted sort
+metavariables, projected non-metavariables, variables outside the goal and duplicate
+projection names that would overwrite answers. A partial projection, distinct
+names for the same goal variable and unused minted sort declarations remain
+valid. Body width and floundering remain execution refusals. The flat Datalog
+adapter uses these constructors and retains failures through
+`FolError::Construction` and the standard error source chain.
+
+`FolLit`, `FolUnsupported` and `FolError` are non-exhaustive. External matches
+must explicitly return or propagate an unsupported-case error rather than omit a
+literal or treat an unknown refusal as success. `FolLit` is now `Clone` rather
+than `Copy`; borrow literals or clone when ownership is needed. The current
+`Pos(NodeId)` and `Neg(NodeId)` payloads retain their meaning. No term rendering,
+canonical key, rule identity, proof identity or admitted execution meaning changes.
+
+## Datalog term inspection
+
+`purrdf_datalog::term::NodeData` is now non-exhaustive. External matches must
+include a wildcard arm that returns an explicit unsupported-form error and
+retains the source `NodeId` and relevant context. Do not silently filter out
+unknown nodes, discard children or fabricate a replacement term. A reasoning
+strategy must also refuse known forms outside its supported fragment.
+
+`TermDag::data` still borrows the complete node. All seven current variants keep
+their payloads and meaning; construct them through `intern_leaf`, `intern_free`,
+`fresh_meta`, `intern_bound`, `intern_app`, `intern_binder` and `intern_rdf`. Term identities,
+hash-consing, binder traversal and existing artifacts retain their behavior.
+
+## Owned structural answers
+
+Pass `FolAnswerContract::GroundOnly` to `resolve_fol` between its sort context
+and budget. The original selection remains inspectable through
+`FolOutcome::answer_contract()` and `FolBinding::answer_contract()`. This
+contract enumerates fully ground answers to a query pattern; representation of
+variables and compound terms does not establish symbolic verdicts.
+
+`FolBinding` fields are private. Replace the rendered `bindings` map with
+`bindings()`, which visits authored names, original scoped variables and native
+term values. `get(name)` selects a structural value. Replace `atom` with `atom()`
+and `proof` with `proof()`. A `FolTerm` exposes its complete `NodeData`; child
+handles resolve through `term(source_id)`, and `same_node` compares a local node
+within its retained owner scope. Names label projection columns; they are not
+variable identities. Local source IDs alone do not identify nodes across owners.
+
+One reachable graph is retained for the entire answer set, including all original
+goal variables, projected terms, answer atoms and proof conclusions. Extracted or
+cloned rows share that graph and survive dropping the outcome, program and source
+arena. `FolBinding::term` inspects a checked original conclusion in that same
+graph. `derivation_id()` reproduces the proof identity after source destruction.
+Row equality includes owner scope. Compare explicit canonical structural keys
+when cross-run structural comparison is intended.
+
+Rendering is an explicit presentation operation: use `get(name).map(FolTerm::render)`
+when a transport needs strings. No rendered-answer compatibility map is maintained.
+Projection, joins, deduplication and answer ordering use structural identities;
+answer order now follows canonical atom keys instead of rendered binding strings.
+
+`TermDag::intern_rdf` and `NodeData::Rdf` retain the original native `TermValue`,
+including lexical form, datatype, language, direction, blank scope and quoted
+components. Native RDF constants are atomic to the compound-term unifier and
+compare by the original structural RDF identity. `RetainedGraph` and `TermRead`
+provide the same read path for live and retained nodes; single-term error
+snapshots use that shared home.
+
+`solve_datalog_goal` retains its opaque-symbol input interpretation. It does not
+parse an arbitrary clause literal spelling into RDF. For RDF sources, use
+`solve_datalog_goal_rdf` with a `FolRdfSource` that resolves the original source
+store's injective transport identity to its original `TermValue`. This address
+is not human-facing `render` output. The explanation adapter retains and passes
+its existing source dictionary, whose identity encoding includes blank scope and
+every RDF component. Missing originals return `FolError::Rdf` with the exact
+source identity; explanation checking propagates this failure through
+`ExplainError::Backward` rather than treating it as an abstention.
+
+Both input adapters use one lowering/solver and one answer owner. Existing opaque
+term, clause and proof identity bytes remain unchanged. Native RDF constants use
+a distinct `R` tag with framed base16 native canonical bytes; proofs produced
+through the RDF adapter therefore have native RDF identities rather than opaque
+surface identities. Regenerate such derived artifacts from their original source
+values; do not reinterpret old opaque symbols as RDF constants.
+
+## Scoped structured truth verdicts
+
+`FolOutcome::truth_of` returns `FolVerdict`, distinguishing
+`Established(Truth::{True, False, Undefined})` from
+`NotEstablished(FolUnestablished::{Unevaluated, Incomplete, NonGround})`.
+Update matches and comparisons to preserve that distinction. Interrupted
+search no longer reports a reached unresolved atom as WFS `Undefined`, and an
+unvisited atom is never reported as `False`. Positive proofs found before a
+budget cut can still establish `True`.
+
+Scope includes demanded ground calls and reached ground answers under the
+selected run's original program and sort context. Even an asserted fact outside
+that demand scope is unevaluated. A nonground call pattern does not establish
+symbolic verdicts or authorize arbitrary ground-instance probes. Keep the original
+caller-owned arena for handle inspection; overlapping local handles from another
+arena do not authenticate source identity.
+
+Read completion through `outcome.status()`; the writable `status` field is
+removed. `confirms_not_false` is removed because its Boolean absence result
+could license an unevaluated negation. `check_fol_proof` now consumes the
+original typed `FolCheckEvidence` from `outcome.checking_evidence()`; no Boolean
+adapter or caller-provided truth callback remains.
+
+Safe negative literals now demand their instantiated dependency through the
+same registry as positive literals. Thus `q(a)` with `p(a) :- not q(a)` correctly
+decides `p(a)` false, including indirect dependency chains. Each new negative
+demand consumes the existing call-discovery work charge, so a fixed budget can
+interrupt earlier. Negative cycles remain WFS `Undefined`. Internal negative
+proof construction uses the same completed scope as public truth probes.
+Canonical term keys and clause/proof identity encodings retain their meaning.
+
+## Bound structured proof checking
+
+`FolProof` is an opaque shared owner. Remove construction and exhaustive matches
+over `FolProof::Assert` and `FolProof::ByRule`; proofs come from the actual
+resolver. Use `is_assert()`, `rule()`, `rule_identity()`, `goal()` and `premises()`
+for current structural inspection. `conclusion()` borrows the original native
+term after the producer arena, program, outcome or answer row has been dropped.
+Proof descendants, checking evidence and all answer rows share one retained graph.
+
+Replace the freely supplied program, sort map, sort context and Boolean oracle
+with `check_fol_proof(&mut dag, proof, outcome.checking_evidence())`. Evidence can
+also be retained from `proof.checking_evidence().clone()`. Only the resolver mints
+this immutable owner, binding the exact ordered program, sorts, answer contract,
+original demanded run and a private live-arena capability. Another run cannot lend
+its completion to a proof, even under an otherwise identical program. A different
+arena, including a clone with overlapping numeric handles, is a foreign checking
+source. This private capability is local authority, never a persisted identity.
+Appending terms to the original arena does not change its immutable earlier nodes.
+
+The checker independently re-derives positive premises and conclusions with the
+original clauses and sort discipline. A negative premise requires completed demand
+coverage, bounded replay through the existing ground implementation, and exact
+agreement of the demanded calls, ground-rule inventory and WFS model. Completion
+flags and model membership alone do not certify absence. Replay shares the ground
+algorithm; this check does not claim algorithm diversity. Partial positive proofs
+remain checkable, while incomplete or unestablished negative dependencies fail.
+
+Structural checking uses iterative, memoized postorder and admits each distinct
+proof node and premise edge under the original retained work ceiling. Negative
+grounding replay separately uses that same ceiling. Work interruption and native
+storage failures remain typed failures. All appended checking nodes, symbols and
+metavariable mints are rolled back on success, error or unwinding; allocation
+capacities may remain warm. The live original arena is required for checking,
+while retained inspection and derivation-identity reproduction are source independent.
+
+`FOL_PROOF_IDENTITY_VERSION` and `identity_version()` identify version 1 of the
+unchanged Merkle/flat identity laws. Existing valid opaque and native RDF identity
+recipes retain their exact bytes. The earlier public enum layout is not a wire
+format for authenticated evidence: regenerate owned proofs from the original
+source and program rather than reinterpret a saved enum record as a checked owner.
+
+The real explanation cross-check now validates its native proof with this evidence
+before confirming the conclusion. `FolError::Proof` preserves the original
+`FolProofError` through `ExplainError::Backward` and the standard source chain.
+
+## Datalog proofs and shared heads
+
+Ordinary head conjunctions now execute one shared body. Read `Derivation::head`
+alongside `Derivation::rule` to identify the producing atom. `ProofArena::by_rule`
+selects head zero; use `by_rule_head` to construct a proof for another head.
+The independent proof encoding is version 2 and explicitly includes this ordinal.
+Regenerate stored version 1 proof bytes from the original inputs and rule program;
+the decoder refuses their old tag. Planner version 6 also changes content-addressed
+plan identities, causing earlier cached plans to miss and be replanned.
+
+`Guard::not_equal` supplies native term inequality without a callback. Programs
+containing native filters use an operation-tagged version 2 clause identity.
+Unchanged callback-only programs retain their clause and reasoning-contract
+identities. A callback named `!=` keeps its caller-defined meaning and has a
+different identity.
+
+Use `DlClause::with_ordered_body` with `clause::BodyLiteral::{Atom, Guard}` when
+a guard computes a key consumed by a later positive atom. Guard inputs must be
+bound at that point, and outputs must be fresh. The join planner may reorder atoms
+within each segment but never across a guard. Negated conjunctions remain attached
+with `with_negations` and run after the positive body and its guards.
+
+`with_guards` keeps its existing meaning: all guards follow the full positive
+join. Ordered bodies with an early guard use a version 3 clause identity that
+includes its position; an equivalent body with all guards at the end keeps its
+existing clause identity. Callback guards still require the caller's evaluator
+and remain outside the independent proof checker's supported fragment.
+
+## Datalog guard values
+
+`GuardCall::inputs` now borrows `DictionaryTerm<Id>` values: original `Id` handles
+or newly computed `Surface` spellings. `GuardEvaluator::evaluate` returns
+`GuardRows<Id>`, whose cells are `DictionaryValue::Id` or owned
+`DictionaryValue::Surface`. A native callback can retain and return original
+identities directly, without rendering them or looking up a spelling.
+
+A callback that needs lexical values calls `call.evaluate_lexical(|inputs| ...)`.
+The helper pins the original dictionary owners throughout that callback and
+preserves typed source failures. Emit an owned string with `.into()` or an
+explicit `DictionaryValue::Surface`; the engine reuses an existing identity when
+the spelling is already known. Native inequality compares the original bindings.
+Guard declarations and clause identities retain their existing meaning.
+
+## Datalog dictionary order and native integers
+
+`TermDictionary` implementations now provide `compare_terms`. This defines the
+canonical total order used by partition scans, round publication and tied witness
+selection. An RDF dictionary calls `dictionary::compare_lexical_terms` to preserve
+canonical lexical order and original dictionary pins. A native dictionary may
+compare original IDs directly. `compare_rows` applies that contract in position
+order and preserves source errors.
+
+Maintained partition directories retain original term IDs. They establish their
+canonical order through `compare_terms` before the dictionary transaction commits;
+publication and subsequent traversal need no lexical copies or source comparison.
+Removing a partition preserves every surviving partition's original identity.
+
+`dictionary::IntegerDictionary<u32>` and `IntegerDictionary<u64>` provide the
+native alternative. Construct one with an explicit `with_symbols` table for the
+program's named constants, insert `DictionaryTerm::Id` rows and return
+`DictionaryValue::Id` from native guards. No cell value is interned, formatted or
+resolved, including during recursive model-only evaluation and witness ties.
+Unknown symbols and explicitly requested lexical projection fail with typed
+errors; this dictionary supplies no fabricated numeric spellings. Recorded
+lexical derivations therefore require a dictionary with actual spellings.
+
+The rule evaluator continues to use triple or quad shapes. Separately,
+`RowColumns<I, N, R>` and `RowIndex` store and index caller-selected row widths;
+they do not add an arbitrary-arity rule language.
+
+Store append boundaries (`row_slots`, `rows_from`) now use `u64`. Keep these
+logical coordinates separate from physical slice lengths. Maintained stores can
+retire row metadata and empty partitions without renumbering surviving handles;
+partition IDs must be resolved through the store rather than cast to array slots.
+
+`seminaive::Maintained` owns a materialized model and accepts signed
+`maintenance::ChangeBatch` transactions over its original dictionary IDs.
+`apply` retains a transaction; `resume` completes it or preserves its pending
+state under a governor refusal. Read `model_delta` and `applied_watermark` only
+after completion. `relation` distinguishes complete, sound lower-bound and
+withheld extensions, with the host's original applied and target positions.
+Native witnesses borrow their original dictionary; request lexical derivations
+explicitly at the presentation boundary.
+
+Use `begin` and `resume_until` to retain transaction preparation and execution
+under one cumulative operation allowance. `transaction_work` includes admitted
+row, dependency, comparison and task steps, retained table-scan layout bounds,
+and original native join steps. A `MaintenanceError::WorkLimit` preserves the
+transaction and states its consumed and next required allowance. Original
+`EvalOptions` limits still govern facts, terms and native joins.
+
+Use `apply_next` to poll a `ChangeSource` directly. It refuses a busy model before
+polling, preserves the host's original failure as `ChangeApplyError::Source`, and
+returns `false` only for an unavailable batch. An accepted batch, including an
+empty transaction, advances its applied position only after `resume` completes.
+
+For fresh-term streams, construct the store with `store::ReclaimingInterner` and
+use `Maintained::new_reclaiming`. `RelationStore::into_reclaiming` transfers an
+existing store's arrangements and IDs unchanged. The explicit `ReclaimDictionary`
+protocol retires unused dictionary metadata; ordinary `TermInterner` keeps its
+permanent-ID contract. Current live facts and proofs retain their terms. The
+latest `ModelDelta`, including deleted facts, also pins its spellings until the
+next transaction completes. A saved raw ID alone does not pin a term;
+`TermExpired` reports an ID whose owner has released it. `IntegerDictionary`
+retains declared program symbols and the host's external identity authority.
+
+## Query-algebra projections
+
+Parsed `SELECT *` can produce `GraphPattern::ProjectStar`. Its `ProjectionVars`
+retains an immutable, ordered snapshot of the visible variables, allowing nested
+wildcard projections to share earlier names. `GraphPattern::Project` continues
+to hold an explicit `Vec<Variable>`.
+
+`GraphPattern` is an exhaustive public enum, so downstream exhaustive matches
+must add the `ProjectStar` arm. To visit a projection's inner pattern, match both
+forms when obtaining that child:
+
+```rust,ignore
+let projection_inner = match pattern {
+    GraphPattern::Project { inner, .. }
+    | GraphPattern::ProjectStar { inner, .. } => Some(inner),
+    _ => None,
+};
+```
+
+For code that reads column names from a `&GraphPattern`, use the shared ordered
+view instead of assuming every parsed projection holds a vector:
+
+```rust,ignore
+if let Some(names) = pattern.projected_names() {
+    for variable in names.iter() {
+        println!("{}", variable.as_str());
+    }
+}
+```
+
+`projected_names()` returns `None` for other pattern variants. Its iterator
+borrows the projection's names and preserves their visible order. Keep explicit
+`Project` construction when a rewrite deliberately chooses an owned variable
+list. A consumer that needs such a list can clone the shared view's names at
+that boundary; expanding every nested wildcard snapshot recreates the repeated
+prefix work the compact representation avoids.
+
+## Segmented data profile 7
+
+Segmented stores use data profile 7 (`PURRSEG7`). Authenticated annotation
+value intervals extend the block summaries to 104 bytes and the header to
+456 bytes, so range scans can reject payload blocks before admission. The reverse index stores
+identifiers into the forward dictionary, dictionary blocks read their first key
+from the record instead of a second stored fence, source directories use sparse
+authenticated prefixes, and oversized terms live in authenticated overflow
+pages. The reader refuses earlier segmented profiles. Regenerate those stores from their original RDF input; there is no
+in-place upgrade. Receipt encoding and hash laws are a separate contract and do
+not change with the data profile.
+
+## Explicit Datalog evidence
+
+Ordinary evaluation produces the model only. Request `DerivationMode::Record`
+when derivations are needed. `Evaluation::derivations` now returns an `Option`,
+and constructing a proof from an evaluation that did not record returns a typed
+refusal. Entailment and SHACL proof callers must request recording explicitly.
+`Evaluation::work` reports semantic fact counts and versioned candidate work,
+and each call can select sequential rule execution without changing a global
+pool. Capacity defaults are covered under
+[Explicit capacity limits](#explicit-capacity-limits).
+
+## Exact XSD numerics
+
+`XsdValue::Integer` and `XsdValue::Decimal` carry the exact integer and decimal
+types at every size (`purrdf_xsd::exact::Decimal` and `exact::Integer`). The
+bounded `purrdf_xsd::Decimal`, the bounded `owl:rational` module and the decimal
+narrowing conversions are removed; use `exact::Rational` for `owl:rational`. Code
+that matched the former wide variants matches the same exact variants for small
+values. Integer narrowing to `i128` or `i64` remains explicit and typed.
+
+`bigint_avg_decimal` and `bigint_avg_decimal_lexical` are no longer public. Use
+`numeric_div_with_policy` so aggregate division follows the same policy as
+ordinary division.
+
+Decimal division keeps every digit of a terminating quotient. Otherwise it
+rounds to 18 fractional places, half to even. Select `exact`, `N`,
+`N:ROUNDING` or `exact-or-N[:ROUNDING]` through `QueryOptions::with_division`
+for a different policy. Temporal seconds are exact decimals, including
+fractional precision beyond 18 places.
+
+## Remembered empty named graphs
+
+Rust `MutableDataset::new` and `QueryOptions`, Python `Store` and
+`MutableDataset`, the WASM `Dataset` and `purrdf update` now remember a named
+graph after its last row is removed or it is cleared. `CREATE` registers an
+empty graph and `DROP` removes it. A missing remembered target or transfer
+source fails before any mutation unless the operation is `SILENT`.
+
+To keep row-driven graph existence, select:
+
+| Surface | Setting |
+| --- | --- |
+| Rust | `GraphExistenceMode::Implicit` |
+| Python | `remember_empty_graphs=False` |
+| WASM | `new Dataset(false)`, or `false` as the fourth argument to `Dataset.parse` |
+| CLI | `--graph-existence implicit` |
+
+Otherwise, use `DROP` where an earlier `CLEAR` was meant to remove the graph.
+
+The C entry points `purrdf_graph_from_dataset`, `purrdf_update_governed`,
+`purrdf_update_governed_xpath_regex` and `purrdf_update_governed_with_geo` take
+a required `int32_t graph_existence`: pass
+`PURRDF_GRAPH_EXISTENCE_REMEMBER_EMPTY` (0) or `PURRDF_GRAPH_EXISTENCE_IMPLICIT`
+(1). Other values are invalid arguments.
+
+## Exact BM25F ranking
+
+The ranking identity is `purrdf-bm25f-fixed-v2`. Query terms, fields,
+populations, field lengths and frequencies, and nonnegative weights no longer
+have admission ceilings, so profile and index fingerprints change. Score
+lexicals that 3.x admitted are byte-identical.
+
+The fixed maximum and width exports are removed. `PreparedQuery::score` returns
+`BoundedScore { value, bound }`, native `Scored` carries `score_bound`, and
+matched-term counts are `usize`. The bound is derived from the prepared query
+and corpus.
+
+## Developer-schema output
+
+IRI-only ontologies emit different developer schemas, and every
+`SchemaCompilation.key` changes, including for inputs with no OWL. Discard
+cached compilations. The notable output changes:
+
+- `ex:X owl:equivalentClass xsd:…` defines a datatype, not a class.
+- Every OWL-derived property accepts a node or a well-typed literal, following
+  the OWL 2 RDF-Based Semantics. An ill-typed literal is no value of any
+  OWL-derived property. Well-typed literals use the reserved `$defs/Literal`,
+  so a class whose local name is `Literal` is keyed by its CURIE.
+- XSD ranges admit every literal in the datatype's value space.
+- A schema `$id` under a hash namespace no longer has a fragment.
+- Class-membership closure admits up to 16,777,216 memberships.
+- Class constructors on IRIs are projected instead of ignored.
+
+SHACL-derived properties and shaped-only output are unchanged.
+
+## SPARQL pre-binding
+
+Every lane that binds a variable before evaluation uses the SHACL pre-binding
+rewrite: `sh:sparql`, prepared-execution parameters, request substitutions, node
+expression scope and `sh:expression`'s `value`. `ShaclPrebinding` and
+`QueryOptions::with_prebinding` are deprecated and have no effect.
+
+Prepared parameters and request substitutions now reach `OPTIONAL`, `MINUS`,
+sub-`SELECT` and `EXISTS`. To keep a free match there, rename the variable
+inside that position, for example `OPTIONAL { ?s2 ex:p ?y }`. An assignment of a
+pre-bound variable keeps only rows whose assigned value equals the binding;
+assign a fresh variable to keep the old answer. A `VALUES` that lists only other
+terms has no rows. `MINUS` carries the bound value on both sides, so share the
+variables it should match on.
+
+The SHACL lanes refuse `MINUS`. A `sh:sparql` constraint, component validator,
+`sh:SPARQLTarget` `sh:ask` and SPARQL rule refuse every `VALUES`. A node
+expression and `sh:expression` refuse a `VALUES` that mentions a pre-bound name.
+
+## Owned RDF triples
+
+`purrdf_core::RdfTriple` implements `Drop`, which makes dropping deeply nested
+terms stack-safe. Moving a field out of an owned triple, or using struct update
+syntax from one, no longer compiles (E0509). Use `RdfTriple::into_parts`:
+
+```rust,ignore
+let (subject, predicate, object, location) = boxed.into_parts();
+```
+
+Construction, by-reference matching, in-place reads and assignments, and moving
+the `Box<RdfTriple>` out of `RdfTerm::Triple` are unchanged.
+
+## SPARQL evaluator errors and codes
+
+A native host function's own error, a native or property-function panic, a
+function resource ceiling or an invalid host protocol response now fails with
+`EvalError::FunctionOperational`. `EvalError::Function` means only that the
+request was refused for arity, type or access mode. Code that caught host
+failures through `Function` must also match `FunctionOperational`. `EvalError`
+also adds `FunctionAdmission` and `XPathRegex`.
+
+`EvalError::diagnostic_code()` and `code()` return specific codes where the
+native engine previously reported `native-sparql-query-eval`:
+
+| Variant | Code |
+| --- | --- |
+| `Internal` | `native-sparql-internal` |
+| `CompositeBound` | `native-sparql-composite-bound` |
+| `FloatEnvironment` | `native-sparql-float-environment` |
+| `FunctionOperational` | `native-sparql-function-operational` |
+| `XPathRegex` | the exhausted resource's code, otherwise `native-sparql-xpath-operational` |
+
+`RdfDiagnostic::code` and the codes reported by the CLI, C ABI, Python and
+WebAssembly change accordingly.
+
+## SHACL profiles and rule sets
+
+`ShaclProfile::ED_20261016` (`shacl-ed-2026-10-16`) selects the editor's-draft
+law. `ShaclProfile::WD_20260918` follows the working draft text and refuses or
+ignores the four rules published after it. `ShaclProfile::REC_20170720`
+collects prefixes along `sh:prefixes/owl:imports*/sh:declare`. The
+compatibility law reads the editor's draft. Use `ShaclProfile::is_shacl12` to
+select both SHACL 1.2 laws.
+
+A rule set must be typed `sh:RuleSet`. An untyped subject of `sh:hasRule` or
+`sh:includesRuleSet` is no longer a rule set, and `RuleOptions::with_rule_set`
+refuses an untyped IRI. An `sh:includesRuleSet` value that is not a declared
+rule set fails when the shapes graph loads. `validate_change` on a shapes graph
+that declares rules entailment answers with the whole graph and the reason
+`rules entailment`.
+
+## Fallible canonical identities
+
+The panicking canonicalization adapters are removed: `canonicalize`,
+`canonicalize_with`, `canonicalize_view`, `canonicalize_graph_view`,
+`graph_digest_view` and `ontology_identity`. Call their `try_` forms and handle
+the returned refusal, either a reserved-vocabulary refusal or an exhausted
+search budget. `datasets_isomorphic` returns `Result<bool, CanonError>`.
+`Justification::digest` and `digest_hex`, `PipelineBundle::digest` and
+`canonical_flat_nquads` return the original refusal. JavaScript
+`Dataset.isomorphic` throws an `Error` carrying it. Successful canonical bytes,
+labels and digests are unchanged.
+
+## Datalog store coordinates
+
+`RelationStore::rows_from` takes a `u64` boundary. `row_slots` reports the next
+logical append coordinate, which differs from the live `row_count` once rows are
+removed. Indexed removal leaves surviving rows and handles in place, and a
+reinserted row receives a fresh identity. Do not use either value as a slice
+index.
+
+## CDT parse error causes
+
+`CdtError::BadEscape` and `CdtError::BadLanguageTag` gain a `cause` field with
+the original UCHAR or language-tag refusal. Update explicit constructions and
+exhaustive field patterns. The standard error source and structured inspection
+also expose it, and messages are unchanged.
+
+## SHACL shape catalogs and recursion refusals
+
+A shapes graph with a cyclic shape reference (a self-reference, mutual
+reference, logical shape list or nested property shape) is refused at load with
+`ShapesError::Recursion`. Its `RecursionRefusal` lists the component's members
+and its dependency edges with their polarity. Shared acyclic references are
+accepted. Preparation that would cross the stack margin, or a reference outside
+its catalog, returns `ShapesError::Preparation`. Exhaustive `ShapesError`
+matches must handle both. `path::eval` and `eval_ids` now return a `Result`.
+
+## Incremental text indexes
+
+Text index and source fingerprints change because their identity domains are
+revised. `token_occurrences`, `documents_with_subject`, `SurfaceTerm::documents`
+and the `words` and `spans` accessors return iterators instead of slices; call
+`.collect()` where a slice or vector was required. `SurfaceTerm` and the
+substring and phonetic match types gain a corpus-profile type parameter that
+defaults to `GraphLanguage`. Inconsistent deltas and unavailable source
+evidence are refused.
+
+## OpenAPI schema references
+
+OpenAPI output now references its definitions as `#/components/schemas/...`
+instead of `#/$defs/...`. Update tooling that rewrote or followed the old
+references. JSON Schema output is unchanged. The schema policy salt includes
+`openapi-3.1-local-refs-v1`, so `SchemaCompilation.key` changes.
+
+### ShExC grammar admission
+
+Token-stream grammar refusals now use `ShexError::Grammar` with a native
+`GrammarReason`, rather than a rendered `Syntax` reason. `GrammarExpectation`
+identifies the required production. Original encountered `Spanned` tokens retain
+their contents and half-open byte spans, including semantic action names and
+bodies, regex flags, repeat bounds and placement operands. These types implement
+the shared borrowed inspection protocol.
+
+The outer `shex-syntax` identity and `at` field remain unchanged; `reason` is now
+a nested native cause with a standard error source. Human messages, byte
+coordinates and refusal order remain unchanged. Contextual, semantic and resource
+refusals still use `Syntax`; this change does not replace that remaining family.
+
+### ShExC facet conflicts and admission
+
+Duplicate facets, unsigned facet conversion and numeric datatype suitability now
+use `ShexError::Facet` with a boxed native `FacetReason`. Evidence retains both
+original occurrences and their spans, admitted values and exact numeric bound
+spellings and datatypes. Integer conversion retains its original `ParseIntError`.
+Datatype refusal carries every admitted numeric facet in original source order.
+`NumericLiteral` participates in borrowed inspection without changing AST equality;
+immutable numeric refusal operands compare floating values by their exact bits.
+
+The outer `shex-syntax` identity, unsigned `at` field, human messages and byte
+coordinates remain unchanged. Its `reason` is a nested native cause and supports
+the standard error chain. Other contextual, resource and numeric range refusals
+continue to use `Syntax`.
+
+### Native ShExJ materialization refusals
+
+Library ShExJ object/member and schema/value refusals now use
+`ShexError::JsonMember` with a boxed `JsonMemberReason`. Typed contexts, members,
+expectations, collection indices and refused JSON values are available through
+borrowed inspection. `JsonOffered` retains native number spellings and member
+order, using the JSON home's iterative clone and drop operations. Numeric range
+refusals retain the actual `f64` conversion bits; they introduce no standard
+integer or floating parsing cause.
+
+The outer `shex-json` identity, human messages and absent byte offsets remain
+unchanged. Its `reason` is a native cause with a standard error chain. JSON ingress,
+IRI and language failures keep their existing native variants. `Shexj` remains for
+caller-provided diagnostics such as CLI import lookup; it is no longer the library
+materializer's fallback. This change adds no success-path DOM copy or whole-parser
+allocation guarantee.
+
+
+## Python prepared query bindings and execution coordinates
+
+`PreparedQuery.run(**bindings)` is replaced by
+`PreparedQuery.run(bindings=None, *, now=None, entropy_seed=None)`. Pass SPARQL
+parameters in a dictionary: `prepared.run({"this": node})` replaces
+`prepared.run(this=node)`. There is no legacy keyword-binding path. Names such
+as `now`, `entropy_seed` and `bindings` remain valid SPARQL parameter names
+inside the dictionary.
+
+Every run may select a fresh exact `xsd:dateTime` string and unsigned 64-bit
+Python integer seed. Omitted values use native defaults for that run, and all
+parameter slots are reset before applying its dictionary. No execution inputs
+are retained from a previous call. Ordinary, RDFLib, governed and entailment
+query methods accept the same coordinate keywords; parser/provider settings
+remain preparation-time configuration. See the [Python API reference](book/src/reference/python-api.md#supplied-query-time-and-entropy).
+
+## Slice ownership query diagnostics
+
+`OwnershipDiagnostic` is non-exhaustive. Its `UnparseableQuery` variant replaces
+`message: String` with `cause: QueryArtifactError`, retaining the original
+`Utf8Error` or SPARQL `ParseError`. Use `cause.to_string()` at the presentation
+boundary for the former message, or inspect the native cause through `source()`
+and `StructuredError`. External matches need an arm for unfamiliar diagnostics.
+
+The causes, owning slice and logical path remain available after the catalog is
+dropped, including in cloned reports. Malformed query artifacts are still skipped
+in artifact order; valid queries continue to contribute dependency evidence.
+Python's ownership lint and ownership-defect classification are unchanged.
+
+## Typed loss-ledger checks
+
+`check_ledger_complete` now returns an owned `LossCompletenessError` instead of a
+string. Its `missing()` and `unexpected()` slices contain every distinct differing code
+in lexical order, preserving duplicate-insensitive set comparison. Display keeps the
+previous missing-before-unexpected message. The refusal owns its strings and remains
+inspectable after the ledger and expected inputs are dropped.
+
+Both `check_ledger_sound` and `check_ledger_sound_in` now return the same native
+`LossSoundnessError<&str>`. The explicit-profile helper still checks the original entry
+pair before code membership and stops at the first offending entry. The built-in helper
+delegates to it; empty ledgers remain sound for unregistered pairs. Neither borrowed
+refusal depends on the temporary built-in profile.
+
+The former lifetime spelling `LossSoundnessError<'a>` becomes `LossSoundnessError<&'a
+str>`. Borrowed errors remain Copy; call `into_owned()` before returning them through a
+static error owner or beyond the ledger/pair strings. The default `LossSoundnessError`
+uses owned String fields. Original variant fields, human messages and borrowed
+structured codes are preserved across that conversion.
+
+Projection integrity errors, schema-import errors and LinkML errors retain their
+original native soundness cause through the standard source chain and structured
+inspection, including the outer LinkML import-model context. Their existing human detail
+and projection path/category remain unchanged. Schema-import and LinkML equality still
+compares the original detail; native provenance is supplemental. The panicking assert
+helpers remain explicit invariant/presentation boundaries over these same typed checks.
+No loss profile or serialization format changes.
+
+## JSON Schema evaluation policy
+
+`EvaluationCause` is now non-exhaustive. Replace the old unit pattern
+`EvaluationCause::ReferenceChain` with
+`EvaluationCause::ReferenceChain { attempted, maximum }` and include a wildcard
+arm when matching causes. The counts describe the refused link and the selected
+maximum, rather than a hardcoded default. Structured inspection exposes both
+fields. `ValidationRefusal::ReferenceChain` also gains `attempted`.
+
+`Schema::is_valid` and `evaluate` retain the default reference maximum of 250.
+Existing `is_valid_with_limits` and `evaluate_with_limits` retain their regex-only
+meaning and use that same reference default. To select both budgets, use
+`EvaluationPolicy::default().with_pattern_limits(limits)` and
+`.with_reference_chain_limit(maximum)`, then pass the policy to
+`is_valid_with_policy` or `evaluate_with_policy`. Zero refuses the first
+reference; descending into another instance location starts a new chain.
+True cycles still produce invalid output, while exhausted budgets produce
+`EvaluationError` with the original keyword and instance locations.
+
+Raising the maximum admits more work; it does not improve the algorithm.
+For an acyclic chain of N distinct targets at one instance, the evaluator
+follows N references and performs N × (N − 1) / 2 cycle-membership probes.
+The native API resource-growth case reports allocations, requested bytes,
+retained bytes and peak working bytes for verdict and full-output evaluation;
+its windows exclude schema compilation and keep the full result alive.

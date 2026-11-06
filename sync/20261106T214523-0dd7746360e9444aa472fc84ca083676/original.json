@@ -1,0 +1,14 @@
+[
+  {
+    "path": "CHANGELOG.md",
+    "kind": "file",
+    "executable": false,
+    "content": "original/0.bin"
+  },
+  {
+    "path": "docs/MIGRATION-4.0.md",
+    "kind": "file",
+    "executable": false,
+    "content": "original/1.bin"
+  }
+]
