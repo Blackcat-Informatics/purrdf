@@ -3,10 +3,10 @@
 
 //! Structural answers over one retained graph for the whole answer set.
 
-use super::{FolAnswerContract, FolProof, canon, render};
+use super::{FolAnswerContract, FolCheckEvidence, FolProof, canon, render};
 use crate::id::NodeId;
-use crate::term::{NodeData, RetainedGraph, TermDag, TermRead};
-use purrdf_lex::allocation::{Memory, Resident, Shared, StorageError};
+use crate::term::{NodeData, RetainedGraph, TermRead};
+use purrdf_lex::allocation::{Memory, Resident, StorageError};
 
 /// One owned answer. Every row from the same run shares one complete reachable
 /// graph, including original goal variables, answer terms and proof conclusions.
@@ -18,16 +18,10 @@ use purrdf_lex::allocation::{Memory, Resident, Shared, StorageError};
 /// explicit canonical term keys when structural comparison across runs is needed.
 #[derive(Debug, Clone)]
 pub struct FolBinding {
-    graph: Shared<AnswerGraph>,
+    graph: FolCheckEvidence,
     bindings: Vec<Assignment>,
     atom: NodeId,
     proof: FolProof,
-}
-
-#[derive(Debug)]
-struct AnswerGraph {
-    terms: RetainedGraph,
-    contract: FolAnswerContract,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,6 +45,9 @@ pub struct FolTerm<'a> {
 }
 
 impl<'a> FolTerm<'a> {
+    pub(super) fn retained(graph: &'a RetainedGraph, node: NodeId) -> Self {
+        Self { graph, node }
+    }
     /// Complete original node data. Child handles resolve through [`Self::term`].
     #[must_use]
     pub fn data(self) -> &'a NodeData {
@@ -138,7 +135,7 @@ impl FolBinding {
     /// Inspect projections in authored order, without rendering values.
     pub fn bindings(&self) -> impl ExactSizeIterator<Item = FolBindingEntry<'_>> {
         self.bindings.iter().map(|assignment| FolBindingEntry {
-            graph: &self.graph.terms,
+            graph: self.graph.graph(),
             assignment,
         })
     }
@@ -155,7 +152,7 @@ impl FolBinding {
     #[must_use]
     pub fn atom(&self) -> FolTerm<'_> {
         FolTerm {
-            graph: &self.graph.terms,
+            graph: self.graph.graph(),
             node: self.atom,
         }
     }
@@ -163,7 +160,7 @@ impl FolBinding {
     /// Original selected semantics, retained by the complete answer owner.
     #[must_use]
     pub fn answer_contract(&self) -> FolAnswerContract {
-        self.graph.contract
+        self.graph.answer_contract()
     }
 
     /// The original proof; every conclusion it names is in this retained graph.
@@ -175,7 +172,7 @@ impl FolBinding {
     /// Reproduce the original derivation identity without the producer arena.
     #[must_use]
     pub fn derivation_id(&self) -> String {
-        super::derivation_id(&self.graph.terms, &self.proof)
+        super::derivation_id(self.graph.graph(), &self.proof)
     }
 
     /// Inspect a retained proof conclusion or other original reachable handle.
@@ -185,36 +182,11 @@ impl FolBinding {
     }
 
     pub(super) fn retain(
-        dag: &TermDag,
         rows: Vec<Projected>,
-        contract: FolAnswerContract,
+        evidence: &FolCheckEvidence,
     ) -> Result<Vec<Self>, StorageError> {
-        if rows.is_empty() {
-            return Ok(Vec::new());
-        }
         let mut resident = Resident;
         let mut memory = Memory::new(&mut resident);
-        let mut roots = Vec::new();
-        for row in &rows {
-            memory.push(&mut roots, row.atom)?;
-            for binding in &row.bindings {
-                memory.push(&mut roots, binding.variable)?;
-                memory.push(&mut roots, binding.value)?;
-            }
-            let mut pending = Vec::new();
-            memory.push(&mut pending, &row.proof)?;
-            while let Some(proof) = pending.pop() {
-                memory.push(&mut roots, proof.goal())?;
-                for premise in proof.premises() {
-                    memory.push(&mut pending, premise)?;
-                }
-            }
-        }
-        let graph = Shared::try_new(AnswerGraph {
-            terms: RetainedGraph::capture(dag, &roots)?,
-            contract,
-        })
-        .map_err(|_| StorageError::AllocationFailed)?;
         let mut answers = Vec::new();
         for Projected {
             bindings,
@@ -225,7 +197,7 @@ impl FolBinding {
             memory.push(
                 &mut answers,
                 Self {
-                    graph: graph.clone(),
+                    graph: evidence.clone(),
                     bindings,
                     atom,
                     proof,
@@ -238,7 +210,7 @@ impl FolBinding {
 
 impl PartialEq for FolBinding {
     fn eq(&self, other: &Self) -> bool {
-        core::ptr::eq(&raw const *self.graph, &raw const *other.graph)
+        self.graph.same(&other.graph)
             && self.bindings == other.bindings
             && self.atom == other.atom
             && self.proof == other.proof

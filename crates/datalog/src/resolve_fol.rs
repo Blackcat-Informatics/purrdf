@@ -35,8 +35,8 @@
 //! rule does not license fails to check however well-formed the record of it is.
 //!
 //! Beyond that, a [`FolProof`] carries a **content-addressed rule identity** and
-//! splits an unconditional fact ([`FolProof::Assert`]) from a conditional
-//! derivation ([`FolProof::ByRule`]), mirroring [`crate::proof::ProofArena`]'s own
+//! splits an unconditional fact ([`FolProof::is_assert`]) from a conditional
+//! derivation ([`FolProof::premises`]), mirroring [`crate::proof::ProofArena`]'s own
 //! `Axiom`/`ByRule` split. The rule identity is [`clause_identity`]: a length-prefixed
 //! [`canon_sorted`] encoding of the clause TEMPLATE (head plus polarity-tagged
 //! body literals), so it is stable across arenas and independent of the run's
@@ -48,8 +48,8 @@
 //! From those two exposed fields a caller reconstructs a **derivation identity**
 //! byte-for-byte through the published recipe in [`derivation_id`]: the SHA-1
 //! Merkle fold `sha1(rule_identity ++ "\n" ++ sorted(child identities))` over an
-//! [`FolProof::ByRule`], bottoming out at `sha1(rule_identity ++ "\n" ++ content
-//! key)` for an [`FolProof::Assert`]. A consumer that keys its own cross-lane
+//! [`FolProof::premises`], bottoming out at `sha1(rule_identity ++ "\n" ++ content
+//! key)` for an [`FolProof::is_assert`]. A consumer that keys its own cross-lane
 //! derivation IDs on that digest reproduces PurRDF's proof identity exactly; the
 //! digest is the content address, and minting an IRI from it is caller-supplied
 //! vocabulary this crate never learns.
@@ -94,6 +94,9 @@ use answer::{Assignment, Projected};
 pub use answer::{FolBinding, FolBindingEntry, FolTerm};
 mod rdf;
 use rdf::Constants;
+mod proof;
+use proof::ProofStep;
+pub use proof::{FOL_PROOF_IDENTITY_VERSION, FolCheckEvidence, FolProof, check_fol_proof};
 pub use rdf::{FolRdfError, FolRdfSource};
 
 /// A clause body literal cannot exceed this many atoms.
@@ -137,7 +140,7 @@ impl FolLit {
 /// Construct through [`Self::new`]. All term handles belong to the same
 /// [`TermDag`], which must remain available for inspection and execution.
 /// A clause's authored rule index is its position in [`FolProgram::clauses`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FolClause {
     /// The clause head — a single atom (this module has no head disjunction or
     /// existential; those belong to [`crate::clause`]'s richer DL-clause shape).
@@ -154,7 +157,7 @@ pub struct FolClause {
 /// Keep that arena for inspection and execution; an equal numeric handle from
 /// another arena is not the same term. Validation checks resident addresses,
 /// not provenance between arenas whose local handles happen to overlap.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FolProgram {
     /// The clause set, in authored order; proof rule indices address this order.
     clauses: Vec<FolClause>,
@@ -190,102 +193,6 @@ pub enum Truth {
     /// The atom depends on its own negation (directly or through a cycle) and
     /// the well-founded semantics assigns it neither truth value.
     Undefined,
-}
-
-/// A proof tree over [`FolClause`]s.
-///
-/// Each node carries both a plain authored `rule` index (what [`check_fol_proof`]
-/// re-derives against) and a content-addressed `rule_identity` (what a caller
-/// reproduces a derivation identity from — see [`clause_identity`] and
-/// [`derivation_id`]). The [`Self::Assert`]/[`Self::ByRule`] split mirrors
-/// [`crate::proof::ProofArena`]'s own `Axiom`/`ByRule` split:
-/// an unconditional fact is an assertion, a conditional consequence is a rule
-/// firing. See the [module docs](self).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FolProof {
-    /// `goal` is asserted directly by the UNCONDITIONAL clause at `rule` — a
-    /// clause with no positive AND no negative body literals. A proof leaf.
-    Assert {
-        /// The producing clause's authored index.
-        rule: usize,
-        /// The producing clause's content-addressed identity — see
-        /// [`clause_identity`]. Re-derived and matched, never trusted, by
-        /// [`check_fol_proof`].
-        rule_identity: String,
-        /// The STATED conclusion — compared against, never trusted, by
-        /// [`check_fol_proof`].
-        goal: NodeId,
-    },
-    /// `goal` follows from `premises` (one per POSITIVE body literal, in
-    /// authored body order) by the clause at `rule`.
-    ByRule {
-        /// The producing clause's authored index.
-        rule: usize,
-        /// The producing clause's content-addressed identity — see
-        /// [`clause_identity`]. Re-derived and matched, never trusted, by
-        /// [`check_fol_proof`].
-        rule_identity: String,
-        /// The STATED conclusion — compared against, never trusted, by
-        /// [`check_fol_proof`].
-        goal: NodeId,
-        /// One proof per positive body literal, in authored body order.
-        premises: Vec<Self>,
-    },
-}
-
-impl FolProof {
-    /// The fields every variant carries — the producing clause's index, its identity
-    /// and the stated goal — read by the one match over the variants.
-    fn header(&self) -> (usize, &str, NodeId) {
-        match self {
-            Self::Assert {
-                rule,
-                rule_identity,
-                goal,
-            }
-            | Self::ByRule {
-                rule,
-                rule_identity,
-                goal,
-                ..
-            } => (*rule, rule_identity, *goal),
-        }
-    }
-
-    /// Whether this proof node is an unconditional [`Self::Assert`] leaf.
-    #[must_use]
-    pub fn is_assert(&self) -> bool {
-        matches!(self, Self::Assert { .. })
-    }
-
-    /// The producing clause's authored index, regardless of variant.
-    #[must_use]
-    pub fn rule(&self) -> usize {
-        self.header().0
-    }
-
-    /// The producing clause's content-addressed identity, regardless of variant —
-    /// see [`clause_identity`].
-    #[must_use]
-    pub fn rule_identity(&self) -> &str {
-        self.header().1
-    }
-
-    /// The STATED conclusion this proof is of, regardless of variant.
-    #[must_use]
-    pub fn goal(&self) -> NodeId {
-        self.header().2
-    }
-
-    /// This node's positive premises, in authored body order (empty for an
-    /// [`Self::Assert`]).
-    #[must_use]
-    pub fn premises(&self) -> &[Self] {
-        match self {
-            Self::Assert { .. } => &[],
-            Self::ByRule { premises, .. } => premises,
-        }
-    }
 }
 
 /// Whether a resolution ran to completion or was cut short by its step budget.
@@ -341,11 +248,11 @@ pub struct FolOutcome {
     /// deterministic order.
     pub answers: Vec<FolBinding>,
     /// The original run's ground demand scope and WFS computation.
-    scope: FolScope,
+    evidence: FolCheckEvidence,
 }
 
 /// One computation's admitted ground probes and completion evidence.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct FolScope {
     /// Original selected execution contract, retained with its verdict evidence.
     contract: FolAnswerContract,
@@ -383,12 +290,12 @@ impl FolOutcome {
     /// The exact answer contract selected for this original run.
     #[must_use]
     pub fn answer_contract(&self) -> FolAnswerContract {
-        self.scope.contract
+        self.evidence.answer_contract()
     }
     /// Whether this original run completed or was interrupted by its budget.
     #[must_use]
     pub fn status(&self) -> FolStatus {
-        self.scope.status
+        self.evidence.status()
     }
 
     /// Probe a ground atom within this run's actual evaluated scope.
@@ -406,7 +313,13 @@ impl FolOutcome {
         if !dag.free_meta(node).is_empty() {
             return FolVerdict::NotEstablished(FolUnestablished::NonGround);
         }
-        self.scope.verdict(&canon(dag, node))
+        self.evidence.scope().verdict(&canon(dag, node))
+    }
+
+    /// Retain the original source/program/sort/contract-bound checking owner.
+    #[must_use]
+    pub fn checking_evidence(&self) -> &FolCheckEvidence {
+        &self.evidence
     }
 }
 
@@ -1277,8 +1190,9 @@ fn build_proofs(
     dag: &TermDag,
     engine: &Engine,
     program: &FolProgram,
-    scope: &FolScope,
-) -> BTreeMap<String, FolProof> {
+    evidence: &FolCheckEvidence,
+) -> Result<BTreeMap<String, FolProof>, StorageError> {
+    let scope = evidence.scope();
     let mut proofs: BTreeMap<String, FolProof> = BTreeMap::new();
     loop {
         let mut changed = false;
@@ -1319,27 +1233,27 @@ fn build_proofs(
             // therefore on the literal counts, NOT on `premises.len()` (which is the
             // positive arity and would wrongly call a neg-only guard an assertion).
             let proof = if rule.pos.is_empty() && rule.neg.is_empty() {
-                FolProof::Assert {
+                ProofStep::Assert {
                     rule: rule.rule,
                     rule_identity,
                     goal: rule.head,
                 }
             } else {
-                FolProof::ByRule {
+                ProofStep::ByRule {
                     rule: rule.rule,
                     rule_identity,
                     goal: rule.head,
                     premises,
                 }
             };
-            proofs.insert(head_key, proof);
+            proofs.insert(head_key, FolProof::new(evidence, proof)?);
             changed = true;
         }
         if !changed {
             break;
         }
     }
-    proofs
+    Ok(proofs)
 }
 
 /// Project every established true ground atom against `program.goal`, keeping only the
@@ -1350,9 +1264,10 @@ fn project(
     engine: &Engine,
     program: &FolProgram,
     ctx: &SortContext,
-    scope: &FolScope,
+    evidence: &FolCheckEvidence,
     proofs: &BTreeMap<String, FolProof>,
 ) -> Result<Vec<FolBinding>, StorageError> {
+    let scope = evidence.scope();
     let mut candidates: Vec<(String, NodeId)> = engine
         .atoms
         .iter()
@@ -1407,10 +1322,34 @@ fn project(
 
     // Candidates already follow structural canonical-key order. Presentation
     // strings never sort, deduplicate or join answer terms.
-    FolBinding::retain(dag, answers, scope.contract)
+    FolBinding::retain(answers, evidence)
 }
 
 // ── Entry point ──────────────────────────────────────────────────────────────────
+
+/// The one projection of evaluated scope, reused by original evaluation and
+/// bounded checking replay.
+fn evaluated_scope(dag: &TermDag, engine: &Engine, contract: FolAnswerContract) -> FolScope {
+    let (true_set, not_false) = well_founded(dag, engine, engine.exhausted);
+    let status = if engine.exhausted {
+        FolStatus::Partial
+    } else {
+        FolStatus::Complete
+    };
+    let mut ground: BTreeSet<String> = engine.atoms.keys().cloned().collect();
+    for &call in engine.calls.values() {
+        if dag.free_meta(call).is_empty() {
+            ground.insert(canon(dag, call));
+        }
+    }
+    FolScope {
+        contract,
+        status,
+        ground,
+        not_false,
+        true_set,
+    }
+}
 
 /// Decide `program`'s goal by SLG-tabled backward resolution under three-valued
 /// well-founded semantics.
@@ -1454,31 +1393,17 @@ pub fn resolve_fol(
         return Ok(FolControl::Unsupported(FolUnsupported::Floundering));
     }
 
-    let (true_set, not_false) = well_founded(dag, &engine, engine.exhausted);
-    let status = if engine.exhausted {
-        FolStatus::Partial
-    } else {
-        FolStatus::Complete
-    };
-    let mut ground: BTreeSet<String> = engine.atoms.keys().cloned().collect();
-    for &call in engine.calls.values() {
-        if dag.free_meta(call).is_empty() {
-            ground.insert(canon(dag, call));
-        }
-    }
-    let scope = FolScope {
-        contract,
-        status,
-        ground,
-        not_false,
-        true_set,
-    };
-    let proofs = build_proofs(dag, &engine, program, &scope);
+    let scope = evaluated_scope(dag, &engine, contract);
+    let evidence = FolCheckEvidence::capture(dag, program, ctx, *budget, scope, &engine)?;
+    let proofs = build_proofs(dag, &engine, program, &evidence)?;
     let answers = match contract {
-        FolAnswerContract::GroundOnly => project(dag, &engine, program, ctx, &scope, &proofs)?,
+        FolAnswerContract::GroundOnly => project(dag, &engine, program, ctx, &evidence, &proofs)?,
     };
 
-    Ok(FolControl::Decided(Box::new(FolOutcome { answers, scope })))
+    Ok(FolControl::Decided(Box::new(FolOutcome {
+        answers,
+        evidence,
+    })))
 }
 
 purrdf_lex::variant_from!(FolProofError { Storage(StorageError) });
@@ -1487,13 +1412,49 @@ purrdf_lex::variant_from!(FolProofError { Storage(StorageError) });
 
 /// Why a [`FolProof`] is not a proof of the conclusion it states.
 ///
-/// Every variant is a NORMAL rejection of an invalid proof, never an engine
-/// fault — mirroring [`crate::proof::ProofError`]'s own doctrine.
+/// Structural and context refusals are distinct from native storage/work
+/// refusals. Original error operands remain inspectable without rendering.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum FolProofError {
     /// Native refusal, distinct from rejecting an invalid proof.
     Storage(StorageError),
+    /// The live arena is not the original private source capability.
+    ForeignSource,
+    /// The supplied evidence belongs to another ordered program.
+    ForeignProgram,
+    /// The supplied evidence belongs to another sort context.
+    ForeignSorts,
+    /// The supplied evidence selects another answer contract.
+    ForeignContract,
+    /// The supplied evidence belongs to another demanded run.
+    ForeignRun,
+    /// The stated conclusion was not retained from the original source.
+    UnknownConclusion {
+        /// Original stated handle.
+        goal: NodeId,
+    },
+    /// The selected ground-only contract cannot certify a symbolic conclusion.
+    NonGroundConclusion {
+        /// Original stated handle.
+        goal: NodeId,
+    },
+    /// Original or replayed grounding did not establish complete negative demands.
+    CompletionIncomplete {
+        /// Actual charged work at interruption.
+        steps: u64,
+        /// Original admitted ceiling, also used for checking replay.
+        max_steps: u64,
+    },
+    /// Structural proof checking exhausted its retained node/edge admission.
+    CheckingWorkExhausted {
+        /// Structural work admitted so far.
+        steps: u64,
+        /// Original ceiling also used for structural checking.
+        max_steps: u64,
+    },
+    /// Demanded coverage, closure or WFS model failed independent replay comparison.
+    InvalidCompletion,
     /// The proof cites a clause index the program does not have.
     UnknownRule {
         /// The cited clause index.
@@ -1528,7 +1489,7 @@ pub enum FolProofError {
         position: usize,
     },
     /// A negative body literal's instantiated atom is not confirmed absent from
-    /// the caller-supplied `not_false` set, so the negation is not licensed.
+    /// the checked original completed scope, so the negation is not licensed.
     NegatedPremiseNotExcluded {
         /// The cited clause index.
         rule: usize,
@@ -1543,7 +1504,7 @@ pub enum FolProofError {
         /// The cited clause index.
         rule: usize,
     },
-    /// A [`FolProof::Assert`] cites a clause that HAS a body: an assertion is only
+    /// A [`FolProof::is_assert`] cites a clause that HAS a body: an assertion is only
     /// valid for an UNCONDITIONAL clause (no positive and no negative literal).
     AssertHasBody {
         /// The cited clause index.
@@ -1551,9 +1512,49 @@ pub enum FolProofError {
     },
 }
 
+impl core::fmt::Display for FolProofError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Storage(error) => error.fmt(f),
+            Self::ForeignSource => f.write_str("proof checking requires the original live source arena"),
+            Self::ForeignProgram => f.write_str("proof evidence belongs to another ordered program"),
+            Self::ForeignSorts => f.write_str("proof evidence belongs to another sort context"),
+            Self::ForeignContract => f.write_str("proof evidence selects another answer contract"),
+            Self::ForeignRun => f.write_str("proof evidence belongs to another demanded run"),
+            Self::UnknownConclusion { goal } => write!(f, "proof conclusion {goal:?} is outside its original retained graph"),
+            Self::NonGroundConclusion { goal } => write!(f, "proof conclusion {goal:?} is not ground under the selected contract"),
+            Self::CompletionIncomplete { steps, max_steps } => write!(f, "negative completion was interrupted after {steps} charged steps under ceiling {max_steps}"),
+            Self::CheckingWorkExhausted { steps, max_steps } => write!(f, "proof checking exhausted its {max_steps} node/edge admission after {steps} steps"),
+            Self::InvalidCompletion => f.write_str("negative demand coverage, closure or WFS model does not reproduce its original completed evidence"),
+            Self::UnknownRule { rule } => write!(f, "proof cites missing clause {rule}"),
+            Self::HeadMismatch { rule, .. } => write!(f, "clause {rule} does not re-derive the stated conclusion"),
+            Self::PremiseCountMismatch { rule, body, premises } => write!(f, "clause {rule} requires {body} positive premises but proof supplies {premises}"),
+            Self::PremiseMismatch { rule, position } => write!(f, "clause {rule} literal {position} does not match its checked premise"),
+            Self::NegatedPremiseNotExcluded { rule, position } => write!(f, "clause {rule} negative literal {position} lacks established absence in the checked scope"),
+            Self::RuleIdentityMismatch { rule } => write!(f, "clause {rule} identity differs from the original program"),
+            Self::AssertHasBody { rule } => write!(f, "proof assertion cites conditional clause {rule}"),
+        }
+    }
+}
+purrdf_hash::error_sources!(FolProofError, Storage);
+
 impl purrdf_hash::error::StructuredError for FolProofError {
     purrdf_hash::error_visit! {
         Storage(cause) => "fol-proof-storage" { "cause" => Cause(cause) },
+        ForeignSource => "fol-proof-foreign-source" {},
+        ForeignProgram => "fol-proof-foreign-program" {},
+        ForeignSorts => "fol-proof-foreign-sorts" {},
+        ForeignContract => "fol-proof-foreign-contract" {},
+        ForeignRun => "fol-proof-foreign-run" {},
+        UnknownConclusion { goal } => "fol-proof-unknown-conclusion" { "goal" => Unsigned(u128::from(goal.index())) },
+        NonGroundConclusion { goal } => "fol-proof-nonground-conclusion" { "goal" => Unsigned(u128::from(goal.index())) },
+        CompletionIncomplete { steps, max_steps } => "fol-proof-completion-incomplete" {
+            "steps" => Unsigned(u128::from(*steps)), "max_steps" => Unsigned(u128::from(*max_steps))
+        },
+        CheckingWorkExhausted { steps, max_steps } => "fol-proof-work-exhausted" {
+            "steps" => Unsigned(u128::from(*steps)), "max_steps" => Unsigned(u128::from(*max_steps))
+        },
+        InvalidCompletion => "fol-proof-invalid-completion" {},
         UnknownRule { rule } => "fol-proof-unknown-rule" { "rule" => Unsigned(*rule as u128) },
         HeadMismatch { rule, derived, stated } => "fol-proof-head-mismatch" { "rule" => Unsigned(*rule as u128), "derived" => Term(derived), "stated" => Term(stated) },
         PremiseCountMismatch { rule, body, premises } => "fol-proof-premise-count-mismatch" { "rule" => Unsigned(*rule as u128), "body" => Unsigned(*body as u128), "premises" => Unsigned(*premises as u128) },
@@ -1562,137 +1563,6 @@ impl purrdf_hash::error::StructuredError for FolProofError {
         RuleIdentityMismatch { rule } => "fol-proof-rule-identity-mismatch" { "rule" => Unsigned(*rule as u128) },
         AssertHasBody { rule } => "fol-proof-assert-has-body" { "rule" => Unsigned(*rule as u128) },
     }
-}
-
-/// Independently check `proof` against `clauses`, RE-DERIVING its conclusion
-/// rather than trusting the one it states.
-///
-/// `meta_sorts` and `ctx` are the same order-sorted context [`resolve_fol`] ran
-/// under (pass an empty map and [`crate::unify::SortContext::default`] for a
-/// sort-blind program); they make the re-derivation sort-aware and let the
-/// carried [`clause_identity`] be re-derived and matched. `not_false` answers "is
-/// this ground atom confirmed not false" — a caller backs it with the SAME
-/// well-founded computation [`resolve_fol`] produced. A conservative adapter
-/// returns `false` ONLY for
-/// `FolVerdict::Established(Truth::False)` from [`FolOutcome::truth_of`], so an
-/// unevaluated or incomplete probe cannot license a negation. This freely
-/// supplied Boolean is not independently authenticated checking evidence.
-///
-/// Every premise is checked FIRST, recursively bottom-up; the clause is freshened
-/// exactly as `ground` freshens it (its variables' sorts declared), its positive
-/// body literals are unified against the checked premises' re-derived atoms into
-/// one shared substitution, its negative body literals are re-decided against
-/// `not_false` under that substitution, and the clause head is instantiated under
-/// the final substitution and compared — never assumed — against the proof's
-/// stated `goal`. Finally the proof's content-addressed rule identity is
-/// re-derived from the cited clause and matched, so a forged identity is rejected
-/// even on an otherwise well-formed record. A [`FolProof::Assert`] is the
-/// zero-premise case restricted to an UNCONDITIONAL clause.
-pub fn check_fol_proof(
-    dag: &mut TermDag,
-    proof: &FolProof,
-    clauses: &[FolClause],
-    meta_sorts: &BTreeMap<MetaId, NodeId>,
-    ctx: &SortContext,
-    not_false: &impl Fn(&TermDag, NodeId) -> bool,
-) -> Result<NodeId, FolProofError> {
-    let rule = proof.rule();
-    let goal = proof.goal();
-    let clause = clauses
-        .get(rule)
-        .ok_or(FolProofError::UnknownRule { rule })?;
-
-    // Re-derive the positive premises bottom-up (an `Assert` has none), then
-    // freshen the clause with its variables' sorts declared so the re-derivation
-    // enforces the same order-sorted discipline the resolver did.
-    let derived_premises = match proof {
-        FolProof::Assert { .. } => {
-            if !clause.body.is_empty() {
-                return Err(FolProofError::AssertHasBody { rule });
-            }
-            Vec::new()
-        }
-        FolProof::ByRule { premises, .. } => {
-            let positive_count = clause
-                .body
-                .iter()
-                .filter(|lit| matches!(lit, FolLit::Pos(_)))
-                .count();
-            if premises.len() != positive_count {
-                return Err(FolProofError::PremiseCountMismatch {
-                    rule,
-                    body: positive_count,
-                    premises: premises.len(),
-                });
-            }
-            let mut derived = Vec::with_capacity(premises.len());
-            for premise in premises {
-                derived.push(check_fol_proof(
-                    dag, premise, clauses, meta_sorts, ctx, not_false,
-                )?);
-            }
-            derived
-        }
-    };
-
-    let (head, body, sort_decls) = freshen_clause(dag, clause, meta_sorts)?;
-    let mut subst = Subst::default();
-    for &(meta, sort) in &sort_decls {
-        subst.declare_meta_sort(meta, sort)?;
-    }
-    let mut premise_iter = derived_premises.into_iter();
-    for (position, lit) in body.iter().enumerate() {
-        if let FolLit::Pos(atom) = lit {
-            let derived_atom = premise_iter
-                .next()
-                .expect("premise count already matched the positive body arity");
-            if !matches!(
-                unify::unify_sorted(dag, *atom, derived_atom, &mut subst, ctx)?,
-                Unified::Ok
-            ) {
-                return Err(FolProofError::PremiseMismatch { rule, position });
-            }
-        }
-    }
-
-    // A clause variable that occurs ONLY in the head (a genuinely universal
-    // fact variable, e.g. the repeated `Y` in `add(z, Y, Y) :- .`, or a
-    // never-constrained "wildcard" position) is not bound by any premise
-    // unification above. Unifying the freshened head against the STATED goal —
-    // which is always fully ground here, since `resolve_fol` only ever proves
-    // fully-ground atoms — is what supplies that binding; a goal the clause
-    // (under the premises already checked) cannot actually produce fails this
-    // unification outright, which is exactly a `HeadMismatch`.
-    if !matches!(
-        unify::unify_sorted(dag, head, goal, &mut subst, ctx)?,
-        Unified::Ok
-    ) {
-        let derived_head = unify::apply(dag, &subst, head)?;
-        return Err(FolProofError::HeadMismatch {
-            rule,
-            derived: crate::term::RetainedTerm::capture(dag, derived_head)?,
-            stated: crate::term::RetainedTerm::capture(dag, goal)?,
-        });
-    }
-
-    for (position, lit) in body.iter().enumerate() {
-        if let FolLit::Neg(atom) = lit {
-            let ground_atom = unify::apply(dag, &subst, *atom)?;
-            if not_false(dag, ground_atom) {
-                return Err(FolProofError::NegatedPremiseNotExcluded { rule, position });
-            }
-        }
-    }
-
-    // The content address is a CHECKED invariant, verified LAST so a structurally
-    // forged proof still reports the structural fault (a mismatched head or
-    // premise) rather than this — but a proof whose re-derivation is otherwise
-    // clean cannot carry an identity that does not belong to the cited clause.
-    if proof.rule_identity() != clause_identity(dag, clause, meta_sorts) {
-        return Err(FolProofError::RuleIdentityMismatch { rule });
-    }
-
-    Ok(unify::apply(dag, &subst, head)?)
 }
 
 // ── Caller-reproducible derivation identity (the published recipe) ───────────────
@@ -1715,9 +1585,9 @@ pub fn content_key(dag: &(impl TermRead + ?Sized), proof: &FolProof) -> String {
 /// derivation identities.
 ///
 /// Exactly:
-/// - [`FolProof::Assert`] → `sha1(rule_identity ++ "\n" ++ content_key)`, where
+/// - [`FolProof::is_assert`] → `sha1(rule_identity ++ "\n" ++ content_key)`, where
 ///   `content_key` is [`canon`] of the asserted ground atom.
-/// - [`FolProof::ByRule`] → `sha1(rule_identity ++ "\n" ++ ids)`, where `ids` is
+/// - [`FolProof::premises`] → `sha1(rule_identity ++ "\n" ++ ids)`, where `ids` is
 ///   the derivation ids of the premises, each recursively computed, STABLE-SORTED
 ///   as a MULTISET (duplicates kept — two premises proving the same atom two ways
 ///   both contribute), and joined by a single `\n`.
@@ -1732,36 +1602,40 @@ pub fn content_key(dag: &(impl TermRead + ?Sized), proof: &FolProof) -> String {
 /// # Example
 ///
 /// ```
-/// use purrdf_datalog::resolve_fol::{derivation_id, FolProof};
+/// use purrdf_datalog::resolve_fol::{FolAnswerContract, FolBudget, FolClause, FolControl, FolProgram, resolve_fol};
 /// use purrdf_datalog::term::TermDag;
+/// use std::collections::BTreeMap;
 ///
 /// let mut dag = TermDag::default();
 /// let goal = dag.intern_leaf("fact")?;
-/// let proof = FolProof::Assert { rule: 0, rule_identity: "rule-id".to_owned(), goal };
-/// let id = derivation_id(&dag, &proof);
+/// let clause = FolClause::new(&dag, goal, vec![])?;
+/// let program = FolProgram::new(&dag, vec![clause], goal, vec![], BTreeMap::new())?;
+/// let FolControl::Decided(outcome) = resolve_fol(&mut dag, &program, &Default::default(),
+///     FolAnswerContract::GroundOnly, &FolBudget { max_steps: 10 })? else { panic!("a ground fact decides"); };
+/// let id = outcome.answers[0].proof().derivation_id();
 /// assert_eq!(id.len(), 40);
 /// assert!(id.bytes().all(|b| b.is_ascii_hexdigit()));
-/// # Ok::<(), purrdf_lex::allocation::StorageError>(())
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[must_use]
 pub fn derivation_id(dag: &(impl TermRead + ?Sized), proof: &FolProof) -> String {
     let mut hasher = Sha1::new();
     hasher.update(proof.rule_identity().as_bytes());
     hasher.update(b"\n");
-    match proof {
-        FolProof::Assert { goal, .. } => {
-            hasher.update(canon(dag, *goal).as_bytes());
-        }
-        FolProof::ByRule { premises, .. } => {
-            let mut child_ids: Vec<String> =
-                premises.iter().map(|p| derivation_id(dag, p)).collect();
-            child_ids.sort();
-            for (index, id) in child_ids.iter().enumerate() {
-                if index > 0 {
-                    hasher.update(b"\n");
-                }
-                hasher.update(id.as_bytes());
+    if proof.is_assert() {
+        hasher.update(canon(dag, proof.goal()).as_bytes());
+    } else {
+        let mut child_ids: Vec<String> = proof
+            .premises()
+            .iter()
+            .map(|p| derivation_id(dag, p))
+            .collect();
+        child_ids.sort();
+        for (index, id) in child_ids.iter().enumerate() {
+            if index > 0 {
+                hasher.update(b"\n");
             }
+            hasher.update(id.as_bytes());
         }
     }
     purrdf_hash::hex::encode(&hasher.finalize())
@@ -1805,6 +1679,8 @@ pub enum FolError {
     Construction(FolConstructionError),
     /// Original native RDF operand missing from its declared source dictionary.
     Rdf(FolRdfError),
+    /// The original backward proof-checking refusal.
+    Proof(Box<FolProofError>),
 }
 
 impl purrdf_hash::error::StructuredError for FolError {
@@ -1813,6 +1689,7 @@ impl purrdf_hash::error::StructuredError for FolError {
         Storage(cause) => "fol-storage" { "cause" => Cause(cause) },
         Construction(cause) => "fol-construction" { "cause" => Cause(cause) },
         Rdf(cause) => "fol-rdf" { "cause" => Cause(cause) },
+        Proof(cause) => "fol-proof" { "cause" => Cause(cause.as_ref()) },
     }
 }
 impl core::fmt::Display for FolError {
@@ -1822,6 +1699,7 @@ impl core::fmt::Display for FolError {
             Self::Storage(e) => e.fmt(f),
             Self::Construction(e) => e.fmt(f),
             Self::Rdf(e) => e.fmt(f),
+            Self::Proof(e) => e.fmt(f),
         }
     }
 }
@@ -1832,6 +1710,7 @@ impl std::error::Error for FolError {
             Self::Storage(e) => Some(e),
             Self::Construction(e) => Some(e),
             Self::Rdf(e) => Some(e),
+            Self::Proof(e) => Some(e.as_ref()),
         }
     }
 }
@@ -2042,10 +1921,21 @@ mod tests {
         dag.intern_app(op_node, args).unwrap()
     }
 
-    /// An always-`Ok` `not_false` adapter, for programs with no negation to
-    /// re-check.
-    fn always_not_false(_dag: &TermDag, _node: NodeId) -> bool {
-        false
+    /// Mint actual original-run evidence for adversarial private proof claims.
+    fn evidence_for(dag: &mut TermDag, clauses: &[FolClause], goal: NodeId) -> FolCheckEvidence {
+        let program =
+            FolProgram::new(dag, clauses.to_vec(), goal, vec![], BTreeMap::new()).unwrap();
+        let FolControl::Decided(outcome) = resolve_fol(
+            dag,
+            &program,
+            &SortContext::default(),
+            FolAnswerContract::GroundOnly,
+            &FolBudget { max_steps: 10_000 },
+        )
+        .unwrap() else {
+            panic!("the ground fixture must decide");
+        };
+        outcome.checking_evidence().clone()
     }
 
     // ── 0: canon/render sanity ───────────────────────────────────────────────
@@ -2138,7 +2028,7 @@ mod tests {
         let goal = app(&mut dag, "add", vec![two, one, r_meta]);
         let program = FolProgram::new(
             &dag,
-            clauses.clone(),
+            clauses,
             goal,
             vec![(r_meta, "R".to_owned())],
             BTreeMap::new(),
@@ -2169,15 +2059,8 @@ mod tests {
             "a projected answer is always in the true set"
         );
 
-        let checked = check_fol_proof(
-            &mut dag,
-            answer.proof(),
-            &clauses,
-            &BTreeMap::new(),
-            &SortContext::default(),
-            &always_not_false,
-        )
-        .expect("the derivation re-derives cleanly");
+        let checked = check_fol_proof(&mut dag, answer.proof(), answer.proof().checking_evidence())
+            .expect("the derivation re-derives cleanly");
         assert_eq!(checked, answer.atom().source_id());
     }
 
@@ -2219,7 +2102,7 @@ mod tests {
         let goal = app(&mut dag, "member", vec![x_goal, list]);
         let program = FolProgram::new(
             &dag,
-            clauses.clone(),
+            clauses,
             goal,
             vec![(x_goal, "X".to_owned())],
             BTreeMap::new(),
@@ -2247,15 +2130,9 @@ mod tests {
         assert_eq!(found, vec!["a".to_owned(), "b".to_owned(), "c".to_owned()]);
 
         for answer in &outcome.answers {
-            let checked = check_fol_proof(
-                &mut dag,
-                answer.proof(),
-                &clauses,
-                &BTreeMap::new(),
-                &SortContext::default(),
-                &always_not_false,
-            )
-            .unwrap_or_else(|error| panic!("{error:?}"));
+            let checked =
+                check_fol_proof(&mut dag, answer.proof(), answer.proof().checking_evidence())
+                    .unwrap_or_else(|error| panic!("{error:?}"));
             assert_eq!(checked, answer.atom().source_id());
         }
     }
@@ -2432,10 +2309,7 @@ mod tests {
         let proved = check_fol_proof(
             &mut dag,
             partial.answers[0].proof(),
-            positive.clauses(),
-            positive.meta_sorts(),
-            &SortContext::default(),
-            &always_not_false,
+            partial.answers[0].proof().checking_evidence(),
         )
         .unwrap();
         assert_eq!(proved, base);
@@ -2541,7 +2415,7 @@ mod tests {
 
     // ── 9/10: the proof checker's rejections ────────────────────────────────
 
-    /// A hand-forged `FolProof::ByRule` whose stated `goal` does not match what
+    /// A hand-forged private rule step whose stated `goal` does not match what
     /// the cited clause actually derives from its (empty) premises is rejected.
     #[test]
     fn check_fol_proof_rejects_a_forged_head() {
@@ -2550,22 +2424,20 @@ mod tests {
         let head = app(&mut dag, "p", vec![x]);
         let clause = FolClause::new(&dag, head, vec![]).unwrap();
         let wrong_goal = leaf(&mut dag, "not_p_of_anything");
-        let forged = FolProof::ByRule {
-            rule: 0,
-            // Any identity here — the forged HEAD is caught before the identity check.
-            rule_identity: String::new(),
-            goal: wrong_goal,
-            premises: vec![],
-        };
-        let error = check_fol_proof(
-            &mut dag,
-            &forged,
-            std::slice::from_ref(&clause),
-            &BTreeMap::new(),
-            &SortContext::default(),
-            &always_not_false,
+        let evidence = evidence_for(&mut dag, std::slice::from_ref(&clause), wrong_goal);
+        let forged = FolProof::new(
+            &evidence,
+            ProofStep::ByRule {
+                rule: 0,
+                // Any identity here — the forged HEAD is caught before the identity check.
+                rule_identity: String::new(),
+                goal: wrong_goal,
+                premises: vec![],
+            },
         )
-        .expect_err("a forged head must be rejected");
+        .unwrap();
+        let error = check_fol_proof(&mut dag, &forged, forged.checking_evidence())
+            .expect_err("a forged head must be rejected");
         assert!(matches!(error, FolProofError::HeadMismatch { rule: 0, .. }));
         let retained = error.clone();
         drop(error);
@@ -2594,27 +2466,29 @@ mod tests {
         let head = app(&mut dag, "p", vec![a]);
         let clause = FolClause::new(&dag, head, vec![]).unwrap();
         let clauses = vec![clause];
-
-        let extra_premise = FolProof::ByRule {
-            rule: 0,
-            rule_identity: String::new(),
-            goal: head,
-            premises: vec![FolProof::ByRule {
+        let evidence = evidence_for(&mut dag, &clauses, head);
+        let child = FolProof::new(
+            &evidence,
+            ProofStep::ByRule {
                 rule: 0,
                 rule_identity: String::new(),
                 goal: head,
                 premises: vec![],
-            }],
-        };
-        let error = check_fol_proof(
-            &mut dag,
-            &extra_premise,
-            &clauses,
-            &BTreeMap::new(),
-            &SortContext::default(),
-            &always_not_false,
+            },
         )
-        .expect_err("an extra premise on a zero-premise rule must be rejected");
+        .unwrap();
+        let extra_premise = FolProof::new(
+            &evidence,
+            ProofStep::ByRule {
+                rule: 0,
+                rule_identity: String::new(),
+                goal: head,
+                premises: vec![child],
+            },
+        )
+        .unwrap();
+        let error = check_fol_proof(&mut dag, &extra_premise, extra_premise.checking_evidence())
+            .expect_err("an extra premise on a zero-premise rule must be rejected");
         assert!(matches!(
             error,
             FolProofError::PremiseCountMismatch {
@@ -2624,21 +2498,18 @@ mod tests {
             }
         ));
 
-        let unknown_rule = FolProof::ByRule {
-            rule: 7,
-            rule_identity: String::new(),
-            goal: head,
-            premises: vec![],
-        };
-        let error = check_fol_proof(
-            &mut dag,
-            &unknown_rule,
-            &clauses,
-            &BTreeMap::new(),
-            &SortContext::default(),
-            &always_not_false,
+        let unknown_rule = FolProof::new(
+            &evidence,
+            ProofStep::ByRule {
+                rule: 7,
+                rule_identity: String::new(),
+                goal: head,
+                premises: vec![],
+            },
         )
-        .expect_err("citing a rule the program does not have must be rejected");
+        .unwrap();
+        let error = check_fol_proof(&mut dag, &unknown_rule, unknown_rule.checking_evidence())
+            .expect_err("citing a rule the program does not have must be rejected");
         assert_eq!(error, FolProofError::UnknownRule { rule: 7 });
     }
 
@@ -2869,43 +2740,25 @@ mod tests {
     /// content-addressed identity (which `check_fol_proof` re-derives and matches).
     #[test]
     fn resolved_proofs_revalidate_with_their_identity() {
-        let (mut dag, clauses, proof) = peano_answer_proof();
-        let checked = check_fol_proof(
-            &mut dag,
-            &proof,
-            &clauses,
-            &BTreeMap::new(),
-            &SortContext::default(),
-            &always_not_false,
-        )
-        .expect("a genuine proof re-derives and its identity matches");
+        let (mut dag, _, proof) = peano_answer_proof();
+        let checked = check_fol_proof(&mut dag, &proof, proof.checking_evidence())
+            .expect("a genuine proof re-derives and its identity matches");
         assert_eq!(checked, proof.goal());
 
         // Corrupting the carried identity is caught even though the derivation is
         // otherwise well-formed.
-        let forged = match proof {
-            FolProof::ByRule {
-                rule,
-                goal,
-                premises,
-                ..
-            } => FolProof::ByRule {
-                rule,
+        let forged = FolProof::new(
+            proof.checking_evidence(),
+            ProofStep::ByRule {
+                rule: proof.rule(),
                 rule_identity: "not-the-real-identity".to_owned(),
-                goal,
-                premises,
+                goal: proof.goal(),
+                premises: proof.premises().to_vec(),
             },
-            FolProof::Assert { .. } => unreachable!("the sum proof is a ByRule"),
-        };
-        let error = check_fol_proof(
-            &mut dag,
-            &forged,
-            &clauses,
-            &BTreeMap::new(),
-            &SortContext::default(),
-            &always_not_false,
         )
-        .expect_err("a forged identity is rejected");
+        .unwrap();
+        let error = check_fol_proof(&mut dag, &forged, forged.checking_evidence())
+            .expect_err("a forged identity is rejected");
         assert_eq!(error, FolProofError::RuleIdentityMismatch { rule: 1 });
     }
 
@@ -2947,23 +2800,37 @@ mod tests {
     fn derivation_id_keeps_duplicate_premises() {
         let mut dag = TermDag::default();
         let a = leaf(&mut dag, "a");
-        let child = FolProof::Assert {
-            rule: 0,
-            rule_identity: "child".to_owned(),
-            goal: a,
-        };
-        let one = FolProof::ByRule {
-            rule: 1,
-            rule_identity: "parent".to_owned(),
-            goal: a,
-            premises: vec![child.clone()],
-        };
-        let two = FolProof::ByRule {
-            rule: 1,
-            rule_identity: "parent".to_owned(),
-            goal: a,
-            premises: vec![child.clone(), child],
-        };
+        let clause = FolClause::new(&dag, a, vec![]).unwrap();
+        let evidence = evidence_for(&mut dag, &[clause], a);
+        let child = FolProof::new(
+            &evidence,
+            ProofStep::Assert {
+                rule: 0,
+                rule_identity: "child".to_owned(),
+                goal: a,
+            },
+        )
+        .unwrap();
+        let one = FolProof::new(
+            &evidence,
+            ProofStep::ByRule {
+                rule: 1,
+                rule_identity: "parent".to_owned(),
+                goal: a,
+                premises: vec![child.clone()],
+            },
+        )
+        .unwrap();
+        let two = FolProof::new(
+            &evidence,
+            ProofStep::ByRule {
+                rule: 1,
+                rule_identity: "parent".to_owned(),
+                goal: a,
+                premises: vec![child.clone(), child],
+            },
+        )
+        .unwrap();
         assert_ne!(
             derivation_id(&dag, &one),
             derivation_id(&dag, &two),
@@ -3008,8 +2875,7 @@ mod tests {
         // holds :- not absent.   (there is no `absent` fact, so the negation succeeds)
         let clause = FolClause::new(&dag, holds, vec![FolLit::Neg(absent)]).unwrap();
         let clauses = vec![clause];
-        let program =
-            FolProgram::new(&dag, clauses.clone(), holds, vec![], BTreeMap::new()).unwrap();
+        let program = FolProgram::new(&dag, clauses, holds, vec![], BTreeMap::new()).unwrap();
         let budget = FolBudget { max_steps: 10_000 };
         let FolControl::Decided(outcome) = resolve_fol(
             &mut dag,
@@ -3035,15 +2901,8 @@ mod tests {
             proof.premises().is_empty(),
             "no positive premises, but still ByRule"
         );
-        let checked = check_fol_proof(
-            &mut dag,
-            proof,
-            &clauses,
-            &BTreeMap::new(),
-            &SortContext::default(),
-            &|dag, node| outcome.truth_of(dag, node) != FolVerdict::Established(Truth::False),
-        )
-        .expect("the neg-only derivation re-validates");
+        let checked = check_fol_proof(&mut dag, proof, outcome.checking_evidence())
+            .expect("the neg-only derivation re-validates");
         assert_eq!(checked, holds);
     }
 
@@ -3056,28 +2915,25 @@ mod tests {
         let holds = leaf(&mut dag, "holds");
         let absent = leaf(&mut dag, "absent");
         let clause = FolClause::new(&dag, holds, vec![FolLit::Neg(absent)]).unwrap();
-        let forged = FolProof::Assert {
-            rule: 0,
-            rule_identity: String::new(),
-            goal: holds,
-        };
-        let error = check_fol_proof(
-            &mut dag,
-            &forged,
-            std::slice::from_ref(&clause),
-            &BTreeMap::new(),
-            &SortContext::default(),
-            &always_not_false,
+        let evidence = evidence_for(&mut dag, &[clause], holds);
+        let forged = FolProof::new(
+            &evidence,
+            ProofStep::Assert {
+                rule: 0,
+                rule_identity: String::new(),
+                goal: holds,
+            },
         )
-        .expect_err("an Assert over a bodied clause is rejected");
+        .unwrap();
+        let error = check_fol_proof(&mut dag, &forged, forged.checking_evidence())
+            .expect_err("an Assert over a bodied clause is rejected");
         assert_eq!(error, FolProofError::AssertHasBody { rule: 0 });
     }
 
     // ── Sort discipline composed with negation-as-failure ────────────────────
 
-    /// A negation-as-failure clause over a SORTED variable decides correctly, and
-    /// a `not_false` verdict flip makes `check_fol_proof` reject the licensed
-    /// negation — the sort discipline and the three-valued negation compose.
+    /// A sorted negation-as-failure proof rechecks under its original evidence;
+    /// another program cannot lend its completed model to that proof.
     #[test]
     fn sorted_negation_decides_and_rechecks() {
         let mut dag = TermDag::default();
@@ -3137,24 +2993,33 @@ mod tests {
             "a negation-guarded fact is never an Assert"
         );
 
-        // Re-checking with a `not_false` that now claims `danger(felix)` is not
-        // false unlicenses the negation.
+        check_fol_proof(&mut dag, &proof, outcome.checking_evidence()).unwrap();
+        // A different program cannot lend its completed evidence to this proof.
         let danger_felix = app(&mut dag, "danger", vec![felix]);
-        let danger_key = canon(&dag, danger_felix);
-        let danger_is_not_false = |dag: &TermDag, node: NodeId| canon(dag, node) == danger_key;
-        let error = check_fol_proof(
-            &mut dag,
-            &proof,
-            &clauses,
-            &meta_sorts,
-            &ctx,
-            &danger_is_not_false,
+        let mut foreign_clauses = clauses;
+        foreign_clauses.push(FolClause::new(&dag, danger_felix, vec![]).unwrap());
+        let foreign_program = FolProgram::new(
+            &dag,
+            foreign_clauses,
+            goal,
+            vec![(r, "R".into())],
+            meta_sorts,
         )
-        .expect_err("an unlicensed negation is rejected");
-        assert!(matches!(
-            error,
-            FolProofError::NegatedPremiseNotExcluded { rule: 0, .. }
-        ));
+        .unwrap();
+        let FolControl::Decided(foreign) = resolve_fol(
+            &mut dag,
+            &foreign_program,
+            &ctx,
+            FolAnswerContract::GroundOnly,
+            &budget,
+        )
+        .unwrap() else {
+            panic!("the neighboring ground program must decide");
+        };
+        assert_eq!(
+            check_fol_proof(&mut dag, &proof, foreign.checking_evidence()).unwrap_err(),
+            FolProofError::ForeignProgram
+        );
     }
 
     // ── Datalog bridge ───────────────────────────────────────────────────────
@@ -3247,17 +3112,10 @@ mod tests {
                 "a fully ground goal has one answer, or none"
             );
 
-            let triple_op = dag.intern_leaf("triple").unwrap();
-            let fol_clauses =
-                lower_datalog_clauses(&mut dag, triple_op, &backward_rules, &Constants::Opaque)
-                    .expect("the same Datalog-only program lowers cleanly a second time");
             let checked = check_fol_proof(
                 &mut dag,
                 outcome.answers[0].proof(),
-                &fol_clauses,
-                &BTreeMap::new(),
-                &SortContext::default(),
-                &always_not_false,
+                outcome.answers[0].proof().checking_evidence(),
             )
             .expect("the backward derivation re-derives cleanly");
             assert_eq!(checked, outcome.answers[0].atom().source_id());

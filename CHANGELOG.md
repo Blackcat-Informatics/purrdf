@@ -8,6 +8,15 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Bound structured proofs (breaking Rust API):** `FolProof` is opaque and
+  retains native conclusions with original source/program/sort/contract/run
+  evidence. `check_fol_proof` accepts that typed owner instead of freely supplied
+  records and a Boolean oracle. Negative checking validates demanded completion
+  with bounded replay; positive checking is iterative, memoized and admitted.
+  Scratch nodes and metavariables roll back. Real explanation confirmation checks
+  its native proof and preserves typed failures. Existing version 1 identity laws
+  retain their exact bytes.
+
 - **Owned structural answers (breaking Rust API):** `FolBinding` exposes native
   term views and original scoped variables through one retained graph shared by
   the complete answer set. Extracted rows survive source destruction; rendering

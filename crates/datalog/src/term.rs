@@ -181,8 +181,10 @@ fn merge_free_meta(left: &[MetaId], right: &[MetaId]) -> Result<Vec<MetaId>, Sto
 /// [`crate::clause`]'s flat quad IR. Owned, never global: two callers building
 /// unrelated terms use two arenas, exactly as two [`crate::proof::ProofArena`]s
 /// never share ids.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub struct TermDag {
+    /// Local authentication capability, minted only when checking evidence is produced.
+    source: Option<TermSource>,
     /// The interned nodes, indexed by [`NodeId`] slot.
     nodes: Vec<NodeData>,
     /// Content hash → id, for O(1) node interning. Probed, never iterated.
@@ -207,7 +209,110 @@ pub struct TermDag {
     symbol_limit: Option<u64>,
 }
 
+/// Private live-arena capability. It is never a persisted or structural identity.
+#[derive(Debug, Clone)]
+pub(crate) struct TermSource(Shared<()>);
+
+impl TermSource {
+    pub(crate) fn same(&self, other: &Self) -> bool {
+        core::ptr::eq(&raw const *self.0, &raw const *other.0)
+    }
+}
+
+impl Clone for TermDag {
+    /// A copied arena starts a distinct local checking source, even when all
+    /// its initial structural values and numeric handles are identical.
+    fn clone(&self) -> Self {
+        Self {
+            source: None,
+            nodes: self.nodes.clone(),
+            by_content: self.by_content.clone(),
+            free_meta: self.free_meta.clone(),
+            symbols: self.symbols.clone(),
+            symbols_by_content: self.symbols_by_content.clone(),
+            next_meta: self.next_meta,
+            #[cfg(test)]
+            node_limit: self.node_limit,
+            #[cfg(test)]
+            symbol_limit: self.symbol_limit,
+        }
+    }
+}
+
+/// Roll back checking scratch on ordinary failure, success and unwinding.
+pub(crate) struct TermTransaction<'a> {
+    dag: &'a mut TermDag,
+    nodes: usize,
+    symbols: usize,
+    next_meta: u64,
+}
+
+impl TermTransaction<'_> {
+    pub(crate) fn dag(&mut self) -> &mut TermDag {
+        self.dag
+    }
+}
+
+impl Drop for TermTransaction<'_> {
+    fn drop(&mut self) {
+        while self.dag.nodes.len() > self.nodes {
+            let index = self.dag.nodes.len() - 1;
+            let id = NodeId::from_address(index).expect("the resident node has a valid address");
+            let hash = FixedState::new().hash_one(&self.dag.nodes[index]);
+            self.dag
+                .by_content
+                .find_entry(hash, |&key| key == id)
+                .expect("a checking scratch node retains its intern entry")
+                .remove();
+            self.dag.nodes.pop();
+            self.dag.free_meta.pop();
+        }
+        while self.dag.symbols.len() > self.symbols {
+            let index = self.dag.symbols.len() - 1;
+            let id = SymId::from_address(index).expect("the resident symbol has a valid address");
+            let hash = FixedState::new().hash_one(&self.dag.symbols[index]);
+            self.dag
+                .symbols_by_content
+                .find_entry(hash, |&key| key == id)
+                .expect("a checking scratch symbol retains its intern entry")
+                .remove();
+            self.dag.symbols.pop();
+        }
+        self.dag.next_meta = self.next_meta;
+    }
+}
+
 impl TermDag {
+    pub(crate) fn source(&mut self) -> Result<TermSource, StorageError> {
+        if self.source.is_none() {
+            self.source = Some(TermSource(
+                Shared::try_new(()).map_err(|_| StorageError::AllocationFailed)?,
+            ));
+        }
+        Ok(self
+            .source
+            .as_ref()
+            .expect("the source was just minted")
+            .clone())
+    }
+
+    pub(crate) fn has_source(&self, source: &TermSource) -> bool {
+        self.source
+            .as_ref()
+            .is_some_and(|current| current.same(source))
+    }
+
+    pub(crate) fn transaction(&mut self) -> TermTransaction<'_> {
+        let nodes = self.nodes.len();
+        let symbols = self.symbols.len();
+        let next_meta = self.next_meta;
+        TermTransaction {
+            dag: self,
+            nodes,
+            symbols,
+            next_meta,
+        }
+    }
     /// The number of interned nodes.
     pub fn len(&self) -> usize {
         self.nodes.len()
@@ -444,6 +549,69 @@ impl TermRead for TermDag {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn checking_scratch_refusal_rolls_back_nodes_and_metavariables() {
+        use crate::resolve_fol::{
+            FolAnswerContract, FolBudget, FolClause, FolControl, FolProgram, FolProofError,
+            check_fol_proof, resolve_fol,
+        };
+        use crate::unify::SortContext;
+        use std::collections::BTreeMap;
+        let mut dag = TermDag::default();
+        let p = dag.intern_leaf("p").unwrap();
+        let a = dag.intern_leaf("a").unwrap();
+        let b = dag.intern_leaf("b").unwrap();
+        let (_, x) = dag.fresh_meta().unwrap();
+        let (_, y) = dag.fresh_meta().unwrap();
+        let head = dag.intern_app(p, vec![x, y]).unwrap();
+        let goal = dag.intern_app(p, vec![a, b]).unwrap();
+        let program = FolProgram::new(
+            &dag,
+            vec![FolClause::new(&dag, head, vec![]).unwrap()],
+            goal,
+            vec![],
+            BTreeMap::new(),
+        )
+        .unwrap();
+        let FolControl::Decided(outcome) = resolve_fol(
+            &mut dag,
+            &program,
+            &SortContext::default(),
+            FolAnswerContract::GroundOnly,
+            &FolBudget { max_steps: 100 },
+        )
+        .unwrap() else {
+            panic!("a ground assertion must decide");
+        };
+        let nodes = dag.len();
+        let metas = dag.next_meta;
+        dag.node_limit = Some(nodes as u64 + 1);
+        assert!(matches!(
+            check_fol_proof(
+                &mut dag,
+                outcome.answers[0].proof(),
+                outcome.checking_evidence()
+            ),
+            Err(FolProofError::Storage(StorageError::Capacity(_)))
+        ));
+        assert_eq!(dag.len(), nodes);
+        assert_eq!(dag.by_content.len(), nodes);
+        assert_eq!(dag.free_meta.len(), nodes);
+        assert_eq!(dag.next_meta, metas);
+        dag.node_limit = None;
+        assert_eq!(
+            check_fol_proof(
+                &mut dag,
+                outcome.answers[0].proof(),
+                outcome.checking_evidence()
+            )
+            .unwrap(),
+            goal
+        );
+        assert_eq!(dag.len(), nodes);
+        assert_eq!(dag.next_meta, metas);
+    }
 
     #[test]
     fn named_node_capacity_rolls_back_only_new_symbols_and_preserves_hits() {

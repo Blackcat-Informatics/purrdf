@@ -1039,12 +1039,9 @@ arena do not authenticate source identity.
 
 Read completion through `outcome.status()`; the writable `status` field is
 removed. `confirms_not_false` is removed because its Boolean absence result
-could license an unevaluated negation. The conservative adapter for the current
-`check_fol_proof` callback returns `false` only when
-`outcome.truth_of(dag, node) == FolVerdict::Established(Truth::False)`.
-Return `true` for incomplete, unevaluated, nonground or otherwise unsupported
-probes. This callback remains caller-supplied evidence; it is not independent
-source/program authentication.
+could license an unevaluated negation. `check_fol_proof` now consumes the
+original typed `FolCheckEvidence` from `outcome.checking_evidence()`; no Boolean
+adapter or caller-provided truth callback remains.
 
 Safe negative literals now demand their instantiated dependency through the
 same registry as positive literals. Thus `q(a)` with `p(a) :- not q(a)` correctly
@@ -1053,6 +1050,51 @@ demand consumes the existing call-discovery work charge, so a fixed budget can
 interrupt earlier. Negative cycles remain WFS `Undefined`. Internal negative
 proof construction uses the same completed scope as public truth probes.
 Canonical term keys and clause/proof identity encodings retain their meaning.
+
+## Bound structured proof checking
+
+`FolProof` is an opaque shared owner. Remove construction and exhaustive matches
+over `FolProof::Assert` and `FolProof::ByRule`; proofs come from the actual
+resolver. Use `is_assert()`, `rule()`, `rule_identity()`, `goal()` and `premises()`
+for current structural inspection. `conclusion()` borrows the original native
+term after the producer arena, program, outcome or answer row has been dropped.
+Proof descendants, checking evidence and all answer rows share one retained graph.
+
+Replace the freely supplied program, sort map, sort context and Boolean oracle
+with `check_fol_proof(&mut dag, proof, outcome.checking_evidence())`. Evidence can
+also be retained from `proof.checking_evidence().clone()`. Only the resolver mints
+this immutable owner, binding the exact ordered program, sorts, answer contract,
+original demanded run and a private live-arena capability. Another run cannot lend
+its completion to a proof, even under an otherwise identical program. A different
+arena, including a clone with overlapping numeric handles, is a foreign checking
+source. This private capability is local authority, never a persisted identity.
+Appending terms to the original arena does not change its immutable earlier nodes.
+
+The checker independently re-derives positive premises and conclusions with the
+original clauses and sort discipline. A negative premise requires completed demand
+coverage, bounded replay through the existing ground implementation, and exact
+agreement of the demanded calls, ground-rule inventory and WFS model. Completion
+flags and model membership alone do not certify absence. Replay shares the ground
+algorithm; this check does not claim algorithm diversity. Partial positive proofs
+remain checkable, while incomplete or unestablished negative dependencies fail.
+
+Structural checking uses iterative, memoized postorder and admits each distinct
+proof node and premise edge under the original retained work ceiling. Negative
+grounding replay separately uses that same ceiling. Work interruption and native
+storage failures remain typed failures. All appended checking nodes, symbols and
+metavariable mints are rolled back on success, error or unwinding; allocation
+capacities may remain warm. The live original arena is required for checking,
+while retained inspection and derivation-identity reproduction are source independent.
+
+`FOL_PROOF_IDENTITY_VERSION` and `identity_version()` identify version 1 of the
+unchanged Merkle/flat identity laws. Existing valid opaque and native RDF identity
+recipes retain their exact bytes. The earlier public enum layout is not a wire
+format for authenticated evidence: regenerate owned proofs from the original
+source and program rather than reinterpret a saved enum record as a checked owner.
+
+The real explanation cross-check now validates its native proof with this evidence
+before confirming the conclusion. `FolError::Proof` preserves the original
+`FolProofError` through `ExplainError::Backward` and the standard source chain.
 
 ## Datalog proofs and shared heads
 

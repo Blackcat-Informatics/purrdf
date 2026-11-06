@@ -85,17 +85,11 @@ fn structural_answers_share_terms_and_variables_after_producer_destruction() {
     };
     assert!(!variables[0].same_node(other_scope.answers[0].bindings().next().unwrap().variable()));
     drop(other_scope);
-    let checked = check_fol_proof(
-        &mut dag,
-        answer.proof(),
-        program.clauses(),
-        program.meta_sorts(),
-        &SortContext::default(),
-        &|_, _| false,
-    )
-    .unwrap();
+    let checked =
+        check_fol_proof(&mut dag, answer.proof(), answer.proof().checking_evidence()).unwrap();
     assert!(answer.term(checked).unwrap().same_node(answer.atom()));
     let identity = answer.derivation_id();
+    let proof = answer.proof().clone();
     drop(outcome);
     drop(program);
     drop(dag);
@@ -103,6 +97,12 @@ fn structural_answers_share_terms_and_variables_after_producer_destruction() {
     drop(answer);
     assert_eq!(clone.answer_contract(), FolAnswerContract::GroundOnly);
     assert_eq!(clone.derivation_id(), identity);
+    assert_eq!(
+        proof.identity_version(),
+        purrdf_datalog::resolve_fol::FOL_PROOF_IDENTITY_VERSION
+    );
+    assert!(proof.conclusion().same_node(clone.atom()));
+    assert_eq!(proof.derivation_id(), identity);
     let term = clone.get("X").unwrap();
     let NodeData::App { args, .. } = term.data() else {
         panic!("the compound answer stays structural");
@@ -332,10 +332,7 @@ fn negative_only_demand_observes_asserted_dependency() {
     check_fol_proof(
         &mut dag,
         absent.answers[0].proof(),
-        absent_program.clauses(),
-        absent_program.meta_sorts(),
-        &SortContext::default(),
-        &|dag, node| absent.truth_of(dag, node) != FolVerdict::Established(Truth::False),
+        absent.checking_evidence(),
     )
     .unwrap();
 }

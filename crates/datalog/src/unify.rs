@@ -210,7 +210,7 @@ pub enum Unified {
 /// closure of "immediate supersort". [`Self::leq`] and [`Self::meet`] then answer
 /// against the closed order in O(1) amortised lookups rather than walking edges
 /// per query.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct SortOrder {
     /// `up[a]` is the set of `b` with `a <: b`, reflexive-transitively closed.
     up: BTreeMap<NodeId, BTreeSet<NodeId>>,
@@ -315,7 +315,7 @@ impl SortOrder {
 
 /// Sort information consulted by [`unify_sorted`]: the subsort order, each
 /// leaf/free term's own sort, and each function symbol's result sort.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct SortContext {
     /// The subsort order.
     order: SortOrder,
@@ -326,6 +326,23 @@ pub struct SortContext {
 }
 
 impl SortContext {
+    /// Every original node consulted by this immutable context.
+    pub(crate) fn nodes(&self) -> impl Iterator<Item = NodeId> + '_ {
+        self.order
+            .universe
+            .iter()
+            .copied()
+            .chain(
+                self.term_sorts
+                    .iter()
+                    .flat_map(|(&node, &sort)| [node, sort]),
+            )
+            .chain(
+                self.op_result_sort
+                    .iter()
+                    .flat_map(|(&node, &sort)| [node, sort]),
+            )
+    }
     /// A sort context from its three components.
     pub fn new(
         order: SortOrder,

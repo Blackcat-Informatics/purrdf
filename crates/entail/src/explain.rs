@@ -497,7 +497,7 @@ fn confirm_backward(
         max_steps: BACKWARD_CROSS_CHECK_STEPS,
     };
     // A program this resolver cannot lower is an abstention, not a disagreement.
-    let (_dag, control) = match solve_datalog_goal_rdf(&clauses, &atom, &budget, terms) {
+    let (mut dag, control) = match solve_datalog_goal_rdf(&clauses, &atom, &budget, terms) {
         Ok(result) => result,
         Err(purrdf_datalog::resolve_fol::FolError::Clause(_)) => {
             return Ok(BackwardCheck::Abstained);
@@ -507,7 +507,17 @@ fn confirm_backward(
     let FolControl::Decided(outcome) = control else {
         return Ok(BackwardCheck::Abstained);
     };
-    if !outcome.answers.is_empty() {
+    if let Some(answer) = outcome.answers.first() {
+        purrdf_datalog::resolve_fol::check_fol_proof(
+            &mut dag,
+            answer.proof(),
+            outcome.checking_evidence(),
+        )
+        .map_err(|cause| {
+            ExplainError::Backward(purrdf_datalog::resolve_fol::FolError::Proof(Box::new(
+                cause,
+            )))
+        })?;
         return Ok(BackwardCheck::Confirmed);
     }
     if outcome.status() == FolStatus::Complete {
