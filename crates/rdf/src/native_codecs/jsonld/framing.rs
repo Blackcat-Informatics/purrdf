@@ -182,16 +182,21 @@ pub fn frame_value_with_context(
         } else {
             walk.views.len() - 1
         };
-        walk.push(Task::Frame(Traversal {
-            graph,
-            selection: Selection::All,
-            at: 0,
-            frame: Some(frame),
-            flags: Flags::from(*policy),
-            embedded: false,
-            values: Vec::new(),
-            waiting: false,
-        }))?;
+        walk.tasks
+            .try_push_admitted(
+                Task::Frame(Traversal {
+                    graph,
+                    selection: Selection::All,
+                    at: 0,
+                    frame: Some(frame),
+                    flags: Flags::from(*policy),
+                    embedded: false,
+                    values: Vec::new(),
+                    waiting: false,
+                }),
+                walk.memory,
+            )
+            .map_err(RdfDiagnostic::from)?;
         while let Some(task) = walk.tasks.pop() {
             walk.step(task)?;
         }
@@ -507,16 +512,6 @@ impl<'a> Walk<'a, '_, '_> {
         scan.release_admitted(self.memory)?;
         Ok(())
     }
-    fn push(&mut self, task: Task<'a>) -> Result<(), RdfDiagnostic> {
-        self.tasks
-            .try_push_admitted(task, self.memory)
-            .map_err(Into::into)
-    }
-    fn result(&mut self, value: Value) -> Result<(), RdfDiagnostic> {
-        self.memory
-            .push(&mut self.results, value)
-            .map_err(Into::into)
-    }
     fn put(
         &mut self,
         members: &mut Vec<(String, Value)>,
@@ -736,7 +731,9 @@ impl<'a> Walk<'a, '_, '_> {
                     let value = value.clone_with_memory(self.memory)?;
                     self.put(&mut members, key, value)?;
                 }
-                self.result(Value::Object(Object::from(members)))
+                self.memory
+                    .push(&mut self.results, Value::Object(Object::from(members)))
+                    .map_err(RdfDiagnostic::from)
             }
             Task::Reverse {
                 graph,
@@ -795,10 +792,17 @@ impl<'a> Walk<'a, '_, '_> {
                 .push(&mut self.ancestors, (frame.graph, subject))?;
             let node = self.plan(frame.graph, subject, frame.frame, flags)?;
             frame.waiting = true;
-            self.push(Task::Frame(frame))?;
-            return self.push(Task::Node(node));
+            self.tasks
+                .try_push_admitted(Task::Frame(frame), self.memory)
+                .map_err(RdfDiagnostic::from)?;
+            return self
+                .tasks
+                .try_push_admitted(Task::Node(node), self.memory)
+                .map_err(RdfDiagnostic::from);
         }
-        self.result(Value::Array(frame.values))
+        self.memory
+            .push(&mut self.results, Value::Array(frame.values))
+            .map_err(RdfDiagnostic::from)
     }
     fn plan(
         &mut self,
@@ -926,46 +930,72 @@ impl<'a> Walk<'a, '_, '_> {
             } else {
                 node.flags
             };
-            self.push(Task::Node(node))?;
+            self.tasks
+                .try_push_admitted(Task::Node(node), self.memory)
+                .map_err(RdfDiagnostic::from)?;
             return match operation {
-                Operation::Property(property, frame) => self.push(Task::Collection(Collection {
-                    graph,
-                    items: Items::Property { subject, property },
-                    at: 0,
-                    frame,
-                    flags,
-                    output: Vec::new(),
-                    waiting: false,
-                })),
-                Operation::Graph(graph, frame) => self.push(Task::Frame(Traversal {
-                    graph,
-                    selection: Selection::All,
-                    at: 0,
-                    frame,
-                    flags,
-                    embedded: false,
-                    values: Vec::new(),
-                    waiting: false,
-                })),
-                Operation::Included(frame) => self.push(Task::Frame(Traversal {
-                    graph,
-                    selection: Selection::All,
-                    at: 0,
-                    frame,
-                    flags,
-                    embedded: false,
-                    values: Vec::new(),
-                    waiting: false,
-                })),
-                Operation::Reverse(frame) => self.push(Task::Reverse {
-                    graph,
-                    subject,
-                    frame,
-                    at: 0,
-                    flags,
-                    members: Vec::new(),
-                    waiting: None,
-                }),
+                Operation::Property(property, frame) => self
+                    .tasks
+                    .try_push_admitted(
+                        Task::Collection(Collection {
+                            graph,
+                            items: Items::Property { subject, property },
+                            at: 0,
+                            frame,
+                            flags,
+                            output: Vec::new(),
+                            waiting: false,
+                        }),
+                        self.memory,
+                    )
+                    .map_err(RdfDiagnostic::from),
+                Operation::Graph(graph, frame) => self
+                    .tasks
+                    .try_push_admitted(
+                        Task::Frame(Traversal {
+                            graph,
+                            selection: Selection::All,
+                            at: 0,
+                            frame,
+                            flags,
+                            embedded: false,
+                            values: Vec::new(),
+                            waiting: false,
+                        }),
+                        self.memory,
+                    )
+                    .map_err(RdfDiagnostic::from),
+                Operation::Included(frame) => self
+                    .tasks
+                    .try_push_admitted(
+                        Task::Frame(Traversal {
+                            graph,
+                            selection: Selection::All,
+                            at: 0,
+                            frame,
+                            flags,
+                            embedded: false,
+                            values: Vec::new(),
+                            waiting: false,
+                        }),
+                        self.memory,
+                    )
+                    .map_err(RdfDiagnostic::from),
+                Operation::Reverse(frame) => self
+                    .tasks
+                    .try_push_admitted(
+                        Task::Reverse {
+                            graph,
+                            subject,
+                            frame,
+                            at: 0,
+                            flags,
+                            members: Vec::new(),
+                            waiting: None,
+                        },
+                        self.memory,
+                    )
+                    .map_err(RdfDiagnostic::from),
             };
         }
         if let Some(frame) = node.frame {
@@ -1022,7 +1052,9 @@ impl<'a> Walk<'a, '_, '_> {
         }
         self.memory.release_vec(node.edges)?;
         self.ancestors.pop();
-        self.result(Value::Object(Object::from(node.members)))
+        self.memory
+            .push(&mut self.results, Value::Object(Object::from(node.members)))
+            .map_err(RdfDiagnostic::from)
     }
     fn item(&self, graph: usize, items: Items<'a>, at: usize) -> Option<&'a Value> {
         match items {
@@ -1065,20 +1097,33 @@ impl<'a> Walk<'a, '_, '_> {
                     collection.flags.apply(collection.frame)?
                 };
                 collection.waiting = true;
-                self.push(Task::Collection(collection))?;
+                self.tasks
+                    .try_push_admitted(Task::Collection(collection), self.memory)
+                    .map_err(RdfDiagnostic::from)?;
                 // The presence of @list above establishes the object view.
-                self.push(Task::List {
-                    original: item.as_object().expect("list object"),
-                })?;
-                return self.push(Task::Collection(Collection {
-                    graph,
-                    items: Items::List(list),
-                    at: 0,
-                    frame,
-                    flags,
-                    output: Vec::new(),
-                    waiting: false,
-                }));
+                self.tasks
+                    .try_push_admitted(
+                        Task::List {
+                            original: item.as_object().expect("list object"),
+                        },
+                        self.memory,
+                    )
+                    .map_err(RdfDiagnostic::from)?;
+                return self
+                    .tasks
+                    .try_push_admitted(
+                        Task::Collection(Collection {
+                            graph,
+                            items: Items::List(list),
+                            at: 0,
+                            frame,
+                            flags,
+                            output: Vec::new(),
+                            waiting: false,
+                        }),
+                        self.memory,
+                    )
+                    .map_err(RdfDiagnostic::from);
             }
             if let Some(id) = item.get("@id").and_then(Value::as_str)
                 && !atomic(item)
@@ -1088,17 +1133,25 @@ impl<'a> Walk<'a, '_, '_> {
                 let frame = collection.frame;
                 let flags = collection.flags;
                 collection.waiting = true;
-                self.push(Task::Collection(collection))?;
-                return self.push(Task::Frame(Traversal {
-                    graph,
-                    selection: Selection::One(subject),
-                    at: 0,
-                    frame,
-                    flags,
-                    embedded: true,
-                    values: Vec::new(),
-                    waiting: false,
-                }));
+                self.tasks
+                    .try_push_admitted(Task::Collection(collection), self.memory)
+                    .map_err(RdfDiagnostic::from)?;
+                return self
+                    .tasks
+                    .try_push_admitted(
+                        Task::Frame(Traversal {
+                            graph,
+                            selection: Selection::One(subject),
+                            at: 0,
+                            frame,
+                            flags,
+                            embedded: true,
+                            values: Vec::new(),
+                            waiting: false,
+                        }),
+                        self.memory,
+                    )
+                    .map_err(RdfDiagnostic::from);
             }
             if let Some(frame) = collection.frame
                 && !self.matches_item(collection.graph, item, frame)?
@@ -1109,7 +1162,9 @@ impl<'a> Walk<'a, '_, '_> {
             let copy = item.clone_with_memory(self.memory)?;
             self.memory.push(&mut collection.output, copy)?;
         }
-        self.result(Value::Array(collection.output))
+        self.memory
+            .push(&mut self.results, Value::Array(collection.output))
+            .map_err(RdfDiagnostic::from)
     }
     #[expect(
         clippy::too_many_arguments,
@@ -1172,27 +1227,40 @@ impl<'a> Walk<'a, '_, '_> {
                 continue;
             }
             let subframe = frame_object(raw)?;
-            self.push(Task::Reverse {
-                graph,
-                subject,
-                frame,
-                at,
-                flags,
-                members,
-                waiting: Some(key),
-            })?;
-            return self.push(Task::Frame(Traversal {
-                graph,
-                selection: Selection::One(candidate),
-                at: 0,
-                frame: Some(subframe),
-                flags,
-                embedded: true,
-                values: Vec::new(),
-                waiting: false,
-            }));
+            self.tasks
+                .try_push_admitted(
+                    Task::Reverse {
+                        graph,
+                        subject,
+                        frame,
+                        at,
+                        flags,
+                        members,
+                        waiting: Some(key),
+                    },
+                    self.memory,
+                )
+                .map_err(RdfDiagnostic::from)?;
+            return self
+                .tasks
+                .try_push_admitted(
+                    Task::Frame(Traversal {
+                        graph,
+                        selection: Selection::One(candidate),
+                        at: 0,
+                        frame: Some(subframe),
+                        flags,
+                        embedded: true,
+                        values: Vec::new(),
+                        waiting: false,
+                    }),
+                    self.memory,
+                )
+                .map_err(RdfDiagnostic::from);
         }
-        self.result(Value::Object(Object::from(members)))
+        self.memory
+            .push(&mut self.results, Value::Object(Object::from(members)))
+            .map_err(RdfDiagnostic::from)
     }
     fn matches(
         &mut self,
