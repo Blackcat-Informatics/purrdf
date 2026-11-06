@@ -1,0 +1,1 @@
+This selection retains the complete synchronization journal for the request/refusal continuation. The existing branch fast-forwarded from its previously merged native foundation to main through stagectl. No conflict or artificial merge commit was created. Substantive source review and qualification remain in the local issue run; this archive makes no full hosted matrix claim.
