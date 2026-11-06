@@ -8,6 +8,12 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Immutable MIME documents (breaking Rust API):** analyzed source and occurrence
+  tables use read-only accessors. Attachment extraction, part covers and projection
+  reuse the trusted model without reanalyzing the complete message. Original
+  bytes, occurrence identities, transfer refusals and external RDF verification
+  are preserved.
+
 - **Typed reasoning requests (breaking Rust API):** regime, session, proof,
   profile, import and fixture operations retain owned native failures through
   non-exhaustive errors. Facade request parsing shares the typed boundary;

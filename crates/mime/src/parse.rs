@@ -61,6 +61,8 @@ pub fn analyze<'a>(
     source: SourceDocument<'a>,
     profile: &Profile,
 ) -> Result<Document<'a>, MimeError> {
+    #[cfg(test)]
+    crate::ownership_tests::record_analysis(source.bytes.len());
     BaseIri::parse(source.id)?;
     let limits = profile.limits();
     Limits::check(
@@ -87,7 +89,6 @@ pub fn analyze<'a>(
         cover,
         id,
         profile_id: profile.identity(),
-        profile: profile.clone(),
         parts: Vec::new(),
         headers: Vec::new(),
         structures: Vec::new(),
