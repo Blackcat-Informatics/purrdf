@@ -49,6 +49,14 @@ division, WKT and GeoJSON parsing resource policies, the SPARQL pre-binding rewr
 SPARQL diagnostic codes.
 Each has its own section below.
 
+## Planner estimates
+
+`PlanEstimate` is non-exhaustive. Replace struct literals with
+`PlanEstimate::new(rows, peak_rows, columns)`, and include `..` when destructuring
+the record. Its public fields remain readable. Row and peak-row estimates, and
+the cell estimate returned by `peak_cells()`, are predictions rather than
+guaranteed output bounds; their meaning and EXPLAIN representation are unchanged.
+
 ## Streaming GTS payloads
 
 `BlobPayload::bytes` now uses `BlobContent`: source-backed CBOR chunks,
