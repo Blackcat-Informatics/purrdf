@@ -1606,7 +1606,7 @@ fn admit_validation(shape: &Term, depth: u32) -> Result<(), crate::error::Shapes
     }
     if depth > crate::expression::MAX_RECURSION_DEPTH {
         return Err(crate::error::ProcessorFailure::ValidationDepth {
-            shape: shape.to_string(),
+            shape: shape.clone(),
             depth,
             limit: crate::expression::MAX_RECURSION_DEPTH,
         }

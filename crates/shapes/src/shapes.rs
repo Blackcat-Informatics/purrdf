@@ -2027,8 +2027,8 @@ pub(crate) struct Parser<'s> {
     /// The unsupported-custom-target refusal of the parse, when it raised one, so
     /// [`Self::load_error`] returns it typed ([`ShapesError::UnsupportedTarget`]).
     unsupported_target: std::cell::RefCell<Option<crate::error::UnsupportedTargetRefusal>>,
-    /// The original static-analysis refusal, retained across textual parser context.
-    recursion_refusal: std::cell::RefCell<Option<ShapesError>>,
+    /// The first native refusal, retained across textual parser context.
+    native_refusal: std::cell::RefCell<Option<ShapesError>>,
     /// Compatibility restrictions apply to reached constraints, although the
     /// complete catalog retains declarations that exported roots never execute.
     constraint_refusals: std::cell::RefCell<std::collections::BTreeMap<String, QueryRefusal>>,
@@ -2225,7 +2225,7 @@ impl<'s> Parser<'s> {
             ill_formed: std::cell::RefCell::new(None),
             prebinding_refusal: std::cell::RefCell::new(None),
             unsupported_target: std::cell::RefCell::new(None),
-            recursion_refusal: std::cell::RefCell::new(None),
+            native_refusal: std::cell::RefCell::new(None),
             constraint_refusals: std::cell::RefCell::default(),
             function_prebinding: std::cell::RefCell::new(std::collections::BTreeMap::new()),
             select_prebound: std::cell::RefCell::new(std::collections::BTreeMap::new()),
@@ -2286,12 +2286,20 @@ impl<'s> Parser<'s> {
         message
     }
 
+    /// Retain the native owner while existing parser frames add display context.
+    /// These paths abort the parse immediately; no recovery consumes this slot.
+    pub(crate) fn retain_native_refusal(&self, refusal: ShapesError) -> String {
+        let message = refusal.to_string();
+        self.native_refusal.borrow_mut().get_or_insert(refusal);
+        message
+    }
+
     /// The parse's error, typed: [`ShapesError::IllFormed`] or
     /// [`ShapesError::Prebinding`] when the error the parse returned IS the refusal the
     /// parse recorded, [`ShapesError::ShaclJs`] when it carries the recorded SHACL-JS
     /// refusal (a caller may prefix context to it), [`ShapesError::Invalid`] otherwise.
     fn load_error(&self, message: String) -> ShapesError {
-        if let Some(refusal) = self.recursion_refusal.borrow_mut().take() {
+        if let Some(refusal) = self.native_refusal.borrow_mut().take() {
             return refusal;
         }
         if let Some(refusal) = self.ill_formed.borrow_mut().take()
@@ -2551,9 +2559,7 @@ impl<'s> Parser<'s> {
         let recursion_source = match self.check_shape_recursion(&owner) {
             Ok(analysis) => analysis,
             Err(refusal) => {
-                let message = refusal.to_string();
-                *self.recursion_refusal.borrow_mut() = Some(refusal);
-                return Err(message);
+                return Err(self.retain_native_refusal(refusal));
             }
         };
         let mut node_shapes = ids

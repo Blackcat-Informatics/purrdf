@@ -1246,12 +1246,7 @@ impl Parser<'_> {
             )
         })
         .map(|_| ())
-        .map_err(|error| {
-            let refusal = crate::error::ShapesError::Storage(error);
-            let message = refusal.to_string();
-            *self.recursion_refusal.borrow_mut() = Some(refusal);
-            message
-        })
+        .map_err(|error| self.retain_native_refusal(crate::error::ShapesError::Storage(error)))
     }
 
     /// Parse a SHAPE-VALUED operand of a node expression, having first PROVED the
@@ -2178,20 +2173,29 @@ impl Parser<'_> {
         // result.
         if let Some(local) = fn_iri.as_str().strip_prefix(sparql_ns::NS) {
             let form = sparql_ns_lowering(local)
-                .map_err(|e| format!("SPARQL function node expression on {node}: {e}"))?;
+                .map_err(|cause| self.retain_native_refusal(cause.at_node(node).into()))?;
             let rendered = form
                 .render(fn_iri.as_str(), args.len())
-                .map_err(|e| format!("SPARQL function node expression on {node}: {e}"))?;
+                .map_err(|cause| self.retain_native_refusal(cause.at_node(node).into()))?;
             // The rendered text is evaluated as the projection of
             // `SELECT ((expr) AS ?result) WHERE {}` (see `crate::sparql::eval_scalar_expr`),
             // so it is validated in exactly that position.
             let probe = format!("SELECT (({rendered}) AS ?result) WHERE {{}}");
-            SparqlParser::new().parse_query(&probe).map_err(|e| {
-                format!(
-                    "SPARQL function node expression <{}> on {node} does not render a valid SPARQL \
-                     expression ({rendered}): {e}",
-                    fn_iri.as_str()
-                )
+            SparqlParser::new().parse_query(&probe).map_err(|cause| {
+                let refusal = match cause {
+                    purrdf_sparql_algebra::ParseError::Storage(cause) => {
+                        crate::error::ShapesError::Storage(cause)
+                    }
+                    cause => crate::expression::SparqlCallError::RenderedSyntax {
+                        iri: fn_iri.as_str().to_owned(),
+                        node: Box::new(node.clone()),
+                        expression: rendered.clone(),
+                        probe: probe.clone(),
+                        cause: Box::new(cause),
+                    }
+                    .into(),
+                };
+                self.retain_native_refusal(refusal)
             })?;
             return Ok(NodeExpr::Call(FnCall::Sparql {
                 iri: fn_iri,

@@ -247,7 +247,7 @@ pub fn validate_changes_to_sarif_string(
     removed_nt: Option<&str>,
     options: &SarifOptions,
     imports: &ShapesImportList<'_>,
-) -> Result<(String, ChangeScope), ShapesError> {
+) -> Result<(String, ChangeScope), purrdf_shapes::report::CompleteValidationError> {
     validate_changes_to_sarif_string_with_shapes_graph(
         shapes_ttl,
         shapes_base,
@@ -282,7 +282,7 @@ pub fn validate_changes_to_sarif_string_with_shapes_graph(
     removed_nt: Option<&str>,
     options: &SarifOptions,
     imports: &ShapesImportList<'_>,
-) -> Result<(String, ChangeScope), ShapesError> {
+) -> Result<(String, ChangeScope), purrdf_shapes::report::CompleteValidationError> {
     let (snapshot, shapes) = change_inputs(
         shapes_ttl,
         shapes_base,
@@ -430,15 +430,15 @@ fn change_inputs(
     removed_nt: Option<&str>,
     options: &SarifOptions,
     imports: &ShapesImportList<'_>,
-) -> Result<(Arc<DeltaDatasetView>, Shapes), ShapesError> {
-    let mut table = ShapesImports::from_turtle(imports)?;
+) -> Result<(Arc<DeltaDatasetView>, Shapes), purrdf_shapes::report::CompleteValidationError> {
+    let mut table = ShapesImports::from_turtle(imports).map_err(ShapesError::from)?;
     let base = parse_ntriples(data_nt)?;
     let mut mutation = MutableDataset::new(base);
     if let Some(added) = added_nt {
         for row in parse_ntriples(added)?.flat_default_graph_quads() {
             mutation
                 .insert(row)
-                .map_err(|error| error.diagnostic_code().to_owned())?;
+                .map_err(|error| ShapesError::from(purrdf_core::RdfDiagnostic::from(error)))?;
         }
     }
     if let Some(removed) = removed_nt {
@@ -446,15 +446,13 @@ fn change_inputs(
             mutation.remove(&row);
         }
     }
-    let snapshot = Arc::new(
-        mutation
-            .snapshot_view()
-            .map_err(|error| error.to_string())?,
-    );
+    let snapshot = Arc::new(mutation.snapshot_view().map_err(ShapesError::from)?);
 
     // The data graph this validation reads is the MUTATED one, so its links are read off
     // the snapshot: a change may add or retract a `sh:shapesGraph` link like any other row.
-    table.link_data_graph(snapshot.as_ref(), &[])?;
+    table
+        .link_data_graph(snapshot.as_ref(), &[])
+        .map_err(ShapesError::from)?;
     let shapes = engine::parse_shapes_with_options(
         shapes_ttl,
         shapes_base,
@@ -462,11 +460,7 @@ fn change_inputs(
         shapes_graph,
         &table,
         &options.validation,
-    )
-    .map_err(|error| match error {
-        purrdf_shapes::report::CompleteValidationError::Shapes(error) => error,
-        error => ShapesError::Invalid(error.to_string()),
-    })?;
+    )?;
     Ok((snapshot, shapes))
 }
 
@@ -478,9 +472,8 @@ fn change_inputs(
 /// carrying a reifier declaration or an annotation contributes those rows too. A
 /// change set short by a row cannot be told from a graph that did not change.
 /// Nothing is dropped by flattening: N-Triples has no named graph to drop.
-fn parse_ntriples(document: &str) -> Result<Arc<purrdf_core::RdfDataset>, String> {
-    purrdf_shapes::text_ingest::parse_ntriples_to_dataset(document)
-        .map_err(|errors| errors.join("\n"))
+fn parse_ntriples(document: &str) -> Result<Arc<purrdf_core::RdfDataset>, ShapesError> {
+    purrdf_shapes::text_ingest::parse_ntriples_to_dataset(document).map_err(ShapesError::Text)
 }
 
 #[cfg(test)]

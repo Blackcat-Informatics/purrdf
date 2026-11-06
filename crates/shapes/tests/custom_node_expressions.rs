@@ -762,20 +762,31 @@ fn a_processor_failure_inside_a_sparql_called_body_fails_validation_with_a_typed
           sh:expression [ ex:pingpong ( sh:this ) ] .
     "#;
     let parsed = parse_shapes(&format!("{PREFIXES}{shapes}"), None).expect("shapes parse");
-    let error = validate_with(&store_of(INCOME_DATA), &parsed)
-        .expect_err("a processor failure inside the body must fail the validation");
+    let prepared = purrdf_shapes::engine::PreparedShapes::new(Arc::new(parsed));
+    let error = prepared
+        .bind_shared_dataset(data_of(INCOME_DATA))
+        .expect("bind")
+        .validate()
+        .expect_err("a processor failure inside the body must fail prepared validation");
+    let purrdf_shapes::report::CompleteValidationError::Shapes(error) = error else {
+        panic!("prepared validation must retain its native processor cause: {error:?}");
+    };
     assert_eq!(error.failure_class(), FailureClass::Processor, "{error}");
-    let Some(ProcessorFailure::Query { code, message }) = error.as_processor() else {
+    let Some(ProcessorFailure::Query { cause }) = error.as_processor() else {
         panic!("expected the query engine's propagated failure, got {error:?}");
     };
     assert_eq!(
-        code,
+        cause.code,
         purrdf_sparql_eval::EvalError::FUNCTION_OPERATIONAL_CODE
     );
     assert!(
-        message.contains("recursion exceeded the depth bound of 32")
-            || message.contains(purrdf_sparql_eval::EvalError::STACK_EXHAUSTED_CODE),
-        "{message}"
+        cause
+            .message
+            .contains("recursion exceeded the depth bound of 32")
+            || cause
+                .message
+                .contains(purrdf_sparql_eval::EvalError::STACK_EXHAUSTED_CODE),
+        "{cause}"
     );
 
     // Neighbour: the same shape of call that terminates is answered, so the failure above
@@ -1220,16 +1231,20 @@ fn a_cycle_through_sparql_query_text_is_bounded_too() {
     let err =
         validate_with(&store_of(INCOME_DATA), &parsed).expect_err("the cycle must be refused");
     assert_eq!(err.failure_class(), FailureClass::Processor, "{err}");
-    let Some(ProcessorFailure::Query { code, message }) = err.as_processor() else {
+    let Some(ProcessorFailure::Query { cause }) = err.as_processor() else {
         panic!("expected the query engine's propagated refusal, got {err:?}");
     };
     assert_eq!(
-        code,
+        cause.code,
         purrdf_sparql_eval::EvalError::FUNCTION_OPERATIONAL_CODE
     );
     assert!(
-        message.contains("recursion exceeded the depth bound of 32")
-            || message.contains(purrdf_sparql_eval::EvalError::STACK_EXHAUSTED_CODE),
+        cause
+            .message
+            .contains("recursion exceeded the depth bound of 32")
+            || cause
+                .message
+                .contains(purrdf_sparql_eval::EvalError::STACK_EXHAUSTED_CODE),
         "the cycle must retain its logical or host-stack refusal: {err}"
     );
 

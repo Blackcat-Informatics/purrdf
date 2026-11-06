@@ -150,7 +150,7 @@ pub(crate) fn read_shapes_document(
             base: document_base,
             prefixes,
         } = purrdf::shapes::text_ingest::parse_turtle_document(&text, base)
-            .map_err(|errors| CliError::Runtime(format!("{what} {path}: {}", errors.join("\n"))))?;
+            .map_err(|errors| CliError::Runtime(format!("{what} {path}: {errors}")))?;
         (dataset, document_base, prefixes)
     } else {
         let outcome = source::load_native_document(path, native, base, input_options)?;
@@ -281,6 +281,7 @@ pub(crate) fn shapes_error(
         ShapesError::SparqlTargetDisagreement(refusal) => {
             return CliError::Runtime(format!("{context}: {refusal}"));
         }
+        other => return CliError::Runtime(format!("{context}: {other}")),
     };
     match error {
         ShapesImportError::Unresolved { iris } => {
@@ -377,6 +378,7 @@ pub(crate) fn shapes_error(
         error @ (ShapesImportError::UnheldLink { .. }
         | ShapesImportError::InvalidLink { .. }
         | ShapesImportError::IncompatibleVersions { .. }) => CliError::Runtime(error.to_string()),
+        other => CliError::Runtime(other.to_string()),
     }
 }
 

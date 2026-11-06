@@ -98,6 +98,8 @@ use crate::operation::{JobError, JobOutcome, SHACL_CODE};
 #[wasm_bindgen]
 #[derive(Debug, Clone)]
 pub struct ShaclImportError {
+    /// Shared owner of the original native error and its inspection protocol.
+    native: JobError,
     /// The engine's kebab-case kind label.
     kind: String,
     /// The IRIs the refusal names.
@@ -108,6 +110,18 @@ pub struct ShaclImportError {
 
 #[wasm_bindgen]
 impl ShaclImportError {
+    /// The retained original error's typed native field owner.
+    #[wasm_bindgen(getter, js_name = nativeCause)]
+    pub fn native_cause(&self) -> Result<Option<JsValue>, JsError> {
+        self.native.native_cause()
+    }
+
+    /// Deterministic native fields, including original import-key or text causes.
+    #[wasm_bindgen(getter, js_name = nativeCauseJson)]
+    pub fn native_cause_json(&self) -> Result<Option<String>, JsError> {
+        self.native.native_cause_json()
+    }
+
     /// `unresolved-import`, `unreached-import`, `incompatible-import-versions`,
     /// `invalid-import`, `unresolved-shapes-graph-link`, `unheld-shapes-graph-link` or
     /// `invalid-shapes-graph-link`.
@@ -139,13 +153,26 @@ impl ShaclImportError {
     }
 }
 
-impl From<&purrdf_validate::ShapesImportError> for ShaclImportError {
-    fn from(error: &purrdf_validate::ShapesImportError) -> Self {
-        Self {
+impl ShaclImportError {
+    /// Retain the specialized import projection only after native cause capture.
+    pub(crate) fn capture(
+        error: &purrdf_validate::ShapesImportError,
+    ) -> Result<Self, purrdf_core::RdfDiagnostic> {
+        let diagnostic =
+            purrdf_validate::native_error::diagnostic("shapes-import-refused", error.clone(), None);
+        if diagnostic.storage_error().is_some() {
+            return Err(diagnostic);
+        }
+        Ok(Self {
+            native: JobError::diagnostic_message(diagnostic),
             kind: error.kind().to_owned(),
             iris: error.iris().into_iter().map(ToOwned::to_owned).collect(),
             message: error.to_string(),
-        }
+        })
+    }
+
+    fn rejection(error: &purrdf_validate::ShapesImportError) -> JsValue {
+        Self::capture(error).map_or_else(crate::operation::diagnostic_to_js, Into::into)
     }
 }
 
@@ -167,22 +194,37 @@ fn shapes_rejection(error: ShapesError) -> JsValue {
                 purrdf_validate::native_error::diagnostic("scope-binding-refused", cause, None);
             crate::operation::native_diagnostic_to_js_with_message(diagnostic)
         }
+        ShapesError::Processor(cause) => {
+            let diagnostic =
+                purrdf_validate::native_error::diagnostic("shapes-refused", cause, None);
+            crate::operation::native_diagnostic_to_js_with_message(diagnostic)
+        }
+        ShapesError::Conformance(cause) => {
+            let diagnostic =
+                purrdf_validate::native_error::diagnostic("shapes-refused", cause, None);
+            crate::operation::native_diagnostic_to_js_with_message(diagnostic)
+        }
         ShapesError::RuleExecution(error) => {
             let receipt = purrdf_validate::query::rule_execution_receipt_json(&error.coordinates);
             let rejection = match error.into_cause() {
                 purrdf_shapes::rules::RulesError::Shapes(cause) => shapes_rejection(cause),
-                cause => JsError::new(&cause.to_string()).into(),
+                cause => crate::operation::native_diagnostic_to_js_with_message(
+                    purrdf_validate::native_error::diagnostic(SHACL_CODE, cause, None),
+                ),
             };
             crate::operation::attach_execution_receipt(rejection, &receipt)
         }
-        ShapesError::Imports(error) => ShaclImportError::from(&error).into(),
+        ShapesError::Imports(error) => ShaclImportError::rejection(&error),
         ShapesError::Storage(error) => crate::operation::diagnostic_to_js(error.into()),
-        other => JsError::new(&shapes_error_message(&other)).into(),
+        other => crate::operation::native_diagnostic_to_js_with_message(
+            purrdf_validate::native_error::diagnostic(SHACL_CODE, other, None),
+        ),
     }
 }
 
 /// The words a shapes-graph error other than the import refusal rejects with, on the
 /// synchronous and the asynchronous lane alike.
+#[cfg(test)]
 pub(crate) fn shapes_error_message(error: &ShapesError) -> String {
     match error {
         ShapesError::ScopeBinding(error) => error.to_string(),
@@ -200,6 +242,7 @@ pub(crate) fn shapes_error_message(error: &ShapesError) -> String {
         ShapesError::Prebinding(violation) => violation.to_string(),
         ShapesError::UnsupportedTarget(refusal) => refusal.message().to_owned(),
         ShapesError::SparqlTargetDisagreement(refusal) => refusal.to_string(),
+        other => other.to_string(),
     }
 }
 
@@ -342,8 +385,9 @@ pub(crate) fn validate_to_sarif_with_options_impl(
     }
     let validation = match conformance_disallows {
         None => base_options,
-        Some(iris) => base_options
-            .with_conformance_disallows(purrdf_validate::ConformanceDisallows::from_iris(iris)?),
+        Some(iris) => base_options.with_conformance_disallows(
+            purrdf_validate::ConformanceDisallows::from_iris(iris).map_err(ShapesError::from)?,
+        ),
     };
     purrdf_validate::validate_to_sarif_string_with_xpath_regex(
         shapes_ttl,
@@ -1197,7 +1241,7 @@ pub fn shacl_pack_product(
             )
         },
         |refusal| match refusal.import_error() {
-            Some(error) => ShaclImportError::from(error).into(),
+            Some(error) => ShaclImportError::rejection(error),
             None => ShaclProductRefusal::from(refusal).into(),
         },
     )?;
@@ -1387,6 +1431,7 @@ fn product_profile(name: Option<&str>) -> Result<Option<Profile>, ShaclProductRe
 /// pattern refusal's, a SHACL-driven query's diagnostic's or another execution failure's
 /// as it renders itself — a resource refusal's starting with its own code. There is no
 /// partial report.
+#[cfg(test)]
 pub(crate) fn selected_error_message(error: &XPathValidationError) -> String {
     match error {
         XPathValidationError::Shapes(error) => shapes_error_message(error),
@@ -2262,17 +2307,50 @@ impl ShaclFailure for ShapesError {
                     purrdf_validate::query::rule_execution_receipt_json(&error.coordinates);
                 let outcome = match error.into_cause() {
                     purrdf_shapes::rules::RulesError::Shapes(cause) => cause.into_outcome(),
-                    cause => JobOutcome::Failed(JobError::message(SHACL_CODE, cause.to_string())),
+                    cause => JobOutcome::Failed(JobError::diagnostic_message(
+                        purrdf_validate::native_error::diagnostic(SHACL_CODE, cause, None),
+                    )),
                 };
                 outcome_with_rule_receipt(outcome, receipt)
             }
             Self::Storage(error) => JobOutcome::Failed(JobError::diagnostic(error.into())),
-            Self::Imports(error) => {
-                JobOutcome::Refused(ShaclRefusal::Import(ShaclImportError::from(&error)))
+            Self::Imports(error) => match ShaclImportError::capture(&error) {
+                Ok(error) => JobOutcome::Refused(ShaclRefusal::Import(error)),
+                Err(cause) => JobOutcome::Failed(JobError::diagnostic(cause)),
+            },
+            other => JobOutcome::Failed(JobError::diagnostic_message(
+                purrdf_validate::native_error::diagnostic(SHACL_CODE, other, None),
+            )),
+        }
+    }
+}
+
+impl ShaclFailure for purrdf_shapes::report::CompleteValidationError {
+    fn into_rejection(self) -> JsValue {
+        match self {
+            Self::Shapes(error) => shapes_rejection(error),
+            Self::RuleExecution { cause, coordinates } => {
+                crate::operation::attach_execution_receipt(
+                    cause.into_rejection(),
+                    &purrdf_validate::query::rule_execution_receipt_json(&coordinates),
+                )
             }
-            other => {
-                JobOutcome::Failed(JobError::message(SHACL_CODE, shapes_error_message(&other)))
-            }
+            other => crate::operation::native_diagnostic_to_js_with_message(
+                purrdf_validate::native_error::diagnostic(SHACL_CODE, other, None),
+            ),
+        }
+    }
+
+    fn into_outcome(self) -> JobOutcome {
+        match self {
+            Self::Shapes(error) => error.into_outcome(),
+            Self::RuleExecution { cause, coordinates } => outcome_with_rule_receipt(
+                cause.into_outcome(),
+                purrdf_validate::query::rule_execution_receipt_json(&coordinates),
+            ),
+            other => JobOutcome::Failed(JobError::diagnostic_message(
+                purrdf_validate::native_error::diagnostic(SHACL_CODE, other, None),
+            )),
         }
     }
 }
@@ -2291,11 +2369,10 @@ impl ShaclFailure for XPathValidationError {
             }
             Self::Shapes(error) => shapes_rejection(error),
             other => {
-                let message = selected_error_message(&other);
-                match selected_refusal_code(&other) {
-                    Some(code) => crate::operation::coded_error(&message, code),
-                    None => JsError::new(&message).into(),
-                }
+                let code = selected_refusal_code(&other).unwrap_or(SHACL_CODE);
+                crate::operation::native_diagnostic_to_js_with_message(
+                    purrdf_validate::native_error::diagnostic(code, other, None),
+                )
             }
         }
     }
@@ -2310,9 +2387,12 @@ impl ShaclFailure for XPathValidationError {
                 purrdf_validate::query::rule_execution_receipt_json(&coordinates),
             ),
             Self::Shapes(error) => error.into_outcome(),
-            other => JobOutcome::Failed(JobError::message(
-                selected_refusal_code(&other).unwrap_or(SHACL_CODE),
-                selected_error_message(&other),
+            other => JobOutcome::Failed(JobError::diagnostic_message(
+                purrdf_validate::native_error::diagnostic(
+                    selected_refusal_code(&other).unwrap_or(SHACL_CODE),
+                    other,
+                    None,
+                ),
             )),
         }
     }

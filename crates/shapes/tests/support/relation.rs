@@ -17,7 +17,7 @@ use purrdf_rdf::RdfDataset;
 /// the test with every message.
 pub fn ntriples(triples: &str) -> Arc<RdfDataset> {
     purrdf_shapes::text_ingest::parse_ntriples_to_dataset(triples)
-        .unwrap_or_else(|errors| panic!("fixture data: {}", errors.join("\n")))
+        .unwrap_or_else(|errors| panic!("fixture data: {}", errors))
 }
 
 /// The id `dataset` holds `value` under; `what` names the node in the failure.

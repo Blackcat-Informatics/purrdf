@@ -326,7 +326,7 @@ enum RuleInput {
 fn rule_inputs(
     request: &RulesRequest<'_>,
 ) -> Result<(std::sync::Arc<purrdf_core::RdfDataset>, RuleInput), ShapesError> {
-    let data = parse_ntriples_to_dataset(request.data_nt).map_err(|errors| errors.join("\n"))?;
+    let data = parse_ntriples_to_dataset(request.data_nt).map_err(ShapesError::Text)?;
     let rules = match (request.shapes_ttl, request.srl) {
         (Some(shapes_ttl), None) => RuleInput::Shapes(Box::new(engine::parse_shapes_with_graph(
             shapes_ttl,
@@ -522,20 +522,26 @@ impl NodeExprInputs {
     fn parse(request: &NodeExprRequest<'_>) -> Result<Self, ShapesError> {
         let imports = ShapesImports::from_turtle(request.imports)?;
         let document = parse_turtle_document(request.shapes_ttl, request.shapes_base)
-            .map_err(|errors| errors.join("\n"))?;
+            .map_err(ShapesError::Text)?;
         let imports = read_under(imports, request.shapes_base, document.base.as_deref());
-        let data =
-            parse_ntriples_to_dataset(request.data_nt).map_err(|errors| errors.join("\n"))?;
+        let data = parse_ntriples_to_dataset(request.data_nt).map_err(ShapesError::Text)?;
         let selector = request.expr.parse()?;
-        let focus =
-            free_expression::parse_term(request.focus).map_err(|e| format!("focus: {e}"))?;
+        let focus = free_expression::parse_term(request.focus).map_err(|cause| {
+            crate::ExprSelectorError::Term {
+                role: "focus".to_owned(),
+                cause,
+            }
+        })?;
         let scope = request
             .scope
             .iter()
             .map(|(name, term)| {
                 free_expression::parse_term(term)
                     .map(|term| ((*name).to_owned(), term))
-                    .map_err(|e| format!("scope {name}: {e}"))
+                    .map_err(|cause| crate::ExprSelectorError::Term {
+                        role: format!("scope {name}"),
+                        cause,
+                    })
             })
             .collect::<Result<Vec<_>, _>>()?;
         let selected = selector.select(
@@ -593,8 +599,7 @@ pub fn lint_shapes_ttl_with_shapes_graph(
         .map(|raw| engine::resolve_shapes_graph_iri(raw, shapes_base))
         .transpose()?;
     let table = ShapesImports::from_turtle(imports)?;
-    let document =
-        parse_turtle_document(shapes_ttl, shapes_base).map_err(|errors| errors.join("\n"))?;
+    let document = parse_turtle_document(shapes_ttl, shapes_base).map_err(ShapesError::Text)?;
     let table = read_under(table, shapes_base, document.base.as_deref());
     lint::lint(
         &document.dataset,

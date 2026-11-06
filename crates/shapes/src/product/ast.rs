@@ -383,7 +383,10 @@ pub(crate) fn open_level(
     refusal: fn() -> ShapesProductError,
 ) -> Result<(), ShapesProductError> {
     if purrdf_stack::is_low() {
-        return Err(crate::error::PreparationRefusal::StackMargin.into());
+        return Err(crate::error::PreparationRefusal::StackMargin {
+            construct: "SHACL product model nesting",
+        }
+        .into());
     }
     if *depth >= MAX_DEPTH {
         return Err(refusal());

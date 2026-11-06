@@ -11,6 +11,9 @@
 //! parse round-trip in between.
 //! `tuples_from_ntriples()` round-trips back to the same tuple set for testing.
 
+mod conformance_error;
+pub use conformance_error::ConformanceError;
+
 use std::collections::BTreeSet;
 use std::convert::Infallible;
 use std::ops::ControlFlow;
@@ -95,6 +98,15 @@ impl std::fmt::Display for SourceConstraintRefusal {
 
 impl std::error::Error for SourceConstraintRefusal {}
 
+impl purrdf_hash::error::StructuredError for SourceConstraintRefusal {
+    purrdf_hash::error_visit! {
+        @record self { shape, property, index } => "shacl-source-constraint-refused" {
+            "shape" => Term(&self.shape), "property" => Boolean(self.property),
+            "index" => Unsigned(self.index as u128),
+        }
+    }
+}
+
 /// A dated query execution lacks the declaration evidence required by its
 /// actual source role. Query text or supplied values cannot establish that role.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -159,6 +171,18 @@ impl std::fmt::Display for QuerySourceRefusal {
 
 impl std::error::Error for QuerySourceRefusal {}
 
+impl purrdf_hash::error::StructuredError for QuerySourceRefusal {
+    purrdf_hash::error_visit! {
+        @record self { profile, purpose, source, index } => "shacl-query-source-refused" {
+            "profile" => Record(&self.profile), "source" => Term(&self.source),
+            "purpose" => Value(self.purpose.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent,
+                |value| purrdf_hash::error::ErrorValue::Record(value))),
+            "index" => Value(self.index.map_or(purrdf_hash::error::ErrorValue::Absent,
+                |value| purrdf_hash::error::ErrorValue::Unsigned(value as u128))),
+        }
+    }
+}
+
 /// A query solution explicitly declared validation failure, rather than a
 /// constraint violation. The producing constraint and focus remain available.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -193,6 +217,16 @@ impl std::fmt::Display for SemanticFailure {
 
 impl std::error::Error for SemanticFailure {}
 
+impl purrdf_hash::error::StructuredError for SemanticFailure {
+    purrdf_hash::error_visit! {
+        @record self { focus, source_constraint } => "shacl-semantic-failure" {
+            "focus" => Term(&self.focus),
+            "source_constraint" => Value(self.source_constraint.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent,
+                |value| purrdf_hash::error::ErrorValue::Term(value))),
+        }
+    }
+}
+
 /// A validation stopped by its actual execution governor. No partial report is
 /// carried because it cannot establish conformance.
 #[derive(Debug, Clone)]
@@ -226,6 +260,14 @@ impl std::fmt::Display for ResourceRefusal {
 }
 
 impl std::error::Error for ResourceRefusal {}
+
+impl purrdf_hash::error::StructuredError for ResourceRefusal {
+    purrdf_hash::error_visit! {
+        @record self { tripped, evidence } => "shacl-resource-refused" {
+            "tripped" => Record(&self.tripped), "evidence" => Record(&self.evidence),
+        }
+    }
+}
 
 /// Identity of one retained source acquisition. Equal graph bytes do not imply
 /// equal source identity; clones of this handle deliberately share identity.
@@ -414,6 +456,25 @@ pub enum CompleteValidationError {
     Execution(String),
 }
 
+impl purrdf_hash::error::StructuredError for CompleteValidationError {
+    purrdf_hash::error_visit! {
+        RuleExecution { cause, coordinates } => "shacl-complete-rule-execution" {
+            "cause" => Cause(cause.as_ref()), "coordinates" => Record(coordinates.as_ref()),
+        },
+        Shapes(cause) => "shacl-complete-shapes" { "cause" => Cause(cause) },
+        Preparation(cause) => "shacl-complete-preparation" { "cause" => Cause(cause) },
+        SourceConstraint(cause) => "shacl-complete-source-constraint" { "cause" => Cause(cause) },
+        QuerySource(cause) => "shacl-complete-query-source" { "cause" => Cause(cause.as_ref()) },
+        SourceContext(message) => "shacl-complete-source-context" { "message" => Text(message) },
+        Semantic(cause) => "shacl-complete-semantic" { "cause" => Cause(cause.as_ref()) },
+        Resource(cause) => "shacl-complete-resource" { "cause" => Cause(cause.as_ref()) },
+        Admission(cause) => "shacl-complete-admission" { "cause" => Cause(cause.as_ref()) },
+        XPathProfile(cause) => "shacl-complete-xpath-profile" { "cause" => Cause(cause) },
+        XPath(cause) => "shacl-complete-xpath" { "cause" => Cause(cause.as_ref()) },
+        Execution(message) => "shacl-complete-execution" { "message" => Text(message) },
+    }
+}
+
 purrdf_lex::variant_from!(CompleteValidationError {
     Shapes(ShapesError),
     Preparation(crate::product::ShapesProductError), Execution(String)
@@ -496,7 +557,6 @@ impl CompleteValidationError {
     pub(crate) fn execution(error: ShapesError) -> Self {
         match error {
             ShapesError::Invalid(message) => Self::Execution(message),
-            ShapesError::Processor(failure) => Self::Execution(failure.to_string()),
             error => Self::Shapes(error),
         }
     }
@@ -1393,7 +1453,7 @@ impl ConformanceDisallows {
     ///
     /// Returns an error when `levels` is empty: see the type docs for why an empty
     /// set cannot be echoed truthfully.
-    pub fn new(levels: impl IntoIterator<Item = Severity>) -> Result<Self, String> {
+    pub fn new(levels: impl IntoIterator<Item = Severity>) -> Result<Self, ConformanceError> {
         let mut builtin = 0u8;
         let mut others: Vec<NamedNode> = Vec::new();
         for level in levels {
@@ -1407,13 +1467,7 @@ impl ConformanceDisallows {
             }
         }
         if builtin == 0 && others.is_empty() {
-            return Err(
-                "the conformance-disallow set is empty; a validation report with no \
-                 sh:conformanceDisallows triple means the DEFAULT set (sh:Violation, sh:Warning, \
-                 sh:Info), so an empty set has no report that states it — name at least one \
-                 severity"
-                    .to_owned(),
-            );
+            return Err(ConformanceError::EmptySet);
         }
         others.sort_unstable();
         others.dedup();
@@ -1431,7 +1485,7 @@ impl ConformanceDisallows {
     /// Returns an error when `iris` is empty, or when an entry is not an absolute
     /// IRI ("All values of sh:conformanceDisallows MUST be IRIs", SHACL 1.2 Core,
     /// "Conformance-Disallow Set").
-    pub fn from_iris<I, S>(iris: I) -> Result<Self, String>
+    pub fn from_iris<I, S>(iris: I) -> Result<Self, ConformanceError>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
@@ -1439,12 +1493,14 @@ impl ConformanceDisallows {
         let mut levels = Vec::new();
         for iri in iris {
             let iri = iri.as_ref();
-            let absolute = purrdf_iri::parse(iri).is_ok_and(|parsed| parsed.has_scheme());
-            if !absolute {
-                return Err(format!(
-                    "sh:conformanceDisallows value {iri:?} is not an absolute IRI; all values of \
-                     sh:conformanceDisallows must be IRIs"
-                ));
+            let parsed = purrdf_iri::parse(iri).map_err(|cause| ConformanceError::InvalidIri {
+                input: iri.to_owned(),
+                cause,
+            })?;
+            if !parsed.has_scheme() {
+                return Err(ConformanceError::RelativeIri {
+                    input: iri.to_owned(),
+                });
             }
             levels.push(Severity::from_iri_open(iri));
         }
@@ -2574,8 +2630,8 @@ fn emit_path_list(
 ///
 /// # Errors
 ///
-/// Returns an error string if the N-Triples cannot be parsed.
-pub fn conforms_from_ntriples(nt: &str) -> Result<bool, String> {
+/// Returns the original text diagnostics if the N-Triples cannot be parsed.
+pub fn conforms_from_ntriples(nt: &str) -> Result<bool, crate::text_ingest::TextErrors> {
     let data = dataset_from_ntriples(nt)?;
     Ok(conforms_from_dataset(&data).unwrap_or(true))
 }
@@ -2584,17 +2640,18 @@ pub fn conforms_from_ntriples(nt: &str) -> Result<bool, String> {
 ///
 /// # Errors
 ///
-/// Returns an error string if the N-Triples cannot be parsed.
-pub fn tuples_from_ntriples(nt: &str) -> Result<BTreeSet<ResultTuple>, String> {
+/// Returns the original text diagnostics if the N-Triples cannot be parsed.
+pub fn tuples_from_ntriples(
+    nt: &str,
+) -> Result<BTreeSet<ResultTuple>, crate::text_ingest::TextErrors> {
     let data = dataset_from_ntriples(nt)?;
     Ok(tuples_from_dataset(&data))
 }
 
 /// Parse a SHACL report N-Triples string into a query-able frozen [`RdfDataset`]
 /// via the native purrdf codec.
-fn dataset_from_ntriples(nt: &str) -> Result<Arc<RdfDataset>, String> {
-    ::purrdf_rdf::parse_dataset(nt.as_bytes(), "application/n-triples", None)
-        .map_err(|e| format!("N-Triples parse error: {e}"))
+fn dataset_from_ntriples(nt: &str) -> Result<Arc<RdfDataset>, crate::text_ingest::TextErrors> {
+    crate::text_ingest::parse_ntriples_to_dataset(nt)
 }
 
 /// Walk a SHACL report dataset and extract result tuples.
@@ -2658,7 +2715,7 @@ pub fn tuples_from_dataset(data: &RdfDataset) -> BTreeSet<ResultTuple> {
 /// values of sh:conformanceDisallows MUST be IRIs").
 pub fn conformance_disallows_from_dataset(
     data: &RdfDataset,
-) -> Result<ConformanceDisallows, String> {
+) -> Result<ConformanceDisallows, ConformanceError> {
     let predicate = Term::NamedNode(NamedNode::from(sh::CONFORMANCE_DISALLOWS));
     let mut levels = Vec::new();
     for report_node in subjects_typed(data, sh::VALIDATION_REPORT) {
@@ -2670,10 +2727,7 @@ pub fn conformance_disallows_from_dataset(
             GraphFilter::AnyGraph,
         ) {
             let Term::NamedNode(level) = object else {
-                return Err(format!(
-                    "sh:conformanceDisallows value {object} is not an IRI; all values of \
-                     sh:conformanceDisallows must be IRIs"
-                ));
+                return Err(ConformanceError::NotIri { value: object });
             };
             levels.push(Severity::from_iri_open(level.as_str()));
         }

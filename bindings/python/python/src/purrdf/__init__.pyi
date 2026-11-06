@@ -1932,6 +1932,8 @@ class _ShapesImportError(ValueError):
 
     kind: str
     iris: list[str]
+    native_cause: dict[str, object]
+    native_cause_json: str
 
 class _PreparedShapes:
     """An immutable shape preparation, reusable across data graphs and writable as

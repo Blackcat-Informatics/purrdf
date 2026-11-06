@@ -24,6 +24,13 @@ pub enum DeltaViewId {
     Delta(TermId),
 }
 
+impl purrdf_hash::error::StructuredError for DeltaViewId {
+    purrdf_hash::error_visit! {
+        Base(id) => "delta-view-base-id" { "index" => Unsigned(id.index() as u128) },
+        Delta(id) => "delta-view-added-id" { "index" => Unsigned(id.index() as u128) },
+    }
+}
+
 impl ViewTermId for DeltaViewId {
     type JoinKeyAtom = u64;
 

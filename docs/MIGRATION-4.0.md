@@ -1404,3 +1404,40 @@ and projection path/category remain unchanged. Schema-import and LinkML equality
 compares the original detail; native provenance is supplemental. The panicking assert
 helpers remain explicit invariant/presentation boundaries over these same typed checks.
 No loss profile or serialization format changes.
+
+
+## Typed SHACL ingress and validation failures
+
+`parse_turtle_to_dataset`, `parse_turtle_document`, `parse_ntriples_to_dataset`,
+`conforms_from_ntriples` and `tuples_from_ntriples` return `TextErrors` instead of
+strings or lists of strings. Iterate `diagnostics()` to inspect each original
+`RdfDiagnostic`, its source range, replayed directive byte count and original
+source position. Native candidate-relative coordinates remain available on the
+cause. Use `Display` for the ordered human-readable diagnostic list.
+
+`free_expression::parse_term` returns `TermParseError`. `ExprSelectorError` lives
+in `purrdf_shapes::free_expression` and is re-exported from `purrdf_validate`.
+Its term and Turtle cases retain original typed causes and native operands.
+Inline Turtle failures retain the caller fragment and the prefixed carrier;
+`fragment_position` maps a diagnostic back to the caller fragment. Import entry
+failures similarly retain `ImportEntryError` in `ShapesImportError::InvalidEntry`.
+
+`Namespaces` operations and `ConsumerProfile::namespaces` return `NamespaceError`.
+`ConformanceDisallows` construction returns `ConformanceError`. SPARQL vocabulary
+lowering and call rendering return `SparqlCallError`, retaining the original IRI,
+call form, argument count and native parser cause where applicable.
+
+Prepared validation, affected-focus expansion and incremental change validation
+return `CompleteValidationError`. Match its native categories rather than parsing
+messages or converting it back to `ShapesError`. Binding refusals distinguish snapshot mismatches and retain native
+focus term IDs, changed-row IDs and actual term-table counts. `ProcessorFailure` retains
+native shape and focus terms, relation IRIs and reasons, and shared original
+admission or query causes. `PreparationRefusal::StackMargin` carries `construct`.
+`ShapesError`, `ProcessorFailure`, `PreparationRefusal`, `RecursionRefusalReason`
+and `ShapesImportError` are non-exhaustive; include a fallback arm in matches.
+
+These failures implement borrowed structured inspection and standard source
+chains. Python, C and JavaScript errors carry the native fields through the
+shared diagnostic transport. Existing import classifications, storage channels
+and rule execution receipts remain available. Successful validation results,
+authored messages and report ordering are unchanged.

@@ -100,7 +100,16 @@ fn load_shapes(tc: &W3cCase) -> Result<LoadedShapes, String> {
         prefixes: doc_prefixes,
         ..
     } = crate::text_ingest::parse_turtle_document(&shapes_text, Some(&file_iri(&tc.shapes_path)))
-        .map_err(|errors| format!("shapes graph parse error: {}", errors.join("; ")))?;
+        .map_err(|errors| {
+        format!(
+            "shapes graph parse error: {}",
+            errors
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("; ")
+        )
+    })?;
     let shapes = if tc.profile == crate::profile::ShaclProfile::LEGACY {
         crate::shapes::from_dataset_with_base(
             &shapes_dataset,

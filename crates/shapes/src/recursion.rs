@@ -25,6 +25,13 @@ pub enum RecursionSemantics {
     Gfp,
 }
 
+impl purrdf_hash::error::StructuredError for RecursionSemantics {
+    purrdf_hash::error_visit! {
+        Lfp => "shacl-recursion-lfp" {},
+        Gfp => "shacl-recursion-gfp" {},
+    }
+}
+
 /// A caller's recursive semantics and finite native work limits.
 ///
 /// There is no default recursive semantics. Zero is a valid work limit: it

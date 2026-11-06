@@ -737,17 +737,33 @@ fn a_restored_preparation_takes_the_request_set() {
 /// beside it is accepted. A non-IRI level is refused; an IRI is accepted.
 #[test]
 fn an_empty_or_non_iri_set_is_refused_and_a_named_one_is_accepted() {
-    assert!(
-        ConformanceDisallows::new(Vec::new())
-            .expect_err("empty")
-            .contains("empty")
-    );
+    assert!(matches!(
+        ConformanceDisallows::new(Vec::new()),
+        Err(purrdf_shapes::ConformanceError::EmptySet)
+    ));
     assert!(ConformanceDisallows::new([Severity::Info]).is_ok());
+    let invalid = ConformanceDisallows::from_iris(["not an iri"]).expect_err("not an IRI");
+    assert!(matches!(
+        &invalid,
+        purrdf_shapes::ConformanceError::InvalidIri { input, .. } if input == "not an iri"
+    ));
     assert!(
-        ConformanceDisallows::from_iris(["not an iri"])
-            .expect_err("not an IRI")
-            .contains("not an absolute IRI")
+        std::error::Error::source(&invalid)
+            .unwrap()
+            .downcast_ref::<purrdf_iri::IriError>()
+            .is_some()
     );
+    assert!(invalid.to_string().contains("not an absolute IRI"));
+    let captured = purrdf_testkit::error_capture::Capture::read(&invalid);
+    assert_eq!(captured.code, "shacl-conformance-invalid-iri");
+    assert!(matches!(
+        captured.field("input"),
+        purrdf_hash::error::ErrorValue::Text("not an iri")
+    ));
+    assert!(matches!(
+        ConformanceDisallows::from_iris(["relative"]),
+        Err(purrdf_shapes::ConformanceError::RelativeIri { input }) if input == "relative"
+    ));
     let parsed = ConformanceDisallows::from_iris([
         "http://www.w3.org/ns/shacl#Trace",
         "http://example.org/ns#Advisory",

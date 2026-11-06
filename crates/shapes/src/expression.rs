@@ -100,6 +100,9 @@
 
 pub(crate) mod named_outputs;
 
+mod sparql_error;
+pub use sparql_error::{SparqlCallError, SparqlUnsupported};
+
 use std::borrow::Cow;
 use std::fmt::Write as _;
 use std::sync::{Arc, OnceLock};
@@ -817,65 +820,38 @@ impl SparqlCallForm {
     /// Returns `Err(String)` when `arity` cannot satisfy the form (an operator
     /// applied to the wrong number of operands, or a keyword function called with a
     /// count its grammar production does not admit).
-    pub fn render(self, iri: &str, arity: usize) -> Result<String, String> {
-        let arg = |i: usize| format!("?a{i}");
-        match self {
+    pub fn render(self, iri: &str, arity: usize) -> Result<String, SparqlCallError> {
+        let (minimum, maximum) = match self {
             Self::Call(keyword) => {
-                if let Some((min, max)) = purrdf_sparql_algebra::builtin_keyword_arity(keyword)
-                    && (arity < min || max.is_some_and(|max| arity > max))
-                {
-                    let expected = match max {
-                        Some(max) if max == min => format!("exactly {min}"),
-                        Some(max) => format!("{min} to {max}"),
-                        None => format!("at least {min}"),
-                    };
-                    return Err(format!(
-                        "<{iri}> is the SPARQL `{keyword}` function and takes {expected} \
-                         argument(s), got {arity}"
-                    ));
-                }
-                let args: Vec<String> = (0..arity).map(arg).collect();
-                Ok(format!("{keyword}({})", args.join(", ")))
+                purrdf_sparql_algebra::builtin_keyword_arity(keyword).unwrap_or((0, None))
             }
-            Self::Infix(op) => {
-                if arity != 2 {
-                    return Err(format!(
-                        "<{iri}> is the SPARQL `{op}` operator and takes exactly 2 arguments, got {arity}"
-                    ));
-                }
-                Ok(format!("({} {op} {})", arg(0), arg(1)))
-            }
-            Self::Prefix(op) => {
-                if arity != 1 {
-                    return Err(format!(
-                        "<{iri}> is the SPARQL unary `{op}` operator and takes exactly 1 argument, got {arity}"
-                    ));
-                }
-                Ok(format!("({op} {})", arg(0)))
-            }
-            Self::Membership(keyword) => {
-                let Some(rest) = arity.checked_sub(1) else {
-                    return Err(format!(
-                        "<{iri}> is the SPARQL `{keyword}` form and takes at least 1 argument, got 0"
-                    ));
-                };
-                let candidates: Vec<String> = (1..=rest).map(arg).collect();
-                Ok(format!(
-                    "({} {keyword} ({}))",
-                    arg(0),
-                    candidates.join(", ")
-                ))
-            }
-            Self::Ebv => {
-                if arity != 1 {
-                    return Err(format!(
-                        "<{iri}> is the SPARQL effective-boolean-value coercion and takes exactly \
-                         1 argument, got {arity}"
-                    ));
-                }
-                Ok(format!("(!(! {}))", arg(0)))
-            }
+            Self::Infix(_) => (2, Some(2)),
+            Self::Prefix(_) | Self::Ebv => (1, Some(1)),
+            Self::Membership(_) => (1, None),
+        };
+        if arity < minimum || maximum.is_some_and(|maximum| arity > maximum) {
+            return Err(SparqlCallError::Arity {
+                iri: iri.to_owned(),
+                form: self,
+                actual: arity,
+                minimum,
+                maximum,
+            });
         }
+        let arg = |i: usize| format!("?a{i}");
+        Ok(match self {
+            Self::Call(keyword) => {
+                let args: Vec<String> = (0..arity).map(arg).collect();
+                format!("{keyword}({})", args.join(", "))
+            }
+            Self::Infix(op) => format!("({} {op} {})", arg(0), arg(1)),
+            Self::Prefix(op) => format!("({op} {})", arg(0)),
+            Self::Membership(keyword) => {
+                let candidates: Vec<String> = (1..arity).map(arg).collect();
+                format!("({} {keyword} ({}))", arg(0), candidates.join(", "))
+            }
+            Self::Ebv => format!("(!(! {}))", arg(0)),
+        })
     }
 }
 
@@ -901,7 +877,7 @@ impl SparqlCallForm {
 /// functions; the two `EXISTS` functional forms, which take a graph pattern
 /// rather than argument values; and anything the vocabulary does not define. A
 /// refusal, never a silent empty result.
-pub fn sparql_ns_lowering(local: &str) -> Result<SparqlCallForm, String> {
+pub fn sparql_ns_lowering(local: &str) -> Result<SparqlCallForm, SparqlCallError> {
     /// The SPARQL 1.2 names that are not spelled as a function call, each with
     /// the surface form it is spelled as instead.
     static NON_CALL_FORMS: &[(&str, SparqlCallForm)] = &[
@@ -958,23 +934,18 @@ pub fn sparql_ns_lowering(local: &str) -> Result<SparqlCallForm, String> {
         return Ok(SparqlCallForm::Call(keyword));
     }
     let iri = format!("{}{local}", crate::model::sparql_ns::NS);
-    if local.starts_with("agg-") {
-        return Err(format!(
-            "<{iri}> names a SPARQL AGGREGATE, not a scalar function, and cannot be called from a \
-             node expression; the SHACL aggregate node expressions are shnex:count, shnex:min, \
-             shnex:max and shnex:sum"
-        ));
-    }
-    if local == "filter-exists" || local == "filter-not-exists" {
-        return Err(format!(
-            "<{iri}> is a SPARQL functional form over a GRAPH PATTERN, not over argument values, \
-             and cannot be called from a node expression; the SHACL existence node expression is \
-             shnex:exists"
-        ));
-    }
-    Err(format!(
-        "<{iri}> is not a callable SPARQL 1.2 function name"
-    ))
+    let reason = if local.starts_with("agg-") {
+        SparqlUnsupported::Aggregate
+    } else if local == "filter-exists" || local == "filter-not-exists" {
+        SparqlUnsupported::GraphPattern
+    } else {
+        SparqlUnsupported::Unknown
+    };
+    Err(SparqlCallError::Unsupported {
+        iri,
+        local: Some(local.to_owned()),
+        reason,
+    })
 }
 
 /// A function-call node expression (`sh:SPARQLFunction` / builtin).
@@ -1250,7 +1221,7 @@ impl<'a> Scope<'a> {
 /// process rather than returning an error a caller could handle.
 #[derive(Debug, Default)]
 pub struct RecursionGuard {
-    stack: FastSet<(String, String)>,
+    stack: FastSet<(Term, Term)>,
     depth: u32,
     structural: u32,
     request: crate::engine::ValidationRequest,
@@ -1379,18 +1350,22 @@ impl RecursionGuard {
     ///
     /// Returns [`crate::error::ProcessorFailure::ReentryCycle`] if the pair is already in flight — a recursion
     /// cycle through `sh:filterShape` / `sh:exists`.
-    pub fn enter(&mut self, shape_id: &str, focus: &str) -> Result<(), crate::error::ShapesError> {
+    pub fn enter(
+        &mut self,
+        shape_id: &Term,
+        focus: &Term,
+    ) -> Result<(), crate::error::ShapesError> {
         if purrdf_stack::is_low() {
             return Err(crate::error::ProcessorFailure::ReentryStackMargin {
-                shape: shape_id.to_owned(),
+                shape: Box::new(shape_id.clone()),
             }
             .into());
         }
-        let key = (shape_id.to_owned(), focus.to_owned());
+        let key = (shape_id.clone(), focus.clone());
         if self.stack.contains(&key) {
             return Err(crate::error::ProcessorFailure::ReentryCycle {
-                shape: shape_id.to_owned(),
-                focus: focus.to_owned(),
+                shape: shape_id.clone(),
+                focus: Box::new(focus.clone()),
             }
             .into());
         }
@@ -1399,8 +1374,8 @@ impl RecursionGuard {
     }
 
     /// Clear `(shape_id, focus)` from the in-flight set.
-    pub fn exit(&mut self, shape_id: &str, focus: &str) {
-        self.stack.remove(&(shape_id.to_owned(), focus.to_owned()));
+    pub fn exit(&mut self, shape_id: &Term, focus: &Term) {
+        self.stack.remove(&(shape_id.clone(), focus.clone()));
     }
 }
 
@@ -2866,10 +2841,9 @@ fn conforms_guarded(
     shape: ShapePlan<'_>,
     guard: &mut RecursionGuard,
 ) -> Result<bool, crate::error::ShapesError> {
-    let shape_id = shape.shape().id.to_string();
-    let node_key = node.to_string();
+    let shape_id = &shape.shape().id;
     let next_depth = guard.depth().saturating_add(1);
-    guard.enter(&shape_id, &node_key)?;
+    guard.enter(shape_id, node)?;
     // The shape's own lowering travels with it: re-entering the constraint engine
     // through an expression costs a plan lookup, not a fresh walk of the shape.
     let verdict = crate::constraints::conforms_with_id_depth(
@@ -2878,7 +2852,7 @@ fn conforms_guarded(
         shape,
         next_depth,
     );
-    guard.exit(&shape_id, &node_key);
+    guard.exit(shape_id, node);
     verdict
 }
 
@@ -3884,20 +3858,20 @@ mod tests {
     #[test]
     fn recursion_guard_detects_reentry() {
         let mut guard = RecursionGuard::default();
-        guard.enter("shapeA", "focusX").expect("first enter ok");
-        let err = guard.enter("shapeA", "focusX").unwrap_err();
+        let shape = ex("shapeA");
+        let focus = ex("focusX");
+        guard.enter(&shape, &focus).expect("first enter ok");
+        let err = guard.enter(&shape, &focus).unwrap_err();
         assert_eq!(
             err,
             crate::error::ProcessorFailure::ReentryCycle {
-                shape: "shapeA".to_owned(),
-                focus: "focusX".to_owned(),
+                shape: shape.clone(),
+                focus: Box::new(focus.clone()),
             }
             .into()
         );
-        guard.exit("shapeA", "focusX");
-        guard
-            .enter("shapeA", "focusX")
-            .expect("re-enter after exit ok");
+        guard.exit(&shape, &focus);
+        guard.enter(&shape, &focus).expect("re-enter after exit ok");
     }
 
     /// A node-expression tree nested past [`MAX_NODE_EXPR_DEPTH`] must fail

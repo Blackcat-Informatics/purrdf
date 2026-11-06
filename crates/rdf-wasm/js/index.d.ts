@@ -2676,6 +2676,9 @@ export function entailVerifyEntailment(
  * in this package the instance owns wasm memory — call `free()` when done.
  */
 export class ShaclImportError {
+  /** Free this owned native cause after inspecting its typed JSON fields. */
+  readonly nativeCause?: YamlSourceCause;
+  readonly nativeCauseJson?: string;
   readonly kind:
     | "unresolved-import"
     | "unreached-import"

@@ -70,8 +70,17 @@ pub struct Vocabulary {
 pub fn declared() -> Result<Vocabulary, String> {
     let mut out = Vocabulary::default();
     for (name, text) in VOCABULARIES {
-        let dataset = crate::text_ingest::parse_turtle_to_dataset(text, None)
-            .map_err(|errors| format!("{name} does not parse: {}", errors.join("; ")))?;
+        let dataset =
+            crate::text_ingest::parse_turtle_to_dataset(text, None).map_err(|errors| {
+                format!(
+                    "{name} does not parse: {}",
+                    errors
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                )
+            })?;
         read_components(&dataset, name, &mut out)?;
         read_functions(&dataset, name, &mut out)?;
     }
@@ -91,8 +100,17 @@ pub fn declared_terms() -> Result<std::collections::BTreeSet<String>, String> {
     let parameter = Term::NamedNode(NamedNode::from(sh::PARAMETER));
     let mut out = std::collections::BTreeSet::new();
     for (name, text) in &VOCABULARIES[..2] {
-        let dataset = crate::text_ingest::parse_turtle_to_dataset(text, None)
-            .map_err(|errors| format!("{name} does not parse: {}", errors.join("; ")))?;
+        let dataset =
+            crate::text_ingest::parse_turtle_to_dataset(text, None).map_err(|errors| {
+                format!(
+                    "{name} does not parse: {}",
+                    errors
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                )
+            })?;
         for (subject, _, _) in native_quads(&dataset, None, None, None, GraphFilter::AnyGraph) {
             let Term::NamedNode(iri) = &subject else {
                 continue;

@@ -221,7 +221,8 @@ fn assert_expansion_covers_every_moved_verdict(case: &Case) {
 
     let before = prepared
         .bind_dataset(&base)
-        .and_then(|validator| validator.validate().map_err(Into::into))
+        .expect("binding succeeds")
+        .validate()
         .unwrap_or_else(|error| panic!("{}: base validation: {error}", case.name));
 
     let mut mutation = MutableDataset::new(Arc::clone(&base));
@@ -263,7 +264,8 @@ fn assert_expansion_covers_every_moved_verdict(case: &Case) {
                 .freeze()
                 .unwrap_or_else(|error| panic!("{}: freeze: {error}", case.name)),
         )
-        .and_then(|validator| validator.validate().map_err(Into::into))
+        .expect("binding succeeds")
+        .validate()
         .unwrap_or_else(|error| panic!("{}: owned validation: {error}", case.name));
     assert_eq!(
         after.result_tuples(),
@@ -1286,7 +1288,8 @@ ex:PersonShape a sh:NodeShape ;
     .expect("fixture data must parse");
     let before = prepared
         .bind_dataset(&base)
-        .and_then(|validator| validator.validate().map_err(Into::into))
+        .expect("binding succeeds")
+        .validate()
         .expect("base validation");
     assert!(
         before.conforms,
@@ -1344,7 +1347,8 @@ ex:PersonShape a sh:NodeShape ;
     );
     let owned = prepared
         .bind_dataset(&mutation.freeze().expect("freeze"))
-        .and_then(|validator| validator.validate().map_err(Into::into))
+        .expect("binding succeeds")
+        .validate()
         .expect("owned validation");
     assert_eq!(
         after.result_tuples(),
@@ -1576,7 +1580,14 @@ ex:PersonShape a sh:NodeShape ;
         .affected_focus_node_ids(&foreign)
         .expect_err("a snapshot this validator does not read must be refused");
     assert!(
-        error.contains("not the one this validator was bound to"),
+        matches!(
+            &error,
+            purrdf_shapes::report::CompleteValidationError::Shapes(
+                purrdf_shapes::ShapesError::Binding(
+                    purrdf_shapes::engine::BindingRefusal::WrongSnapshot
+                )
+            )
+        ),
         "the refusal must say WHICH pairing failed, got {error:?}"
     );
 }
@@ -1614,7 +1625,14 @@ ex:PersonShape a sh:NodeShape ;
         .affected_focus_node_ids(&snapshot)
         .expect_err("a frozen binding carries no change");
     assert!(
-        error.contains("not bound to a mutation snapshot"),
+        matches!(
+            &error,
+            purrdf_shapes::report::CompleteValidationError::Shapes(
+                purrdf_shapes::ShapesError::Binding(
+                    purrdf_shapes::engine::BindingRefusal::MissingMutationBinding
+                )
+            )
+        ),
         "the refusal must name the missing precondition, got {error:?}"
     );
 }
@@ -1697,11 +1715,18 @@ fn expanding_a_change_on_an_unprojected_delta_binding_is_refused() {
         .affected_focus_node_ids(&snapshot)
         .expect_err("a delta binding that reads the plain table alone must be refused");
     assert!(
-        error.contains("does not project the RDF 1.2 statement layer"),
+        matches!(
+            &error,
+            purrdf_shapes::report::CompleteValidationError::Shapes(
+                purrdf_shapes::ShapesError::Binding(
+                    purrdf_shapes::engine::BindingRefusal::UnprojectedStatements
+                )
+            )
+        ),
         "the refusal must name the precondition that failed, got {error:?}"
     );
     assert!(
-        error.contains("bind_delta_with_shapes_graph"),
+        error.to_string().contains("bind_delta_with_shapes_graph"),
         "the refusal must name the constructor that satisfies the precondition, got {error:?}"
     );
 

@@ -559,6 +559,15 @@ pub enum RuleLimit {
     JoinSteps,
 }
 
+impl purrdf_hash::error::StructuredError for RuleLimit {
+    purrdf_hash::error_visit! {
+        TermGeneratingRounds => "rule-limit-term-generating-rounds" {},
+        GeneratedTerms => "rule-limit-generated-terms" {},
+        StoredFacts => "rule-limit-stored-facts" {},
+        JoinSteps => "rule-limit-join-steps" {},
+    }
+}
+
 /// A rule set refused for passing a rule-evaluation limit ([`RuleOptions`]).
 ///
 /// It states the limit, how far past it the run went, the knob that raises it and — for
@@ -580,6 +589,20 @@ pub struct RuleLimitExceeded {
     indices: Vec<usize>,
     /// The knob that raises the limit, as the host names it.
     knob: String,
+}
+
+impl purrdf_hash::error::StructuredError for RuleLimitExceeded {
+    purrdf_hash::error_visit! {
+        @record self { usage, limit, observed, permitted, stated, input_terms, rules, indices, knob }
+        => "shacl-rule-limit-exceeded" {
+            "usage" => Record(&self.usage), "limit" => Record(&self.limit),
+            "observed" => Unsigned(u128::from(self.observed)), "permitted" => Unsigned(u128::from(self.permitted)),
+            "stated" => Boolean(self.stated), "input_terms" => Unsigned(u128::from(self.input_terms)),
+            "rules" => List(self.rules.iter().map(|value| purrdf_hash::error::ErrorValue::Text(value))),
+            "indices" => List(self.indices.iter().map(|value| purrdf_hash::error::ErrorValue::Unsigned(*value as u128))),
+            "knob" => Text(&self.knob),
+        }
+    }
 }
 
 impl RuleLimitExceeded {
@@ -731,6 +754,14 @@ pub struct RuleExecutionError {
     /// Supplied coordinates and all contexts captured before the failure.
     pub coordinates: RuleCoordinates,
 }
+
+impl purrdf_hash::error::StructuredError for RuleExecutionError {
+    purrdf_hash::error_visit! {
+        @record self { cause, coordinates } => "shacl-rule-execution" {
+            "cause" => Cause(self.cause.as_ref()), "coordinates" => Record(&self.coordinates),
+        }
+    }
+}
 impl RuleExecutionError {
     /// Recover the original typed cause after retaining this execution's receipt.
     #[must_use]
@@ -790,6 +821,16 @@ pub enum RulesError {
     },
     /// Any other failure.
     Failed(String),
+}
+
+impl purrdf_hash::error::StructuredError for RulesError {
+    purrdf_hash::error_visit! {
+        Execution(cause) => "shacl-rules-execution" { "cause" => Cause(cause.as_ref()) },
+        Shapes(cause) => "shacl-rules-shapes" { "cause" => Cause(cause) },
+        LimitExceeded(cause) => "shacl-rules-limit-exceeded" { "cause" => Cause(cause.as_ref()) },
+        Stopped { cause } => "shacl-rules-stopped" { "cause" => Cause(cause.as_ref()) },
+        Failed(message) => "shacl-rules-failed" { "message" => Text(message) },
+    }
 }
 
 impl RulesError {

@@ -34,6 +34,30 @@ pub struct RuleCoordinates {
     execution: Option<Digest32>,
 }
 
+impl purrdf_hash::error::StructuredError for RuleCoordinates {
+    purrdf_hash::error_visit! {
+        @record self { now, entropy_seed, executions, program, snapshot, shapes, contract, source_rules, execution }
+        => "shacl-rule-coordinates" {
+            "now" => Value(self.now.as_deref().map_or(purrdf_hash::error::ErrorValue::Absent,
+                |value| purrdf_hash::error::ErrorValue::Record(value))),
+            "entropy_seed" => Value(self.entropy_seed.map_or(purrdf_hash::error::ErrorValue::Absent,
+                |value| purrdf_hash::error::ErrorValue::Unsigned(u128::from(value)))),
+            "executions" => List(self.executions.iter().map(|value| purrdf_hash::error::ErrorValue::Record(value))),
+            "program" => Value(self.program.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent,
+                |value| purrdf_hash::error::ErrorValue::Record(value))),
+            "snapshot" => Value(self.snapshot.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent,
+                |value| purrdf_hash::error::ErrorValue::Record(value))),
+            "shapes" => Value(self.shapes.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent,
+                |value| purrdf_hash::error::ErrorValue::Record(value))),
+            "contract" => Value(self.contract.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent,
+                |value| purrdf_hash::error::ErrorValue::Record(value))),
+            "source_rules" => Boolean(self.source_rules),
+            "execution" => Value(self.execution.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent,
+                |value| purrdf_hash::error::ErrorValue::Record(value))),
+        }
+    }
+}
+
 impl RuleCoordinates {
     /// Certified semantic program identity, when available.
     #[must_use]

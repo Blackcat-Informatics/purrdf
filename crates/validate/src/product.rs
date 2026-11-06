@@ -118,22 +118,7 @@ impl ShapesProductRefusal {
     pub fn message(&self) -> std::borrow::Cow<'_, str> {
         match self {
             Self::Shapes(ShapesError::Invalid(message)) => message.as_str().into(),
-            Self::Shapes(
-                error @ (ShapesError::Canonical(_)
-                | ShapesError::ImportArrays(_)
-                | ShapesError::ScopeBinding(_)
-                | ShapesError::RuleExecution(_)
-                | ShapesError::Imports(_)
-                | ShapesError::Recursion(_)
-                | ShapesError::Preparation(_)
-                | ShapesError::Storage(_)
-                | ShapesError::Processor(_)
-                | ShapesError::ShaclJs(_)
-                | ShapesError::IllFormed(_)
-                | ShapesError::Prebinding(_)
-                | ShapesError::UnsupportedTarget(_)
-                | ShapesError::SparqlTargetDisagreement(_)),
-            ) => error.to_string().into(),
+            Self::Shapes(error) => error.to_string().into(),
             Self::Admission(error) => error.message().into(),
         }
     }
@@ -311,7 +296,7 @@ pub fn pack_shapes_product_with_options(
         base: document_base,
         prefixes,
     } = purrdf_shapes::text_ingest::parse_turtle_document(shapes_ttl, shapes_base)
-        .map_err(|errors| ShapesProductRefusal::Shapes(errors.join("\n").into()))?;
+        .map_err(|errors| ShapesProductRefusal::Shapes(ShapesError::Text(errors)))?;
     // The base an in-document `@base` established is a second IRI the document was read
     // under; `shapes_base` is declared by the constructor itself.
     if let Some(document_base) = document_base {
@@ -1089,7 +1074,7 @@ fn validate_prepared_with_xpath_regex(
 /// dimension names.
 fn parse_data_nt(data_nt: &str) -> Result<Arc<RdfDataset>, ShapesProductRefusal> {
     purrdf_shapes::text_ingest::parse_ntriples_to_dataset(data_nt)
-        .map_err(|errors| ShapesProductRefusal::Shapes(errors.join("\n").into()))
+        .map_err(|errors| ShapesProductRefusal::Shapes(ShapesError::Text(errors)))
 }
 
 /// The ONE rebuild-validation body, with the caller's expectation as its only

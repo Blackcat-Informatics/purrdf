@@ -255,11 +255,23 @@ pub struct ShapesProductError {
     canonical: Option<Box<purrdf_core::CanonError>>,
 }
 
+impl purrdf_hash::error::StructuredError for ShapesProductError {
+    purrdf_hash::error_visit! {
+        @record self { dimension, message, preparation, canonical } => "shapes-product-refused" {
+            "dimension" => Code(self.dimension.label()), "message" => Message(&self.message),
+            "preparation" => Value(self.preparation.as_ref().map_or(purrdf_hash::error::ErrorValue::Absent,
+                |value| purrdf_hash::error::ErrorValue::Cause(value))),
+            "canonical" => Value(self.canonical.as_deref().map_or(purrdf_hash::error::ErrorValue::Absent,
+                |value| purrdf_hash::error::ErrorValue::Cause(value))),
+        }
+    }
+}
+
 impl From<crate::error::PreparationRefusal> for ShapesProductError {
     fn from(error: crate::error::PreparationRefusal) -> Self {
         let dimension = match &error {
             crate::error::PreparationRefusal::Storage(_) => ProductDimension::Resource,
-            crate::error::PreparationRefusal::StackMargin => ProductDimension::DepthLimit,
+            crate::error::PreparationRefusal::StackMargin { .. } => ProductDimension::DepthLimit,
             crate::error::PreparationRefusal::UnqualifiedRecursion(_) => {
                 ProductDimension::UnsupportedCapability
             }

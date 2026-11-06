@@ -126,7 +126,7 @@ fn registry(who: &str) -> Arc<RdfDataset> {
     purrdf_shapes::text_ingest::parse_ntriples_to_dataset(&format!(
         "<{EX}{who}> <{EX}status> \"banned\" .\n<{EX}carol> <{EX}status> \"cleared\" .\n"
     ))
-    .unwrap_or_else(|errors| panic!("registry fixture: {}", errors.join("\n")))
+    .unwrap_or_else(|errors| panic!("registry fixture: {}", errors))
 }
 
 /// Sources that answer `ENDPOINT` in process from `remote`.

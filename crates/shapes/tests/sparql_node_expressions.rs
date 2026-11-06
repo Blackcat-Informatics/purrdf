@@ -496,11 +496,29 @@ fn an_unknown_sparql_ns_name_is_a_load_error() {
 /// shapes-load, named as such.
 #[test]
 fn a_sparql_ns_operator_with_the_wrong_arity_is_a_load_error() {
-    let err = turtle::load_error(
-        PREFIXES,
-        r"ex:S a sh:NodeShape ; sh:expression [ sparql:add ( 1 2 3 ) ] .",
+    use purrdf_shapes::{ShapesError, expression::SparqlCallError};
+    let source =
+        format!("{PREFIXES}ex:S a sh:NodeShape ; sh:expression [ sparql:add ( 1 2 3 ) ] .");
+    let err = parse_shapes(&source, None).expect_err("wrong arity");
+    drop(source);
+    assert!(
+        err.to_string().contains("exactly 2 arguments"),
+        "got: {err}"
     );
-    assert!(err.contains("exactly 2 arguments"), "got: {err}");
+    let ShapesError::SparqlCall(cause) = &err else {
+        panic!("{err:?}")
+    };
+    let SparqlCallError::AtNode { cause, .. } = cause.as_ref() else {
+        panic!("{cause:?}")
+    };
+    assert!(matches!(cause.as_ref(), SparqlCallError::Arity {
+        iri, actual: 3, minimum: 2, maximum: Some(2), ..
+    } if iri == "http://www.w3.org/ns/sparql#add"));
+    let captured = purrdf_testkit::error_capture::Capture::read(&err);
+    assert_eq!(
+        captured.child("cause").child("cause").code,
+        "shacl-sparql-call-arity"
+    );
 }
 
 /// A keyword function is held to the count its grammar production fixes, as an

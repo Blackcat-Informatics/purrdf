@@ -272,7 +272,7 @@ fn eval_node_expr_case(tc: &NodeExprCase) -> Result<Vec<Term>, String> {
     let text = fs::read_to_string(&tc.file)
         .map_err(|e| format!("cannot read {}: {e}", tc.file.display()))?;
     let doc_prefixes = text_ingest::parse_turtle_document(&text, Some(&file_iri(&tc.file)))
-        .map_err(|errors| format!("node-expression graph parse error: {}", errors.join("; ")))?
+        .map_err(|errors| format!("node-expression graph parse error: {}", errors.to_string()))?
         .prefixes;
     // The node-expression loader and evaluator take no profile: node expressions exist
     // only in SHACL 1.2, so there is no compatibility alternative to select. The
@@ -344,7 +344,7 @@ fn infer(tc: &InferCase) -> Result<(Arc<RdfDataset>, Arc<RdfDataset>), String> {
         prefixes: doc_prefixes,
         ..
     } = text_ingest::parse_turtle_document(&shapes_text, Some(&file_iri(&tc.shapes_path)))
-        .map_err(|errors| format!("shapes graph parse error: {}", errors.join("; ")))?;
+        .map_err(|errors| format!("shapes graph parse error: {}", errors.to_string()))?;
     // Rules run under the editor's draft law, which the suite's commit pins.
     let shapes = shapes::from_dataset_with_options(
         &shapes_dataset,

@@ -145,7 +145,7 @@ impl PurrdfError {
                 let cause = error.into_cause();
                 let error = match cause {
                     purrdf_rs::shapes::rules::RulesError::Shapes(error) => Self::shapes(error),
-                    other => Self::new(PurrdfStatus::ParseError, other.to_string()),
+                    other => Self::native_shacl(other),
                 };
                 error.with_execution_receipt(&receipt)
             }
@@ -153,50 +153,46 @@ impl PurrdfError {
                 Self::from_diagnostic(PurrdfStatus::StorageError, &error.into())
             }
             purrdf_validate::ShapesError::Imports(error) => Self::shapes_import(&error),
-            purrdf_validate::ShapesError::Recursion(refusal) => {
-                Self::new(PurrdfStatus::ParseError, refusal.to_string())
+            other => Self::native_shacl(other),
+        }
+    }
+
+    fn native_shacl(error: impl purrdf_lex::error::NativeError + 'static) -> Self {
+        let diagnostic = purrdf_validate::native_error::diagnostic("shapes-refused", error, None);
+        let message = diagnostic.message.clone();
+        Self::from_owned_diagnostic_with_message(PurrdfStatus::ParseError, diagnostic, &message)
+    }
+
+    pub(crate) fn complete(error: purrdf_rs::shapes::report::CompleteValidationError) -> Self {
+        match error {
+            purrdf_rs::shapes::report::CompleteValidationError::Shapes(error) => {
+                Self::shapes(error)
             }
-            purrdf_validate::ShapesError::Preparation(refusal) => {
-                Self::new(PurrdfStatus::ParseError, refusal.to_string())
-            }
-            purrdf_validate::ShapesError::Invalid(message) => {
-                Self::new(PurrdfStatus::ParseError, message)
-            }
-            purrdf_validate::ShapesError::Processor(failure) => {
-                Self::new(PurrdfStatus::ParseError, failure.to_string())
-            }
-            purrdf_validate::ShapesError::ShaclJs(refusal) => {
-                Self::new(PurrdfStatus::ParseError, refusal.to_string())
-            }
-            purrdf_validate::ShapesError::IllFormed(refusal) => {
-                Self::new(PurrdfStatus::ParseError, refusal.to_string())
-            }
-            purrdf_validate::ShapesError::Prebinding(violation) => {
-                Self::new(PurrdfStatus::ParseError, violation.to_string())
-            }
-            purrdf_validate::ShapesError::UnsupportedTarget(refusal) => {
-                Self::new(PurrdfStatus::ParseError, refusal.to_string())
-            }
-            purrdf_validate::ShapesError::SparqlTargetDisagreement(refusal) => {
-                Self::new(PurrdfStatus::ParseError, refusal.to_string())
-            }
+            purrdf_rs::shapes::report::CompleteValidationError::RuleExecution {
+                cause,
+                coordinates,
+            } => Self::complete(*cause).with_execution_receipt(
+                &purrdf_validate::query::rule_execution_receipt_json(&coordinates),
+            ),
+            other => Self::native_shacl(other),
         }
     }
 
     /// The [`PurrdfStatus::ShapesImportError`] for `error`.
     pub(crate) fn shapes_import(error: &purrdf_validate::ShapesImportError) -> Self {
-        Self {
-            execution_receipt: None,
-            details: None,
-            code: PurrdfStatus::ShapesImportError,
-            message: sanitized(&error.to_string()),
-            dimension: None,
-            diagnostic: None,
-            import: Some(ImportRefusal {
-                kind: sanitized(error.kind()),
-                iris: error.iris().into_iter().map(sanitized).collect(),
-            }),
-        }
+        let diagnostic =
+            purrdf_validate::native_error::diagnostic("shapes-import-refused", error.clone(), None);
+        let message = diagnostic.message.clone();
+        let mut result = Self::from_owned_diagnostic_with_message(
+            PurrdfStatus::ShapesImportError,
+            diagnostic,
+            &message,
+        );
+        result.import = Some(ImportRefusal {
+            kind: sanitized(error.kind()),
+            iris: error.iris().into_iter().map(sanitized).collect(),
+        });
+        result
     }
 
     /// Build a prepared-shapes-product refusal, carrying the pinned kebab-case

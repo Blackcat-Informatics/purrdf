@@ -93,15 +93,33 @@ pub(crate) fn validation_error(
         }
         XPathValidationError::Shapes(error) => shapes(error),
         XPathValidationError::Pattern(error) if error.is_operational() => {
-            PurrdfError::new(PurrdfStatus::RegexResourceError, error.to_string())
+            native_validation_error(error, PurrdfStatus::RegexResourceError)
         }
-        XPathValidationError::CachePoisoned => PurrdfError::new(
+        XPathValidationError::CachePoisoned => native_validation_error(
+            XPathValidationError::CachePoisoned,
             PurrdfStatus::RegexResourceError,
-            XPathValidationError::CachePoisoned.to_string(),
         ),
-        XPathValidationError::Query(diagnostic) => query_error(&diagnostic),
-        other => PurrdfError::new(PurrdfStatus::ParseError, other.to_string()),
+        XPathValidationError::Query(diagnostic) => {
+            let status = if is_regex_resource_code(&diagnostic.code) {
+                PurrdfStatus::RegexResourceError
+            } else {
+                PurrdfStatus::QueryError
+            };
+            let message = diagnostic.to_string();
+            PurrdfError::from_owned_diagnostic_with_message(status, diagnostic, &message)
+        }
+        XPathValidationError::Complete(error) => PurrdfError::complete(*error),
+        other => native_validation_error(other, PurrdfStatus::ParseError),
     }
+}
+
+fn native_validation_error(
+    error: impl purrdf_lex::error::NativeError + 'static,
+    status: PurrdfStatus,
+) -> PurrdfError {
+    let diagnostic = purrdf_validate::native_error::diagnostic("shapes-refused", error, None);
+    let message = diagnostic.message.clone();
+    PurrdfError::from_owned_diagnostic_with_message(status, diagnostic, &message)
 }
 
 #[cfg(test)]
