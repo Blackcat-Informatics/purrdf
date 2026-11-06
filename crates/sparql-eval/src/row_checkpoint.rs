@@ -1553,7 +1553,9 @@ mod tests {
             let expected = rows.clone();
             let pointer = rows.as_ptr();
             let capacity = rows.capacity();
-            let consumed = ResourceDimension::ALL.map(|dimension| state.consumed_in(dimension));
+            let consumed = std::array::from_fn::<_, { ResourceDimension::COUNT }, _>(|index| {
+                state.consumed_in(ResourceDimension::ALL[index])
+            });
             let (rows, resume) = checkpoint
                 .commit_rows(&mut ctx, rows, [])
                 .expect("identity admission");
@@ -1562,7 +1564,9 @@ mod tests {
             assert_eq!(rows, expected);
             assert_eq!(resume, None);
             assert_eq!(
-                ResourceDimension::ALL.map(|dimension| state.consumed_in(dimension)),
+                std::array::from_fn::<_, { ResourceDimension::COUNT }, _>(|index| {
+                    state.consumed_in(ResourceDimension::ALL[index])
+                }),
                 consumed
             );
         }
@@ -1689,7 +1693,9 @@ mod tests {
                 (
                     rows,
                     state.tripped(),
-                    ResourceDimension::ALL.map(|dimension| state.consumed_in(dimension)),
+                    std::array::from_fn::<_, { ResourceDimension::COUNT }, _>(|index| {
+                        state.consumed_in(ResourceDimension::ALL[index])
+                    }),
                     ctx.scratch.minted_bytes(),
                 )
             };
@@ -1793,8 +1799,9 @@ mod tests {
                             (
                                 rows,
                                 state.tripped(),
-                                ResourceDimension::ALL
-                                    .map(|dimension| state.consumed_in(dimension)),
+                                std::array::from_fn::<_, { ResourceDimension::COUNT }, _>(|index| {
+                                    state.consumed_in(ResourceDimension::ALL[index])
+                                }),
                                 ctx.scratch.minted_bytes(),
                             ),
                             forked,

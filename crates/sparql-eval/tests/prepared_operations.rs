@@ -337,7 +337,7 @@ fn shared_prepared_fallible_operations_keep_both_meters_and_certified_prefixes()
             fuel > prior.consumed_in(ResourceDimension::Fuel),
             "each quiescent operation adds to the shared meter"
         );
-        for dimension in ResourceDimension::ALL {
+        for &dimension in ResourceDimension::ALL {
             assert!(
                 result.evidence.governors.consumed_in(dimension) >= prior.consumed_in(dimension),
                 "shared operation consumption cannot regress in {dimension:?}"

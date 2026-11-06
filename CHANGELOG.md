@@ -8,6 +8,12 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Extensible governors (breaking Rust API):** `ResourceDimension` and
+  `GovernorParts` are non-exhaustive, dimension enumeration is a static slice,
+  and request parts use public const construction. The evaluator shares the
+  Core dimension index; current labels, defaults, accounting and the fixed C
+  projection remain unchanged.
+
 - **Typed skipped-query diagnostics (breaking Rust API):** slice ownership
   diagnostics retain original UTF-8 and SPARQL errors through
   `QueryArtifactError`. `OwnershipDiagnostic` is non-exhaustive; malformed query

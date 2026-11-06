@@ -595,6 +595,13 @@ error is not a query error), indexed by `PurrdfExpressionErrorCode`: `[0]` `err:
 (`PURRDF_EXPRESSION_ERROR_CODE_COUNT` entries). Every entry is zero for an execution
 that raised none.
 
+The `PurrdfResourceVector` fields and their C discriminants are a fixed
+eight-dimension projection, even when the Rust resource vocabulary grows.
+An unrepresented budget/refusal dimension is `-1`; the trip kind, limit,
+consumed value and estimate still describe the original trip. A complete
+receipt for future dimensions requires an additive C carrier retaining native
+evidence. The existing projected values cannot supply those measurements later.
+
 ## Division policy
 
 `purrdf_dataset_set_division_policy(dataset, policy, out_error)` sets the precision

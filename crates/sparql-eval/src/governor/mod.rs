@@ -998,7 +998,7 @@ impl GovernorState {
             return Err(tripped);
         }
 
-        let slot = &self.consumed[Self::slot(dimension)];
+        let slot = &self.consumed[dimension.index()];
         // `try_update`, the non-deprecated name for this atomic, postdates the
         // workspace MSRV floor, so the original name is kept and its deprecation
         // suppressed at this one call site.
@@ -1068,7 +1068,7 @@ impl GovernorState {
         if let Some(&tripped) = self.tripped.get() {
             return Err(tripped);
         }
-        let consumed = self.consumed[Self::slot(dimension)].load(Ordering::Relaxed);
+        let consumed = self.consumed[dimension.index()].load(Ordering::Relaxed);
         let would = consumed.saturating_add(amount);
         let limit = self.limits.get(dimension);
         if would > limit {
@@ -1095,7 +1095,7 @@ impl GovernorState {
             return Err(tripped);
         }
 
-        self.peaks[Self::slot(dimension)].fetch_max(observed, Ordering::Relaxed);
+        self.peaks[dimension.index()].fetch_max(observed, Ordering::Relaxed);
 
         let limit = self.limits.get(dimension);
         if observed > limit {
@@ -1166,7 +1166,7 @@ impl GovernorState {
     /// peak-tracked dimension, and the running sum otherwise.
     #[must_use]
     pub fn consumed_in(&self, dimension: ResourceDimension) -> u64 {
-        let slot = Self::slot(dimension);
+        let slot = dimension.index();
         if is_peak_tracked(dimension) {
             self.peaks[slot].load(Ordering::Relaxed)
         } else {
@@ -1181,7 +1181,7 @@ impl GovernorState {
     #[must_use]
     pub fn evidence(&self) -> GovernorEvidence {
         let mut evidence = GovernorEvidence::new(self.limits);
-        for dimension in ResourceDimension::ALL {
+        for &dimension in ResourceDimension::ALL {
             evidence
                 .consumed
                 .set(dimension, self.consumed_in(dimension));
@@ -1313,7 +1313,7 @@ impl GovernorState {
             return self.charge(dimension, amount);
         };
 
-        let slot = &self.consumed[Self::slot(dimension)];
+        let slot = &self.consumed[dimension.index()];
         // `try_update`, the non-deprecated name for this atomic, postdates the
         // workspace MSRV floor, so the original name is kept and its deprecation
         // suppressed at this one call site.
@@ -1467,31 +1467,12 @@ impl GovernorState {
         if self.tripped().is_some() {
             return Some(0);
         }
-        let consumed = self.consumed[Self::slot(ResourceDimension::Fuel)].load(Ordering::Relaxed);
+        let consumed = self.consumed[ResourceDimension::Fuel.index()].load(Ordering::Relaxed);
         let headroom = self
             .limits
             .get(ResourceDimension::Fuel)
             .saturating_sub(consumed);
         Some(headroom / cost.max(1))
-    }
-
-    /// The dense slot `dimension` occupies in the counter arrays.
-    ///
-    /// Written as a match rather than as a search of [`ResourceDimension::ALL`] because
-    /// this runs on the charge path, which is the hottest code in a governed query. The
-    /// mapping is pinned to `ALL`'s order by test, so it cannot drift from the kernel
-    /// vocabulary.
-    const fn slot(dimension: ResourceDimension) -> usize {
-        match dimension {
-            ResourceDimension::Fuel => 0,
-            ResourceDimension::AnswerRows => 1,
-            ResourceDimension::IntermediateCells => 2,
-            ResourceDimension::ScratchBytes => 3,
-            ResourceDimension::RemoteRequests => 4,
-            ResourceDimension::UdfDepth => 5,
-            ResourceDimension::Pages => 6,
-            ResourceDimension::Bytes => 7,
-        }
     }
 
     /// Latch a trip, resolving it against any stop signal that is already firing.
@@ -2871,7 +2852,7 @@ mod tests {
         // The order itself is pinned beside the type in the kernel vocabulary; what is
         // this crate's business is that resolution actually honours it, and that an empty
         // candidate set is not a trip.
-        for dimension in ResourceDimension::ALL {
+        for &dimension in ResourceDimension::ALL {
             let budget = TrippedGovernor::Budget {
                 dimension,
                 limit: 0,
@@ -2903,7 +2884,7 @@ mod tests {
             limit: 1,
             consumed: 9,
         };
-        for dimension in ResourceDimension::ALL {
+        for &dimension in ResourceDimension::ALL {
             if dimension == ResourceDimension::IntermediateCells {
                 continue;
             }
@@ -3190,21 +3171,12 @@ mod tests {
 
     #[test]
     fn every_dimension_has_its_own_counter_slot() {
-        for (expected, dimension) in ResourceDimension::ALL.into_iter().enumerate() {
-            assert_eq!(
-                GovernorState::slot(dimension),
-                expected,
-                "the counter slot of {} must track its position in the kernel vocabulary",
-                dimension.label()
-            );
-        }
-
         // Charging one dimension must not move another's counter.
         let state = GovernorState::new(&QueryGovernors::UNBOUNDED);
         state
             .charge(ResourceDimension::ScratchBytes, 7)
             .expect("unbounded");
-        for dimension in ResourceDimension::ALL {
+        for &dimension in ResourceDimension::ALL {
             let expected = u64::from(dimension == ResourceDimension::ScratchBytes) * 7;
             assert_eq!(
                 state.consumed_in(dimension),

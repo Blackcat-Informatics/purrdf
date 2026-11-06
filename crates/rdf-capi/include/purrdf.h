@@ -1252,7 +1252,10 @@ typedef struct {
 } PurrdfQueryGovernors;
 
 /**
- * A fixed, named C representation of the kernel's eight-dimensional resource vector.
+ * A fixed projection of the kernel's eight currently named resource dimensions.
+ *
+ * This layout remains fixed when the Rust vocabulary grows. New dimensions need
+ * an additional C evidence carrier retaining the complete native receipt.
  */
 typedef struct {
     /**
@@ -1298,7 +1301,8 @@ typedef struct {
      */
     int32_t kind;
     /**
-     * [`PurrdfResourceDimension`] discriminant, or `-1` for a stop/none/unknown.
+     * [`PurrdfResourceDimension`] discriminant, or `-1` when absent or not represented
+     * by this ABI. A budget/refusal still retains its kind and counts in that case.
      */
     int32_t dimension;
     /**
@@ -1320,7 +1324,11 @@ typedef struct {
 } PurrdfGovernorTrip;
 
 /**
- * One governed execution's deterministic accounting receipt.
+ * One governed execution's deterministic accounting receipt projected to this ABI.
+ *
+ * The consumed and limit vectors retain their eight fixed fields. Complete evidence
+ * for a future Rust dimension needs an additive carrier owning the native receipt;
+ * the projected fields cannot recover measurements that they do not represent.
  */
 typedef struct {
     /**

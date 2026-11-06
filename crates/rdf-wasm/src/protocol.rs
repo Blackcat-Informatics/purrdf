@@ -121,7 +121,8 @@ fn trip_from_record(
         dimension
             .and_then(|name| {
                 ResourceDimension::ALL
-                    .into_iter()
+                    .iter()
+                    .copied()
                     .find(|candidate| candidate.label() == name)
             })
             .ok_or_else(|| format!("a {kind:?} trip names no governed dimension"))

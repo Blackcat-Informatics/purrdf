@@ -718,6 +718,25 @@ units and destination limit through its cause. Integer-conversion failures retai
 their original native source. Successful calculations, refusal order and human
 messages are unchanged.
 
+## Extensible governor dimensions and request parts
+
+`ResourceDimension` and `GovernorParts` are now non-exhaustive. Construct
+request parts with `GovernorParts::new()` or `Default::default()`, then assign
+the public settings you need. Unspecified settings retain the metered base and
+its logical UDF depth of 32; requesting no ceiling remains explicit.
+
+`ResourceDimension::ALL` is a static slice. Iterate by reference, or use
+`.iter().copied()` when values are needed. Use `ResourceDimension::index()`
+for this build's local counters. The index and `COUNT` are not persisted or
+wire identities; stable labels and explicit host mappings retain that role.
+Current dimension order, labels, accounting and refusal priority are unchanged.
+
+The C resource and evidence structs retain their eight named fields and stable
+discriminants. An unrepresented trip dimension is `-1`, with the original
+budget/refusal kind and counts retained. Complete future-dimensional evidence
+needs an additive native-owned carrier; the existing projection cannot recover
+measurements omitted from its fixed fields.
+
 ## Regime term arena controls
 
 `MaterializeLimits` adds `max_term_arena_bytes: Option<u64>`; use `None` to
