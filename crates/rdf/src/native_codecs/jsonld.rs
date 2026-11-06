@@ -80,6 +80,12 @@ use purrdf_iri::vocab::rdf::REST as RDF_REST;
 use purrdf_xsd::datatype::XSD_STRING;
 
 use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
+
+fn ordered_object(mut members: Vec<(String, Value)>) -> Value {
+    members.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+    Value::Object(Object::from(members))
+}
+
 /// Schema reference for the YAML-LD language-server header when the output is
 /// consumed from the bundled `purrdf.gts` snapshot. The schema is shipped as
 /// `schemas-archive/purrdf.schema.json`, so a bare member name resolves inside the
