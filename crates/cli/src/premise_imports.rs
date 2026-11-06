@@ -64,6 +64,10 @@ pub(crate) fn premise_iri(
     match format {
         SourceFormat::Native(native) => source::effective_base(path, native, base),
         SourceFormat::Pack | SourceFormat::Gts => Ok(None),
+        _ => Err(crate::format::unsupported_format(
+            format,
+            "the premise input",
+        )),
     }
 }
 

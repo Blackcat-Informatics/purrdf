@@ -685,6 +685,7 @@ fn data_graph_iris(
                 .collect())
         }
         SourceFormat::Pack | SourceFormat::Gts => Ok(Vec::new()),
+        _ => Err(format::unsupported_format(format, "the data input")),
     }
 }
 
@@ -1373,6 +1374,7 @@ pub(crate) fn shapes_document_base(
                  --shapes an RDF text document"
             ))),
         },
+        _ => Err(format::unsupported_format(format, "the shapes input")),
     }
 }
 

@@ -46,7 +46,11 @@ pub const GTS_EXTENSIONS: &[&str] = &["gts"];
 /// the RDF text syntaxes" and "a container" — not just "which text syntax" — resolves
 /// through [`classify_source`] to this type rather than hand-rolling a second
 /// container/extension decision.
+///
+/// New routing kinds may be added. Consumers outside this crate must explicitly
+/// handle an unsupported kind instead of treating it as a known syntax or container.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SourceFormat {
     /// One of the native RDF text syntaxes (see [`NativeRdfFormat`]).
     Native(NativeRdfFormat),
