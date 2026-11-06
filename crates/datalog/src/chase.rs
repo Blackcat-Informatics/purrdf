@@ -134,8 +134,9 @@ use crate::store::{Arity, Bound, RelationStore, ShapeFact, StoreShape, TermInter
 
 mod termination;
 pub use termination::{
-    AnalysisLimits, AnalysisReport, PreparedChase, SourcePosition, TerminationError,
-    TerminationViolation, WA_LAW_VERSION, WaCertificate, certify, certify_with,
+    AnalysisLimits, AnalysisReport, ChaseCertificate, PreparedChase, SourcePosition,
+    TerminationCriterion, TerminationError, TerminationViolation, WA_LAW_VERSION, WaCertificate,
+    certify, certify_with,
 };
 
 /// What the termination analysis proved about a clause set.
@@ -143,6 +144,7 @@ pub use termination::{
 /// Computed by [`certify`] and carried on [`ChaseOutcome`] so a caller can put the
 /// certificate in a report next to the facts it justifies.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ChaseTermination {
     /// No existential edge of the position dependency graph lies in a cycle.
     ///
@@ -168,8 +170,20 @@ pub enum ChaseTermination {
 
 impl ChaseTermination {
     /// Whether the analysis certified termination.
-    pub fn is_certified(&self) -> bool {
-        matches!(self, Self::WeaklyAcyclic { .. })
+    pub const fn is_certified(&self) -> bool {
+        match self {
+            Self::WeaklyAcyclic { .. } => true,
+            Self::Uncertified { .. } => false,
+        }
+    }
+
+    /// The sufficient criterion proved by this summary, absent for a refusal.
+    #[must_use]
+    pub const fn criterion(&self) -> Option<TerminationCriterion> {
+        match self {
+            Self::WeaklyAcyclic { .. } => Some(TerminationCriterion::WeaklyAcyclic),
+            Self::Uncertified { .. } => None,
+        }
     }
 }
 
@@ -1047,10 +1061,10 @@ where
 
     /// The termination certificate that admitted the program.
     ///
-    /// Always [`ChaseTermination::WeaklyAcyclic`] on a successful run — the
+    /// Its native criterion certified the program before execution. The
     /// [`Uncertified`](ChaseTermination::Uncertified) case is returned as
-    /// [`ChaseError::Termination`] instead — and carried here so a caller can report the
-    /// proof alongside the facts it justifies.
+    /// [`ChaseError::Termination`] instead. The certified summary accompanies the facts
+    /// so a caller can report the proof alongside the conclusions it justifies.
     pub fn termination(&self) -> &ChaseTermination {
         &self.termination
     }
