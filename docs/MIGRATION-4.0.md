@@ -568,13 +568,34 @@ Unicode scalar and relative byte offset, or private JSON pointer, reason,
 found/expected values and nested reader/storage causes. Standard error sources
 borrow those same owners. Clone and equality operate on the native fields.
 
-Every visualization-error variant reports its currently stored fields through
-the shared visitor. The existing `VizPresentationError` also supplies its own
-unchanged human presentation, standard error interface and structured issue,
-instruction and message. Remaining text/message payloads keep their current
-contents; inspection does not reconstruct operands already rendered by their
-producers. Parsing, escaping, successful SVG/JSON bytes and human messages are
-unchanged.
+`VizError::Layout` now owns a non-exhaustive `VizLayoutError` instead of a
+rendered string. Inspect its original node, edge, rank, component, anchor and
+parent identities, counts, rectangles, route points and arithmetic operands.
+Checked coordinate and region-depth conversions retain their original
+`TryFromIntError`. Layout errors and their geometry records support borrowed
+structured inspection and standard error sources.
+
+`VizPresentationIssue` is non-exhaustive. Replace `VizPresentationError` struct
+literals with `VizPresentationError::new(issue, instruction, message)` and field
+access with `issue()`, `instruction()` and `message()`. Navigation parsing keeps
+the original `IriError` through `native_cause()`, the shared visitor and standard
+source chain. Clones share that cause; compatibility equality still compares
+the original issue, instruction and message. Physical failure to retain a
+native cause returns `VizError::Storage` with the original `StorageError`.
+
+Navigation refusals nested in presentation JSON retain their native cause and
+RFC 6901 pointer through `DecodeError::native`. Record consumers can use
+`native_with_allocation` to admit presentation and pointers through their
+original `RecordAllocation`; the cause has its own independent Resident owner.
+`DecodeReason` is non-exhaustive and its borrowed `Native` case shares an already
+retained owner. Record equality still compares the original pointer, message
+and failure, independently of supplemental provenance. Genuine authored
+messages continue through `custom`; native presentation is exposed as
+`native_cause` rather than `external_message` during inspection. Physical
+retention or record admission failures keep the existing typed storage channel.
+
+Parsing, refusal priority, escaping, successful SVG/JSON bytes and human
+messages are unchanged.
 
 ## Visualization specification refusals
 

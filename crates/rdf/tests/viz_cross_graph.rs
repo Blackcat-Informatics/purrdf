@@ -3,7 +3,11 @@
 
 //! Visual reifier roles are independent of the carrier's graph-scoped table fold.
 
+use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
 use std::sync::Arc;
+
+#[global_allocator]
+static GLOBAL: CountingAllocator = CountingAllocator;
 
 use purrdf_rdf::dataset_view::DatasetMut;
 use purrdf_rdf::ir::MutableDataset;
@@ -408,10 +412,7 @@ fn nested_presentation_keeps_cross_boundary_semantics_and_exact_visible_exports(
     stale.geometry.components[0].rect.width += 1;
     assert!(matches!(
         render_presented_export_svg(&stale, &VizSvgOptions::default()),
-        Err(VizError::Presentation(VizPresentationError {
-            issue: VizPresentationIssue::Export,
-            ..
-        }))
+        Err(VizError::Presentation(cause)) if cause.issue() == VizPresentationIssue::Export
     ));
 }
 
@@ -613,7 +614,9 @@ fn declared_scenarios_preserve_order_error_and_parallel_grammar_with_visible_rdf
 
 #[test]
 fn presentation_refusals_have_valid_binding_containment_order_and_navigation_neighbors() {
+    use purrdf_lex::json::record::{DecodeError, FromJson, ToJson, Within};
     use purrdf_rdf::viz::*;
+    use purrdf_testkit::error_capture::Capture;
     let spec = VizSpec::default();
     let model = project_graph_input(&viz_presentation::input(), &spec).expect("projection");
     let valid = viz_presentation::architecture(&model);
@@ -621,6 +624,96 @@ fn presentation_refusals_have_valid_binding_containment_order_and_navigation_nei
         build_presented_export(&model, &spec, p, &VizLayoutOptions::default())
     };
     build(&valid).expect("valid containment and local link");
+    let malformed = "https://[broken";
+    let expected = purrdf_iri::parse(malformed).expect_err("malformed native authority");
+    let direct = VizNavigation::parse(malformed).expect_err("invalid navigation");
+    let VizError::Presentation(presentation) = direct else {
+        panic!("native presentation refusal")
+    };
+    assert_eq!(presentation.issue(), VizPresentationIssue::Navigation);
+    assert_eq!(presentation.instruction(), malformed);
+    let retained = presentation.clone();
+    assert!(core::ptr::eq(
+        std::error::Error::source(&presentation).unwrap(),
+        std::error::Error::source(&retained).unwrap(),
+    ));
+    assert_eq!(
+        presentation,
+        VizPresentationError::new(presentation.issue(), malformed, presentation.message())
+    );
+    drop(presentation);
+    assert_eq!(
+        std::error::Error::source(&retained)
+            .unwrap()
+            .downcast_ref::<purrdf_iri::IriError>(),
+        Some(&expected)
+    );
+    let decode = {
+        let mut document = valid.to_json();
+        document["displays"][0]["navigation"] = malformed.into();
+        VizPresentation::from_json(&document)
+            .expect_err("nested navigation retains its native cause")
+    };
+    assert_eq!(decode.pointer(), "/displays/0/navigation");
+    assert_eq!(
+        decode,
+        DecodeError::custom(decode.message())
+            .within("navigation")
+            .within("0")
+            .within("displays")
+    );
+    let copied = decode.clone();
+    assert!(core::ptr::eq(
+        std::error::Error::source(&decode).unwrap(),
+        std::error::Error::source(&copied).unwrap()
+    ));
+    drop(decode);
+    let native = std::error::Error::source(&copied)
+        .unwrap()
+        .downcast_ref::<VizError>()
+        .unwrap();
+    let VizError::Presentation(native) = native else {
+        panic!("original navigation presentation")
+    };
+    assert_eq!(
+        std::error::Error::source(native)
+            .unwrap()
+            .downcast_ref::<purrdf_iri::IriError>(),
+        Some(&expected)
+    );
+    let outer_events = Vec::with_capacity(8);
+    let native_events = Vec::with_capacity(8);
+    let iri_events = Vec::with_capacity(8);
+    let window = CurrentThreadWindow::open();
+    let outer = Capture::read_with_buffer(&copied, outer_events);
+    let fields = Capture::read_with_buffer(native, native_events);
+    let native_iri = Capture::read_with_buffer(native.native_cause().unwrap(), iri_events);
+    let measured = window.close();
+    assert_eq!((measured.allocations, measured.requested_bytes), (0, 0));
+    assert!(matches!(
+        outer.field("external_message"),
+        purrdf_hash::error::ErrorValue::Absent
+    ));
+    assert!(matches!(
+        outer.field("native_cause"),
+        purrdf_hash::error::ErrorValue::Cause(_)
+    ));
+    assert!(matches!(
+        fields.field("native_cause"),
+        purrdf_hash::error::ErrorValue::Cause(_)
+    ));
+    assert_eq!(native_iri.code, Capture::read(&expected).code);
+    assert!(matches!(
+        VizNavigation::parse(&format!("{malformed}{}", "x".repeat(8192))),
+        Err(VizError::TooLarge {
+            limit: "navigation bytes",
+            ..
+        })
+    ));
+    let Err(VizError::Presentation(policy)) = VizNavigation::parse("javascript:alert(1)") else {
+        panic!("unsafe scheme")
+    };
+    assert!(policy.native_cause().is_none());
     let statement = &model.statements[0];
     let assertion = model
         .assertions
@@ -649,10 +742,7 @@ fn presentation_refusals_have_valid_binding_containment_order_and_navigation_nei
     };
     assert!(matches!(
         build(&shared),
-        Err(VizError::Presentation(VizPresentationError {
-            issue: VizPresentationIssue::Binding,
-            ..
-        }))
+        Err(VizError::Presentation(cause)) if cause.issue() == VizPresentationIssue::Binding
     ));
     shared.displays[1].label = shared.displays[0].label.clone();
     let table_spec = VizSpec {
@@ -673,10 +763,7 @@ fn presentation_refusals_have_valid_binding_containment_order_and_navigation_nei
     table.displays[0].label.as_mut().expect("label").direction = Some(VizTextDirection::Rtl);
     assert!(matches!(
         table_build(&table),
-        Err(VizError::Presentation(VizPresentationError {
-            issue: VizPresentationIssue::Unsupported,
-            ..
-        }))
+        Err(VizError::Presentation(cause)) if cause.issue() == VizPresentationIssue::Unsupported
     ));
     table.displays[0].label = Some(VizSceneLabel::plain("Reviewed call"));
     table.displays[0]
@@ -687,10 +774,7 @@ fn presentation_refusals_have_valid_binding_containment_order_and_navigation_nei
         .push_str(" in full");
     assert!(matches!(
         table_build(&table),
-        Err(VizError::Presentation(VizPresentationError {
-            issue: VizPresentationIssue::Unsupported,
-            ..
-        }))
+        Err(VizError::Presentation(cause)) if cause.issue() == VizPresentationIssue::Unsupported
     ));
     table.displays[0].label = Some(VizSceneLabel::plain("Reviewed call"));
     table.displays[0].description = Some("d".repeat(1000));
@@ -763,10 +847,7 @@ fn presentation_refusals_have_valid_binding_containment_order_and_navigation_nei
     cyclic.components[0].parent = Some("service".to_owned());
     assert!(matches!(
         build(&cyclic),
-        Err(VizError::Presentation(VizPresentationError {
-            issue: VizPresentationIssue::Containment,
-            ..
-        }))
+        Err(VizError::Presentation(cause)) if cause.issue() == VizPresentationIssue::Containment
     ));
     for link in [
         "javascript:alert(1)",
@@ -792,9 +873,6 @@ fn presentation_refusals_have_valid_binding_containment_order_and_navigation_nei
     scenario.scenario.as_mut().expect("scenario").interactions[0].order = 1;
     assert!(matches!(
         build(&scenario),
-        Err(VizError::Presentation(VizPresentationError {
-            issue: VizPresentationIssue::Scenario,
-            ..
-        }))
+        Err(VizError::Presentation(cause)) if cause.issue() == VizPresentationIssue::Scenario
     ));
 }

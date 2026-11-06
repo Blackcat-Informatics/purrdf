@@ -6,8 +6,8 @@
 use super::super::{LINE_HEIGHT, validate_label_bounds};
 use crate::viz::presentation::scene_node;
 use crate::viz::{
-    VizError, VizLayout, VizLayoutLabel, VizPoint, VizPresentationLayout, VizPresentedScene,
-    VizRect,
+    VizError, VizLayout, VizLayoutError, VizLayoutLabel, VizPoint, VizPresentationLayout,
+    VizPresentedScene, VizRect,
 };
 use std::collections::BTreeMap;
 
@@ -22,9 +22,11 @@ fn contains(parent: VizRect, child: VizRect) -> bool {
 
 fn rectangle(id: &str, rect: VizRect, canvas: VizRect) -> Result<(), VizError> {
     if rect.width <= 0 || rect.height <= 0 || !contains(canvas, rect) {
-        return Err(VizError::Layout(format!(
-            "presentation rectangle {id} is empty or outside the complete canvas"
-        )));
+        return Err(VizError::Layout(VizLayoutError::PresentationRectangle {
+            id: id.to_owned(),
+            rect,
+            canvas,
+        }));
     }
     Ok(())
 }
@@ -41,9 +43,11 @@ fn labels<'a>(
             .and_then(|n| n.checked_mul(i64::from(LINE_HEIGHT)))
             .is_none_or(|height| height > i64::from(label.rect.height))
         {
-            return Err(VizError::Layout(
-                "presentation label lines exceed their assigned height".to_owned(),
-            ));
+            return Err(VizError::Layout(VizLayoutError::LabelHeight {
+                rect: label.rect,
+                lines: label.lines.len(),
+                line_height: LINE_HEIGHT,
+            }));
         }
     }
     Ok(())
@@ -82,9 +86,18 @@ pub(super) fn geometry(
         || g.interactions.len() != p.scenario.as_ref().map_or(0, |s| s.interactions.len())
         || g.detail_heading.is_some() != p.scenario.is_some()
     {
-        return Err(VizError::Layout(
-            "presentation geometry does not cover every admitted instruction".to_owned(),
-        ));
+        return Err(VizError::Layout(VizLayoutError::InstructionCoverage {
+            components: g.components.len(),
+            expected_components: p.components.len(),
+            participants: g.participants.len(),
+            expected_participants: p.scenario.as_ref().map_or(0, |s| s.participants.len()),
+            regions: g.regions.len(),
+            expected_regions: p.scenario.as_ref().map_or(0, |s| s.regions.len()),
+            interactions: g.interactions.len(),
+            expected_interactions: p.scenario.as_ref().map_or(0, |s| s.interactions.len()),
+            detail_heading: g.detail_heading.is_some(),
+            expected_detail_heading: p.scenario.is_some(),
+        }));
     }
     let frames: BTreeMap<_, _> = g
         .components
@@ -93,24 +106,28 @@ pub(super) fn geometry(
         .map(|frame| (frame.id.as_str(), frame))
         .collect();
     if frames.len() != g.components.len() + g.regions.len() {
-        return Err(VizError::Layout(
-            "presentation geometry repeats a frame identity".to_owned(),
-        ));
+        return Err(VizError::Layout(VizLayoutError::DuplicateFrames {
+            unique: frames.len(),
+            components: g.components.len(),
+            regions: g.regions.len(),
+        }));
     }
     for frame in frames.values() {
         rectangle(&frame.id, frame.rect, canvas)?;
         if let Some(parent) = &frame.parent {
             let parent = frames.get(parent.as_str()).ok_or_else(|| {
-                VizError::Layout(format!(
-                    "presentation frame {} has no parent geometry",
-                    frame.id
-                ))
+                VizError::Layout(VizLayoutError::MissingParentFrame {
+                    frame: frame.id.clone(),
+                    parent: parent.clone(),
+                })
             })?;
             if !contains(parent.rect, frame.rect) {
-                return Err(VizError::Layout(format!(
-                    "presentation frame {} leaves its parent boundary",
-                    frame.id
-                )));
+                return Err(VizError::Layout(VizLayoutError::FrameBounds {
+                    frame: frame.id.clone(),
+                    parent: parent.id.clone(),
+                    rect: frame.rect,
+                    parent_rect: parent.rect,
+                }));
             }
         }
     }
@@ -121,26 +138,40 @@ pub(super) fn geometry(
     for component in &p.components {
         let frame = frames
             .get(format!("present-component-{}", component.id).as_str())
-            .ok_or_else(|| VizError::Layout("component frame identity is absent".to_owned()))?;
+            .ok_or_else(|| {
+                VizError::Layout(VizLayoutError::MissingComponentFrame {
+                    component: component.id.clone(),
+                })
+            })?;
         for binding in std::iter::once(&component.binding).chain(&component.members) {
             let node = scene_node(&presented.scene, binding)?;
             let node = layout
                 .nodes
                 .iter()
                 .find(|n| n.id == node.id)
-                .ok_or_else(|| VizError::Layout("component node has no geometry".to_owned()))?;
+                .ok_or_else(|| {
+                    VizError::Layout(VizLayoutError::MissingComponentNode {
+                        component: component.id.clone(),
+                        node: node.id.clone(),
+                    })
+                })?;
             if !contains(frame.rect, node.rect) {
-                return Err(VizError::Layout(format!(
-                    "component {} does not contain its declared node {}",
-                    component.id, node.id
-                )));
+                return Err(VizError::Layout(VizLayoutError::ComponentBounds {
+                    component: component.id.clone(),
+                    node: node.id.clone(),
+                    frame: frame.rect,
+                    rect: node.rect,
+                }));
             }
         }
     }
     for port in &g.ports {
-        let frame = frames
-            .get(port.boundary.as_str())
-            .ok_or_else(|| VizError::Layout("boundary port has no frame".to_owned()))?;
+        let frame = frames.get(port.boundary.as_str()).ok_or_else(|| {
+            VizError::Layout(VizLayoutError::MissingPortFrame {
+                port: port.id.clone(),
+                boundary: port.boundary.clone(),
+            })
+        })?;
         let rect = frame.rect;
         let on_boundary = ((port.point.x == rect.x || port.point.x == rect.right())
             && (rect.y..=rect.bottom()).contains(&port.point.y))
@@ -150,12 +181,21 @@ pub(super) fn geometry(
             .edges
             .iter()
             .find(|edge| edge.id == port.edge)
-            .ok_or_else(|| VizError::Layout("boundary port has no native RDF edge".to_owned()))?;
+            .ok_or_else(|| {
+                VizError::Layout(VizLayoutError::MissingPortEdge {
+                    port: port.id.clone(),
+                    edge: port.edge.clone(),
+                })
+            })?;
         if !on_boundary || !on_route(port.point, &edge.points) {
-            return Err(VizError::Layout(format!(
-                "boundary port {} is not on its perimeter and actual edge route",
-                port.id
-            )));
+            return Err(VizError::Layout(VizLayoutError::PortRoute {
+                port: port.id.clone(),
+                boundary: port.boundary.clone(),
+                edge: port.edge.clone(),
+                point: port.point,
+                frame: rect,
+                points: edge.points.clone(),
+            }));
         }
     }
     for participant in &g.participants {
@@ -165,10 +205,12 @@ pub(super) fn geometry(
             || !point_inside(participant.start, canvas)
             || !point_inside(participant.end, canvas)
         {
-            return Err(VizError::Layout(format!(
-                "participant {} has an invalid lifeline",
-                participant.id
-            )));
+            return Err(VizError::Layout(VizLayoutError::Lifeline {
+                participant: participant.id.clone(),
+                start: participant.start,
+                end: participant.end,
+                canvas,
+            }));
         }
     }
     labels(g.participants.iter().map(|p| (&p.text, p.rect)), canvas)?;
@@ -183,10 +225,11 @@ pub(super) fn geometry(
                 .windows(2)
                 .any(|pair| pair[0].x != pair[1].x && pair[0].y != pair[1].y)
         {
-            return Err(VizError::Layout(format!(
-                "interaction {} has an invalid orthogonal route",
-                interaction.id
-            )));
+            return Err(VizError::Layout(VizLayoutError::InteractionRoute {
+                interaction: interaction.id.clone(),
+                points: interaction.points.clone(),
+                canvas,
+            }));
         }
     }
     labels(

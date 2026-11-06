@@ -32,12 +32,14 @@ impl VizNavigation {
                 allowed: 8192,
             });
         }
-        let parsed = purrdf_iri::parse(value).map_err(|_| {
-            presentation_error(
+        let parsed = purrdf_iri::parse(value).map_err(|cause| {
+            VizPresentationError::new(
                 VizPresentationIssue::Navigation,
                 value,
                 "use an HTTP(S) URL or local reference",
             )
+            .with_native_cause(cause)
+            .map_or_else(VizError::Storage, VizError::Presentation)
         })?;
         let safe_scheme = parsed.scheme().is_none_or(|scheme| {
             (scheme.eq_ignore_ascii_case("https") || scheme.eq_ignore_ascii_case("http"))
@@ -70,6 +72,7 @@ impl VizNavigation {
 
 /// The reason a presentation instruction cannot be applied faithfully.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum VizPresentationIssue {
     /// Missing, duplicate or ambiguous semantic identity.
     Binding,
@@ -86,15 +89,72 @@ pub enum VizPresentationIssue {
 }
 
 /// A typed, actionable presentation refusal.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct VizPresentationError {
-    /// Closed refusal class.
-    pub issue: VizPresentationIssue,
-    /// The instruction or semantic identity involved.
-    pub instruction: String,
-    /// How to correct the instruction.
-    pub message: String,
+    pub(super) issue: VizPresentationIssue,
+    pub(super) instruction: String,
+    pub(super) message: String,
+    pub(super) native_cause: Option<purrdf_lex::allocation::NativeCause>,
 }
+
+impl VizPresentationError {
+    /// Construct an actionable refusal for an instruction or semantic identity.
+    #[must_use]
+    pub fn new(
+        issue: VizPresentationIssue,
+        instruction: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            issue,
+            instruction: instruction.into(),
+            message: message.into(),
+            native_cause: None,
+        }
+    }
+
+    /// Refusal class, extensible independently of the presentation record.
+    #[must_use]
+    pub const fn issue(&self) -> VizPresentationIssue {
+        self.issue
+    }
+
+    /// The original instruction or semantic identity involved.
+    #[must_use]
+    pub fn instruction(&self) -> &str {
+        &self.instruction
+    }
+
+    /// How to correct the instruction.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    /// Borrow the original native refusal without copying or rendering it.
+    #[must_use]
+    pub fn native_cause(&self) -> Option<&(dyn purrdf_hash::error::NativeError + 'static)> {
+        self.native_cause.as_ref().map(|cause| &***cause)
+    }
+
+    fn with_native_cause(
+        mut self,
+        cause: impl purrdf_hash::error::NativeError + 'static,
+    ) -> Result<Self, purrdf_lex::allocation::StorageError> {
+        self.native_cause = Some(purrdf_lex::allocation::retain_native_cause(cause)?);
+        Ok(self)
+    }
+}
+
+// Preserve compatibility equality independently of supplemental native provenance.
+impl PartialEq for VizPresentationError {
+    fn eq(&self, other: &Self) -> bool {
+        self.issue == other.issue
+            && self.instruction == other.instruction
+            && self.message == other.message
+    }
+}
+impl Eq for VizPresentationError {}
 
 /// Human-facing text and navigation attached to an exact semantic identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -331,11 +391,7 @@ pub(super) fn presentation_error(
     instruction: &str,
     message: &str,
 ) -> VizError {
-    VizError::Presentation(VizPresentationError {
-        issue,
-        instruction: instruction.to_owned(),
-        message: message.to_owned(),
-    })
+    VizError::Presentation(VizPresentationError::new(issue, instruction, message))
 }
 
 /// Build a presentation without allowing it to replace or reinterpret RDF facts.

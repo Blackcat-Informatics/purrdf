@@ -226,6 +226,16 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Breaking Changes
 
+- **Typed visualization refusals:** `VizError::Layout` owns a non-exhaustive
+  `VizLayoutError` with original identities, geometry and arithmetic operands.
+  Construct presentation refusals through `VizPresentationError::new` and use
+  borrowed field accessors; `VizPresentationIssue` is non-exhaustive. Navigation
+  retains native IRI failures through direct and nested JSON callers. Shared
+  record decoding carries supplemental native causes without changing its
+  pointer, message, compatibility equality or original record-account ownership;
+  `DecodeReason` is non-exhaustive. Successful output and refusal order are
+  unchanged.
+
 - **Canonical reserved-vocabulary refusals:** `ReservedVocabulary` lends its
   original IRI and position through `iri()` and `position()`; clones share the
   immutable payload and its original admission owner, and the refusal stays
