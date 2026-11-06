@@ -1,0 +1,102 @@
+{
+  "CHANGELOG.md": [
+    {
+      "mode": "100644",
+      "oid": "5336d66d3b20291138bffe713ae6d44418c95f7b",
+      "stage": 1,
+      "content": "inputs/0-1.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "d51881a702d4e94b99563d5bbc06c50eb2522b7a",
+      "stage": 2,
+      "content": "inputs/0-2.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "63080602b7e1a1e0892fc9bff503dc76f8033575",
+      "stage": 3,
+      "content": "inputs/0-3.bin"
+    }
+  ],
+  "crates/datalog/src/resolve_fol.rs": [
+    {
+      "mode": "100644",
+      "oid": "98190a524df87b9bb8053ad6fdc622e499af52ea",
+      "stage": 1,
+      "content": "inputs/1-1.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "15925ddc4f5708c9fb4c1c3c5fc8a28e8be4a8d7",
+      "stage": 2,
+      "content": "inputs/1-2.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "f4075ae49a3b0c2d1d9696766c8bbcd5e403165f",
+      "stage": 3,
+      "content": "inputs/1-3.bin"
+    }
+  ],
+  "crates/datalog/src/term.rs": [
+    {
+      "mode": "100644",
+      "oid": "6667b415f6430044dad71e3203d8b1a59fb90c9a",
+      "stage": 1,
+      "content": "inputs/2-1.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "500eeab1eed13992d5660a1bf3a64d41ca75d997",
+      "stage": 2,
+      "content": "inputs/2-2.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "5b98682780d69b85b5b7f380b9a1849a747bd323",
+      "stage": 3,
+      "content": "inputs/2-3.bin"
+    }
+  ],
+  "crates/datalog/tests/structured_errors.rs": [
+    {
+      "mode": "100644",
+      "oid": "6444f0ac99ba65292b11ed57b46f35b44e182e1e",
+      "stage": 1,
+      "content": "inputs/3-1.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "98d866add95d7f84ade9dae40ca97225d4980195",
+      "stage": 2,
+      "content": "inputs/3-2.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "d6855f4f5058a325bb70d59a0cad7cb72a18c942",
+      "stage": 3,
+      "content": "inputs/3-3.bin"
+    }
+  ],
+  "docs/MIGRATION-4.0.md": [
+    {
+      "mode": "100644",
+      "oid": "ce1f072c095de75c1f78ac6310816189640af01d",
+      "stage": 1,
+      "content": "inputs/4-1.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "d069e54d519661fcd07c1a5916cbad7138db75cd",
+      "stage": 2,
+      "content": "inputs/4-2.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "292b4bcf7497ec4e04c27feb8c88911b4bd12a60",
+      "stage": 3,
+      "content": "inputs/4-3.bin"
+    }
+  ]
+}

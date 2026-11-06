@@ -1,0 +1,25 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "Programme: https://github.com/Blackcat-Informatics/purrdf/issues/1140\n\n## Scope\n\nReplace check_fol_proof's freely supplied Boolean negation oracle with typed program/source-bound checking evidence. Settle FolProof construction, inspection, ownership, conclusion access and identity/version contracts before v4. The checker must validate negative completion evidence rather than accept an unchecked evaluator Boolean. Deliver this for existing ground proofs now; later symbolic, constraint and higher-order proof forms extend the settled owner without changing frozen payloads.\n\n## Acceptance\n\n- [ ] Existing asserted and derived ground proofs independently re-derive their conclusions under the correct source/program/sort contract.\n- [ ] Forged premises, a foreign source or program, incomplete negative dependencies and unestablished absence are rejected.\n- [ ] Proof inspection and retention support actual consumers without exposing a payload layout that later required forms must break.\n- [ ] Preserve existing valid identity laws or explicitly migrate/version changed ones; do not silently reinterpret persisted proofs.\n\n## Release classification\n\nRequired before PurRDF v4.0: this changes existing public construction, signatures, payload ownership or exhaustive matching. Track in the API-freeze epic and v4.0 milestone; provide migration evidence to the final public-interface audit.\n\nAPI freeze: https://github.com/Blackcat-Informatics/purrdf/issues/1104. Final audit: https://github.com/Blackcat-Informatics/purrdf/issues/1115.\n\n## Dependencies and existing ownership\n\nDepends on:\n\n- https://github.com/Blackcat-Informatics/purrdf/issues/1141\n- https://github.com/Blackcat-Informatics/purrdf/issues/1142\n- https://github.com/Blackcat-Informatics/purrdf/issues/1143\n\n## Implementation and verification\n\nImplement complete production behavior through the shared owners; remove superseded paths within scope. Choose algorithms against semantic requirements and measured work, allocation and retained-memory behavior. No stubs, silent fallbacks or speculative duplicate mechanisms satisfy acceptance. Use focused native behavioral checks, actual affected callers and required repository hooks/gates. Host checks cover real transport/ownership obligations; do not duplicate native semantic suites on WASM. GMEOW checks consume authenticated prepared artifacts rather than building replacements.\n\nThis specification records source/planning evidence, not executed conformance or implementation qualification.",
+  "closedAt": null,
+  "comments": [],
+  "createdAt": "2026-11-06T17:53:16Z",
+  "labels": [],
+  "milestone": {
+    "number": 4,
+    "title": "v4.0",
+    "description": "",
+    "dueOn": "2026-10-12T00:00:00Z"
+  },
+  "number": 1144,
+  "state": "OPEN",
+  "title": "v4 API: bind proof checking to source and evaluated scope",
+  "updatedAt": "2026-11-06T17:53:16Z",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/issues/1144"
+}

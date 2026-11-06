@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1144-v4-api-bind-proof-checking-to-source",
+  "branch": "paudley/1144-v4-api-bind-proof-checking-to-source",
+  "base_ref": "paudley/1143-v4-api-replace-rendered-answer-bindings",
+  "head": "dd8919411933b5c3d6420f8e0e8c9532f22aa94f",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/1144-v4-api-bind-proof-checking-to-source/.stage/v4-api-bind-proof-checking-to-source/sync/20261106T211129-e9febd5a5273433880a6289b90c38c94",
+  "conflicts": [],
+  "status": "noop",
+  "base": "b6f4fa42b0826ac488a2db30e853ff120122f5ed",
+  "merge_bases": [
+    "b6f4fa42b0826ac488a2db30e853ff120122f5ed"
+  ],
+  "commit": "dd8919411933b5c3d6420f8e0e8c9532f22aa94f"
+}

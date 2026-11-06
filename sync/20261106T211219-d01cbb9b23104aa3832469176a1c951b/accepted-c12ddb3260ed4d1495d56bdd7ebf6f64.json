@@ -1,0 +1,32 @@
+[
+  {
+    "path": "CHANGELOG.md",
+    "kind": "file",
+    "executable": false,
+    "content": "accepted-c12ddb3260ed4d1495d56bdd7ebf6f64/0.bin"
+  },
+  {
+    "path": "crates/datalog/src/resolve_fol.rs",
+    "kind": "file",
+    "executable": false,
+    "content": "accepted-c12ddb3260ed4d1495d56bdd7ebf6f64/1.bin"
+  },
+  {
+    "path": "crates/datalog/src/term.rs",
+    "kind": "file",
+    "executable": false,
+    "content": "accepted-c12ddb3260ed4d1495d56bdd7ebf6f64/2.bin"
+  },
+  {
+    "path": "crates/datalog/tests/structured_errors.rs",
+    "kind": "file",
+    "executable": false,
+    "content": "accepted-c12ddb3260ed4d1495d56bdd7ebf6f64/3.bin"
+  },
+  {
+    "path": "docs/MIGRATION-4.0.md",
+    "kind": "file",
+    "executable": false,
+    "content": "accepted-c12ddb3260ed4d1495d56bdd7ebf6f64/4.bin"
+  }
+]

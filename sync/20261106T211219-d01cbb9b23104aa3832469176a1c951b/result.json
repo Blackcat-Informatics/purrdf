@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1144-v4-api-bind-proof-checking-to-source",
+  "branch": "paudley/1144-v4-api-bind-proof-checking-to-source",
+  "base_ref": "origin/main",
+  "head": "dd8919411933b5c3d6420f8e0e8c9532f22aa94f",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/1144-v4-api-bind-proof-checking-to-source/.stage/v4-api-bind-proof-checking-to-source/sync/20261106T211219-d01cbb9b23104aa3832469176a1c951b",
+  "conflicts": [
+    "CHANGELOG.md",
+    "crates/datalog/src/resolve_fol.rs",
+    "crates/datalog/src/term.rs",
+    "crates/datalog/tests/structured_errors.rs",
+    "docs/MIGRATION-4.0.md"
+  ],
+  "status": "completed",
+  "base": "a240e1349b5a68f3eaf3ae6b7ecee6289b526560",
+  "merge_bases": [
+    "18c290fe385457942c242a5f65db4a425600e0e7"
+  ],
+  "merge_index": "fd4b9e2f7ebd24beb7e0b5e0ec80a122649636508add7347f0ece701f2b74ea0",
+  "reused_paths": [],
+  "rerere_output": "Recorded preimage for 'CHANGELOG.md'\nRecorded preimage for 'crates/datalog/src/resolve_fol.rs'\nRecorded preimage for 'crates/datalog/src/term.rs'\nRecorded preimage for 'crates/datalog/tests/structured_errors.rs'\nRecorded preimage for 'docs/MIGRATION-4.0.md'\n",
+  "candidate_tree": "fe928f2b34331d9892c3102c57d19a108e6be501",
+  "candidate_patch": "candidate-c12ddb3260ed4d1495d56bdd7ebf6f64.patch",
+  "validation_records": [],
+  "commit": "f53a7e708b91793a1942be2c1b5eae4f2a311002",
+  "tree": "fe928f2b34331d9892c3102c57d19a108e6be501"
+}

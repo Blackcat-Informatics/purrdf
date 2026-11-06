@@ -1,0 +1,32 @@
+[
+  {
+    "path": "CHANGELOG.md",
+    "kind": "file",
+    "executable": false,
+    "content": "original/0.bin"
+  },
+  {
+    "path": "crates/datalog/src/resolve_fol.rs",
+    "kind": "file",
+    "executable": false,
+    "content": "original/1.bin"
+  },
+  {
+    "path": "crates/datalog/src/term.rs",
+    "kind": "file",
+    "executable": false,
+    "content": "original/2.bin"
+  },
+  {
+    "path": "crates/datalog/tests/structured_errors.rs",
+    "kind": "file",
+    "executable": false,
+    "content": "original/3.bin"
+  },
+  {
+    "path": "docs/MIGRATION-4.0.md",
+    "kind": "file",
+    "executable": false,
+    "content": "original/4.bin"
+  }
+]
