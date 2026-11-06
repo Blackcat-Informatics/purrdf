@@ -2174,6 +2174,7 @@ struct NDegreeFrame<Id> {
 
 struct NDegreeGroup<Id> {
     permutations: Permutations<Id>,
+    fresh_distinct: bool,
     chosen_path: Option<String>,
     chosen_issuer: Option<IdIssuer<Id>>,
     candidate: Option<NDegreeCandidate<Id>>,
@@ -2184,6 +2185,8 @@ struct NDegreeCandidate<Id> {
     path: String,
     recursion: std::vec::IntoIter<Id>,
     pending: Option<Id>,
+    /// All completed children depend only on this prefix of the current permutation.
+    dependency_prefix: usize,
 }
 
 /// Per-run canonicalization state over ONE view.
@@ -3171,6 +3174,9 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                         if let Some(related) = candidate.recursion.next() {
                             // §4.8 step 5.4.5: suspend this path while its child runs.
                             self.check_stop().map_err(CanonError::with_read_error)?;
+                            candidate.dependency_prefix = candidate
+                                .dependency_prefix
+                                .max(group.permutations.items.len() - candidate.recursion.len());
                             let child_issuer = candidate.issuer.clone();
                             candidate.pending = Some(related);
                             group.candidate = Some(candidate);
@@ -3192,7 +3198,19 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                                 let (path, groups) = self.refusal_path(observation, &mut parents);
                                 (context, path, Some(groups))
                             })?;
-                            reused = memo.lookup(self, related, &mut child.issuer, memory)?;
+                            let permutations = &group.permutations;
+                            let candidate = group
+                                .candidate
+                                .as_mut()
+                                .expect("the parent retained its suspended candidate");
+                            reused =
+                                memo.lookup(self, related, &mut child.issuer, memory, |id| {
+                                    if candidate.dependency_prefix < permutations.items.len() {
+                                        candidate.dependency_prefix = candidate
+                                            .dependency_prefix
+                                            .max(permutations.required_prefix(id));
+                                    }
+                                })?;
                             parents.push(frame);
                             frame = child;
                             continue;
@@ -3259,6 +3277,11 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                                 path,
                                 recursion: recursion.into_iter(),
                                 pending: None,
+                                dependency_prefix: if group.fresh_distinct {
+                                    0
+                                } else {
+                                    group.permutations.items.len()
+                                },
                             });
                         }
                         continue;
@@ -3284,6 +3307,16 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                             .or_else(|| frame.issuer.issued_for(id))
                     };
                     let mut permutations = permutations(&related);
+                    // Distinct fresh IDs always emit the same complete initial label path
+                    // and leave the same next ordinal, regardless of their identities.
+                    let mut fresh_distinct = true;
+                    for (position, &id) in related.iter().enumerate() {
+                        self.check_stop().map_err(CanonError::with_read_error)?;
+                        if fixed_label(id).is_some() || related[..position].contains(&id) {
+                            fresh_distinct = false;
+                            break;
+                        }
+                    }
                     if related.iter().all(|&id| fixed_label(id).is_some()) {
                         // Every candidate has no recursion and the same final issuer.
                         // Choose its minimum fixed-label concatenation once, retaining
@@ -3298,6 +3331,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                     }
                     frame.group = Some(NDegreeGroup {
                         permutations,
+                        fresh_distinct,
                         chosen_path: None,
                         chosen_issuer: None,
                         candidate: None,
@@ -3317,13 +3351,20 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                 .as_mut()
                 .expect("a child has a suspended candidate");
             if cached.is_none() {
+                let permutations = &group.permutations;
+                let dependency_prefix = &mut candidate.dependency_prefix;
                 memo.completed(
                     self,
-                    frame_identifier,
+                    (frame_identifier, hash),
                     &frame.issuer,
                     &candidate.issuer,
-                    hash,
                     memory,
+                    |id| {
+                        if *dependency_prefix < permutations.items.len() {
+                            *dependency_prefix =
+                                (*dependency_prefix).max(permutations.required_prefix(id));
+                        }
+                    },
                 )?;
             }
             let related = candidate
@@ -3343,6 +3384,15 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                 .as_ref()
                 .is_some_and(|best| candidate.path.as_str() > best.as_str())
             {
+                // Every completed child has the same focus, next ordinal and reached
+                // issued labels for this fixed prefix. Its hash and issuer extension
+                // are therefore identical throughout the remaining suffix block.
+                // Strict loss cannot skip a tied winner or alter first-tie issuance.
+                self.check_stop().map_err(CanonError::with_read_error)?;
+                group
+                    .permutations
+                    .skip_remaining_prefix(candidate.dependency_prefix);
+                self.check_stop().map_err(CanonError::with_read_error)?;
                 group.candidate = None;
             }
             frame = parent;
@@ -3884,6 +3934,22 @@ struct Permutations<T> {
     done: bool,
     /// The solver proved the first ordering sufficient for a fixed-label group.
     single: bool,
+}
+
+impl<T: Copy + PartialEq> Permutations<T> {
+    /// The current occurrence prefix needed to preserve an issued dependency.
+    fn required_prefix(&self, id: T) -> usize {
+        self.idx
+            .iter()
+            .position(|&index| self.items[index] == id)
+            .map_or(0, |position| position + 1)
+    }
+
+    /// Leave the current prefix at its final suffix ordering. The next obtained
+    /// candidate is then the first of the next prefix block, charged by the caller.
+    fn skip_remaining_prefix(&mut self, prefix: usize) {
+        self.idx[prefix..].sort_unstable_by(|left, right| right.cmp(left));
+    }
 }
 
 impl<T: Copy> Iterator for Permutations<T> {
@@ -7530,6 +7596,132 @@ mod tests {
         issuer
     }
 
+    /// Arms share only their issued root unless an explicit tail-to-arm edge couples them.
+    fn search_star(
+        order: &[usize],
+        coupled: &[(usize, usize)],
+    ) -> (Arc<RdfDataset>, TermId, Vec<TermId>) {
+        let mut builder = RdfDatasetBuilder::new();
+        let predicate = iri(&mut builder, "link");
+        let root = builder
+            .intern_blank(&format!("root{}", order[0]), BlankScope::DEFAULT)
+            .unwrap();
+        let mut branches = BTreeMap::new();
+        let mut tails = BTreeMap::new();
+        for &index in order {
+            branches.insert(
+                index,
+                builder
+                    .intern_blank(&format!("arm{index}_{}", order[0]), BlankScope::DEFAULT)
+                    .unwrap(),
+            );
+            tails.insert(
+                index,
+                builder
+                    .intern_blank(&format!("tip{index}_{}", order[0]), BlankScope::DEFAULT)
+                    .unwrap(),
+            );
+        }
+        for &index in order {
+            let anchor = iri(&mut builder, &format!("anchor{index}"));
+            builder
+                .push_quad(root, predicate, branches[&index], None)
+                .unwrap();
+            builder
+                .push_quad(branches[&index], predicate, tails[&index], None)
+                .unwrap();
+            builder
+                .push_quad(tails[&index], predicate, anchor, None)
+                .unwrap();
+        }
+        for &(tail, branch) in coupled {
+            builder
+                .push_quad(tails[&tail], predicate, branches[&branch], None)
+                .unwrap();
+        }
+        let blanks = std::iter::once(root)
+            .chain(branches.values().copied())
+            .chain(tails.values().copied())
+            .collect();
+        (builder.freeze().unwrap(), root, blanks)
+    }
+
+    /// A ten-arm independent group must finish under the unchanged finite policy;
+    /// coupled neighbours must retain their suffix dependencies and exact source mapping.
+    #[test]
+    fn separable_star_and_coupled_neighbour_preserve_canonical_source_identity() {
+        for (count, coupled) in [(10, Vec::new()), (4, vec![(0, 1), (1, 2), (2, 3), (3, 0)])] {
+            let mut results = Vec::new();
+            for order in [
+                (0..count).collect::<Vec<_>>(),
+                (0..count).rev().collect::<Vec<_>>(),
+            ] {
+                let (dataset, root, blanks) = search_star(&order, &coupled);
+                let run = SearchRun::new(RDFC_V2_CORPUS_POLICY, None);
+                let mut state = CanonState::new(
+                    dataset.as_ref(),
+                    CanonScope::Dataset,
+                    CanonPresentation::Overlay,
+                    CanonHash::Sha256,
+                    &run,
+                );
+                let mut storage = purrdf_lex::allocation::Resident;
+                let mut memory = Memory::new(&mut storage);
+                let footprints = state.collect_incidence(&mut memory).unwrap();
+                for &id in &state.blanks {
+                    state
+                        .first_degree
+                        .insert(id, state.hash_first_degree(id).unwrap());
+                }
+                let mut entry = IdIssuer::new(TEMP_PREFIX);
+                entry.issue(root);
+                let (hash, issuer) = state
+                    .hash_n_degree(root, entry, &footprints, &mut memory)
+                    .expect("the selected star must complete within the finite corpus policy");
+                let source_labels: Vec<_> = blanks
+                    .iter()
+                    .map(|&id| {
+                        issuer
+                            .issued_for(id)
+                            .expect("each source blank is issued")
+                            .to_owned()
+                    })
+                    .collect();
+                footprints.release(&mut memory).unwrap();
+                assert_eq!(memory.admitted_bytes(), 0);
+
+                let mapped = canonical_relabel_with_mapping(
+                    &dataset,
+                    &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+                )
+                .expect("canonical source mapping");
+                let mapped_terms: Vec<_> = blanks
+                    .iter()
+                    .map(|&id| mapped.dataset().term_value(mapped.map_term(id).unwrap()))
+                    .collect();
+                results.push((
+                    hash,
+                    source_labels,
+                    canon(&dataset).nquads().to_owned(),
+                    mapped_terms,
+                ));
+            }
+            assert!(results[0].0 == results[1].0, "isomorphic n-degree hashes");
+            assert_eq!(
+                results[0].1, results[1].1,
+                "source issuance survives relabeling"
+            );
+            assert_eq!(
+                results[0].2, results[1].2,
+                "canonical output survives source order"
+            );
+            assert_eq!(
+                results[0].3, results[1].3,
+                "exact source-to-canonical mapping"
+            );
+        }
+    }
+
     /// Other preissued branches do not replace the caller's prefix, while focus
     /// label, reached frontier labels and the next temporary counter remain key inputs.
     #[test]
@@ -7558,11 +7750,11 @@ mod tests {
         let mut memo = memo::Memo::new(&footprints).unwrap();
         memo.completed(
             &state,
-            fixture.branches[0],
+            (fixture.branches[0], hash),
             &completed,
             &entry,
-            hash,
             &mut memory,
+            |_| {},
         )
         .unwrap();
         let mut order = fixture.branches;
@@ -7590,8 +7782,14 @@ mod tests {
         let reads = fixture.view.reads.get();
         let work = run.work();
         assert!(
-            memo.lookup(&state, fixture.branches[0], &mut frame.issuer, &mut memory)
-                .unwrap()
+            memo.lookup(
+                &state,
+                fixture.branches[0],
+                &mut frame.issuer,
+                &mut memory,
+                |_| {},
+            )
+            .unwrap()
                 == Some(hash)
         );
         assert_eq!(
@@ -7634,9 +7832,15 @@ mod tests {
             ("next counter", changed_counter),
         ] {
             assert!(
-                memo.lookup(&state, fixture.branches[0], &mut issuer, &mut memory)
-                    .unwrap()
-                    .is_none(),
+                memo.lookup(
+                    &state,
+                    fixture.branches[0],
+                    &mut issuer,
+                    &mut memory,
+                    |_| {},
+                )
+                .unwrap()
+                .is_none(),
                 "a changed {name} must miss"
             );
         }
@@ -7688,11 +7892,11 @@ mod tests {
         let mut memo = memo::Memo::new(&footprints).unwrap();
         memo.completed(
             &state,
-            fixture.branches[0],
+            (fixture.branches[0], hash),
             &completed,
             &entry,
-            hash,
             &mut memory,
+            |_| {},
         )
         .unwrap();
         let mut frame = state
@@ -7710,7 +7914,13 @@ mod tests {
         let work = run.work();
         signal.0.store(3, std::sync::atomic::Ordering::Relaxed);
         assert!(matches!(
-            memo.lookup(&state, fixture.branches[0], &mut frame.issuer, &mut memory),
+            memo.lookup(
+                &state,
+                fixture.branches[0],
+                &mut frame.issuer,
+                &mut memory,
+                |_| {},
+            ),
             Err(CanonError::Stopped)
         ));
         assert_eq!(fixture.view.reads.get(), reads);
