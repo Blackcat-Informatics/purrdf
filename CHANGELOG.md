@@ -18,7 +18,8 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   so typed nodes and reifier annotations round-trip through the strict native
   reader. This corrects the emitted type-entry bytes; the untyped expanded byte
   baseline is unchanged.
-  The MIME/RDF serialization transcript golden follows those corrected bytes.
+  The MIME/RDF and JSON-cover serialization transcript goldens follow those
+  corrected bytes.
 
 - **Extensible governors (breaking Rust API):** `ResourceDimension` and
   `GovernorParts` are non-exhaustive, dimension enumeration is a static slice,
