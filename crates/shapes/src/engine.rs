@@ -3929,7 +3929,10 @@ pub(crate) fn validate_dataset_as_document(
 ///
 /// A rules-engine failure: validation of a graph whose rules could not be executed
 /// has no answer.
-fn entailed_for_validation(data: &ShaclData, shapes: &Shapes) -> Result<Option<ShaclData>, String> {
+fn entailed_for_validation(
+    data: &ShaclData,
+    shapes: &Shapes,
+) -> Result<Option<ShaclData>, ShapesError> {
     // `sh:RulesEntailment` executes the default rule set, which holds every rule of the
     // shapes graph, so a rule set named beside it adds nothing; rule sets alone execute
     // together as a single rule set.
@@ -3948,7 +3951,7 @@ fn entailed_for_validation(data: &ShaclData, shapes: &Shapes) -> Result<Option<S
         crate::srl::eval::Reexecution::Incremental,
     )
     .map(|inference| Arc::clone(inference.dataset()))
-    .map_err(|e| format!("the sh:entailment regime could not execute the rules: {e}"))?;
+    .map_err(|error| ShapesError::RulesEntailment(Box::new(error)))?;
     build_projected_data(entailed, shapes, data.shapes_graph_iri()).map(Some)
 }
 
@@ -4228,7 +4231,7 @@ pub fn validate_projected_dataset(
 /// SHACL-SPARQL under it, exactly as [`validate_projected_dataset_with_shapes_graph`]
 /// exposes it with no override. A `Shapes` that carries the IRI is never validated as if
 /// it did not: `$shapesGraph` would silently be unbound.
-fn projected_data(projected: Arc<RdfDataset>, shapes: &Shapes) -> Result<ShaclData, String> {
+fn projected_data(projected: Arc<RdfDataset>, shapes: &Shapes) -> Result<ShaclData, ShapesError> {
     if shapes.shapes_graph.is_some() {
         return build_projected_data(projected, shapes, None);
     }
@@ -4261,7 +4264,7 @@ pub(crate) fn build_projected_data(
     data: Arc<RdfDataset>,
     shapes: &Shapes,
     override_graph: Option<&str>,
-) -> Result<ShaclData, String> {
+) -> Result<ShaclData, ShapesError> {
     let core = Arc::new(ShaclDatasetView::native(Arc::clone(&data)));
     let (sparql, graph) = build_sparql_view(
         ::purrdf_rdf::ir::CompositeSource::new(data),
@@ -4341,7 +4344,7 @@ fn complete_data(
     };
     let composite = Arc::new(
         CompositeDatasetView::from_bound_sources(sources(), ViewLimits::default())
-            .map_err(|error| error.to_string())?,
+            .map_err(crate::data_view::ViewAdmissionError::composite)?,
     );
     for index in 0..data.term_count() {
         let id = TermId::from_index(u32::try_from(index).expect("native term count fits u32"))
@@ -4387,7 +4390,7 @@ fn complete_data(
     );
     let composite = Arc::new(
         CompositeDatasetView::from_bound_sources(sparql_sources, ViewLimits::default())
-            .map_err(|error| error.to_string())?,
+            .map_err(crate::data_view::ViewAdmissionError::composite)?,
     );
     let sparql = Arc::new(
         ShaclDatasetView::composite(composite, false, ViewLimits::default())?
@@ -4402,7 +4405,7 @@ fn build_sparql_view(
     shapes: &Shapes,
     override_graph: Option<&str>,
     limits: ::purrdf_rdf::ir::ViewLimits,
-) -> Result<(Arc<ShaclDatasetView>, Option<String>), String> {
+) -> Result<(Arc<ShaclDatasetView>, Option<String>), ShapesError> {
     let graph_iri = override_graph
         .map(str::to_owned)
         .or_else(|| shapes.shapes_graph.clone());
@@ -4422,7 +4425,7 @@ fn build_sparql_view(
         ],
         limits,
     )
-    .map_err(|error| error.to_string())?;
+    .map_err(crate::data_view::ViewAdmissionError::composite)?;
     let view = ShaclDatasetView::composite(Arc::new(composite), false, limits)?
         .with_statement_projection();
     Ok((Arc::new(view), Some(graph_iri)))

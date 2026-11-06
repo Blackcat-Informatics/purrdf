@@ -52,6 +52,18 @@ pub enum ShapesError {
     ShapeFiles(Box<crate::shape_union::ShapeFilesError>),
     /// Original native aggregate, environment or function-binding failure.
     SparqlOperation(Box<crate::sparql::OperationError>),
+    /// Original SPARQL-RL document refusal and native condition.
+    Srl(Box<crate::srl::SrlError>),
+    /// Original failure while executing the selected rules entailment regime.
+    RulesEntailment(Box<Self>),
+    /// Original rule well-formedness condition and operands.
+    RuleWellFormedness(crate::srl::ir::WellFormednessError),
+    /// Original rule-set or processor admission operands.
+    RuleAdmission(crate::rules::RuleAdmissionError),
+    /// Original explicit profile request failure.
+    ProfileRequest(crate::profile::ProfileRequestError),
+    /// Original carrier admission counts and native composite cause.
+    ViewAdmission(crate::data_view::ViewAdmissionError),
     /// Original SPARQL namespace lowering, arity or rendered-query refusal.
     SparqlCall(Box<crate::expression::SparqlCallError>),
     /// Original prepared binding or changed-row refusal.
@@ -108,6 +120,12 @@ impl purrdf_hash::error::StructuredError for ShapesError {
     purrdf_hash::error_visit! {
         ShapeFiles(cause) => "shapes-shape-files" { "cause" => Cause(cause.as_ref()) },
         SparqlOperation(cause) => "shapes-sparql-operation" { "cause" => Cause(cause.as_ref()) },
+        ViewAdmission(cause) => "shapes-view-admission" { "cause" => Cause(cause) },
+        ProfileRequest(cause) => "shapes-profile-request" { "cause" => Cause(cause) },
+        RuleAdmission(cause) => "shapes-rule-admission" { "cause" => Cause(cause) },
+        Srl(cause) => "shapes-srl" { "cause" => Cause(cause.as_ref()) },
+        RulesEntailment(cause) => "shapes-rules-entailment" { "cause" => Cause(cause.as_ref()) },
+        RuleWellFormedness(cause) => "shapes-rule-well-formedness" { "cause" => Cause(cause) },
         SparqlCall(cause) => "shapes-sparql-call" { "cause" => Cause(cause.as_ref()) },
         Binding(cause) => "shapes-binding" { "cause" => Cause(cause) },
         Selector(cause) => "shapes-selector" { "cause" => Cause(cause.as_ref()) },
@@ -152,6 +170,7 @@ impl ShapesError {
     #[must_use]
     pub const fn as_imports(&self) -> Option<&ShapesImportError> {
         match self {
+            Self::RulesEntailment(cause) => cause.as_imports(),
             Self::RuleExecution(error) => match error.original_shapes() {
                 Some(cause) => cause.as_imports(),
                 None => None,
@@ -175,6 +194,11 @@ impl ShapesError {
             | Self::Binding(_)
             | Self::ShapeFiles(_)
             | Self::SparqlOperation(_)
+            | Self::ViewAdmission(_)
+            | Self::ProfileRequest(_)
+            | Self::RuleAdmission(_)
+            | Self::RuleWellFormedness(_)
+            | Self::Srl(_)
             | Self::SparqlCall(_)
             | Self::Invalid(_) => None,
         }
@@ -184,6 +208,7 @@ impl ShapesError {
     #[must_use]
     pub const fn as_shacl_js(&self) -> Option<&ShaclJsRefusal> {
         match self {
+            Self::RulesEntailment(cause) => cause.as_shacl_js(),
             Self::RuleExecution(error) => match error.original_shapes() {
                 Some(cause) => cause.as_shacl_js(),
                 None => None,
@@ -207,6 +232,11 @@ impl ShapesError {
             | Self::Binding(_)
             | Self::ShapeFiles(_)
             | Self::SparqlOperation(_)
+            | Self::ViewAdmission(_)
+            | Self::ProfileRequest(_)
+            | Self::RuleAdmission(_)
+            | Self::RuleWellFormedness(_)
+            | Self::Srl(_)
             | Self::SparqlCall(_)
             | Self::Invalid(_) => None,
         }
@@ -216,6 +246,7 @@ impl ShapesError {
     #[must_use]
     pub const fn as_ill_formed(&self) -> Option<&IllFormedShapesGraph> {
         match self {
+            Self::RulesEntailment(cause) => cause.as_ill_formed(),
             Self::RuleExecution(error) => match error.original_shapes() {
                 Some(cause) => cause.as_ill_formed(),
                 None => None,
@@ -239,6 +270,11 @@ impl ShapesError {
             | Self::Binding(_)
             | Self::ShapeFiles(_)
             | Self::SparqlOperation(_)
+            | Self::ViewAdmission(_)
+            | Self::ProfileRequest(_)
+            | Self::RuleAdmission(_)
+            | Self::RuleWellFormedness(_)
+            | Self::Srl(_)
             | Self::SparqlCall(_)
             | Self::Invalid(_) => None,
         }
@@ -248,6 +284,7 @@ impl ShapesError {
     #[must_use]
     pub const fn as_unsupported_target(&self) -> Option<&UnsupportedTargetRefusal> {
         match self {
+            Self::RulesEntailment(cause) => cause.as_unsupported_target(),
             Self::RuleExecution(error) => match error.original_shapes() {
                 Some(cause) => cause.as_unsupported_target(),
                 None => None,
@@ -271,6 +308,11 @@ impl ShapesError {
             | Self::Binding(_)
             | Self::ShapeFiles(_)
             | Self::SparqlOperation(_)
+            | Self::ViewAdmission(_)
+            | Self::ProfileRequest(_)
+            | Self::RuleAdmission(_)
+            | Self::RuleWellFormedness(_)
+            | Self::Srl(_)
             | Self::SparqlCall(_)
             | Self::Invalid(_) => None,
         }
@@ -280,6 +322,7 @@ impl ShapesError {
     #[must_use]
     pub const fn as_sparql_target_disagreement(&self) -> Option<&SparqlTargetDisagreement> {
         match self {
+            Self::RulesEntailment(cause) => cause.as_sparql_target_disagreement(),
             Self::RuleExecution(error) => match error.original_shapes() {
                 Some(cause) => cause.as_sparql_target_disagreement(),
                 None => None,
@@ -303,6 +346,11 @@ impl ShapesError {
             | Self::Binding(_)
             | Self::ShapeFiles(_)
             | Self::SparqlOperation(_)
+            | Self::ViewAdmission(_)
+            | Self::ProfileRequest(_)
+            | Self::RuleAdmission(_)
+            | Self::RuleWellFormedness(_)
+            | Self::Srl(_)
             | Self::SparqlCall(_)
             | Self::Invalid(_) => None,
         }
@@ -312,6 +360,7 @@ impl ShapesError {
     #[must_use]
     pub const fn as_prebinding(&self) -> Option<&PrebindingViolation> {
         match self {
+            Self::RulesEntailment(cause) => cause.as_prebinding(),
             Self::RuleExecution(error) => match error.original_shapes() {
                 Some(cause) => cause.as_prebinding(),
                 None => None,
@@ -335,6 +384,11 @@ impl ShapesError {
             | Self::Binding(_)
             | Self::ShapeFiles(_)
             | Self::SparqlOperation(_)
+            | Self::ViewAdmission(_)
+            | Self::ProfileRequest(_)
+            | Self::RuleAdmission(_)
+            | Self::RuleWellFormedness(_)
+            | Self::Srl(_)
             | Self::SparqlCall(_)
             | Self::Invalid(_) => None,
         }
@@ -381,6 +435,9 @@ impl ShapesError {
             | Self::Text(_)
             | Self::Selector(_)
             | Self::Binding(_)
+            | Self::ProfileRequest(_)
+            | Self::RuleAdmission(_)
+            | Self::RuleWellFormedness(_)
             | Self::SparqlCall(_) => FailureClass::Evaluation,
             Self::SparqlOperation(error) => error.failure_class(),
             Self::ShapeFiles(error) => error.failure_class(),
@@ -394,6 +451,9 @@ impl ShapesError {
             Self::Storage(_) | Self::Canonical(_) | Self::Processor(_) | Self::Preparation(_) => {
                 FailureClass::Processor
             }
+            Self::ViewAdmission(_) => FailureClass::Processor,
+            Self::Srl(cause) => cause.failure_class(),
+            Self::RulesEntailment(cause) => cause.failure_class(),
             Self::RuleExecution(error) => error.failure_class(),
             Self::Imports(_)
             | Self::Recursion(_)
@@ -416,6 +476,7 @@ impl ShapesError {
     #[must_use]
     pub const fn as_processor(&self) -> Option<&ProcessorFailure> {
         match self {
+            Self::RulesEntailment(cause) => cause.as_processor(),
             Self::RuleExecution(error) => match error.original_shapes() {
                 Some(cause) => cause.as_processor(),
                 None => None,
@@ -439,6 +500,11 @@ impl ShapesError {
             | Self::Binding(_)
             | Self::ShapeFiles(_)
             | Self::SparqlOperation(_)
+            | Self::ViewAdmission(_)
+            | Self::ProfileRequest(_)
+            | Self::RuleAdmission(_)
+            | Self::RuleWellFormedness(_)
+            | Self::Srl(_)
             | Self::SparqlCall(_)
             | Self::Invalid(_) => None,
         }
@@ -667,6 +733,11 @@ impl fmt::Display for ShapesError {
         match self {
             Self::SparqlOperation(error) => error.fmt(f),
             Self::ShapeFiles(error) => error.fmt(f),
+            Self::Srl(cause) => cause.fmt(f),
+            Self::RulesEntailment(cause) => write!(
+                f,
+                "the sh:entailment regime could not execute the rules: {cause}"
+            ),
             Self::ImportArrays(error) => error.fmt(f),
             Self::ScopeBinding(error) => error.fmt(f),
             Self::RuleExecution(error) => error.fmt(f),
@@ -685,6 +756,10 @@ impl fmt::Display for ShapesError {
             Self::Conformance(error) => error.fmt(f),
             Self::Text(error) => error.fmt(f),
             Self::Binding(error) => error.fmt(f),
+            Self::ViewAdmission(error) => error.fmt(f),
+            Self::ProfileRequest(error) => error.fmt(f),
+            Self::RuleAdmission(error) => error.fmt(f),
+            Self::RuleWellFormedness(error) => error.fmt(f),
             Self::SparqlCall(error) => error.fmt(f),
             Self::Selector(error) => error.fmt(f),
         }
@@ -696,6 +771,8 @@ impl std::error::Error for ShapesError {
         match self {
             Self::SparqlOperation(error) => Some(error.as_ref()),
             Self::ShapeFiles(error) => Some(error.as_ref()),
+            Self::Srl(cause) => Some(cause.as_ref()),
+            Self::RulesEntailment(cause) => Some(cause.as_ref()),
             Self::ImportArrays(error) => Some(error),
             Self::ScopeBinding(error) => Some(error),
             Self::RuleExecution(error) => Some(error.as_ref()),
@@ -714,6 +791,10 @@ impl std::error::Error for ShapesError {
             Self::Conformance(error) => Some(error),
             Self::Text(error) => Some(error),
             Self::Binding(error) => Some(error),
+            Self::ViewAdmission(error) => Some(error),
+            Self::ProfileRequest(error) => Some(error),
+            Self::RuleAdmission(error) => Some(error),
+            Self::RuleWellFormedness(error) => Some(error),
             Self::SparqlCall(error) => Some(error.as_ref()),
             Self::Selector(error) => Some(error.as_ref()),
         }
@@ -1576,3 +1657,11 @@ impl From<crate::expression::SparqlCallError> for ShapesError {
         Self::SparqlCall(Box::new(error))
     }
 }
+
+purrdf_lex::variant_from!(ShapesError { ViewAdmission(crate::data_view::ViewAdmissionError) });
+
+purrdf_lex::variant_from!(ShapesError { ProfileRequest(crate::profile::ProfileRequestError) });
+
+purrdf_lex::variant_from!(ShapesError { RuleAdmission(crate::rules::RuleAdmissionError) });
+
+purrdf_lex::variant_from!(ShapesError { RuleWellFormedness(crate::srl::ir::WellFormednessError) });

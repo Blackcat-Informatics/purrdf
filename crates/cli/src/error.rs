@@ -116,6 +116,11 @@ impl CliOutcome {
 /// A CLI-level failure, carrying its rendered message and its exit classification.
 #[derive(Debug)]
 pub enum CliError {
+    /// Original profile request with its command-line selection.
+    ShaclProfileRequest {
+        id: String,
+        cause: purrdf::shapes::profile::ProfileRequestError,
+    },
     /// Original request/source acquisition refusal before document parsing.
     DocumentInput {
         /// File path or - for standard input.
@@ -192,7 +197,7 @@ impl CliError {
     pub(crate) fn exit_code(&self) -> i32 {
         match self {
             Self::WordId(error) if matches!(&**error, crate::WordIdFailure::Usage(_)) => 2,
-            Self::Usage(_) => 2,
+            Self::Usage(_) | Self::ShaclProfileRequest { .. } => 2,
             Self::OutputPublication { .. }
             | Self::OutputIo(_)
             | Self::PartialOutputRemoved { .. }
@@ -231,6 +236,7 @@ impl fmt::Display for CliError {
             ),
             Self::FileIdentity(error) => error.fmt(f),
             Self::WordId(error) => error.fmt(f),
+            Self::ShaclProfileRequest { id, cause } => write!(f, "--shacl-profile {id}: {cause}"),
             Self::Usage(msg) | Self::Runtime(msg) => f.write_str(msg),
             Self::Canonical { message, .. } => f.write_str(message),
             Self::OutputPublication { original, failure } => {
@@ -271,6 +277,7 @@ impl std::error::Error for CliError {
             Self::DocumentInput { cause, .. } => Some(cause),
             Self::YamlSource(error) => Some(&**error),
             Self::Diagnostic(error) => Some(error),
+            Self::ShaclProfileRequest { cause, .. } => Some(cause),
             Self::OutputIo(error) => Some(error),
             Self::PartialOutputRemoved { original, .. } => Some(&**original),
             Self::FileIdentity(error) => Some(error),

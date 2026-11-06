@@ -439,9 +439,9 @@ where
             .with_derivation_mode(purrdf_datalog::seminaive::DerivationMode::Record);
         for rule in &set.rules {
             if let IrRuleBody::Elements(element_rule) = &rule.body {
-                element_rule
-                    .check_well_formed()
-                    .map_err(|e| format!("rule {} is not well formed: {e}", rule.id))?;
+                element_rule.check_well_formed().map_err(|cause| {
+                    rules::RulesError::WellFormedness(cause.in_rule(rule.id.clone()))
+                })?;
             }
         }
         let empty = empty_data()?;

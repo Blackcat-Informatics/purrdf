@@ -421,11 +421,19 @@ unsafe fn validate_entry(
         let graph = opt_cstr_to_str(shapes_graph_iri)?;
         let regex = decode_regex_profile(regex_profile)?;
         let law = purrdf_validate::requested_shacl_profile(opt_cstr_to_str(shacl_profile)?, regex)
-            .map_err(|message| {
-                PurrdfError::new(
-                    PurrdfStatus::InvalidArgument,
-                    format!("shacl_profile {message}, or NULL for the compatibility law"),
-                )
+            .map_err(|cause| {
+                let message = format!("shacl_profile {cause}, or NULL for the compatibility law");
+                let diagnostic =
+                    purrdf_validate::native_error::diagnostic("shacl-profile-request", cause, None);
+                if diagnostic.storage_error().is_some() {
+                    PurrdfError::from_owned_diagnostic(PurrdfStatus::InvalidArgument, diagnostic)
+                } else {
+                    PurrdfError::from_owned_diagnostic_with_message(
+                        PurrdfStatus::InvalidArgument,
+                        diagnostic,
+                        &message,
+                    )
+                }
             })?;
         let bytes = match (regex, law) {
             (None, None) => validate_to_sarif_bytes(

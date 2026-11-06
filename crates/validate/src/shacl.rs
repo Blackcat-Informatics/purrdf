@@ -38,27 +38,29 @@ pub fn requested_shacl_recursion(
     mode: Option<&str>,
     max_pairs: Option<u64>,
     max_iterations: Option<u64>,
-) -> Result<Option<purrdf_shapes::recursion::RecursionOptions>, String> {
-    use purrdf_shapes::recursion::{RecursionOptions, RecursionSemantics};
+) -> Result<
+    Option<purrdf_shapes::recursion::RecursionOptions>,
+    purrdf_shapes::recursion::RecursionRequestError,
+> {
+    use purrdf_shapes::recursion::{RecursionOptions, RecursionRequestError, RecursionSemantics};
+    let refused = || RecursionRequestError::new(mode, max_pairs, max_iterations);
 
     let Some(mode) = mode else {
         return if max_pairs.is_none() && max_iterations.is_none() {
             Ok(None)
         } else {
-            Err("recursion limits require an explicit lfp or gfp selection".to_owned())
+            Err(refused())
         };
     };
     let semantics = match mode {
         "lfp" => RecursionSemantics::Lfp,
         "gfp" => RecursionSemantics::Gfp,
         _ => {
-            return Err(format!(
-                "unknown recursion mode {mode:?}; expected lfp or gfp"
-            ));
+            return Err(refused());
         }
     };
     let (Some(max_pairs), Some(max_iterations)) = (max_pairs, max_iterations) else {
-        return Err("recursion requires both max_pairs and max_iterations".to_owned());
+        return Err(refused());
     };
     Ok(Some(RecursionOptions {
         semantics,
@@ -511,7 +513,27 @@ mod tests {
             (Some("lfp"), None, Some(1)),
             (Some("other"), Some(1), Some(1)),
         ] {
-            assert!(requested_shacl_recursion(mode, pairs, iterations).is_err());
+            use purrdf_hash::error::ErrorValue;
+            use purrdf_testkit::error_capture::Capture;
+            let error = {
+                let mode = mode.map(str::to_owned);
+                requested_shacl_recursion(mode.as_deref(), pairs, iterations).unwrap_err()
+            };
+            let captured = Capture::read(&error);
+            match mode {
+                Some(expected) => assert!(
+                    matches!(captured.field("mode"), ErrorValue::Text(value) if value == expected)
+                ),
+                None => assert!(matches!(captured.field("mode"), ErrorValue::Absent)),
+            }
+            for (name, expected) in [("max_pairs", pairs), ("max_iterations", iterations)] {
+                match expected {
+                    Some(expected) => assert!(
+                        matches!(captured.field(name), ErrorValue::Unsigned(value) if value == u128::from(expected))
+                    ),
+                    None => assert!(matches!(captured.field(name), ErrorValue::Absent)),
+                }
+            }
         }
     }
 

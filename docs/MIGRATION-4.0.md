@@ -1746,3 +1746,29 @@ generated shapes retain their original directory as a configuration failure;
 I/O failures are operational processor failures. File ordering, exclusions and
 fail-closed discovery remain unchanged. File reads in `load_shapes` use the same
 native owner. Retrieval-IRI and RDF loading still use their existing contracts.
+
+## Typed SHACL admission and request errors
+
+Replace explicit `String` error annotations at these Rust boundaries:
+
+| Operation | Error type |
+| --- | --- |
+| `ShaclDatasetView::composite` and `delta` | `purrdf_shapes::data_view::ViewAdmissionError` |
+| `requested_shacl_profile` | `purrdf_validate::ProfileRequestError` |
+| `requested_shacl_recursion` | `purrdf_validate::RecursionRequestError` |
+| `srl::ir::ElementRule::check_well_formed` | `purrdf_shapes::srl::ir::WellFormednessError` |
+| `rules::shacl_rule_set` | `purrdf_shapes::rules::RuleAdmissionError` |
+| `shapes::__linked_declarations` | `purrdf_shapes::ShapesError` |
+
+These owners have private representations. Inspect original counts, maxima,
+computed mapping bytes, variable names, processor terms and absent request limits
+through `StructuredError`. Native profile, regex-law and composite failures remain
+available through standard error sources. Convert to a string only when presenting
+an error. `SrlError::WellFormedness` now carries a typed `cause` instead of a
+`message` field; `ShapesError` and `RulesError` retain the same typed owners when
+these operations fail during validation or rule execution.
+
+The schema guards `limits::ensure_depth` and `ensure_emitted` are internal.
+Public schema depth and output-budget constants, and `emitted_bytes_bound`, remain
+available for caller planning. Carrier thresholds, request defaults, rule selection,
+refusal order and successful RDF identities are unchanged.

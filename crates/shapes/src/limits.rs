@@ -21,7 +21,7 @@ pub const MAX_SCHEMA_DEPTH: usize = 128;
 /// # Errors
 ///
 /// Returns the refusal message when `depth` exceeds [`MAX_SCHEMA_DEPTH`].
-pub fn ensure_depth(depth: usize, path: &str, surface: &str) -> Result<(), String> {
+pub(crate) fn ensure_depth(depth: usize, path: &str, surface: &str) -> Result<(), String> {
     if depth > MAX_SCHEMA_DEPTH {
         Err(format!(
             "{surface} schema expression at {path} exceeds depth {MAX_SCHEMA_DEPTH}"
@@ -69,7 +69,11 @@ pub const fn emitted_bytes_bound(input_bytes: usize) -> usize {
 /// # Errors
 ///
 /// Returns the refusal message when `output_bytes` exceeds the bound.
-pub fn ensure_emitted(input_bytes: usize, output_bytes: usize, what: &str) -> Result<(), String> {
+pub(crate) fn ensure_emitted(
+    input_bytes: usize,
+    output_bytes: usize,
+    what: &str,
+) -> Result<(), String> {
     let bound = emitted_bytes_bound(input_bytes);
     if output_bytes > bound {
         Err(format!(

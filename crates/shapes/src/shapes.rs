@@ -1667,7 +1667,7 @@ impl LinkedDeclarations {
 ///
 /// The linker's own refusal, exactly as a parse of `dataset` would report it.
 #[doc(hidden)]
-pub fn __linked_declarations(dataset: &Arc<RdfDataset>) -> Result<LinkedDeclarations, String> {
+pub fn __linked_declarations(dataset: &Arc<RdfDataset>) -> Result<LinkedDeclarations, ShapesError> {
     let parser = Parser::new(
         dataset.as_ref(),
         None,
@@ -1677,8 +1677,11 @@ pub fn __linked_declarations(dataset: &Arc<RdfDataset>) -> Result<LinkedDeclarat
         None,
         crate::profile::ShaclProfile::LEGACY,
     );
-    let registry = ComponentRegistry::parse(dataset.as_ref(), &parser.prefix_resolver)?;
-    let linked = parser.discover_custom_functions()?;
+    let registry = ComponentRegistry::parse(dataset.as_ref(), &parser.prefix_resolver)
+        .map_err(|message| parser.load_error(message))?;
+    let linked = parser
+        .discover_custom_functions()
+        .map_err(|message| parser.load_error(message))?;
     let mut registered_components: Vec<String> = registry.components.keys().cloned().collect();
     registered_components.sort();
     Ok(LinkedDeclarations {

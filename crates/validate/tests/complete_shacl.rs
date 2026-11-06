@@ -644,11 +644,35 @@ fn a_host_request_selects_one_exact_law_beside_its_xpath_law() {
         requested_shacl_profile(Some("shacl-ed-2026-10-16"), Some(Profile::Xpath31)),
         Ok(Some(ShaclProfile::ED_20261016))
     );
-    let message = requested_shacl_profile(Some("shacl-ed-2026-10-17"), None).unwrap_err();
+    use purrdf_testkit::error_capture::Capture;
+    use std::error::Error;
+    let unsupported = {
+        let id = String::from("shacl-ed-2026-10-17");
+        requested_shacl_profile(Some(&id), None).unwrap_err()
+    };
+    let original = unsupported
+        .source()
+        .unwrap()
+        .downcast_ref::<purrdf_shapes::profile::UnsupportedProfile>()
+        .unwrap();
+    assert_eq!(original.id(), "shacl-ed-2026-10-17");
+    assert_eq!(
+        Capture::read(&unsupported).child("cause").code,
+        "shacl-unsupported-profile"
+    );
+    let message = unsupported.to_string();
     assert!(message.starts_with("unsupported-profile: "), "{message}");
     assert!(message.contains("shacl-ed-2026-10-17"), "{message}");
     let conflict =
         requested_shacl_profile(Some("shacl-ed-2026-10-16"), Some(Profile::Xpath20)).unwrap_err();
+    let original = conflict
+        .source()
+        .unwrap()
+        .downcast_ref::<purrdf_shapes::profile::XPathProfileConflict>()
+        .unwrap();
+    assert_eq!(original.requested(), Profile::Xpath20);
+    assert_eq!(original.required(), Profile::Xpath31);
+    let conflict = conflict.to_string();
     assert!(
         conflict.contains("shacl-ed-2026-10-16") && conflict.contains("requires"),
         "{conflict}"
