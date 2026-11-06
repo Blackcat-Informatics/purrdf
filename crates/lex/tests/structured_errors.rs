@@ -305,6 +305,128 @@ fn yaml_and_scalar_decoders_publish_native_positions_and_limits() {
         ("limit", ErrorValue::Unsigned(1))
     ));
 
+    // The parser transfers admitted decoded text out of its failed document;
+    // original byte coordinates remain absolute across Unicode and CRLF.
+    let source = String::from("---\r\n\"é\": 1\r\n\"\\u00e9\": 2");
+    let first = source.find('"').unwrap();
+    let repeated = source.find("\"\\u00e9\"").unwrap();
+    let duplicate = purrdf_lex::yaml::read(&source).unwrap_err();
+    assert_eq!(duplicate.offset(), repeated);
+    drop(source);
+    let purrdf_lex::yaml::ErrorKind::DuplicateKey {
+        key,
+        first: original,
+        repeated: again,
+    } = duplicate.kind()
+    else {
+        panic!("the repeated decoded key is retained");
+    };
+    assert_eq!((key.as_str(), *original, *again), ("é", first, repeated));
+    let captured = purrdf_testkit::error_capture::Capture::read(&duplicate);
+    let kind = captured.child("kind");
+    assert_eq!(kind.code, "yaml-duplicate-key");
+    assert!(matches!(kind.field("key"), ErrorValue::Text(text) if text == "é"));
+    assert!(matches!(kind.field("first"), ErrorValue::ByteCount(n) if n == first as u128));
+    assert!(matches!(kind.field("repeated"), ErrorValue::ByteCount(n) if n == repeated as u128));
+
+    let off = purrdf_lex::yaml::Limits {
+        aliases: false,
+        ..purrdf_lex::yaml::Limits::DEFAULT
+    };
+    for (source, anchor) in [("&naïve x", true), ("*naïve", false), ("&", true)] {
+        let error = purrdf_lex::yaml::read_with(source, off).unwrap_err();
+        let purrdf_lex::yaml::ErrorKind::Alias {
+            anchor: actual,
+            name,
+        } = error.kind()
+        else {
+            panic!("disabled policy precedes name grammar and lookup");
+        };
+        assert_eq!(*actual, anchor);
+        assert_eq!(
+            &source[name.start..name.end],
+            if source == "&" { "" } else { "naïve" }
+        );
+        let captured = purrdf_testkit::error_capture::Capture::read(&error);
+        assert_eq!(captured.child("kind").code, "yaml-alias-disabled");
+        assert!(matches!(
+            captured.child("kind").child("name").field("start"),
+            ErrorValue::ByteCount(1)
+        ));
+    }
+    assert!(purrdf_lex::yaml::read("&naïve x").is_ok());
+    assert!(purrdf_lex::yaml::read("[&naïve x, *naïve]").is_ok());
+
+    for (source, code, valid) in [
+        (r#""\uD800""#, "yaml-escape", r#""\uD7FF""#),
+        ("'unfinished", "yaml-unfinished-quote", "'finished'"),
+        ("\"unfinished", "yaml-unfinished-quote", "\"finished\""),
+        ("[{}", "yaml-unfinished-flow", "[{}]"),
+        ("[{", "yaml-unfinished-flow", "[{}]"),
+        ("[] trailing", "yaml-trailing-content", "[] # trailing"),
+        (
+            "a: [] trailing",
+            "yaml-trailing-content",
+            "a: [] # trailing",
+        ),
+        ("[]\n{}", "yaml-trailing-content", "[]\n---\n{}"),
+        (
+            "[]\n... trailing",
+            "yaml-trailing-content",
+            "[]\n... # trailing",
+        ),
+    ] {
+        let limits = purrdf_lex::yaml::StreamLimits {
+            core: purrdf_lex::yaml::Limits::DEFAULT,
+            max_documents: 4,
+            max_input_bytes: 1024,
+            max_allocation_bytes: 1 << 20,
+        };
+        // End-marker validation is a stream obligation; the legacy single-read
+        // door deliberately reports its earlier multiple-document refusal.
+        let error = if source.contains("...") {
+            purrdf_lex::yaml::read_stream(source, limits).unwrap_err()
+        } else {
+            purrdf_lex::yaml::read(source).unwrap_err()
+        };
+        let captured = purrdf_testkit::error_capture::Capture::read(&error);
+        assert_eq!(captured.child("kind").code, code, "{source}");
+        match error.kind() {
+            purrdf_lex::yaml::ErrorKind::Escape { span } => {
+                assert_eq!(&source[span.start..span.end], r"\uD800");
+            }
+            purrdf_lex::yaml::ErrorKind::UnfinishedQuote { quote, span } => {
+                assert_eq!(*quote, source.chars().next().unwrap());
+                assert_eq!((span.start, span.end), (0, source.len()));
+            }
+            purrdf_lex::yaml::ErrorKind::UnfinishedFlow { opener, expected } => {
+                assert_eq!(
+                    &source[opener.start..opener.end],
+                    if source == "[{" { "{" } else { "[" }
+                );
+                assert_eq!(*expected, if source == "[{" { '}' } else { ']' });
+                assert_eq!(error.offset(), source.len());
+            }
+            purrdf_lex::yaml::ErrorKind::TrailingContent { span, context } => {
+                assert_eq!(span.start, error.offset());
+                let expected = if source.contains("...") {
+                    purrdf_lex::yaml::TrailingContext::EndMarker
+                } else if source.starts_with("a:") {
+                    purrdf_lex::yaml::TrailingContext::Node
+                } else {
+                    purrdf_lex::yaml::TrailingContext::Document
+                };
+                assert_eq!(*context, expected);
+            }
+            _ => panic!("the native grammar category is preserved"),
+        }
+        // The multi-document neighbour uses the existing stream door.
+        assert!(
+            purrdf_lex::yaml::read_stream(valid, limits).is_ok(),
+            "{valid}"
+        );
+    }
+
     let percent = purrdf_lex::percent::decode("%G0").expect_err("not a hexadecimal pair");
     let crockford = purrdf_lex::crockford::parse_u128("x").expect_err("not 26 digits");
     let uchar = purrdf_lex::terminals::decode_uchar(br"\uD800")

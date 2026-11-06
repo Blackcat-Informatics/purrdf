@@ -64,14 +64,14 @@ fn yaml_stream_documents_isolate_anchors_directives_and_absolute_errors() {
     );
     let source = "--- &a α\r\n---\r\n*a";
     let error = read_stream(source, stream_limits()).unwrap_err();
-    assert_eq!(error.kind(), ErrorKind::UnknownAlias);
+    assert!(matches!(*error.kind(), ErrorKind::UnknownAlias { .. }));
     assert_eq!(
         (error.offset(), error.line(), error.column()),
         (source.rfind('*').unwrap(), 3, 1)
     );
     let source = "--- α\r\n--- {key: x, key: y}";
     let error = read_stream(source, stream_limits()).unwrap_err();
-    assert_eq!(error.kind(), ErrorKind::DuplicateKey);
+    assert!(matches!(*error.kind(), ErrorKind::DuplicateKey { .. }));
     assert_eq!(error.line(), 2);
     assert!(error.offset() > source.find('\n').unwrap());
 }
@@ -86,32 +86,34 @@ fn yaml_stream_admission_includes_all_retained_documents_and_alias_copies() {
         Vec::<purrdf_lex::json::Value>::new()
     );
     assert_eq!(
-        read_stream("---", limits).unwrap_err().kind(),
+        read_stream("---", limits).unwrap_err().into_kind(),
         ErrorKind::Documents { limit: 0 }
     );
     let mut limits = stream_limits();
     limits.max_documents = 1;
     let error = read_stream("---\n---", limits).unwrap_err();
-    assert_eq!(error.kind(), ErrorKind::Documents { limit: 1 });
+    assert_eq!(*error.kind(), ErrorKind::Documents { limit: 1 });
     assert_eq!((error.offset(), error.line(), error.column()), (4, 2, 1));
     let mut limits = stream_limits();
     limits.core.max_nodes = 5;
     assert_eq!(
         read_stream("[&a x, *a]\n---\n[&a x, *a]", limits)
             .unwrap_err()
-            .kind(),
+            .into_kind(),
         ErrorKind::Nodes { limit: 5 }
     );
     let mut limits = stream_limits();
     limits.core.max_depth = 1;
     assert_eq!(
-        read_stream("a\n---\n[[x]]", limits).unwrap_err().kind(),
+        read_stream("a\n---\n[[x]]", limits)
+            .unwrap_err()
+            .into_kind(),
         ErrorKind::Depth { limit: 1 }
     );
     let mut limits = stream_limits();
     limits.max_input_bytes = 0;
     assert_eq!(
-        read_stream(" ", limits).unwrap_err().kind(),
+        read_stream(" ", limits).unwrap_err().into_kind(),
         ErrorKind::Input { limit: 0 }
     );
     // Calibrate the public result's admission boundary without pinning native
@@ -129,7 +131,7 @@ fn yaml_stream_admission_includes_all_retained_documents_and_alias_copies() {
     }
     limits.max_allocation_bytes = lower - 1;
     assert_eq!(
-        read_stream("a\n... b", limits).unwrap_err().kind(),
+        read_stream("a\n... b", limits).unwrap_err().into_kind(),
         ErrorKind::Allocation { limit: lower - 1 }
     );
     let mut limits = stream_limits();
@@ -139,7 +141,7 @@ fn yaml_stream_admission_includes_all_retained_documents_and_alias_copies() {
     assert_eq!(
         read_stream(&document.repeat(32), limits)
             .unwrap_err()
-            .kind(),
+            .into_kind(),
         ErrorKind::Allocation { limit: 64 << 10 }
     );
     // Work and produced numeric spelling bytes are cumulative across document
@@ -148,14 +150,14 @@ fn yaml_stream_admission_includes_all_retained_documents_and_alias_copies() {
     limits.core.max_numeric_bytes = 2;
     assert!(read_stream("12", limits).is_ok());
     let error = read_stream("12\r\n---\r\n34", limits).unwrap_err();
-    assert_eq!(error.kind(), ErrorKind::NumericOutput { limit: 2 });
+    assert_eq!(*error.kind(), ErrorKind::NumericOutput { limit: 2 });
     assert_eq!((error.offset(), error.line(), error.column()), (9, 3, 1));
     let mut limits = stream_limits();
     // One decimal byte is classified, copied, then validated: three units.
     limits.core.max_numeric_work = 3;
     assert!(read_stream("1", limits).is_ok());
     let error = read_stream("1\n---\n2", limits).unwrap_err();
-    assert_eq!(error.kind(), ErrorKind::NumericWork { limit: 3 });
+    assert_eq!(*error.kind(), ErrorKind::NumericWork { limit: 3 });
     assert_eq!((error.offset(), error.line(), error.column()), (6, 3, 1));
     let mut limits = stream_limits();
     // Classification and radix packing fit; repeated word division does not.
@@ -163,7 +165,7 @@ fn yaml_stream_admission_includes_all_retained_documents_and_alias_copies() {
     assert!(matches!(
         read_stream(&format!("0x1{}", "f".repeat(96)), limits)
             .unwrap_err()
-            .kind(),
+            .into_kind(),
         ErrorKind::NumericWork { limit: 300 }
     ));
 }
@@ -178,13 +180,19 @@ fn ok(text: &str) -> String {
 fn refused(text: &str) -> ErrorKind {
     match read(text) {
         Ok(value) => panic!("{text:?} accepted as {}", write_compact(&value)),
-        Err(error) => error.kind(),
+        Err(error) => error.into_kind(),
     }
 }
 
 fn syntax(text: &str) {
     assert!(
-        matches!(refused(text), ErrorKind::Syntax(_)),
+        matches!(
+            refused(text),
+            ErrorKind::Syntax(_)
+                | ErrorKind::UnfinishedQuote { .. }
+                | ErrorKind::UnfinishedFlow { .. }
+                | ErrorKind::TrailingContent { .. }
+        ),
         "{text:?}: {:?}",
         refused(text)
     );

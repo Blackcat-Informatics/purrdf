@@ -1654,6 +1654,15 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 - **rdf:** Serializing a named graph the dataset does not contain
   (`SerializeGraph::Named` with an absent name) now emits no rows. Previously it
   emitted the default graph's triples in place of the requested graph.
+- **Structured YAML refusals (breaking Rust API):** `ErrorKind` is
+  non-exhaustive and `Error::kind()` borrows owned context. Repeated keys retain
+  decoded text and original occurrences; disabled anchors and aliases, refused
+  escapes, unfinished quotes/flow collections and trailing content expose typed
+  context through native access and structured inspection. Both error types
+  lose `Copy`; successful parsing, parser messages and emitter bytes are unchanged.
+  Physical storage causes remain inspectable through the standard source chain;
+  shared YAML host adapters now classify those failures as storage refusals.
+
 - **rdf:** Declared empty named graphs survive JSON-LD, YAML-LD and TriX, as
   they already did in TriG. The JSON-LD and YAML-LD writers emit
   `{"@id": g, "@graph": []}` and their readers declare such a graph; the TriX

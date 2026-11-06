@@ -17,13 +17,13 @@ const SCALAR: Limits = Limits {
 fn strict(text: &str) -> Result<String, ErrorKind> {
     read(text)
         .map(|value| write_compact(&value))
-        .map_err(|error| error.kind())
+        .map_err(purrdf_lex::yaml::Error::into_kind)
 }
 
 fn scalar(text: &str) -> Result<String, ErrorKind> {
     read_with(text, SCALAR)
         .map(|value| write_compact(&value))
-        .map_err(|error| error.kind())
+        .map_err(purrdf_lex::yaml::Error::into_kind)
 }
 
 #[test]
@@ -107,8 +107,14 @@ fn with_scalar_keys_a_number_boolean_or_null_key_is_its_source_text() {
 #[test]
 fn with_scalar_keys_a_repeated_key_is_still_refused_and_a_collection_is_never_a_key() {
     // `1` and `"1"` spell one key.
-    assert_eq!(scalar("1: a\n\"1\": b"), Err(ErrorKind::DuplicateKey));
-    assert_eq!(scalar("1: a\n1: b"), Err(ErrorKind::DuplicateKey));
+    assert!(matches!(
+        scalar("1: a\n\"1\": b"),
+        Err(ErrorKind::DuplicateKey { .. })
+    ));
+    assert!(matches!(
+        scalar("1: a\n1: b"),
+        Err(ErrorKind::DuplicateKey { .. })
+    ));
     for refused in [
         "[x]: a",
         "{x: y}: a",
