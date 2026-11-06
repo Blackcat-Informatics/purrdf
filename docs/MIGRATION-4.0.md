@@ -997,10 +997,63 @@ retains the source `NodeId` and relevant context. Do not silently filter out
 unknown nodes, discard children or fabricate a replacement term. A reasoning
 strategy must also refuse known forms outside its supported fragment.
 
-`TermDag::data` still borrows the complete node. All six current variants keep
+`TermDag::data` still borrows the complete node. All seven current variants keep
 their payloads and meaning; construct them through `intern_leaf`, `intern_free`,
-`fresh_meta`, `intern_bound`, `intern_app` and `intern_binder`. Term identities,
+`fresh_meta`, `intern_bound`, `intern_app`, `intern_binder` and `intern_rdf`. Term identities,
 hash-consing, binder traversal and existing artifacts retain their behavior.
+
+## Owned structural answers
+
+Pass `FolAnswerContract::GroundOnly` to `resolve_fol` between its sort context
+and budget. The original selection remains inspectable through
+`FolOutcome::answer_contract()` and `FolBinding::answer_contract()`. This
+contract enumerates fully ground answers to a query pattern; representation of
+variables and compound terms does not establish symbolic verdicts.
+
+`FolBinding` fields are private. Replace the rendered `bindings` map with
+`bindings()`, which visits authored names, original scoped variables and native
+term values. `get(name)` selects a structural value. Replace `atom` with `atom()`
+and `proof` with `proof()`. A `FolTerm` exposes its complete `NodeData`; child
+handles resolve through `term(source_id)`, and `same_node` compares a local node
+within its retained owner scope. Names label projection columns; they are not
+variable identities. Local source IDs alone do not identify nodes across owners.
+
+One reachable graph is retained for the entire answer set, including all original
+goal variables, projected terms, answer atoms and proof conclusions. Extracted or
+cloned rows share that graph and survive dropping the outcome, program and source
+arena. `FolBinding::term` inspects a checked original conclusion in that same
+graph. `derivation_id()` reproduces the proof identity after source destruction.
+Row equality includes owner scope. Compare explicit canonical structural keys
+when cross-run structural comparison is intended.
+
+Rendering is an explicit presentation operation: use `get(name).map(FolTerm::render)`
+when a transport needs strings. No rendered-answer compatibility map is maintained.
+Projection, joins, deduplication and answer ordering use structural identities;
+answer order now follows canonical atom keys instead of rendered binding strings.
+
+`TermDag::intern_rdf` and `NodeData::Rdf` retain the original native `TermValue`,
+including lexical form, datatype, language, direction, blank scope and quoted
+components. Native RDF constants are atomic to the compound-term unifier and
+compare by the original structural RDF identity. `RetainedGraph` and `TermRead`
+provide the same read path for live and retained nodes; single-term error
+snapshots use that shared home.
+
+`solve_datalog_goal` retains its opaque-symbol input interpretation. It does not
+parse an arbitrary clause literal spelling into RDF. For RDF sources, use
+`solve_datalog_goal_rdf` with a `FolRdfSource` that resolves the original source
+store's injective transport identity to its original `TermValue`. This address
+is not human-facing `render` output. The explanation adapter retains and passes
+its existing source dictionary, whose identity encoding includes blank scope and
+every RDF component. Missing originals return `FolError::Rdf` with the exact
+source identity; explanation checking propagates this failure through
+`ExplainError::Backward` rather than treating it as an abstention.
+
+Both input adapters use one lowering/solver and one answer owner. Existing opaque
+term, clause and proof identity bytes remain unchanged. Native RDF constants use
+a distinct `R` tag with framed base16 native canonical bytes; proofs produced
+through the RDF adapter therefore have native RDF identities rather than opaque
+surface identities. Regenerate such derived artifacts from their original source
+values; do not reinterpret old opaque symbols as RDF constants.
 
 ## Scoped structured truth verdicts
 
@@ -1021,12 +1074,9 @@ arena do not authenticate source identity.
 
 Read completion through `outcome.status()`; the writable `status` field is
 removed. `confirms_not_false` is removed because its Boolean absence result
-could license an unevaluated negation. The conservative adapter for the current
-`check_fol_proof` callback returns `false` only when
-`outcome.truth_of(dag, node) == FolVerdict::Established(Truth::False)`.
-Return `true` for incomplete, unevaluated, nonground or otherwise unsupported
-probes. This callback remains caller-supplied evidence; it is not independent
-source/program authentication.
+could license an unevaluated negation. `check_fol_proof` now consumes the
+original typed `FolCheckEvidence` from `outcome.checking_evidence()`; no Boolean
+adapter or caller-provided truth callback remains.
 
 Safe negative literals now demand their instantiated dependency through the
 same registry as positive literals. Thus `q(a)` with `p(a) :- not q(a)` correctly
@@ -1035,6 +1085,51 @@ demand consumes the existing call-discovery work charge, so a fixed budget can
 interrupt earlier. Negative cycles remain WFS `Undefined`. Internal negative
 proof construction uses the same completed scope as public truth probes.
 Canonical term keys and clause/proof identity encodings retain their meaning.
+
+## Bound structured proof checking
+
+`FolProof` is an opaque shared owner. Remove construction and exhaustive matches
+over `FolProof::Assert` and `FolProof::ByRule`; proofs come from the actual
+resolver. Use `is_assert()`, `rule()`, `rule_identity()`, `goal()` and `premises()`
+for current structural inspection. `conclusion()` borrows the original native
+term after the producer arena, program, outcome or answer row has been dropped.
+Proof descendants, checking evidence and all answer rows share one retained graph.
+
+Replace the freely supplied program, sort map, sort context and Boolean oracle
+with `check_fol_proof(&mut dag, proof, outcome.checking_evidence())`. Evidence can
+also be retained from `proof.checking_evidence().clone()`. Only the resolver mints
+this immutable owner, binding the exact ordered program, sorts, answer contract,
+original demanded run and a private live-arena capability. Another run cannot lend
+its completion to a proof, even under an otherwise identical program. A different
+arena, including a clone with overlapping numeric handles, is a foreign checking
+source. This private capability is local authority, never a persisted identity.
+Appending terms to the original arena does not change its immutable earlier nodes.
+
+The checker independently re-derives positive premises and conclusions with the
+original clauses and sort discipline. A negative premise requires completed demand
+coverage, bounded replay through the existing ground implementation, and exact
+agreement of the demanded calls, ground-rule inventory and WFS model. Completion
+flags and model membership alone do not certify absence. Replay shares the ground
+algorithm; this check does not claim algorithm diversity. Partial positive proofs
+remain checkable, while incomplete or unestablished negative dependencies fail.
+
+Structural checking uses iterative, memoized postorder and admits each distinct
+proof node and premise edge under the original retained work ceiling. Negative
+grounding replay separately uses that same ceiling. Work interruption and native
+storage failures remain typed failures. All appended checking nodes, symbols and
+metavariable mints are rolled back on success, error or unwinding; allocation
+capacities may remain warm. The live original arena is required for checking,
+while retained inspection and derivation-identity reproduction are source independent.
+
+`FOL_PROOF_IDENTITY_VERSION` and `identity_version()` identify version 1 of the
+unchanged Merkle/flat identity laws. Existing valid opaque and native RDF identity
+recipes retain their exact bytes. The earlier public enum layout is not a wire
+format for authenticated evidence: regenerate owned proofs from the original
+source and program rather than reinterpret a saved enum record as a checked owner.
+
+The real explanation cross-check now validates its native proof with this evidence
+before confirming the conclusion. `FolError::Proof` preserves the original
+`FolProofError` through `ExplainError::Backward` and the standard source chain.
 
 ## Datalog proofs and shared heads
 

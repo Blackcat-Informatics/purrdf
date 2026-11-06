@@ -8,11 +8,23 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
-- **JSON Schema evaluation policy (breaking Rust API):** reference-chain causes
-  retain attempted and selected maximum counts, and `EvaluationCause` is
-  non-exhaustive. Caller-selected policies share regex budgets and configure
-  consecutive references without disabling cycle detection or descent resets.
-  Existing convenience methods retain their defaults.
+- **Bound structured proofs (breaking Rust API):** `FolProof` is opaque and
+  retains native conclusions with original source/program/sort/contract/run
+  evidence. `check_fol_proof` accepts that typed owner instead of freely supplied
+  records and a Boolean oracle. Negative checking validates demanded completion
+  with bounded replay; positive checking is iterative, memoized and admitted.
+  Scratch nodes and metavariables roll back. Real explanation confirmation checks
+  its native proof and preserves typed failures. Existing version 1 identity laws
+  retain their exact bytes.
+
+- **Owned structural answers (breaking Rust API):** `FolBinding` exposes native
+  term views and original scoped variables through one retained graph shared by
+  the complete answer set. Extracted rows survive source destruction; rendering
+  is explicit and canonical structural keys order answers. `resolve_fol` selects
+  and retains `FolAnswerContract::GroundOnly`. Native RDF constants preserve full
+  literal, blank-scope and quoted-term identity; the explanation adapter uses its
+  original dictionary and propagates missing operands as typed failures. Existing
+  opaque identity laws remain unchanged; the RDF adapter uses native RDF keys.
 
 - **Scoped structured truth (breaking Rust API):** `truth_of` distinguishes
   established WFS values from unevaluated, incomplete and nonground probes.
@@ -29,6 +41,12 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   Datalog lowering path uses this API. `FolLit` is non-exhaustive and no longer
   `Copy`; `FolUnsupported` and `FolError` are non-exhaustive. Current term,
   clause and proof identity laws retain their meaning.
+
+- **JSON Schema evaluation policy (breaking Rust API):** reference-chain causes
+  retain attempted and selected maximum counts, and `EvaluationCause` is
+  non-exhaustive. Caller-selected policies share regex budgets and configure
+  consecutive references without disabling cycle detection or descent resets.
+  Existing convenience methods retain their defaults.
 
 - **Extensible Datalog terms (breaking Rust API):** `NodeData` is
   non-exhaustive. External inspection must explicitly refuse unsupported forms

@@ -82,7 +82,7 @@ use purrdf_datalog::id::ProofId;
 use purrdf_datalog::proof::{
     EvaluationProofIndex, ProofArena, ProofContext, ProofError, ProofIndexWork,
 };
-use purrdf_datalog::resolve_fol::{FolBudget, FolControl, FolStatus, solve_datalog_goal};
+use purrdf_datalog::resolve_fol::{FolBudget, FolControl, FolStatus, solve_datalog_goal_rdf};
 use purrdf_datalog::seminaive::{
     BudgetReport, DerivationMode, EvalOptions, Evaluation, WorkReport, compile,
 };
@@ -91,7 +91,7 @@ use purrdf_datalog::store::{Fact, RelationStore};
 use purrdf_lex::allocation::{Shared, StorageError};
 
 use crate::calculus::{ChaseRule, program_with_attribution};
-use crate::engine::{seed, surface_of};
+use crate::engine::{Terms, seed, surface_of};
 use crate::interner::{Interner, blank_closure, blank_subjects, intern_into};
 use crate::reasoner::{DlAxiom, DlCompleteness, Reasoner, Verdict};
 use crate::rules::RuleId;
@@ -147,6 +147,8 @@ pub enum ExplainError {
     /// wrong answer carrying a proof that fails to check is a gate failure, where a wrong
     /// answer carrying a panic is a crash report.
     Unchecked(ProofError),
+    /// Original source, construction or storage refusal in the backward cross-check.
+    Backward(purrdf_datalog::resolve_fol::FolError),
 }
 
 impl std::fmt::Display for ExplainError {
@@ -177,6 +179,7 @@ impl std::fmt::Display for ExplainError {
             ),
             Self::Entail(error) => write!(f, "the explained run failed: {error}"),
             Self::Unchecked(error) => write!(f, "the proof term did not check: {error}"),
+            Self::Backward(error) => write!(f, "the backward cross-check failed: {error}"),
         }
     }
 }
@@ -198,6 +201,7 @@ impl std::error::Error for ExplainError {
         match self {
             Self::Entail(inner) => Some(inner.as_ref()),
             Self::Unchecked(inner) => Some(inner),
+            Self::Backward(inner) => Some(inner),
             Self::Existential(_)
             | Self::NotDerived { .. }
             | Self::BackwardDisagreement { .. }
@@ -214,6 +218,7 @@ impl purrdf_hash::error::StructuredError for ExplainError {
         Existential(regime) => "explanation-existential" { "regime" => Code(regime.token()) },
         Entail(cause) => "explanation-run" { "cause" => Cause(cause.as_ref()) },
         Unchecked(cause) => "explanation-unchecked" { "cause" => Cause(cause) },
+        Backward(cause) => "explanation-backward" { "cause" => Cause(cause) },
     }
 }
 
@@ -464,6 +469,7 @@ fn confirm_backward(
     regime: Regime,
     program: &[DlClause],
     seeded: &RelationStore,
+    terms: &Terms,
     goal: &Fact,
 ) -> Result<BackwardCheck, ExplainError> {
     if matches!(regime, Regime::Rdfs | Regime::OwlRl) {
@@ -491,13 +497,27 @@ fn confirm_backward(
         max_steps: BACKWARD_CROSS_CHECK_STEPS,
     };
     // A program this resolver cannot lower is an abstention, not a disagreement.
-    let Ok((_dag, control)) = solve_datalog_goal(&clauses, &atom, &budget) else {
-        return Ok(BackwardCheck::Abstained);
+    let (mut dag, control) = match solve_datalog_goal_rdf(&clauses, &atom, &budget, terms) {
+        Ok(result) => result,
+        Err(purrdf_datalog::resolve_fol::FolError::Clause(_)) => {
+            return Ok(BackwardCheck::Abstained);
+        }
+        Err(error) => return Err(ExplainError::Backward(error)),
     };
     let FolControl::Decided(outcome) = control else {
         return Ok(BackwardCheck::Abstained);
     };
-    if !outcome.answers.is_empty() {
+    if let Some(answer) = outcome.answers.first() {
+        purrdf_datalog::resolve_fol::check_fol_proof(
+            &mut dag,
+            answer.proof(),
+            outcome.checking_evidence(),
+        )
+        .map_err(|cause| {
+            ExplainError::Backward(purrdf_datalog::resolve_fol::FolError::Proof(Box::new(
+                cause,
+            )))
+        })?;
         return Ok(BackwardCheck::Confirmed);
     }
     if outcome.status() == FolStatus::Complete {
@@ -602,7 +622,7 @@ pub fn prepare_explanations(
         .cloned()
         .collect();
 
-    let (edb, _terms) = seed(ds, regime, &program, graph)?;
+    let (edb, terms) = seed(ds, regime, &program, graph)?;
     let seeded = edb.clone();
     let executable = compile(program.clone()).map_err(EntailError::Evaluate)?;
     let evaluation = purrdf_datalog::seminaive::evaluate_guarded(
@@ -617,6 +637,7 @@ pub fn prepare_explanations(
         program,
         attribution,
         seeded,
+        terms,
         evaluation: Shared::try_new(evaluation)
             .map_err(|_| EntailError::from(StorageError::AllocationFailed))?,
         regime,
@@ -632,6 +653,7 @@ struct ExplanationContext {
     program: Vec<DlClause>,
     attribution: Vec<ChaseRule>,
     seeded: RelationStore,
+    terms: Terms,
     evaluation: Shared<Evaluation>,
     regime: Regime,
     graph: Option<TermValue>,
@@ -802,7 +824,13 @@ impl ExplanationSession<'_> {
 
         // INDEPENDENT RE-DERIVATION. The chase says this holds; a different engine — SLG
         // resolution over the same clause program — is asked the same question.
-        let backward = confirm_backward(context.regime, &context.program, &context.seeded, &goal)?;
+        let backward = confirm_backward(
+            context.regime,
+            &context.program,
+            &context.seeded,
+            &context.terms,
+            &goal,
+        )?;
 
         let proof = ChaseProof {
             context: self
