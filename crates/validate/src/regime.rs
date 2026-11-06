@@ -3940,6 +3940,15 @@ impl std::error::Error for PremiseIriError {
     }
 }
 
+impl purrdf_hash::error::StructuredError for PremiseIriError {
+    purrdf_hash::error_visit! {
+        @record self { iri, cause } => "premise-iri-not-absolute" {
+            "iri" => Text(&self.iri),
+            "cause" => Cause(&self.cause),
+        }
+    }
+}
+
 /// Check that every premise IRI is an absolute IRI, in order, refusing the first that is not.
 ///
 /// The workspace IRI parser ([`purrdf_iri::is_absolute`]) judges each one. A string it refuses
