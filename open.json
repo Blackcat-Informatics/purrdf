@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "issue": 1177,
+  "repo": "purrdf",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrdf",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrdf",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1177-admit-caller-selected-json-schema",
+  "branch": "paudley/1177-admit-caller-selected-json-schema",
+  "slug": "admit-caller-selected-json-schema",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/1177-admit-caller-selected-json-schema/.stage/admit-caller-selected-json-schema",
+  "stage_tracked": true,
+  "base": "origin/main",
+  "base_oid": "18c290fe385457942c242a5f65db4a425600e0e7",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrdf/.worktrees/1177-admit-caller-selected-json-schema",
+    "branch:paudley/1177-admit-caller-selected-json-schema",
+    "ignored:31241 files (31238 reflinked, 0 written)",
+    "rust-caches:reflinked /home/paudley/Active/purrdf/.worktrees/1176-seal-mime-documents-before-v4-to-remove caches into /home/paudley/Active/purrdf/.worktrees/1177-admit-caller-selected-json-schema plus 0 dependency units from 0 other checkouts in 29.5s; 20496 unchanged files keep their built mtimes; 371 units naming another checkout rebuild",
+    "stage:/home/paudley/Active/purrdf/.worktrees/1177-admit-caller-selected-json-schema/.stage/admit-caller-selected-json-schema",
+    "issue:/home/paudley/Active/purrdf/.worktrees/1177-admit-caller-selected-json-schema/.stage/admit-caller-selected-json-schema/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-11-06T13:17:22-0600",
+  "seed_error": ""
+}

@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1177-admit-caller-selected-json-schema",
+  "branch": "paudley/1177-admit-caller-selected-json-schema",
+  "base_ref": "refs/remotes/origin/main",
+  "head": "8e073d32ff09263952695c74f5bb9193c6ba9926",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/1177-admit-caller-selected-json-schema/.stage/admit-caller-selected-json-schema/sync/20261106T202438-100ae013a04d47738c4d6a302de117b2",
+  "conflicts": [
+    "CHANGELOG.md"
+  ],
+  "status": "completed",
+  "base": "5c2a02bef5e21b48bf5ae7af889700bd487dc7c5",
+  "merge_bases": [
+    "18c290fe385457942c242a5f65db4a425600e0e7"
+  ],
+  "merge_index": "55ccba2a6983bcb4b0b8d60df10366c9d195d67dd8063fc92bbedfa3f7a057da",
+  "reused_paths": [],
+  "rerere_output": "Recorded preimage for 'CHANGELOG.md'\n",
+  "candidate_tree": "85a4549a8db4f1e07cfbcbfea80cc1d6feaee0b0",
+  "candidate_patch": "candidate-40fa15be218d40cfa7aa115b5c881b7c.patch",
+  "validation_records": [],
+  "commit": "01d2708e79c9996809d825e4579c445d180526c1",
+  "tree": "85a4549a8db4f1e07cfbcbfea80cc1d6feaee0b0"
+}
