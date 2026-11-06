@@ -5903,11 +5903,13 @@ fn render_report(out: &mut String, report: &ReasoningReport) {
         "{indent}termination: {}",
         report.termination().map_or_else(
             || "none".to_owned(),
-            |c| format!(
-                "weakly-acyclic positions={} existential-edges={}",
-                c.positions(),
-                c.existential_edges()
-            )
+            |c| match (c.positions(), c.existential_edges()) {
+                (Some(positions), Some(existential_edges)) => format!(
+                    "{} positions={positions} existential-edges={existential_edges}",
+                    c.criterion().label(),
+                ),
+                _ => format!("{} law={}", c.criterion().label(), c.law_version()),
+            }
         )
     );
     let _ = writeln!(

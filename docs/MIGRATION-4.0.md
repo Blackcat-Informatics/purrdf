@@ -673,6 +673,32 @@ Target-specific capacity default constants have been removed.
 `EvalOptions::without_stored_fact_limit`,
 `without_join_step_limit` and `without_term_arena_limit` remove selected ceilings.
 
+## Prepared chase certificates
+
+`PreparedChase::certificate()` now borrows an opaque `ChaseCertificate`, which
+retains the original verified evidence and its allocation owner. Inspect its
+`criterion()`, `law_version()`, `program_identity()`, `report()` and `summary()`
+without copying the proof. `weakly_acyclic()` returns an optional borrowed
+`WaCertificate` for WA-specific positions and ranks. The `certify` and
+`certify_with` functions still produce owned WA evidence with independent
+verification before preparation. Explicit
+`close()` still owns evidence destruction and the original fallible grant refund.
+
+`ChaseTermination`, `TerminationError` and `TerminationCriterion` are
+non-exhaustive. Match known variants with a future-case arm; use the native
+criterion classification rather than treating an unfamiliar certified summary
+as an absent certificate. The implemented criterion remains weak acyclicity
+under law version 1; the chase, witnesses and model identities are unchanged.
+
+Entailment's `TerminationCertificate` retains the native certified summary and
+criterion and implements `Clone` without `Copy`. `ReasoningReport::termination()`
+returns `Option<&TerminationCertificate>`. Borrow it for inspection or explicitly
+clone it when an owned value is required. `positions()` and `existential_edges()`
+return `Option<usize>` because these counts belong to WA evidence. Structured
+inspection exposes the original `summary` and `criterion` records with the law
+version. Display delegates to the original native summary, and current WA report
+bytes remain unchanged. A lane that invents no term still reports no certificate.
+
 ## HNSW arithmetic refusals
 
 Shared distance pair and batch APIs now return `Result<f64, NonFinite>` instead
@@ -1201,3 +1227,16 @@ parameter slots are reset before applying its dictionary. No execution inputs
 are retained from a previous call. Ordinary, RDFLib, governed and entailment
 query methods accept the same coordinate keywords; parser/provider settings
 remain preparation-time configuration. See the [Python API reference](book/src/reference/python-api.md#supplied-query-time-and-entropy).
+
+## Slice ownership query diagnostics
+
+`OwnershipDiagnostic` is non-exhaustive. Its `UnparseableQuery` variant replaces
+`message: String` with `cause: QueryArtifactError`, retaining the original
+`Utf8Error` or SPARQL `ParseError`. Use `cause.to_string()` at the presentation
+boundary for the former message, or inspect the native cause through `source()`
+and `StructuredError`. External matches need an arm for unfamiliar diagnostics.
+
+The causes, owning slice and logical path remain available after the catalog is
+dropped, including in cloned reports. Malformed query artifacts are still skipped
+in artifact order; valid queries continue to contribute dependency evidence.
+Python's ownership lint and ownership-defect classification are unchanged.

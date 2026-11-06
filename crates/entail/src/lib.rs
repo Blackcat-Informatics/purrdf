@@ -2089,15 +2089,26 @@ mod tests {
         let rdfs = materialize(&ds, Materialization::Rdfs).expect("closed").1;
         let rdf_certificate = rdf.termination().expect("the RDF lane is chased");
         let rdfs_certificate = rdfs.termination().expect("the RDFS lane is chased");
-        assert!(rdf_certificate.existential_edges() > 0);
-        assert!(rdf_certificate.positions() > 0);
+        assert_eq!(
+            rdf_certificate.criterion(),
+            purrdf_datalog::chase::TerminationCriterion::WeaklyAcyclic
+        );
+        assert_eq!(
+            rdf_certificate.law_version(),
+            purrdf_datalog::chase::WA_LAW_VERSION
+        );
+        assert!(rdf_certificate.summary().is_certified());
+        let rdf_edges = rdf_certificate.existential_edges().expect("WA statistics");
+        let rdf_positions = rdf_certificate.positions().expect("WA statistics");
+        assert!(rdf_edges > 0);
+        assert!(rdf_positions > 0);
         assert_ne!(
             rdf_certificate, rdfs_certificate,
             "the certificate is a function of the CLAUSE SET, so two different rule tables \
              must not prove the same thing"
         );
         assert!(
-            rdfs_certificate.existential_edges() > rdf_certificate.existential_edges(),
+            rdfs_certificate.existential_edges().expect("WA statistics") > rdf_edges,
             "RDFS states rdfs14/rdfs14a besides rdfD1/rdfD1a"
         );
         // It is `purrdf-datalog`'s own sentence, not a second spelling of it.
@@ -2105,8 +2116,7 @@ mod tests {
             rdf_certificate.to_string(),
             format!(
                 "weakly acyclic: {} refined position(s), {} existential edge(s), none in a cycle",
-                rdf_certificate.positions(),
-                rdf_certificate.existential_edges()
+                rdf_positions, rdf_edges
             )
         );
         // It does NOT vary with the data — a certificate that moved per input would be

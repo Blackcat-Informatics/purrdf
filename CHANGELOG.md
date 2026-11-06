@@ -8,6 +8,18 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Typed skipped-query diagnostics (breaking Rust API):** slice ownership
+  diagnostics retain original UTF-8 and SPARQL errors through
+  `QueryArtifactError`. `OwnershipDiagnostic` is non-exhaustive; malformed query
+  artifacts remain nonfatal findings and valid artifacts still contribute edges.
+
+- **General prepared chase certificates (breaking Rust API):** prepared admission
+  exposes an opaque, owned proof with its criterion, law version and program
+  identity. Explicit WA evidence remains available by borrowed view. Entailment
+  borrows its retained native summary and exposes WA counts as optional values;
+  `TerminationCertificate` no longer implements `Copy`. Current WA proofs,
+  grants, witnesses and report bytes retain their existing behavior.
+
 - **Typed USTAR refusals (breaking Rust API):** archive readers, member
   iterators and writers return `UstarError` with original offsets, lengths,
   size-field bytes and native UTF-8 causes. Projection packages preserve that
