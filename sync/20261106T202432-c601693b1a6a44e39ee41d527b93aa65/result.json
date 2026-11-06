@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1116-v4-api-retain-typed-literal-component",
+  "branch": "paudley/1116-v4-api-retain-typed-literal-component",
+  "base_ref": "origin/main",
+  "head": "4839835ad61fb739fdbadac92f05d466e6e1e028",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/1116-v4-api-retain-typed-literal-component/.stage/v4-api-retain-typed-literal-component/sync/20261106T202432-c601693b1a6a44e39ee41d527b93aa65",
+  "conflicts": [],
+  "status": "fast_forward",
+  "base": "5c2a02bef5e21b48bf5ae7af889700bd487dc7c5",
+  "merge_bases": [
+    "4839835ad61fb739fdbadac92f05d466e6e1e028"
+  ],
+  "commit": "5c2a02bef5e21b48bf5ae7af889700bd487dc7c5"
+}
