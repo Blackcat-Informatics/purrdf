@@ -1083,11 +1083,9 @@ impl DatasetView for ProbeView {
     }
 
     fn resolve(&self, id: TermId) -> Result<Self::TermGuard<'_>, Self::ReadError> {
-        self.checked_read(|_| {
-            self.term_overrides
-                .get(&id)
-                .copied()
-                .unwrap_or_else(|| self.inner.as_ref().resolve(id))
+        self.checked_read(|_| match self.term_overrides.get(&id) {
+            Some(term) => *term,
+            None => self.inner.as_ref().resolve(id),
         })
     }
 
