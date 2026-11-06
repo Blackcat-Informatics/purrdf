@@ -40,7 +40,7 @@ use purrdf_lex::yaml::{self, ErrorKind};
 
 /// Whether `kind` says "valid YAML, but JSON (or this reader's JSON-shaped
 /// output) cannot hold it", as opposed to a grammar refusal.
-const fn unsupported(kind: ErrorKind) -> bool {
+const fn unsupported(kind: &ErrorKind) -> bool {
     matches!(
         kind,
         ErrorKind::Tag

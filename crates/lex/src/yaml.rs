@@ -112,7 +112,9 @@ mod syntax;
 mod write;
 
 pub use project::{SyntaxProjectionLimits, SyntaxRootPolicy, SyntaxSelection};
-pub use read::{Error, ErrorKind, Limits, StreamLimits, read, read_stream, read_with};
+pub use read::{
+    Error, ErrorKind, Limits, StreamLimits, TrailingContext, read, read_stream, read_with,
+};
 pub use syntax::{
     Attachment, BlockHeader, Chomping, CollectionStyle, ExplicitTag, NodeId, NodeKind, Position,
     ProjectionLimits, ScalarStyle, Span, SyntaxArena, SyntaxDocument, SyntaxDocumentRoot,

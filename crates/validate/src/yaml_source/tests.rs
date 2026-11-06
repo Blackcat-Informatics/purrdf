@@ -217,6 +217,22 @@ fn native_source_roundtrip_preserves_roots_profiles_and_original_refusals() {
         crate::native_error::to_json(storage.native_cause().unwrap()).unwrap()["code"].as_str(),
         Some("yaml-source-storage")
     );
+    // Compose the host storage adapter with the separately checked lexical
+    // source dispatch; this does not induce native allocator exhaustion.
+    let original = purrdf_lex::allocation::StorageError::AllocationFailed;
+    let failure = Error::Native(YamlError::Storage(original));
+    let diagnostic = failure.into_diagnostic();
+    assert_eq!(diagnostic.code, "rdf-storage-refused");
+    assert_eq!(diagnostic.storage_error(), Some(original));
+    let retained = diagnostic.native_cause().unwrap();
+    assert_eq!(
+        std::error::Error::source(retained)
+            .unwrap()
+            .downcast_ref::<purrdf_lex::allocation::StorageError>(),
+        Some(&original),
+    );
+    let captured = purrdf_testkit::error_capture::Capture::read(retained);
+    assert_eq!(captured.child("cause").code, "storage-allocation-failed");
     assert!(matches!(
         export("relative", source, &selected),
         Err(Error::Native(YamlError::Iri(_)))
@@ -229,8 +245,16 @@ fn native_source_roundtrip_preserves_roots_profiles_and_original_refusals() {
         panic!("native syntax failure");
     };
     assert!(cause.line() > 0 && cause.column() > 0);
-    let expected = crate::native_error::to_json(&YamlError::Syntax(cause)).unwrap();
-    let diagnostic = Error::Native(YamlError::Syntax(cause)).into_diagnostic();
+    let purrdf_lex::yaml::ErrorKind::UnfinishedFlow { opener, expected } = cause.kind() else {
+        panic!("native unfinished-flow context survives the host request");
+    };
+    assert_eq!(
+        (opener.start, opener.end, *expected, cause.offset()),
+        (0, 1, ']', 13)
+    );
+    let cause = YamlError::Syntax(cause);
+    let expected = crate::native_error::to_json(&cause).unwrap();
+    let diagnostic = Error::Native(cause).into_diagnostic();
     assert_eq!(diagnostic.code, "yaml-source-native");
     assert_eq!(
         crate::native_error::to_json(diagnostic.native_cause().unwrap()).unwrap(),

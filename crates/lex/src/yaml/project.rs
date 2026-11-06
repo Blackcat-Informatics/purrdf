@@ -131,7 +131,7 @@ impl SyntaxStream<'_> {
     }
 
     fn project(
-        self,
+        mut self,
         selection: SyntaxSelection,
         roots: SyntaxRootPolicy,
         limits: SyntaxProjectionLimits,
@@ -170,12 +170,27 @@ impl SyntaxStream<'_> {
                         return Err((ErrorKind::NonStringKey, at));
                     };
                     builder.validate_key(&scalar.text, plain(scalar.style), tag(key), at)?;
-                    if keys.get(&scalar.text.as_str()).is_some() {
-                        return Err((ErrorKind::DuplicateKey, at));
+                    if let Some(&first) = keys.get(&scalar.text.as_str()) {
+                        let mut id = entry.key;
+                        while let NodeKind::Alias { target, .. } = nodes[id.0].kind {
+                            id = target;
+                        }
+                        let key = match &mut self.arena.nodes[id.0].kind {
+                            NodeKind::Scalar(scalar) => core::mem::take(&mut scalar.text),
+                            _ => unreachable!("a checked scalar mapping key"),
+                        };
+                        return Err((
+                            ErrorKind::DuplicateKey {
+                                key,
+                                first,
+                                repeated: at,
+                            },
+                            at,
+                        ));
                     }
                     builder
                         .allocations
-                        .memory(|memory| keys.insert(scalar.text.as_str(), (), memory))
+                        .memory(|memory| keys.insert(scalar.text.as_str(), at, memory))
                         .map_err(|cause| storage(cause, limit, key.span.start))?;
                 }
                 builder

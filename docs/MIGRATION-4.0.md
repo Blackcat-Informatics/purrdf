@@ -69,6 +69,37 @@ Existing format routing, glob matching and refusal payloads remain unchanged.
 Future language or compiled-plan laws must preserve existing valid patterns and
 readable 4.0 portable descriptions, or use explicitly selected versioned forms.
 
+## YAML reader refusals
+
+`purrdf_lex::yaml::ErrorKind` is non-exhaustive. Include a wildcard when matching
+it. Both `ErrorKind` and `Error` now own context and are no longer `Copy`;
+`Error::kind()` borrows the kind and `into_kind()` consumes the error. Move the
+original error through native and host wrappers instead of relying on copies.
+
+Repeated scalar-key failures retain the decoded key text and the first and
+repeated occurrence offsets. Lexical collection-key duplicates retain their
+original occurrence spans. Disabled anchor and alias failures distinguish the
+indicator and retain the name span, excluding that indicator. Unknown and cyclic
+aliases retain the alias occurrence's name span rather than the target's range.
+Escape failures retain their original escape span; unfinished quote, unfinished
+flow and trailing-content failures have stable native categories and ranges.
+`TrailingContext` distinguishes a completed node, document or explicit end marker.
+
+Every span refers to the original UTF-8 source, including stream offsets. Keep
+that source if its verbatim name or escape bytes are needed; failure construction
+does not allocate a second copy of lexical names. Decoded repeated-key text is
+owned by the error and remains available after the source is dropped. Borrowed
+structured inspection exposes these fields without rendering messages. Existing
+parser messages, refusal positions, successful values and emitter bytes are unchanged.
+
+Physical lexical allocation failures now expose their original storage cause
+through the standard source chain. The shared YAML source host adapter classifies
+these as `rdf-storage-refused` or `rdf-capacity-exhausted`, rather than
+`yaml-source-native`; the C transport returns `StorageError` rather than
+`ParseError`, and Python/JavaScript expose the corresponding storage diagnostic.
+Explicit configured allocation-limit refusals keep their existing classification.
+The separate JSON-LD adapter retains its `native-yaml-storage` code.
+
 ## Planner estimates
 
 `PlanEstimate` is non-exhaustive. Replace struct literals with
