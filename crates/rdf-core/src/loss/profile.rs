@@ -183,47 +183,48 @@ pub(super) fn builtin_codes(from: &str, to: &str) -> impl Iterator<Item = &'stat
     codes(builtin_registry(), from, to)
 }
 
-/// Original borrowed code/pair operands of an unsound ledger entry.
+/// Original code/pair operands of an unsound ledger entry.
+/// Checks borrow these strings; `into_owned` retains them beyond the ledger.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum LossSoundnessError<'a> {
+pub enum LossSoundnessError<S = String> {
     /// The entry belongs to a different conversion than the one being checked.
     PairMismatch {
         /// Original recorded code.
-        code: &'a str,
+        code: S,
         /// Original recorded source.
-        actual_from: &'a str,
+        actual_from: S,
         /// Original recorded target.
-        actual_to: &'a str,
+        actual_to: S,
         /// Requested source.
-        expected_from: &'a str,
+        expected_from: S,
         /// Requested target.
-        expected_to: &'a str,
+        expected_to: S,
     },
     /// This code is not registered for its conversion pair.
     UnregisteredCode {
         /// Original recorded code.
-        code: &'a str,
+        code: S,
         /// Original recorded source.
-        from: &'a str,
+        from: S,
         /// Original recorded target.
-        to: &'a str,
+        to: S,
     },
 }
 
-impl purrdf_hash::error::StructuredError for LossSoundnessError<'_> {
+impl<S: AsRef<str>> purrdf_hash::error::StructuredError for LossSoundnessError<S> {
     purrdf_hash::error_visit! {
         PairMismatch { code, actual_from, actual_to, expected_from, expected_to } => "loss-pair-mismatch" {
-            "code" => Code(code), "actual_from" => Code(actual_from), "actual_to" => Code(actual_to),
-            "expected_from" => Code(expected_from), "expected_to" => Code(expected_to),
+            "code" => Code(code.as_ref()), "actual_from" => Code(actual_from.as_ref()), "actual_to" => Code(actual_to.as_ref()),
+            "expected_from" => Code(expected_from.as_ref()), "expected_to" => Code(expected_to.as_ref()),
         },
         UnregisteredCode { code, from, to } => "loss-unregistered-code" {
-            "code" => Code(code), "from" => Code(from), "to" => Code(to),
+            "code" => Code(code.as_ref()), "from" => Code(from.as_ref()), "to" => Code(to.as_ref()),
         },
     }
 }
 
-impl std::fmt::Display for LossSoundnessError<'_> {
+impl<S: AsRef<str>> std::fmt::Display for LossSoundnessError<S> {
     fn fmt(&self, output: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::PairMismatch {
@@ -234,14 +235,49 @@ impl std::fmt::Display for LossSoundnessError<'_> {
                 expected_to,
             } => write!(
                 output,
-                "loss ledger code {code:?} belongs to ({actual_from:?}, {actual_to:?}), expected ({expected_from:?}, {expected_to:?})"
+                "loss ledger code {:?} belongs to ({:?}, {:?}), expected ({:?}, {:?})",
+                code.as_ref(),
+                actual_from.as_ref(),
+                actual_to.as_ref(),
+                expected_from.as_ref(),
+                expected_to.as_ref()
             ),
             Self::UnregisteredCode { code, from, to } => write!(
                 output,
-                "loss ledger unsound for ({from:?}, {to:?}): code {code:?} is not in the declared profile"
+                "loss ledger unsound for ({:?}, {:?}): code {:?} is not in the declared profile",
+                from.as_ref(),
+                to.as_ref(),
+                code.as_ref()
             ),
         }
     }
 }
 
-impl std::error::Error for LossSoundnessError<'_> {}
+impl<S: AsRef<str> + std::fmt::Debug> std::error::Error for LossSoundnessError<S> {}
+
+impl LossSoundnessError<&str> {
+    /// Own the original operands so the refusal outlives its ledger and pair strings.
+    #[must_use]
+    pub fn into_owned(self) -> LossSoundnessError {
+        match self {
+            Self::PairMismatch {
+                code,
+                actual_from,
+                actual_to,
+                expected_from,
+                expected_to,
+            } => LossSoundnessError::PairMismatch {
+                code: code.to_owned(),
+                actual_from: actual_from.to_owned(),
+                actual_to: actual_to.to_owned(),
+                expected_from: expected_from.to_owned(),
+                expected_to: expected_to.to_owned(),
+            },
+            Self::UnregisteredCode { code, from, to } => LossSoundnessError::UnregisteredCode {
+                code: code.to_owned(),
+                from: from.to_owned(),
+                to: to.to_owned(),
+            },
+        }
+    }
+}

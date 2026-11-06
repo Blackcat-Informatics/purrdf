@@ -56,8 +56,8 @@ pub(super) fn import_document(
 ) -> Result<ImportedShapes, LinkmlError> {
     let mut importer = NativeImporter::new(document)?;
     let (pivot, ignored_class_iris) = importer.build_pivot(visible_classes)?;
-    let mut imported = import_schema_value_from(SOURCE, &pivot, config)
-        .map_err(|error| LinkmlError::new(format!("LinkML import model: {error}")))?;
+    let mut imported =
+        import_schema_value_from(SOURCE, &pivot, config).map_err(LinkmlError::import)?;
 
     if !ignored_class_iris.is_empty() {
         imported.shapes.node_shapes.retain(|shape| {
@@ -79,7 +79,7 @@ pub(super) fn import_document(
         }
         losses.record(remapped);
     }
-    check_ledger_sound(&losses, SOURCE, TARGET).map_err(LinkmlError::new)?;
+    check_ledger_sound(&losses, SOURCE, TARGET).map_err(LinkmlError::from)?;
     imported.losses = losses;
     Ok(imported)
 }
@@ -160,7 +160,7 @@ fn verify_slot_reports(package: &LinkmlPackage) -> Result<(), LinkmlError> {
             "LinkML package slot diagnostic report differs from its retained emitted report",
         ));
     }
-    check_ledger_sound(&package.losses, "json-schema", "linkml-1.11").map_err(LinkmlError::new)?;
+    check_ledger_sound(&package.losses, "json-schema", "linkml-1.11").map_err(LinkmlError::from)?;
 
     verify_report_order(&package.slot_renames, |row| {
         (

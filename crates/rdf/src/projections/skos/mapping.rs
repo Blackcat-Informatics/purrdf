@@ -269,7 +269,7 @@ impl<'a> Projector<'a> {
             )));
         }
         check_ledger_sound(&self.ledger, "rdf-1.2-dataset", "skos")
-            .map_err(ProjectionError::integrity)?;
+            .map_err(ProjectionError::from)?;
 
         Ok(SkosProjection {
             dataset,

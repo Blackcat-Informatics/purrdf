@@ -92,7 +92,7 @@ pub(crate) fn ensure_sound(
     from: &str,
     to: &str,
 ) -> Result<(), ProjectionError> {
-    check_ledger_sound(ledger, from, to).map_err(ProjectionError::integrity)
+    check_ledger_sound(ledger, from, to).map_err(ProjectionError::from)
 }
 
 #[cfg(test)]
@@ -107,6 +107,45 @@ mod tests {
             note: Cow::Borrowed("An example value is dropped."),
             location: None,
         }])
+    }
+
+    #[test]
+    fn soundness_refusals_retain_native_fields_after_input_destruction() {
+        use purrdf_hash::error::ErrorValue;
+        for requested_from in ["rdf-1.2-dataset", "other-source"] {
+            let mut ledger = LossLedger::new();
+            let source = String::from(requested_from);
+            let target = String::from("example");
+            ledger.record(LossEntry {
+                code: Cow::Owned(String::from("undeclared")),
+                from: Cow::Owned(String::from("rdf-1.2-dataset")),
+                to: Cow::Owned(String::from("example")),
+                note: Cow::Borrowed("a loss"),
+                location: None,
+            });
+            let original = check_ledger_sound(&ledger, &source, &target)
+                .unwrap_err()
+                .into_owned();
+            let error = ensure_sound(&ledger, &source, &target)
+                .unwrap_err()
+                .at_path("rows.csv");
+            drop((ledger, source, target));
+            assert_eq!(error.kind(), super::super::ProjectionErrorKind::Integrity);
+            assert_eq!(error.path(), Some("rows.csv"));
+            assert_eq!(error.message(), original.to_string());
+            assert_eq!(
+                std::error::Error::source(&error)
+                    .unwrap()
+                    .downcast_ref::<purrdf_core::LossSoundnessError>(),
+                Some(&original)
+            );
+            let captured = purrdf_testkit::error_capture::Capture::read(&error);
+            assert!(matches!(
+                captured.child("cause").field("code"),
+                ErrorValue::Code("undeclared")
+            ));
+        }
+        ensure_sound(&LossLedger::new(), "unknown", "unknown").unwrap();
     }
 
     #[test]
