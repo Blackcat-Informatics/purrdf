@@ -1198,15 +1198,21 @@ fn a_recursive_function_makes_validation_fail_rather_than_conform() {
     assert!(err.contains("64"), "got: {err}");
 }
 
+/// Recognize logical limits and native physical guards across callback layers.
+/// Some callbacks retain causes; others carry their rendered messages.
 fn is_bounded_cycle(cause: &purrdf_core::RdfDiagnostic) -> bool {
     use purrdf_shapes::PreparationRefusal;
     use purrdf_sparql_eval::EvalError;
 
+    let preparation_stack = PreparationRefusal::StackMargin {
+        construct: "SHACL model inspection",
+    };
     cause
         .message
         .contains("recursion exceeded the depth bound of 32")
         || cause.message.contains(EvalError::STACK_EXHAUSTED_CODE)
         || cause.message.contains(EvalError::HOST_STACK_EXHAUSTED_CODE)
+        || cause.message.contains(&preparation_stack.to_string())
         || std::iter::successors(Some(cause as &(dyn std::error::Error + 'static)), |error| {
             error.source()
         })

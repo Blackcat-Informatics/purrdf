@@ -1106,6 +1106,13 @@ every RDF component. Missing originals return `FolError::Rdf` with the exact
 source identity; explanation checking propagates this failure through
 `ExplainError::Backward` rather than treating it as an abstention.
 
+Mixed sources can explicitly admit registered internal relation and coordinate
+identities through the provided `FolRdfSource::is_opaque_transport` method. Its
+default refuses them. Native RDF values take precedence, and only literal
+transport keys can be opaque; missing IRI operands still fail. The explanation
+adapter inventories its actual program and seeded facts without inventing RDF
+values for internal identities.
+
 Both input adapters use one lowering/solver and one answer owner. Existing opaque
 term, clause and proof identity bytes remain unchanged. Native RDF constants use
 a distinct `R` tag with framed base16 native canonical bytes; proofs produced

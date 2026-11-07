@@ -205,6 +205,70 @@ fn rdf_answers_retain_original_literal_blank_and_quoted_identity() {
         .unwrap()
         .clone();
     let key = retained.get("O").unwrap().canonical_key();
+
+    // Real clause transports also contain private relations and coordinates.
+    // Native values remain authoritative even when opaque admission overlaps.
+    struct MixedSource<'a>(&'a Source);
+    impl FolRdfSource for MixedSource<'_> {
+        fn resolve(&self, identity: &str) -> Option<&TermValue> {
+            self.0.resolve(identity)
+        }
+
+        fn is_opaque_transport(&self, identity: &str) -> bool {
+            matches!(
+                identity,
+                "\0relation" | "\0coordinate" | "quoted" | "<urn:missing>"
+            )
+        }
+    }
+    let internal_fact = |predicate| {
+        DlClause::datalog(
+            ClauseAtom::quad(
+                ClauseTerm::literal("blank one"),
+                predicate,
+                ClauseTerm::literal("quoted"),
+                ClauseTerm::literal("\0coordinate"),
+            ),
+            vec![],
+        )
+    };
+    let mixed_goal = ClauseAtom::quad(
+        ClauseTerm::var("S"),
+        ClauseTerm::var("P"),
+        ClauseTerm::var("O"),
+        ClauseTerm::var("G"),
+    );
+    let mixed_clauses = [internal_fact(ClauseTerm::literal("\0relation"))];
+    let default_error =
+        solve_datalog_goal_rdf(&mixed_clauses, &mixed_goal, &budget, &source).unwrap_err();
+    assert!(matches!(default_error, FolError::Rdf(cause) if cause.identity() == "\0relation"));
+    let mixed_source = MixedSource(&source);
+    let (_, mixed_control) =
+        solve_datalog_goal_rdf(&mixed_clauses, &mixed_goal, &budget, &mixed_source).unwrap();
+    let FolControl::Decided(mixed_outcome) = mixed_control else {
+        panic!("registered transport constants must retain the ground answer");
+    };
+    assert_eq!(mixed_outcome.answers.len(), 1);
+    let row = &mixed_outcome.answers[0];
+    assert_eq!(native(row.get("S").unwrap()), blank(1));
+    assert_eq!(native(row.get("O").unwrap()), quoted);
+    assert_eq!(row.get("P").unwrap().symbol(), Some("\0relation"));
+    assert_eq!(row.get("G").unwrap().symbol(), Some("\0coordinate"));
+    for refused in [
+        ClauseTerm::literal("\0unregistered"),
+        ClauseTerm::iri("urn:missing"),
+    ] {
+        let identity = refused.surface().unwrap();
+        let error = solve_datalog_goal_rdf(
+            &[internal_fact(refused)],
+            &mixed_goal,
+            &budget,
+            &mixed_source,
+        )
+        .unwrap_err();
+        assert!(matches!(error, FolError::Rdf(cause) if cause.identity() == identity));
+    }
+
     source.0.remove("directed");
     let error = solve_datalog_goal_rdf(&clauses, &goal, &budget, &source).unwrap_err();
     let FolError::Rdf(cause) = &error else {
