@@ -50,6 +50,18 @@ graphs, provenance, and linked binary content. PurRDF keeps those distinctions
 through querying, validation and the carriers that can represent them; a
 projection that loses information returns a located loss ledger.
 
+**Version 4.0 brings the logic engines, document carriers and operational
+storage under explicit, inspectable contracts.** Rules can be prepared and
+maintained across signed changes; ground reasoning answers retain their native
+structure and checking evidence; reasoning request failures retain native causes
+across the language bindings. Geography
+now includes certified geodesy, explicit coordinate operations, buffers and
+overlays. Lossless TOML and MIME join the document codecs.
+
+This checkout contains the 4.0 release candidate. Registry badges and install
+commands below refer to the versions available from each registry; consult the
+[4.0 migration guide](./docs/MIGRATION-4.0.md) when moving from 3.x.
+
 **One RDF engine. One behavior. Every language.** The language surfaces expose
 different portions of the toolkit, described below. Every published Rust crate
 also builds for `wasm32-unknown-unknown`.
@@ -65,9 +77,9 @@ also builds for `wasm32-unknown-unknown`.
 | --- | --- |
 | Carry RDF 1.2 through an application | Interned datasets, triple terms, reifiers, annotations, directional literals and named graphs; native text codecs, canonicalization, diff and isomorphism. |
 | Query and change a graph | SPARQL 1.1/1.2 query and Update, prepared execution, property paths, host extensions, resource governors and explain receipts. |
-| Validate and derive knowledge | SHACL 1.2, ShEx 2.1, deterministic Datalog, RDF/RDFS/OWL-RL/D materialization, OWL-Direct reasoning and RIF-Core. |
+| Validate and derive knowledge | SHACL 1.2, ShEx 2.1, JSON Schema, incremental Datalog, certified existential chase, goal-directed ground resolution, OWL-Direct and RIF-Core. |
 | Retrieve across several signals | Exact fixed-point BM25, GeoSPARQL predicates, exact embedding kNN, deterministic HNSW, and reciprocal-rank fusion with per-producer evidence. |
-| Make a document queryable | Structural Markdown and ordered JSON codecs with byte-addressed occurrences, explicit profiles and exact reconstruction. |
+| Make a document queryable | Ordered JSON, structural Markdown, lossless TOML 1.1 and original-byte MIME covers with explicit profiles and verified reconstruction. |
 | Exchange graph data | GTS containers with binary payloads; canonical five-table Parquet; graph, tabular and research-object projections with loss records. |
 | Read an immutable snapshot under a budget | Certified segmented storage, authenticated range reads, pinned terms, sparse caches and shared workspace admission through the ordinary dataset/evaluator seams. |
 
@@ -76,6 +88,60 @@ surface at the root and the other engines as modules. Applications supply their
 own vocabularies, extension registrations, network transports and embedding
 models. Standard RDF vocabulary terms are built in; application namespaces are
 explicit configuration.
+
+## Logic engines in 4.0
+
+PurRDF supports both materializing consequences and answering a particular
+goal. The shared [`datalog`](./crates/datalog/src/lib.rs) module is available
+through the facade, alongside [`entail`](./crates/entail/) and
+[`shapes`](./crates/shapes/). Programs, selected limits and semantic laws
+participate in content identities so a result identifies the contract it ran.
+
+**One rule representation, several execution strategies.** DL-clauses express
+atomic, conjunctive, existential, disjunctive and inconsistency heads. The
+stratified semi-naive evaluator, restricted existential chase and OWL-Direct
+tableau consume their supported fragments and refuse unsupported forms
+explicitly. Triple and quad programs use the same native machinery. Guards,
+native filters and ordered schedules carry SHACL and SPARQL rule expressions
+through the shared evaluator.
+
+**Prepare once; maintain across changes.** Demand queries compile a goal and
+its rules into a reusable program. Signed insertions and retractions update a
+retained model, including recursive support and stratified negation, while
+preserving original dictionary identities. Paused maintenance retains its work;
+answers and net membership deltas become available at a completed transaction
+boundary. Hosts select logical ceilings and storage admission explicitly.
+Unstated fact, join and term-arena ceilings impose no logical cap; physical
+storage and counter limits still apply. Term-generating rules have their own
+declared limits. Resource refusal never masquerades as a complete model.
+
+**Admit existential programs before execution.** The restricted chase checks
+constant-refined weak acyclicity and binds prepared execution to the original
+program and its termination certificate. Conjunctive heads share their
+existential witnesses. A failed admission names the unsupported form or
+termination obligation; it does not claim that every refused program diverges.
+See the [chase contract](./crates/datalog/src/chase.rs).
+
+**Ask a goal and inspect its proof.** Native backward resolution works over a
+shared compound-term DAG with order-sorted unification and tabled evaluation.
+Owned ground answers retain their structural bindings, original RDF values and
+checking evidence after the working arena is released. Truth probes distinguish
+established true, false or well-founded undefined from an unevaluated atom or
+incomplete search. A partial search may establish a positive proof; it cannot
+establish falsity merely because an answer has not appeared. Independent proof
+checking binds the proof to the source, program, sorts and original run contract.
+This is the shipped ground answer contract; symbolic residual answers and
+higher-order execution are outside it. See
+[resolution](./crates/datalog/src/resolve_fol.rs) and
+[proof checking](./crates/datalog/src/resolve_fol/proof.rs).
+
+**Use established RDF reasoning regimes.** RDF, RDFS, OWL 2 RL and datatype
+materialization, open-world OWL-Direct services and RIF-Core sit above the native
+engines. SHACL inference rules use the same ordered rule substrate. Python, C,
+JavaScript and the CLI expose selected reasoning operations; the compound-term
+construction, maintenance and structural proof APIs described above are Rust
+APIs. The [reasoning guide](./docs/book/src/entailment.md) describes each regime
+and its completion boundaries.
 
 ## Query, reason and retrieve together
 
@@ -108,11 +174,14 @@ predicate remains an ordinary RDF pattern.
   callers can select English stemming. Stop-word dictionaries and a separate query
   dialect are outside its surface.
 - **Geometry:** [`purrdf-geo`](./crates/geo/) implements GeoSPARQL 1.1 topological
-  predicates over exact rational WKT/GeoJSON geometry, plus accessors and
-  exactly computable measures and constructors. Coordinate transformation,
-  ellipsoidal geodesics, buffers and overlay set operations are not implemented;
-  registered unsupported functions refuse by name. The host declares the CRS
-  and which coordinate systems use metres.
+  predicates over exact rational WKT/GeoJSON geometry. Its shared
+  [`geographic kernel`](./crates/geo-kernel/) supplies certified ellipsoidal
+  geodesy, explicit coordinate-operation chains, buffers, overlays, hierarchical
+  cells/covers and spatial indexes. The standard profile interprets `CRS84` and
+  GeoJSON as WGS 84 longitude/latitude; other references, units and transformations
+  require explicit registration. Numerical proof and resource policies produce
+  completed values or typed refusals. The [geographic profile](./docs/GEO-PROFILE.md)
+  specifies operation laws, coordinate grids and host request interfaces.
 - **Vectors:** [PURREMB](./docs/PURREMB.md) carries caller-produced embeddings,
   their coordinates and derivation identities. Exact kNN supports cosine,
   negative dot and squared Euclidean distance. [`purrdf-hnsw`](./crates/hnsw/)
@@ -151,11 +220,23 @@ and their byte cover. Both require explicit profiles, bind identity to the
 profile's law and source bytes, and reconstruct the source byte for byte.
 The Markdown dialect is specified by the codec; it is not a CommonMark parser.
 
+[`purrdf-toml`](./crates/toml/) preserves TOML 1.1 authoring occurrences and
+verifies reconstructed bytes by reparsing. [`purrdf-mime`](./crates/mime/)
+keeps RFC 5322/MIME source bytes, ordered headers, nested parts and typed defects
+in an immutable analyzed document. Attachment decoding and strict RDF
+reconstruction use that original document. Editing its source requires a new
+analysis. [`purrdf-yaml`](./crates/yaml/) covers original YAML presentation,
+including ordered occurrences, tags and aliases in its acyclic source profile;
+this source carrier is separate from YAML-LD semantic processing.
+[`purrdf-glob`](./crates/glob/) compiles Unicode patterns over explicit
+literal or IRI lexical surfaces with deterministic work refusal.
+
 **Conversions account for loss.** Native codecs cover Turtle, TriG,
 N-Triples, N-Quads, RDF/XML, TriX, HexTuples, JSON-LD and YAML-LD. The JSON-LD
 context lens compiles reusable offline contexts; it supplies expansion,
-compaction and derived-prefix modes, with caller-provided context registries
-and no network loader or framing API. Graph and research-object projections
+compaction, derived-prefix modes and native JSON-LD/YAML-LD framing, with
+caller-provided offline context registries, explicit policies and limits.
+It installs no network loader. Graph and research-object projections
 include Neo4j CSV, openCypher, GraphML, CSVW, OBO Graphs, SKOS, DCAT, VoID,
 RO-Crate, Croissant, DataCite and Frictionless. Supported reversible carriers
 retain RDF 1.2 through an exact sideband; lossy views report what was lost.
@@ -185,7 +266,8 @@ variable-projected `SELECT` over a basic graph pattern; unpriced operational
 forms return a typed refusal. Construction, full certification, host buffers
 and caller-owned outputs have separate memory obligations. The kernel performs
 no filesystem or network I/O. See the [storage contract](./crates/rdf-core/STORAGE.md)
-and [3.0 migration guide](./docs/MIGRATION-3.0.md) for the exact boundaries.
+and [4.0 migration guide](./docs/MIGRATION-4.0.md) for the exact boundaries and
+stored-artifact rebuild requirements.
 
 Rust's `explain_query_fallible_view` measures the operational view directly and
 returns its explanation with final storage evidence. Its options and stop-signal
@@ -208,6 +290,13 @@ including imports and semantic actions. Imports resolve from explicit host
 registries. The Rust schema compiler also projects shapes into JSON Schema,
 OpenAPI, Pydantic, LinkML, TypeScript and GraphQL, with coverage and loss reports;
 those schema lanes are Rust-only.
+
+Native [`JSON Schema`](./crates/jsonschema/) evaluates drafts 2020-12,
+2019-09 and 07 with exact decimal numbers, dynamic/recursive references and
+ECMA-262 patterns. Callers supply meta-schemas, resource registries and reference
+policies. Resource exhaustion is a typed evaluation error, distinct from an
+invalid instance. ShEx likewise distinguishes matcher refusal from a completed
+validation result.
 
 The entailment engine implements **all 78 OWL 2 RL rules** and all 18 RDF + RDFS
 patterns. That is rule-table coverage, distinct from entailment conformance:
@@ -233,8 +322,11 @@ parameters and exact logical anchors in JSON, SARIF and the C diagnostic record.
 ### Rust
 
 ```sh
-cargo add purrdf
+cargo add purrdf --git https://github.com/Blackcat-Informatics/purrdf.git
 ```
+
+The Git dependency uses the current source. Use a released version from
+crates.io when you need a registry-pinned dependency.
 
 ```rust
 use purrdf::{parse_dataset, serialize_dataset, SerializeGraph};
@@ -253,8 +345,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-Use the facade's `sparql`, `shapes`, `shex`, `entail`, `retrieval`, `columnar`,
-`json` and `markdown` modules as your application grows.
+Use the facade's `sparql`, `shapes`, `shex`, `datalog`, `entail`, `retrieval`,
+`geo`, `columnar`, `json`, `yaml`, `toml`, `mime` and `markdown` modules as your
+application grows.
 [More Rust examples](./docs/book/src/getting-started/rust.md).
 
 ### Python
@@ -312,7 +405,7 @@ console.log(restored.size, dataset.id.toString());
 
 The RDF/JS-shaped API also exposes SPARQL, SHACL, reasoning, projections and
 static RDF 1.2 SVG visualization. Asynchronous queries can use host-provided
-`SERVICE` / `LOAD` resolvers through JSPI. In 3.0, dataset identities and
+`SERVICE` / `LOAD` resolvers through JSPI. Dataset identities and
 generations are `bigint`; use decimal strings in JSON.
 [JavaScript guide](./crates/rdf-wasm/js/README.md).
 
@@ -347,7 +440,7 @@ federation resolver, and the core ships no HTTP client.
 | [`purrdf-sparql-results`](./crates/sparql-results/) | Results JSON, XML, CSV and TSV. |
 | [`purrdf-shapes`](./crates/shapes/) | SHACL validation/rules and schema compilation. |
 | [`purrdf-shex`](./crates/shex/) | ShEx schemas and validation. |
-| [`purrdf-datalog`](./crates/datalog/) | Deterministic semi-naive rule substrate. |
+| [`purrdf-datalog`](./crates/datalog/) | Semi-naive evaluation, incremental maintenance, prepared demand, existential chase and ground resolution. |
 | [`purrdf-entail`](./crates/entail/) | Materialization, OWL-Direct and RIF-Core. |
 | [`purrdf-text`](./crates/text/) | Exact fixed-point full-text search. |
 | [`purrdf-geo`](./crates/geo/) | Exact GeoSPARQL geometry and relations. |
@@ -367,10 +460,12 @@ federation resolver, and the core ships no HTTP client.
 | [`purrdf-iri`](./crates/iri/) | IRI/URI, language tags, base resolution and standard vocabularies. |
 | [`purrdf-xsd`](./crates/xsd/) | XSD value spaces, exact numbers and temporal arithmetic. |
 | [`purrdf-cdt`](./crates/cdt/) | SPARQL composite datatypes and their function library. |
-| [`purrdf-events`](./crates/rdf-events/) | Zero-dependency ingestion protocol and text direction. |
+| [`purrdf-events`](./crates/rdf-events/) | Ingestion protocol and the shared RDF 1.2 text-direction type. |
 | [`purrdf-lex`](./crates/lex/) | Shared terminals, Unicode and JSON/YAML/CBOR/XML codecs. |
 | [`purrdf-hash`](./crates/hash/) | Zero-dependency hashes and shared identity kernels. |
 | [`purrdf-deflate`](./crates/deflate/) | Native deterministic DEFLATE/gzip. |
+| [`purrdf-zstd`](./crates/zstd/) | Native Zstandard frames and deterministic FastCOVER dictionary training. |
+| [`purrdf-yaml`](./crates/yaml/) | Lossless YAML document model and RDF cover. |
 | [`purrdf-ed25519`](./crates/ed25519/) | Ed25519 signing and strict verification. |
 | [`purrdf-stack`](./crates/stack/) | Native/WASM stack admission. |
 | [`purrdf-wasm`](./crates/rdf-wasm/) | Engine and ESM bindings for JavaScript. |
@@ -391,10 +486,8 @@ and **590/591 passing** on the vendored W3C SHACL 1.2 test suite.
 The 591st entry, `hasLang-example`, is reported failed: it calls `sparql:hasLang` with two
 arguments where the SPARQL 1.2 grammar takes one.
 
-
-Conformance gates distinguish official suites, first-party frozen corpora and
-explicitly recorded boundaries. The full scoreboard and commands are in
-[`docs/CONFORMANCE.md`](./docs/CONFORMANCE.md):
+The following measurements cover the named corpora. They do not assert that
+every possible input or every language surface has been exercised:
 
 | Engine | Suite | Result |
 | --- | --- | --- |
@@ -461,7 +554,7 @@ published crate for WASM. Release artifacts use stable Rust.
 
 The Cargo suite, Python distributions and npm package share one coordinated
 version and follow semantic versioning. The C ABI is separately versioned,
-currently **0.8**, with signature checks and `purrdf_abi_version` at runtime.
+currently **0.20.0**, with signature checks and `purrdf_abi_version` at runtime.
 See [contributing](./CONTRIBUTING.md) for the verified commit workflow.
 
 PurRDF is developed by Blackcat Informatics® Inc. and is the library backbone
