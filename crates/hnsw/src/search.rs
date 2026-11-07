@@ -762,6 +762,11 @@ mod tests {
         assert!(visited.visit(usize::MAX).unwrap());
         visited.generation = u32::MAX;
         visited.begin();
+        // Row zero's page still carries generation one. Wrapping must clear
+        // it before generation one is reused, even though it was not touched
+        // in generation two.
+        assert!(!visited.contains(0));
+        assert!(visited.visit(0).unwrap());
         assert!(!visited.contains(usize::MAX));
         assert!(visited.visit(usize::MAX).unwrap());
     }
