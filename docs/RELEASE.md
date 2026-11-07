@@ -153,10 +153,10 @@ first tagged run can publish the complete workspace in dependency order.
    bash scripts/bootstrap-crates-io.sh --publish --output /tmp/purrdf-empty-publish
    ```
 
-   Verification uses the `stable` Rust toolchain. Operators with a separate
-   stable validation installation may set `PURRDF_BOOTSTRAP_TOOLCHAIN` to that
-   installed toolchain (for example, `1.98.1`); the script rejects a nightly
-   or beta compiler.
+   Empty-package verification uses the installed Rust compiler and its Cargo
+   executable; it installs or selects no other toolchain. The retained receipt
+   records the compiler version. Functional release builds retain their separate
+   stable-toolchain policy.
 
    Both commands use fresh directories outside the workspace. Publication uses
    `CARGO_REGISTRY_TOKEN` or `CARGO_TOKEN` without displaying its value. Normal
