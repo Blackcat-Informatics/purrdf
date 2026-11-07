@@ -18,13 +18,13 @@ mixed targets on WASM or extend them with ordinary native tests.
 
 Quick orientation:
 
-* **Gate before you claim done**: `make check` (fmt + clippy + build + tests +
-  hygiene). Clippy runs the workspace pedantic/nursery lint table and must be
-  warning-free.
-* **Never**: add Cargo features; hand-edit `generated/` or `vectors/`; pin a
+* **Verify the affected behavior and callers** using the canonical Rust guide.
+  Run required hooks and release gates fully, preserve their profiles and deny
+  warnings. Completion alone does not require a duplicate whole-workspace run.
+* **Never**: add semantic Cargo features; hand-edit `generated/` or `vectors/`; pin a
   dependency version inside a member crate (root `[workspace.dependencies]`
   only); introduce nondeterminism into serializers or the GTS writer; add
-  PyO3 anywhere near `purrdf-core`; break the wasm32 build (every
+  PyO3 anywhere near `purrdf-core`; break the `wasm32` build (every
   release crate must stay `wasm32-unknown-unknown`-clean — `make wasm`).
 * **Naming**: the project is **PurRDF** in prose, `purrdf` in identifiers.
 * **PurRDF is NOT an ontology**: it mints no vocabulary IRIs. Vocabularies are
