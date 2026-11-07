@@ -41,35 +41,36 @@
  * discipline (append-only status enum, drift-gated header) is in place, but the
  * version stays pre-1.0 until a real C consumer + the rdflib shim exercise it.
  *
- * # The bump rule this triple obeys
+ * # Compatibility during workspace v4
  *
- * The project's pre-1.0 policy — `docs/book/src/project/releases.md`, the
- * "Pre-1.0 semver policy" section — is: while the version is `0.x`, a **minor**
- * bump (`0.x` → `0.(x+1)`) may include breaking changes, and a **patch** bump
- * (`0.x.y` → `0.x.(y+1)`) is bugfix-only and API-compatible. So while MAJOR is
- * `0`, **an incompatible C-ABI change rides the MINOR component**; MAJOR does
- * not move, because moving it would declare the 1.0 stability this surface has
- * explicitly not earned yet (the paragraph above).
+ * The C ABI row in `docs/MIGRATION-4.0.md`, "Compatibility after 4.0", governs
+ * workspace v4: the ABI 0.20.0 surface shipped with v4.0 remains compatible
+ * throughout v4 despite its separate beta version. Existing exported signatures,
+ * return contracts, status discriminants, struct layouts and array dimensions
+ * are frozen. Add symbols or retained handles for new capabilities, and retain
+ * the existing entry points and layouts. An ABI version bump never authorizes
+ * a breaking change within workspace v4.
  *
- * A change is incompatible — and therefore MUST bump MINOR — when a host built
- * against the previous header would mis-execute against the new library:
- * removing an exported function, renaming one, retyping or reordering its
- * parameters, inserting a parameter anywhere but the end, changing its return
- * type, or renumbering a status discriminant. `tests/abi_signatures.rs` pins
- * the complete exported prototype list to this triple, so such a change cannot
- * reach a release without an author deliberately touching these constants.
+ * Earlier workspace releases permitted incompatible changes on an ABI minor
+ * bump while this major component was zero. That historical policy does not
+ * apply during workspace v4. `tests/abi_signatures.rs` pins the exported
+ * prototype list to this triple; additive exports still update the minor
+ * version so callers can identify the surface available in a loaded library.
  */
 #define PURRDF_ABI_MAJOR 0
 
 /**
- * ABI minor version. It TRACKS THE EXPORTED SIGNATURES: every change to the
- * parameter list, the return contract, or the documented behaviour of an exported
- * symbol bumps it, including a purely additive out-param — additive in source is
- * still a recompile for every C consumer, and a library whose minor is below the
- * header's cannot honour the call the header describes. It is the number a consumer
- * linking against an unknown build reads back from `purrdf_abi_version` to decide
- * whether the header it compiled against and the library it loaded agree, so it must
- * never stand still across a signature change.
+ * ABI minor version. During workspace v4, additive exported symbols bump it;
+ * existing parameter lists, return contracts and layouts remain compatible.
+ * Adding an out-parameter to an existing symbol is an incompatible change and
+ * is forbidden during v4. A caller reads this number through
+ * `purrdf_abi_version` to determine whether a loaded library provides the
+ * additional symbols its header declares.
+ *
+ * # Historical changes before the workspace v4 compatibility baseline
+ *
+ * The examples below describe earlier ABI revisions and do not authorize
+ * incompatible changes during workspace v4.
  *
  * `0.6.0` → `0.7.0` carries four incompatible signature changes, deliberately
  * bundled into one unreleased bump rather than split across four:

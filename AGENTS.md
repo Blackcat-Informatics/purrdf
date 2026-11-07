@@ -263,6 +263,14 @@ makes it removable).
 
 ## 2. Hard constraints (violating these fails CI or review)
 
+* **Preserve the v4 compatibility baseline.** Follow
+  [Compatibility after 4.0](./docs/MIGRATION-4.0.md#compatibility-after-40) for
+  post-release work. Preserve existing signatures, variant payloads, ownership,
+  generic/trait requirements, host behavior and valid v4 artifact readers.
+  Non-exhaustiveness permits additions, not replacement of existing payloads.
+  New semantic and identity laws require explicit versions. Fixed C layouts use
+  additive handles and entry points for new evidence.
+
 * **NO semantic Cargo features, ever.** The sole exception is the empty,
   non-semantic `purrdf-capi:capi = []` marker that `cargo-c` requires. It gates
   no code and must never appear in `cfg(feature = ...)`; CI checks both facts
@@ -516,12 +524,12 @@ black-cat family system — `#cat-head-core` is shared verbatim; only the
 
 Tag-driven trusted publishing: `rust-v*` → crates.io (37 crates, ordered),
 `py-v*` → PyPI (`purrdf`). See [`docs/RELEASE.md`](./docs/RELEASE.md). Version
-is single-sourced in `[workspace.package]`. Twelve members never reach
+is single-sourced in `[workspace.package]`. Thirteen members never reach
 crates.io: `purrdf-capi`, `purrdf-sparql-conformance`,
-`purrdf-conformance-kit`, `purrdf-hash-conformance`, `purrdf-cli`, `purrdf-envelope-probe`,
+`purrdf-conformance-kit`, `purrdf-shacl-conformance`, `purrdf-hash-conformance`, `purrdf-cli`, `purrdf-envelope-probe`,
 `purrdf-bench`, `purrdf-alloc-probe`, `purrdf-testkit`, `wasm-link`,
 `helper-census`, and `purrdf-python` (PyPI via maturin instead).
-`purrdf-alloc-probe`, `purrdf-conformance-kit` and `purrdf-testkit` are
+`purrdf-alloc-probe`, `purrdf-conformance-kit`, `purrdf-shacl-conformance` and `purrdf-testkit` are
 dev-dependencies of published crates, so their root `[workspace.dependencies]` entries are path-only with
 **no `version`** — cargo then strips them from the packaged manifest, which is
 the only way `cargo publish`'s dev-dependency-resolving verification step can

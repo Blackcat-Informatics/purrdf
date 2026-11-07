@@ -87,7 +87,7 @@ Regenerate or recompute these stored artifacts; 4.0 readers refuse or miss the
 - Developer-schema compilations cached under an earlier `SchemaCompilation.key`.
 
 Rebuild C clients against the regenerated `purrdf.h`; the 4.0 libraries declare
-C ABI 0.16.0. Several defaults change behavior without a signature change:
+C ABI 0.20.0. Several defaults change behavior without a signature change:
 remembered empty named graphs, model-only Datalog output, exact decimal
 division, WKT and GeoJSON parsing resource policies, the SPARQL pre-binding rewrite and specific
 SPARQL diagnostic codes.
@@ -1772,3 +1772,50 @@ The schema guards `limits::ensure_depth` and `ensure_emitted` are internal.
 Public schema depth and output-budget constants, and `emitted_bytes_bound`, remain
 available for caller planning. Carrier thresholds, request defaults, rule selection,
 refusal order and successful RDF identities are unchanged.
+
+## Compatibility after 4.0
+
+The public surface of the stable `rust-v4.0.0` tree is the v4 compatibility
+baseline. It includes reachable module re-exports, macro-generated declarations,
+associated types and errors, target-specific exports, C headers, and the Python
+and JavaScript packages. A hidden public item has the same compatibility
+obligations as a documented public item. Checkout-based conformance fixtures are
+kept outside the shipping API.
+
+Changes during v4 must preserve existing signatures, variant payloads, public
+construction and matching, ownership and borrow lifetimes, required trait
+methods and bounds, and existing trait implementations, including `Clone`,
+`Copy`, equality, ordering, hashing and thread safety. Non-exhaustiveness permits additional variants; it does not permit
+changing an existing variant's fields or semantics. Private representations and
+provided trait methods can grow without imposing new obligations on existing
+implementations. Traits that support trait objects in the baseline must retain
+that support; provided generic methods need an appropriate `Self: Sized` bound
+when their addition would otherwise remove it. New entry points use the same underlying execution and native
+owners.
+
+The following boundaries have specific compatibility obligations:
+
+| Boundary | Frozen contract | Compatible extension |
+| --- | --- | --- |
+| Structured resolution | `resolve_fol` selects `FolAnswerContract::GroundOnly`; extracted bindings retain their scoped graph. | Additional contracts and answer views over the same evaluator; existing ground results and ownership remain available. |
+| Resolution status and control | Existing `FolStatus`, `FolControl`, `Unified` variants and constructible `FolBudget { max_steps }`. | New control/result owners and entry points; preserve existing status projections and budget construction. |
+| Terms and proofs | Existing `NodeData` payloads, `TermRead` requirements, structural answer keys, source/program/sort/contract proof binding and version 1 identity laws. | Additional node or contract variants and versioned proof laws; no fabricated clause indices or replacement of native RDF identity with display text. |
+| Borrowed answer access | Existing lifetimes and the infallible exact-size borrowed binding snapshot. | Additional owned, residual or fallible views; retain the original snapshot contract. |
+| Dataset providers | Existing `DatasetView::ReadError` bounds and cell-access signatures. | Provided inspection hooks and native accessors sharing one typed read; retain the original owned error and preserve source-read propagation. |
+| Planning and governors | Existing estimates, actual observations, callback/provider behavior and admitted resource accounts. | Private algorithm changes, additional capability methods and explicit caller-selected controls; no invented guaranteed bound. |
+| C ABI | ABI 0.20.0 layouts, symbols and discriminants, including the fixed eight-dimension governor projection. | New retained handles and functions for additional evidence; existing structs and arrays keep their size and meaning. |
+| Python and JavaScript | Existing call/return shapes, exception classes and retained ownership. | Additional methods, keyword controls and owner types with existing defaults and behavior preserved. |
+| Prepared and persisted data | Existing valid v4 formats, profile meanings and source/plan/proof identities. | Explicitly version new laws and encodings, and keep readers for valid v4 artifacts. Source-bound memo misses remain distinct from unreadable durable data. |
+
+Typed error enrichment preserves original operands, standard source/downcast
+access, borrowed structured inspection, storage refusal and human presentation.
+An external provider's opaque error remains explicitly opaque; retaining it does
+not justify inventing semantic fields or silently losing a known native cause.
+Inspection and native ownership must not gain stronger caller bounds as an
+incidental implementation change.
+
+Algorithmic improvements, additional languages and new reasoning contracts do
+not authorize another migration of the frozen surface. A correctness repair
+must identify the violated existing law and preserve the adjacent valid case.
+A new semantic law or identity uses a new explicit version instead of silently
+reinterpreting a valid v4 value or artifact.

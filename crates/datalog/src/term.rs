@@ -126,8 +126,8 @@ pub trait TermRead {
 /// not silently drop the node or substitute another term. Recognizing a stored
 /// form does not imply that a reasoning strategy supports it.
 ///
-/// [`TermDag::data`] borrows the complete node. The arena's `intern_leaf`,
-/// `intern_free`, `fresh_meta`, `intern_bound`, `intern_app` and `intern_binder`
+/// [`TermDag::data`] borrows the complete node. The arena's `intern_rdf`,
+/// `intern_leaf`, `intern_free`, `fresh_meta`, `intern_bound`, `intern_app` and `intern_binder`
 /// methods construct all current forms with their existing payloads and meaning.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
