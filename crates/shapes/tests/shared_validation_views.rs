@@ -183,8 +183,7 @@ fn validation_handle_budget_is_admitted_before_mapping() {
     };
     let count = snapshot.term_count();
     let refused = ShaclDatasetView::delta(Arc::clone(&snapshot), true, limits)
-        .err()
-        .expect("mapping bytes exceed zero");
+        .expect_err("mapping bytes exceed zero");
     ShaclDatasetView::delta(snapshot, true, ViewLimits::default()).expect("admitted neighbor");
     let captured = Capture::read(&refused);
     assert_eq!(captured.code, "shacl-view-retention-limit");
@@ -200,8 +199,7 @@ fn validation_handle_budget_is_admitted_before_mapping() {
     let composite =
         Arc::new(CompositeDatasetView::new(vec![data()], ViewLimits::default()).unwrap());
     let refused = ShaclDatasetView::composite(Arc::clone(&composite), true, limits)
-        .err()
-        .expect("composite mapping bytes exceed zero");
+        .expect_err("composite mapping bytes exceed zero");
     ShaclDatasetView::composite(composite, true, ViewLimits::default()).expect("admitted neighbor");
     assert_eq!(Capture::read(&refused).code, "shacl-view-retention-limit");
 }
