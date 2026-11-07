@@ -1,0 +1,19 @@
+ghprsq source head backlink metadata
+
+parent_hashes: 4e68248f59a1b76201b32b0923581f39321af583
+
+GhpRsq-Schema: 1
+GhpRsq-Merge-Style: structured-squash-head-backlink
+GhpRsq-GitHub-Repo: Blackcat-Informatics/purrdf
+GhpRsq-GitHub-Pull-Request: 1221
+GhpRsq-GitHub-PR-URL: https://github.com/Blackcat-Informatics/purrdf/pull/1221
+GhpRsq-Base-Ref: main
+GhpRsq-Base-OID: 0884d13fa0b2c7de0afd74f50237b6ce215f4e76
+GhpRsq-Head-Ref: paudley/1179-unify-the-rust-engineering-contract-and
+GhpRsq-Head-OID: 4e68248f59a1b76201b32b0923581f39321af583
+GhpRsq-Result-Tree: 262815ad8197453758a337536f5843ffe091586e
+GhpRsq-Result-Commit: f39dca154a5a5d28e9bf48f3c3220e7ed75a1c93
+GhpRsq-Parent-Hashes: 4e68248f59a1b76201b32b0923581f39321af583
+GhpRsq-Squash-Notes-SHA256: f1f7825f30ae9abf844fd2c08c83c6775c43f7af2d62b73b348a6492c65891a5
+GhpRsq-Defect-Class: none
+GhpRsq-Stage-Evidence: none
