@@ -1705,8 +1705,11 @@ the error before reading conformance entries. An assignment-search refusal is
 `ValidationError::MatcherWork { attempted, maximum }`, with structured code
 `shex-matcher-work`; it is not a nonconformance finding. Negation propagates the
 refusal instead of turning incomplete search into a successful result. Pattern
-language errors remain findings; operational pattern failures retain their
-native cause through `ValidationError::Regex`.
+language and flag errors remain findings. Default entry points such as
+`validate` and `validate_with` do not return `ValidationError::Regex`. Selected
+XPath entry points, including `validate_with_xpath` and
+`XPathValidator::validate`, retain operational pattern failures and their native
+cause through `ValidationError::Regex`.
 
 `ValidationOptions` is non-exhaustive. Replace struct literals with
 `ValidationOptions::default()` and the `with_*` methods. Select search admission

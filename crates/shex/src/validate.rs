@@ -320,7 +320,9 @@ impl core::fmt::Debug for ValidationOptions<'_> {
 /// absent from the dataset is validated against an empty neighbourhood.
 ///
 /// # Errors
-/// Returns a typed matcher or native pattern refusal, without a partial report.
+/// Returns a typed matcher refusal, without a partial report. Pattern and flag
+/// errors remain facet findings; native pattern refusals are available through
+/// [`validate_with_xpath`].
 ///
 /// # Examples
 ///
