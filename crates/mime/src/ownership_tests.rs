@@ -90,3 +90,175 @@ fn repeated_part_access_and_projection_reuse_analyzed_source() {
         bytes.len()
     );
 }
+
+#[test]
+fn transfer_allocation_tracks_outputs_rather_than_escape_density() {
+    let profile = Profile::new(
+        "original",
+        Vocabulary::under("https://example.org/mime#").unwrap(),
+        Limits::unbounded(),
+    )
+    .unwrap();
+    for count in [32, 8192] {
+        for (name, encoding, unit, decoded) in [
+            (
+                "sparse",
+                "quoted-printable",
+                b"AAAAAAAAAAAAAAA=41".as_slice(),
+                b"AAAAAAAAAAAAAAAA".as_slice(),
+            ),
+            (
+                "dense",
+                "quoted-printable",
+                b"=41".as_slice(),
+                b"A".as_slice(),
+            ),
+            (
+                "whitespace",
+                "base64",
+                b"Y \tW\r\nJj!?".as_slice(),
+                b"abc".as_slice(),
+            ),
+            (
+                "binary",
+                "binary",
+                b"\0\xff\n\r".as_slice(),
+                b"\0\xff\n\r".as_slice(),
+            ),
+        ] {
+            let mut source = format!("Content-Transfer-Encoding: {encoding}\r\n\r\n").into_bytes();
+            source.extend(unit.repeat(count));
+            let expected = decoded.repeat(count);
+            let window = CurrentThreadWindow::open();
+            let document = analyze(
+                SourceDocument {
+                    id: "urn:example:transfer",
+                    bytes: &source,
+                },
+                &profile,
+            )
+            .unwrap();
+            let analysis = window.close();
+            assert!(document.problems().is_empty());
+            let part = &document.parts()[0];
+            let window = CurrentThreadWindow::open();
+            crate::transfer::visit(&source[part.body.clone()], &part.transfer_encoding, |_| {})
+                .unwrap();
+            let validation = window.close();
+            assert_eq!(
+                validation,
+                Default::default(),
+                "validation retained decoded output"
+            );
+            let window = CurrentThreadWindow::open();
+            let attachment = document.decoded_attachment(0).unwrap();
+            let extraction = window.close();
+            assert_eq!(attachment.bytes, expected);
+            assert!(
+                extraction.allocations <= 2,
+                "escape density added allocations"
+            );
+            assert!(extraction.requested_bytes <= 2 * u64::try_from(expected.len()).unwrap());
+            let window = CurrentThreadWindow::open();
+            let digest = document.decoded_digest(0).unwrap();
+            let digest_work = window.close();
+            assert_eq!(digest, attachment.digest);
+            assert_eq!(
+                digest_work,
+                Default::default(),
+                "digest retained decoded output"
+            );
+            eprintln!(
+                "MIME transfer={name}, input={}, decoded={}, analysis={analysis:?}, validation={validation:?}, extraction={extraction:?}, digest={digest_work:?}",
+                unit.len() * count,
+                expected.len()
+            );
+        }
+    }
+}
+
+#[test]
+fn transfer_failures_discard_partial_payloads_and_digests_at_original_offsets() {
+    use crate::{MimeError, TransferEncoding as Encoding};
+    let profile = Profile::new(
+        "original",
+        Vocabulary::under("https://example.org/mime#").unwrap(),
+        Limits::unbounded(),
+    )
+    .unwrap();
+    for (encoding, body, at, reason) in [
+        (
+            Encoding::QuotedPrintable,
+            b"ok=41=Z0".as_slice(),
+            5,
+            "invalid quoted-printable hexadecimal escape",
+        ),
+        (
+            Encoding::QuotedPrintable,
+            b"ok=\xff0",
+            2,
+            "non-ASCII quoted-printable escape",
+        ),
+        (
+            Encoding::QuotedPrintable,
+            b"x=",
+            1,
+            "truncated quoted-printable escape",
+        ),
+        (
+            Encoding::QuotedPrintable,
+            b"x\n",
+            1,
+            "illegal unencoded quoted-printable byte or bare line ending",
+        ),
+        (
+            Encoding::Base64,
+            b"YWJjAR==",
+            0,
+            "malformed base64 groups or padding",
+        ),
+        (
+            Encoding::Base64,
+            b"YWJjZg==AAAA",
+            0,
+            "malformed base64 groups or padding",
+        ),
+    ] {
+        let mut source =
+            format!("Content-Transfer-Encoding: {}\r\n\r\n", encoding.name()).into_bytes();
+        source.extend_from_slice(body);
+        let document = analyze(
+            SourceDocument {
+                id: "urn:example:transfer",
+                bytes: &source,
+            },
+            &profile,
+        )
+        .unwrap();
+        for failure in [
+            document.decoded_attachment(0).map(|_| ()),
+            document.decoded_digest(0).map(|_| ()),
+        ] {
+            match failure.unwrap_err() {
+                MimeError::Transfer {
+                    at: actual,
+                    reason: actual_reason,
+                    ..
+                } => assert_eq!(
+                    (actual, actual_reason),
+                    (document.parts()[0].body.start + at, reason)
+                ),
+                other => panic!("unexpected transfer failure: {other}"),
+            }
+        }
+    }
+    for (body, decoded) in [
+        (b"a=62=\r\nc \t\r\nx \t".as_slice(), b"abc\r\nx".as_slice()),
+        (b"=3d=5F", b"=_"),
+    ] {
+        assert_eq!(
+            crate::transfer::decode(body, &Encoding::QuotedPrintable).unwrap(),
+            decoded
+        );
+    }
+}

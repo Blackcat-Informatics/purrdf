@@ -445,7 +445,7 @@ fn child_ranges(document: &mut Document<'_>, part: usize) -> Vec<(Range<usize>, 
     } else if !matches!(
         encoding,
         TransferEncoding::SevenBit | TransferEncoding::EightBit
-    ) && transfer::decode(&document.source.bytes[body.clone()], &encoding).is_err()
+    ) && transfer::visit(&document.source.bytes[body.clone()], &encoding, |_| {}).is_err()
     {
         problem(
             document,

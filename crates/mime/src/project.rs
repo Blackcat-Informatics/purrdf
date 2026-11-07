@@ -146,11 +146,11 @@ pub fn project(document: &Document<'_>, profile: &Profile) -> Result<Arc<RdfData
         }
         // A malformed transfer has a typed source problem, never a fabricated
         // decoded-content identity. Explicit decoding returns its exact refusal.
-        if let Ok(decoded) = document.decoded_attachment(index) {
+        if let Ok(digest) = document.decoded_digest(index) {
             writer.field(
                 &subject,
                 "decodedDigest",
-                TermValue::simple_literal(decoded.digest.to_hex()),
+                TermValue::simple_literal(digest.to_hex()),
             )?;
         }
     }
