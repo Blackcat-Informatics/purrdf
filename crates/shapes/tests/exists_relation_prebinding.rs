@@ -90,7 +90,7 @@ fn data() -> Arc<RdfDataset> {
         }
     }
     purrdf_shapes::text_ingest::parse_turtle_to_dataset(&turtle, None)
-        .unwrap_or_else(|errors| panic!("fixture data: {}", errors))
+        .unwrap_or_else(|errors| panic!("fixture data: {errors}"))
 }
 
 /// The focus node of `kind` and `verdict`, by the id the dataset holds it under: the

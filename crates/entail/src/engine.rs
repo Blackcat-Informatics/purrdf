@@ -107,7 +107,7 @@ use crate::axioms::axioms_for;
 use crate::calculus::{ChaseRule, calculus_contract_hash, clash_rule, program_with_attribution};
 use crate::datatypes::LiteralIndex;
 use crate::interner::intern_into;
-use crate::lists::{CLASH_RELATION, ListIndex, is_internal};
+use crate::lists::{CLASH_RELATION, InternalFact, ListIndex, is_internal};
 use crate::report::{InconsistencyWitness, InconsistentRun, ReasoningReport, WitnessTriple};
 use crate::report::{RunStats, TerminationCertificate};
 use crate::surrogates::SurrogateIndex;
@@ -765,6 +765,7 @@ pub(crate) fn seed<D: DatasetView>(
                     original: error.original.map(|surface| terms.value(&surface).clone()),
                 }))
             })? {
+                terms.record_internal(&fact);
                 let _ = edb.insert(&fact.subject, fact.predicate, &fact.object, &fact.graph);
             }
         }
@@ -781,6 +782,7 @@ pub(crate) fn seed<D: DatasetView>(
                 let _ = terms.record(&TermValue::iri(datatype));
             }
             for fact in literals.materialize() {
+                terms.record_internal(&fact);
                 let _ = edb.insert(&fact.subject, fact.predicate, &fact.object, &fact.graph);
             }
         }
@@ -794,6 +796,7 @@ pub(crate) fn seed<D: DatasetView>(
                 let _ = terms.record(&TermValue::iri(iri));
             }
             for fact in surrogates.materialize() {
+                terms.record_internal(&fact);
                 let _ = edb.insert(&fact.subject, fact.predicate, &fact.object, &fact.graph);
             }
         }
@@ -1353,19 +1356,24 @@ fn admits_predicate(value: &TermValue) -> bool {
 
 /// The surface → value dictionary that lets an answer be read back as RDF 1.2 terms.
 ///
-/// Every surface the store can ever hold is recorded here before evaluation begins: the
-/// constants of the program ([`Self::record_program`]) and the terms of the seeded facts
-/// ([`Self::record`]). The evaluator mints no terms, so those two sets are exhaustive and
-/// [`Self::value`] is total — see the [module docs](self).
+/// RDF surfaces retain the original values recorded from the program and seeded
+/// facts. Internal identities are recorded separately for backward lowering;
+/// they never acquire invented RDF values or enter materialized output.
 #[derive(Debug, Default)]
 pub(crate) struct Terms {
     /// Surfaces to the values they were rendered from, in lexical surface order.
     by_surface: BTreeMap<String, TermValue>,
+    /// Exact internal constants named by the program or its seeded facts.
+    opaque_transport: BTreeSet<String>,
 }
 
 impl purrdf_datalog::resolve_fol::FolRdfSource for Terms {
     fn resolve(&self, original_identity: &str) -> Option<&TermValue> {
         self.by_surface.get(original_identity)
+    }
+
+    fn is_opaque_transport(&self, original_identity: &str) -> bool {
+        self.opaque_transport.contains(original_identity)
     }
 }
 
@@ -1386,24 +1394,42 @@ impl Terms {
 
     /// Record every constant term of `program`.
     ///
-    /// Every constant this crate's calculus names is an IRI — PurRDF mints no vocabulary,
-    /// and the rules quantify over data rather than comparing it against literals — which
-    /// `every_clause_constant_is_an_iri` asserts over every declared program. A literal
-    /// constant is therefore NOT handled here, and deliberately so: a
-    /// [`ClauseTerm::Literal`] carries an already-rendered surface with no structure to
-    /// recover a [`TermValue`] from, so guessing one would put a term in the dictionary
-    /// that [`surface_of`] does not agree with. The rule that introduces the first literal
-    /// constant has to give this module a way to read it back, and the test is what makes
-    /// that a failure rather than a silent wrong term.
+    /// IRI constants retain native RDF values. A [`ClauseTerm::Literal`] holds
+    /// transport bytes rather than components from which to recover a value:
+    /// [`Self::record_literals`] records the declared RDF literals, while this
+    /// walk inventories internal constants without inventing RDF counterparts.
     fn record_program(&mut self, program: &[DlClause]) {
         for clause in program {
             for atom in clause.body().iter().chain(clause.head_atoms()) {
                 for term in atom.terms() {
-                    if let ClauseTerm::Iri(iri) = term {
-                        let _ = self.record(&TermValue::iri(iri.clone()));
+                    match term {
+                        ClauseTerm::Iri(iri) => {
+                            let _ = self.record(&TermValue::iri(iri.clone()));
+                        }
+                        ClauseTerm::Literal(surface) => self.record_opaque(surface),
+                        _ => {}
                     }
                 }
             }
+        }
+    }
+
+    /// Register only internal identities actually named by this source.
+    fn record_opaque(&mut self, surface: &str) {
+        if is_internal(surface) && !self.opaque_transport.contains(surface) {
+            self.opaque_transport.insert(surface.to_owned());
+        }
+    }
+
+    /// Preserve internal relations and coordinates from every seeded position.
+    fn record_internal(&mut self, fact: &InternalFact) {
+        for surface in [
+            fact.subject.as_str(),
+            fact.predicate,
+            &fact.object,
+            &fact.graph,
+        ] {
+            self.record_opaque(surface);
         }
     }
 
@@ -1783,18 +1809,26 @@ mod tests {
     /// [`super::Terms::value`] on some input that happens to reach it.
     #[test]
     fn every_clause_literal_is_declared_or_internal() {
-        let mut terms = super::Terms::default();
-        terms.record_literals();
+        use purrdf_datalog::resolve_fol::FolRdfSource;
+
         let mut declared = 0_usize;
         let mut internal = 0_usize;
         for regime in ALL_REGIMES {
-            for clause in calculus_program(regime) {
+            let program = calculus_program(regime);
+            let mut terms = super::Terms::default();
+            terms.record_program(&program);
+            terms.record_literals();
+            for clause in program {
                 for atom in clause.body().iter().chain(clause.head_atoms()) {
                     for term in atom.terms() {
                         let ClauseTerm::Literal(surface) = term else {
                             continue;
                         };
                         if crate::lists::is_internal(surface) {
+                            assert!(
+                                terms.is_opaque_transport(surface),
+                                "{regime:?}: {surface:?}"
+                            );
                             internal += 1;
                             continue;
                         }
@@ -1932,14 +1966,43 @@ mod tests {
     /// internal id, whether or not a quad mentions it.
     #[test]
     fn no_term_of_the_closure_is_internal() {
-        let closed = close(
-            &collection_fixture(),
-            Regime::OwlRl,
-            &EvalOptions::default(),
-            None,
-        )
-        .expect("the fixture's collections are well formed")
-        .0;
+        use purrdf_datalog::resolve_fol::FolRdfSource;
+
+        let mut builder = RdfDatasetBuilder::new();
+        super::copy_into(&mut builder, collection_fixture().as_ref()).unwrap();
+        let subject = builder.intern_iri(EX_X).unwrap();
+        let predicate = builder.intern_iri(EX_Q).unwrap();
+        for value in [
+            TermValue::typed_literal("01", crate::vocab::XSD_INTEGER),
+            TermValue::simple_literal("text"),
+            quoted(EX_X, EX_Q, EX_Y),
+        ] {
+            let object = crate::interner::intern_into(&mut builder, &value).unwrap();
+            builder.push_quad(subject, predicate, object, None).unwrap();
+        }
+        let premise = builder.freeze().unwrap();
+        for regime in [Regime::OwlRl, Regime::D, Regime::Rdf] {
+            let (seeded, terms) =
+                super::seed(premise.as_ref(), regime, &calculus_program(regime), None)
+                    .expect("the source inventories every internal seed coordinate");
+            let mut internal = 0;
+            for fact in seeded.facts_sorted() {
+                for surface in [&fact.subject, &fact.predicate, &fact.object, &fact.graph] {
+                    if crate::lists::is_internal(surface) {
+                        assert!(
+                            terms.is_opaque_transport(surface),
+                            "{regime:?}: {surface:?}"
+                        );
+                        internal += 1;
+                    }
+                }
+            }
+            assert!(internal > 0, "{regime:?}");
+            assert!(!terms.is_opaque_transport("\0unregistered"));
+        }
+        let closed = close(&premise, Regime::OwlRl, &EvalOptions::default(), None)
+            .expect("the fixture's collections are well formed")
+            .0;
         for quad in closed.quads() {
             for term in [quad.s, quad.p, quad.o] {
                 let surface = surface_of(&closed.term_value(term));

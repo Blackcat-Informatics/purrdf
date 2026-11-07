@@ -76,7 +76,7 @@ fn people(count: usize) -> Arc<RdfDataset> {
         .expect("writing to a String cannot fail");
     }
     purrdf_shapes::text_ingest::parse_ntriples_to_dataset(&triples)
-        .unwrap_or_else(|errors| panic!("fixture data: {}", errors))
+        .unwrap_or_else(|errors| panic!("fixture data: {errors}"))
 }
 
 fn shapes() -> purrdf_shapes::shapes::Shapes {

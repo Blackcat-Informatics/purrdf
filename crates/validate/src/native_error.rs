@@ -75,14 +75,9 @@ impl std::fmt::Display for InspectionError {
         }
     }
 }
-impl std::error::Error for InspectionError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match &self.0 {
-            InspectionFailure::Storage(cause) => Some(cause),
-            InspectionFailure::Protocol(_) => None,
-        }
-    }
-}
+purrdf_hash::error_sources!(InspectionError, patterns
+    Self(InspectionFailure::Storage(cause)) => cause,
+);
 impl StructuredError for InspectionError {
     fn visit<'error>(&'error self, visitor: &mut dyn ErrorVisitor<'error>) {
         match &self.0 {
@@ -761,6 +756,11 @@ mod tests {
             let baseline = memory.admitted_bytes();
             let failure = to_json_with_memory(&source, &mut memory).unwrap_err();
             assert_eq!(failure.storage_error(), Some(StorageError::AdmissionFailed));
+            assert_eq!(
+                std::error::Error::source(&failure)
+                    .and_then(|cause| cause.downcast_ref::<StorageError>()),
+                Some(&StorageError::AdmissionFailed),
+            );
             assert_eq!(memory.admitted_bytes(), baseline);
             memory.release_vec(original).unwrap();
             assert_eq!(account.live, 0);

@@ -62,11 +62,6 @@ impl std::fmt::Display for ConformanceError {
     }
 }
 
-impl std::error::Error for ConformanceError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::InvalidIri { cause, .. } => Some(cause),
-            _ => None,
-        }
-    }
-}
+purrdf_hash::error_sources!(ConformanceError, patterns
+    Self::InvalidIri { cause, .. } => cause,
+);

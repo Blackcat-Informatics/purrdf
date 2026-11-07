@@ -16,8 +16,19 @@ pub use io::{IoFailure, io_error};
 /// or a native-cause accessor (`error_sources!(Type, native accessor)`). Other
 /// enum variants have no underlying error. The original cause is borrowed
 /// without rendering, cloning or type erasure beyond the Error trait.
+/// Named fields and nested variants use `patterns Pattern => cause` arms.
 #[macro_export]
 macro_rules! error_sources {
+    ($kind:ty, patterns $($pattern:pat => $cause:expr),+ $(,)?) => {
+        impl ::core::error::Error for $kind {
+            fn source(&self) -> Option<&(dyn ::core::error::Error + 'static)> {
+                match self {
+                    $($pattern => Some($cause),)+
+                    _ => None,
+                }
+            }
+        }
+    };
     ($kind:ty, native $method:ident) => {
         impl ::core::error::Error for $kind {
             fn source(&self) -> Option<&(dyn ::core::error::Error + 'static)> {

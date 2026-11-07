@@ -1106,6 +1106,13 @@ every RDF component. Missing originals return `FolError::Rdf` with the exact
 source identity; explanation checking propagates this failure through
 `ExplainError::Backward` rather than treating it as an abstention.
 
+Mixed sources can explicitly admit registered internal relation and coordinate
+identities through the provided `FolRdfSource::is_opaque_transport` method. Its
+default refuses them. Native RDF values take precedence, and only literal
+transport keys can be opaque; missing IRI operands still fail. The explanation
+adapter inventories its actual program and seeded facts without inventing RDF
+values for internal identities.
+
 Both input adapters use one lowering/solver and one answer owner. Existing opaque
 term, clause and proof identity bytes remain unchanged. Native RDF constants use
 a distinct `R` tag with framed base16 native canonical bytes; proofs produced
@@ -1696,6 +1703,30 @@ chains. Python, C and JavaScript errors carry the native fields through the
 shared diagnostic transport. Existing import classifications, storage channels
 and rule execution receipts remain available. Successful validation results,
 authored messages and report ordering are unchanged.
+
+## ShEx matcher operational refusals
+
+The native validation entry points, including exact-schema and shape-map
+variants, return `Result<ResultShapeMap, purrdf_shex::ValidationError>`. Handle
+the error before reading conformance entries. An assignment-search refusal is
+`ValidationError::MatcherWork { attempted, maximum }`, with structured code
+`shex-matcher-work`; it is not a nonconformance finding. Negation propagates the
+refusal instead of turning incomplete search into a successful result. Pattern
+language and flag errors remain findings. Default entry points such as
+`validate` and `validate_with` do not return `ValidationError::Regex`. Selected
+XPath entry points, including `validate_with_xpath` and
+`XPathValidator::validate`, retain operational pattern failures and their native
+cause through `ValidationError::Regex`.
+
+`ValidationOptions` is non-exhaustive. Replace struct literals with
+`ValidationOptions::default()` and the `with_*` methods. Select search admission
+with `.with_matcher_limits(MatcherLimits::new(maximum_states))`; existing public
+fields remain individually mutable. The default admits 200,000 states per
+ambiguous neighbourhood. Entering an assignment prefix, including the terminal
+cardinality check, consumes one state; unique predicate assignments do not
+backtrack and consume none. Zero refuses the first ambiguous search state, and
+the retained `u128` attempted count represents maximum plus one even for a
+`u64::MAX` allowance.
 
 ## JSON Schema evaluation policy
 

@@ -1223,7 +1223,7 @@ class ShexResultEntry(TypedDict):
 class shex:
 
     @staticmethod
-    def validate(schema: str, data: str, map: list[tuple[str, str]], *, schema_format: str=..., data_format: str=..., base: str | None=..., xpath_regex: str | None=...) -> list[ShexResultEntry]:
+    def validate(schema: str, data: str, map: list[tuple[str, str]], *, schema_format: str=..., data_format: str=..., base: str | None=..., xpath_regex: str | None=..., matcher_maximum_states: int=...) -> list[ShexResultEntry]:
         ...
 
     @staticmethod
@@ -1307,6 +1307,8 @@ class _ShapesImportError(ValueError):
     """
     kind: str
     iris: list[str]
+    native_cause: dict[str, object]
+    native_cause_json: str
 
 class _PreparedShapes:
     """An immutable shape preparation, reusable across data graphs and writable as

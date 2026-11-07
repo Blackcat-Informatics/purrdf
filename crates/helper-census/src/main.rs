@@ -31,6 +31,7 @@ mod rules;
 mod source;
 mod structure;
 mod toml;
+mod wasm_package;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -43,6 +44,7 @@ const USAGE: &str = "\
 Usage: helper-census [--root DIR] [--ledger FILE] <mode>
        helper-census --glossary-gate [--root DIR] [--po FILE]
                      [--glossary FILE] [--self-test] [--inventory FILE]
+       helper-census --wasm-package-hosts
        helper-census [--root DIR] --non-rust-ratchet
                      (--base REV | --merge-base-with REF)
                      --target (index | worktree | rev:REV)
@@ -202,11 +204,18 @@ fn parse_arguments(mut args: impl Iterator<Item = String>) -> Result<Arguments, 
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.iter().any(|arg| arg == "--glossary-gate") {
-        return match glossary::run(args) {
+    let specialized = if args.iter().any(|arg| arg == "--wasm-package-hosts") {
+        Some(("wasm-package", wasm_package::run(&args)))
+    } else if args.iter().any(|arg| arg == "--glossary-gate") {
+        Some(("glossary", glossary::run(args)))
+    } else {
+        None
+    };
+    if let Some((mode, result)) = specialized {
+        return match result {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
-                eprintln!("helper-census glossary: {error}");
+                eprintln!("helper-census {mode}: {error}");
                 ExitCode::FAILURE
             }
         };

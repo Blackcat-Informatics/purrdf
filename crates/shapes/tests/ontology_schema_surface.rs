@@ -1429,9 +1429,24 @@ fn iri_only_output_changes_only_in_owl_values_precision_and_openapi_references()
     };
     for ((heading, before), (now_heading, now)) in before.iter().zip(&now) {
         assert_eq!(heading, now_heading);
+        if heading.ends_with(" openapi") {
+            assert_eq!(
+                before.pointer("/info/version").and_then(Value::as_str),
+                Some("3.0.1")
+            );
+            assert_eq!(
+                now.pointer("/info/version").and_then(Value::as_str),
+                Some(purrdf_shapes::VERSION),
+            );
+        }
         let mut paths = Vec::new();
         differing_paths(before, now, "", &mut paths);
         for path in &paths {
+            // This historical comparison pins semantic changes independently
+            // of the explicitly checked release metadata above.
+            if heading.ends_with(" openapi") && path == "/info/version" {
+                continue;
+            }
             if heading.ends_with(" openapi") && path.ends_with("/$ref") {
                 let previous = before
                     .pointer(path)

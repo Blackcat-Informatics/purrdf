@@ -167,8 +167,7 @@ mod tests {
                     ..ViewLimits::default()
                 },
             )
-            .err()
-            .expect("native composite refuses its term limit")
+            .expect_err("native composite refuses its term limit")
         };
         let cause = error
             .source()
