@@ -263,6 +263,14 @@ makes it removable).
 
 ## 2. Hard constraints (violating these fails CI or review)
 
+* **Preserve the v4 compatibility baseline.** Follow
+  [Compatibility after 4.0](./docs/MIGRATION-4.0.md#compatibility-after-40) for
+  post-release work. Preserve existing signatures, variant payloads, ownership,
+  generic/trait requirements, host behavior and valid v4 artifact readers.
+  Non-exhaustiveness permits additions, not replacement of existing payloads.
+  New semantic and identity laws require explicit versions. Fixed C layouts use
+  additive handles and entry points for new evidence.
+
 * **NO semantic Cargo features, ever.** The sole exception is the empty,
   non-semantic `purrdf-capi:capi = []` marker that `cargo-c` requires. It gates
   no code and must never appear in `cfg(feature = ...)`; CI checks both facts

@@ -52,7 +52,7 @@ passes, `VERSION` matches the tree, the full changelog section and validated
 reviewed summary exist, and none
 of the three tags already exists locally or remotely. It then runs the Rust and
 wasm workspace gate, the generated C-ABI/header check, the native Python binding
-suite, the optimized size-gated npm/wasm package tests, and `make w3c-earl`, which
+suite, the optimized npm/wasm package tests, and `make w3c-earl`, which
 regenerates the two W3C SHACL implementation reports for the commit about to be
 tagged. Only after every
 surface passes does it recheck the clean synchronized state and atomically push
@@ -453,8 +453,10 @@ TypeScript, Node, and packed-tarball smoke), packs the
 tarball, attests provenance + SPDX SBOM, and publishes with `--access public`
 (npm's own sigstore provenance is added automatically).
 
-The js package version is bumped by hand in `crates/rdf-wasm/js/package.json`
-(it is not read from the workspace):
+Use `make bump VERSION=x.y.z` to update the workspace, Python distributions,
+JavaScript package and lockfiles together. The JavaScript package carries its
+own version field, and the shared bump command keeps it coherent. For a separately
+authorized single-lane publication, use the corresponding already-bumped version:
 
 ```sh
 git tag npm-v0.1.5
