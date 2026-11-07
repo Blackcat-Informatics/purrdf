@@ -313,7 +313,7 @@ type Finding = (String, Option<String>, String);
 fn validate(data_ntriples: &str) -> (bool, BTreeSet<Finding>) {
     let shapes = parse_shapes(&shapes_graph(), None).expect("the mirrored shapes graph parses");
     let data = parse_ntriples_to_dataset(data_ntriples)
-        .unwrap_or_else(|errors| panic!("fixture data: {}", errors.join("\n")));
+        .unwrap_or_else(|errors| panic!("fixture data: {errors}"));
     let report = validate_dataset_with_shapes_graph(&data, &shapes, None)
         .expect("validation runs to a verdict");
     let findings = report
@@ -740,7 +740,7 @@ fn the_integration_needs_only_parse_shapes_and_validate_dataset_with_shapes_grap
     let shapes =
         parse_shapes(&shapes_graph(), None).expect("SHACL Core parses on the existing surface");
     let data = parse_ntriples_to_dataset(&conforming_ntriples())
-        .unwrap_or_else(|errors| panic!("fixture data: {}", errors.join("\n")));
+        .unwrap_or_else(|errors| panic!("fixture data: {errors}"));
     let report = validate_dataset_with_shapes_graph(&data, &shapes, None)
         .expect("the existing ungoverned validation entry runs GeoSPARQL's shapes");
 
