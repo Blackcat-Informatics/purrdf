@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/666-bump-to-v4-0",
+  "branch": "paudley/666-bump-to-v4-0",
+  "base_ref": "origin/main",
+  "head": "a328543743ca933afef00168b25970678b0461a7",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/666-bump-to-v4-0/.stage/release-candidate-integration/sync/20261107T012337-673badd9a073446b9175396dedf16ab7",
+  "conflicts": [],
+  "status": "fast_forward",
+  "base": "e0df4fa55e9d0c8610b437bb5bfd381e3e8c7b7f",
+  "merge_bases": [
+    "a328543743ca933afef00168b25970678b0461a7"
+  ],
+  "commit": "e0df4fa55e9d0c8610b437bb5bfd381e3e8c7b7f"
+}
