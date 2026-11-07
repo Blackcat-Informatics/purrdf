@@ -1697,6 +1697,27 @@ shared diagnostic transport. Existing import classifications, storage channels
 and rule execution receipts remain available. Successful validation results,
 authored messages and report ordering are unchanged.
 
+## ShEx matcher operational refusals
+
+The native validation entry points, including exact-schema and shape-map
+variants, return `Result<ResultShapeMap, purrdf_shex::ValidationError>`. Handle
+the error before reading conformance entries. An assignment-search refusal is
+`ValidationError::MatcherWork { attempted, maximum }`, with structured code
+`shex-matcher-work`; it is not a nonconformance finding. Negation propagates the
+refusal instead of turning incomplete search into a successful result. Pattern
+language errors remain findings; operational pattern failures retain their
+native cause through `ValidationError::Regex`.
+
+`ValidationOptions` is non-exhaustive. Replace struct literals with
+`ValidationOptions::default()` and the `with_*` methods. Select search admission
+with `.with_matcher_limits(MatcherLimits::new(maximum_states))`; existing public
+fields remain individually mutable. The default admits 200,000 states per
+ambiguous neighbourhood. Entering an assignment prefix, including the terminal
+cardinality check, consumes one state; unique predicate assignments do not
+backtrack and consume none. Zero refuses the first ambiguous search state, and
+the retained `u128` attempted count represents maximum plus one even for a
+`u64::MAX` allowance.
+
 ## JSON Schema evaluation policy
 
 `EvaluationCause` is now non-exhaustive. Replace the old unit pattern

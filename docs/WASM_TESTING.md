@@ -66,6 +66,22 @@ the shipped JavaScript/Worker bindings and identity ABI; those are host-interfac
 checks. Assembly codegen remains the separate seven-configuration `make simd-asm`
 claim. None of these substitutes for another.
 
+`npm test` executes the package selections through
+`helper-census --wasm-package-hosts`. Its executable inventory is
+[`wasm_package.rs`](../crates/helper-census/src/wasm_package.rs): each exact title
+must have its concrete obligation in this document. The runner passes anchored
+name filters to Node and reads the complete JUnit report through the shared XML
+reader. Every requested case must execute once and pass; missing, skipped,
+duplicate or failed cases and unexpected executed cases refuse qualification.
+Node failures and malformed reports also refuse qualification. Native scalar
+and SIMD selections and assembled playground cases retain their own entry points.
+
+The named `smoke:pack` probe installs the actual packed tarball in an independent
+project. It checks exported package and Worker imports, relative WASM assets,
+JavaScript class construction, native return-field transport, HTTP responses
+and SARIF string transport. Native Rust owns canonicalization equivalence,
+UPDATE rollback and SHACL conformance.
+
 The packaged case `isomorphic refusal crosses the wasm boundary as a JavaScript
 Error` in `canonicalization-host-error.test.mjs` exercises the wasm-bindgen
 `JsError` construction/import and JavaScript exception prototype. It distinguishes

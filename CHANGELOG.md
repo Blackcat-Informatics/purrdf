@@ -6,7 +6,26 @@ breaking change bumps the major version, a minor bump is additive, and a patch
 bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 0.x.
 
-## [Unreleased]
+## [4.0.0] - 2026-11-07
+
+- **Compatibility throughout v4:** Existing public signatures, variant payloads,
+  trait implementations and trait-object support, ownership, host contracts and
+  valid persisted artifacts remain compatible. C ABI 0.20.0 remains compatible
+  throughout workspace v4 despite its separate beta version; new capabilities
+  use additive exports and retained handles. New semantic laws use explicit
+  versions.
+
+- **Release dependencies:** Refresh AES to 0.9.4, ctutils to 0.4.8, the coordinated
+  wasm-bindgen family to 0.2.130 and wasm-encoder to 0.263. The wasm package build
+  honors the selected CLI on `PATH` and still refuses a schema-version mismatch.
+  Recipient notices reflect the updated dependency closure.
+
+- **ShEx matcher refusals (breaking Rust API):** Validation returns
+  `Result<ResultShapeMap, ValidationError>`; assignment-search exhaustion retains
+  its attempted and admitted maximum state counts instead of becoming a
+  nonconformance finding. Negation propagates that refusal. Construct the
+  non-exhaustive `ValidationOptions` through `Default` and its `with_*` methods;
+  `MatcherLimits` selects admission per ambiguous neighbourhood.
 
 - **SHACL conformance support (breaking Rust API):** Corpus readers and vendored
   vocabulary fixture readers move from the published Shapes API into the
@@ -204,7 +223,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   their standard sources still borrow the original limit value. Unstopped
   results, proofs, contract identities and effective limits remain unchanged.
 
-- **Segmented data profile 6 (breaking persisted format):** the reverse index
+- **Segmented data profile 7 (breaking persisted format):** authenticated
+  annotation value intervals extend block summaries to 104 bytes and the header
+  to 456 bytes, allowing range scans to reject payload blocks before admission.
+  The reverse index
   stores identifiers into the forward dictionary, and dictionary blocks read
   their first key from its record instead of a second stored fence. Exact reverse
   lookup uses the same authenticated forward reader. Older segmented profiles
