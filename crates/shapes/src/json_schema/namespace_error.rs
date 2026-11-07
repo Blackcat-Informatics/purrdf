@@ -125,14 +125,9 @@ impl fmt::Display for NamespaceError {
     }
 }
 
-impl std::error::Error for NamespaceError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::InvalidIri { cause, .. } => Some(cause),
-            _ => None,
-        }
-    }
-}
+purrdf_hash::error_sources!(NamespaceError, patterns
+    Self::InvalidIri { cause, .. } => cause,
+);
 
 pub(super) fn absolute(
     input: &str,

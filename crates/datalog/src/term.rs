@@ -226,7 +226,7 @@ pub(crate) struct TermSource(Shared<()>);
 
 impl TermSource {
     pub(crate) fn same(&self, other: &Self) -> bool {
-        core::ptr::eq(&raw const *self.0, &raw const *other.0)
+        Shared::ptr_eq(&self.0, &other.0)
     }
 }
 
@@ -268,11 +268,10 @@ impl Drop for TermTransaction<'_> {
     fn drop(&mut self) {
         while self.dag.nodes.len() > self.nodes {
             let index = self.dag.nodes.len() - 1;
-            let id = NodeId::from_address(index).expect("the resident node has a valid address");
             let hash = FixedState::new().hash_one(&self.dag.nodes[index]);
             self.dag
                 .by_content
-                .find_entry(hash, |&key| key == id)
+                .find_entry(hash, |&key| key.resident_index() == index)
                 .expect("a checking scratch node retains its intern entry")
                 .remove();
             self.dag.nodes.pop();
@@ -280,11 +279,10 @@ impl Drop for TermTransaction<'_> {
         }
         while self.dag.symbols.len() > self.symbols {
             let index = self.dag.symbols.len() - 1;
-            let id = SymId::from_address(index).expect("the resident symbol has a valid address");
             let hash = FixedState::new().hash_one(&self.dag.symbols[index]);
             self.dag
                 .symbols_by_content
-                .find_entry(hash, |&key| key == id)
+                .find_entry(hash, |&key| key.resident_index() == index)
                 .expect("a checking scratch symbol retains its intern entry")
                 .remove();
             self.dag.symbols.pop();

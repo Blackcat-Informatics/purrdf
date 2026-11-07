@@ -403,7 +403,7 @@ impl FolCheckEvidence {
         &self.0.scope
     }
     pub(super) fn same(&self, other: &Self) -> bool {
-        core::ptr::eq(&raw const *self.0, &raw const *other.0)
+        Shared::ptr_eq(&self.0, &other.0)
     }
 
     fn validate_negative_completion(&self, dag: &mut TermDag) -> Result<FolScope, FolProofError> {
