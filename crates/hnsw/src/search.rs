@@ -10,10 +10,10 @@
 //!
 //! Three pieces of scratch state make the search deterministic and cheap:
 //!
-//! * [`Visited`] is a generation-stamped `Vec<u32>`: a node is "visited" when its stamp
-//!   equals the current generation, so starting a query is one increment and clearing it
-//!   is not an `O(n)` fill. The generation is per search, and a per-thread instance is
-//!   reused across the queries a rayon worker runs.
+//! * [`Visited`] uses generation stamps. Resident searches reuse a dense buffer;
+//!   bounded searches own admitted bit pages that grow only for reached pages.
+//!   Each page has a generation stamp and one bit per row. The same
+//!   traversal reads both representations without using table iteration order.
 //! * [`DistanceCache`] memoizes `d(a, b)` for the round. The graph's answer cannot depend
 //!   on it — a cache hit and a recomputation return the same bits — so it is
 //!   digest-neutral by construction; it exists only to stop the build evaluating a pair
@@ -46,54 +46,132 @@ use purrdf_sparql_eval::{
 use crate::error::{HnswError, Result};
 use crate::graph::{Graph, VectorMatrix};
 
-/// Generation-stamped visited tracking: `O(1)` clear, no per-query allocation when reused.
+const PAGE_WORDS: usize = 8;
+const PAGE_ROWS: usize = PAGE_WORDS * u64::BITS as usize;
+
+#[derive(Debug)]
+struct StampPage {
+    generation: u32,
+    bits: [u64; PAGE_WORDS],
+}
+
+/// Visitation stamps with execution-owned lazy pages for bounded searches.
 #[derive(Debug)]
 pub(crate) struct Visited {
-    stamps: Vec<u32>,
+    stamps: Stamps,
     generation: u32,
-    _allocation: Option<WorkspaceAllocation>,
+    workspace: WorkspaceCapability,
+}
+
+#[derive(Debug)]
+enum Stamps {
+    Dense {
+        values: Vec<u32>,
+        // The buffer dies before its original admission.
+        _allocation: Option<WorkspaceAllocation>,
+    },
+    Pages(AdmittedMap<usize, StampPage>),
 }
 
 impl Visited {
-    /// Scratch sized for a graph of `nodes` rows.
+    /// Reusable resident scratch sized for a graph of `nodes` rows.
     pub(crate) fn new(nodes: usize) -> Self {
         Self::try_new(nodes, &WorkspaceCapability::resident())
             .expect("resident HNSW visited storage")
     }
 
-    /// Allocate the actual stamp array under this execution's ownership.
+    /// Bounded searches admit only the pages they actually reach. Resident
+    /// construction retains the dense stamps used by the scratch pool.
     pub(crate) fn try_new(nodes: usize, workspace: &WorkspaceCapability) -> Result<Self> {
-        let mut stamps = Vec::new();
+        if workspace.is_bounded() {
+            return Ok(Self::paged(workspace));
+        }
+        Self::dense(nodes, workspace)
+    }
+
+    fn dense(nodes: usize, workspace: &WorkspaceCapability) -> Result<Self> {
+        let mut values = Vec::new();
         let mut allocation = None;
-        workspace.reserve_vec(&mut stamps, &mut allocation, nodes)?;
-        stamps.resize(nodes, 0);
+        workspace.reserve_vec(&mut values, &mut allocation, nodes)?;
+        values.resize(nodes, 0);
         Ok(Self {
-            stamps,
+            stamps: Stamps::Dense {
+                values,
+                _allocation: allocation,
+            },
             generation: 0,
-            _allocation: allocation,
+            workspace: workspace.clone(),
         })
     }
 
-    /// Start a fresh search, invalidating every prior stamp.
-    ///
-    /// The generation wraps after `u32::MAX` searches; at the wrap the stamps are
-    /// cleared before the new generation is installed, so a stale zero stamp cannot be
-    /// mistaken for the current generation.
+    fn paged(workspace: &WorkspaceCapability) -> Self {
+        Self {
+            stamps: Stamps::Pages(AdmittedMap::default()),
+            generation: 0,
+            workspace: workspace.clone(),
+        }
+    }
+
+    /// Starting a layer invalidates prior stamps without releasing their owner.
+    /// On generation wrap, clear the old entries before installing generation one.
     fn begin(&mut self) {
         self.generation = self.generation.wrapping_add(1);
         if self.generation == 0 {
-            self.stamps.fill(0);
+            match &mut self.stamps {
+                Stamps::Dense { values, .. } => values.fill(0),
+                Stamps::Pages(values) => values.clear(),
+            }
             self.generation = 1;
         }
     }
 
-    /// Mark `row` visited, returning `true` the first time it is seen this generation.
-    fn visit(&mut self, row: usize) -> bool {
-        if self.stamps[row] == self.generation {
-            false
-        } else {
-            self.stamps[row] = self.generation;
-            true
+    fn contains(&self, row: usize) -> bool {
+        match &self.stamps {
+            Stamps::Dense { values, .. } => values[row] == self.generation,
+            Stamps::Pages(pages) => pages.get(&(row / PAGE_ROWS)).is_some_and(|page| {
+                page.generation == self.generation
+                    && page.bits[row % PAGE_ROWS / u64::BITS as usize]
+                        & (1_u64 << (row % u64::BITS as usize))
+                        != 0
+            }),
+        }
+    }
+
+    /// Mark a row before scoring it. Admission failure preserves prior entries.
+    fn visit(&mut self, row: usize) -> Result<bool> {
+        match &mut self.stamps {
+            Stamps::Dense { values, .. } => {
+                if values[row] == self.generation {
+                    Ok(false)
+                } else {
+                    values[row] = self.generation;
+                    Ok(true)
+                }
+            }
+            Stamps::Pages(pages) => {
+                let key = row / PAGE_ROWS;
+                if !pages.contains_key(&key) {
+                    pages.insert_admitted(
+                        key,
+                        StampPage {
+                            generation: self.generation,
+                            bits: [0; PAGE_WORDS],
+                        },
+                        &self.workspace,
+                    )?;
+                }
+                // The page either existed or its fallible insertion succeeded above.
+                let page = pages.get_mut(&key).expect("the admitted stamp page exists");
+                if page.generation != self.generation {
+                    page.bits.fill(0);
+                    page.generation = self.generation;
+                }
+                let word = row % PAGE_ROWS / u64::BITS as usize;
+                let bit = 1_u64 << (row % u64::BITS as usize);
+                let fresh = page.bits[word] & bit == 0;
+                page.bits[word] |= bit;
+                Ok(fresh)
+            }
         }
     }
 }
@@ -507,7 +585,7 @@ pub(crate) fn search_layer_admitted<A: Arithmetic>(
     let mut results: AdmittedHeap<Ranked> = AdmittedHeap::new(query.workspace());
 
     for &entry in entry_points {
-        if !visited.visit(entry) {
+        if !visited.visit(entry)? {
             continue;
         }
         let score = Ranked {
@@ -541,13 +619,13 @@ pub(crate) fn search_layer_admitted<A: Arithmetic>(
         let neighbors = graph.neighbors(current.row, layer);
         let unvisited = neighbors
             .iter()
-            .filter(|neighbor| visited.stamps[neighbor.row] != visited.generation)
+            .filter(|neighbor| !visited.contains(neighbor.row))
             .count();
         query
             .workspace()
             .reserve_vec(&mut fresh, &mut fresh_allocation, unvisited)?;
         for neighbor in neighbors {
-            if visited.visit(neighbor.row) {
+            if visited.visit(neighbor.row)? {
                 fresh.push(neighbor.row);
             }
         }
@@ -614,10 +692,78 @@ mod tests {
     fn visited_stamps_clear_on_a_new_generation() {
         let mut visited = Visited::new(4);
         visited.begin();
-        assert!(visited.visit(2));
-        assert!(!visited.visit(2));
+        assert!(visited.visit(2).unwrap());
+        assert!(!visited.visit(2).unwrap());
         visited.begin();
-        assert!(visited.visit(2), "a new generation clears the stamp");
+        assert!(
+            visited.visit(2).unwrap(),
+            "a new generation clears the stamp"
+        );
+    }
+
+    #[test]
+    fn paged_and_dense_visitation_keep_rank_bits_and_evaluation_work() {
+        let (matrix, graph) = line_graph(&[4; 1057]);
+        for seed in [0, 511, 1056] {
+            for ef in [1, 8, 1057] {
+                let dense_cache = DistanceCache::default();
+                let dense_query = Query::new(
+                    &matrix,
+                    Kernel::SquaredEuclidean,
+                    exact(),
+                    &[],
+                    &dense_cache,
+                    seed,
+                );
+                let mut dense = Visited::new(matrix.rows());
+                let dense_rows =
+                    search_layer(&graph, &dense_query, &mut dense, &[0], 0, ef).unwrap();
+                let paged_cache = DistanceCache::default();
+                let paged_query = Query::new(
+                    &matrix,
+                    Kernel::SquaredEuclidean,
+                    exact(),
+                    &[],
+                    &paged_cache,
+                    seed,
+                );
+                let mut paged = Visited::paged(&WorkspaceCapability::resident());
+                let paged_rows =
+                    search_layer(&graph, &paged_query, &mut paged, &[0], 0, ef).unwrap();
+                assert_eq!(
+                    dense_rows
+                        .iter()
+                        .map(|rank| (rank.row, rank.distance.to_bits()))
+                        .collect::<Vec<_>>(),
+                    paged_rows
+                        .iter()
+                        .map(|rank| (rank.row, rank.distance.to_bits()))
+                        .collect::<Vec<_>>()
+                );
+                assert_eq!(dense_cache.evaluations(), paged_cache.evaluations());
+            }
+        }
+    }
+
+    #[test]
+    fn paged_stamps_revisit_rows_across_layers_and_generation_wrap() {
+        let mut visited = Visited::paged(&WorkspaceCapability::resident());
+        visited.begin();
+        for row in [0, 63, 64, PAGE_ROWS - 1, PAGE_ROWS] {
+            assert!(!visited.contains(row));
+            assert!(visited.visit(row).unwrap());
+            assert!(visited.contains(row));
+            assert!(!visited.visit(row).unwrap());
+        }
+        assert!(visited.visit(usize::MAX).unwrap());
+        assert!(!visited.visit(usize::MAX).unwrap());
+        visited.begin();
+        assert!(!visited.contains(usize::MAX));
+        assert!(visited.visit(usize::MAX).unwrap());
+        visited.generation = u32::MAX;
+        visited.begin();
+        assert!(!visited.contains(usize::MAX));
+        assert!(visited.visit(usize::MAX).unwrap());
     }
 
     #[test]
@@ -682,3 +828,7 @@ mod tests {
         assert_eq!(query.of(1).unwrap(), 1.0);
     }
 }
+
+#[cfg(test)]
+#[path = "search/visitation_measure.rs"]
+mod visitation_measure;
