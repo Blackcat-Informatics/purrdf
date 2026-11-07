@@ -25,11 +25,11 @@
 //!   (`PurrdfStr`) point into library-owned memory — the C side
 //!   **never** `free()`s a `PurrdfStr.ptr`.
 //! - **SemVer-frozen ABI.** The status enum is append-only; the committed
-//!   `include/purrdf.h` is the contract. This is the project's one sanctioned
-//!   no-backwards-compat exception. The current ABI is **0.20.0 (beta)**; the minor
+//!   `include/purrdf.h` is the contract. The current ABI is **0.20.0 (beta)**; the minor
 //!   number tracks the exported signatures (see [`version::PURRDF_ABI_MINOR`]).
-//!   Pre-1.0, an incompatible change rides a MINOR bump — see
-//!   [`version::PURRDF_ABI_MAJOR`] for the rule and
+//!   Workspace v4 preserves the ABI 0.20.0 signatures and layouts even while the
+//!   ABI version remains beta. Additive exports update MINOR; a version bump
+//!   does not authorize a v4 break. See [`version::PURRDF_ABI_MAJOR`] for the rule and
 //!   `tests/abi_signatures.rs` for the snapshot that enforces it.
 //!
 //! ## Thread-safety (per handle)

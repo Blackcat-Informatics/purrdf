@@ -1788,7 +1788,9 @@ methods and bounds, and existing trait implementations, including `Clone`,
 `Copy`, equality, ordering, hashing and thread safety. Non-exhaustiveness permits additional variants; it does not permit
 changing an existing variant's fields or semantics. Private representations and
 provided trait methods can grow without imposing new obligations on existing
-implementations. New entry points use the same underlying execution and native
+implementations. Traits that support trait objects in the baseline must retain
+that support; provided generic methods need an appropriate `Self: Sized` bound
+when their addition would otherwise remove it. New entry points use the same underlying execution and native
 owners.
 
 The following boundaries have specific compatibility obligations:
