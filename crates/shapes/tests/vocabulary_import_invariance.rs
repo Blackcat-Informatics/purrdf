@@ -143,12 +143,12 @@ struct Input {
 /// original text with the vocabulary appended.
 fn parse(input: &Input, text: &str) -> Result<(Arc<RdfDataset>, Shapes), String> {
     let dataset = parse_turtle_to_dataset(text, input.base.as_deref())
-        .map_err(|errors| format!("shapes graph parse error: {}", errors.to_string()))?;
+        .map_err(|errors| format!("shapes graph parse error: {errors}"))?;
     // The ORIGINAL document's prefix map, for both runs: appending the vocabulary adds
     // its own `@prefix` directives, and the invariance claim is about the graph it
     // merges, not about the fallback map a different document would declare.
     let prefixes = parse_turtle_document(&input.shapes_text, input.base.as_deref())
-        .map_err(|errors| format!("shapes graph parse error: {}", errors.to_string()))?
+        .map_err(|errors| format!("shapes graph parse error: {errors}"))?
         .prefixes;
     let shapes = from_dataset_with_options(
         &dataset,
