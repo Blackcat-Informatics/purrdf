@@ -89,10 +89,11 @@ versions using a token with the separate yank permission, retaining the records
 and publisher settings. The complete setup and historical bootstrap receipts
 are in the release process document linked above.
 
-Twelve workspace members are deliberately never published to crates.io:
+Thirteen workspace members are deliberately never published to crates.io:
 `purrdf-capi` (built via cargo-c, distributed as `libpurrdf`),
 `purrdf-sparql-conformance` (the test harness), `purrdf-conformance-kit` (the
 manifest, report and outcome grading the community corpus runner uses),
+`purrdf-shacl-conformance` (shared SHACL corpus and vocabulary fixtures),
 `purrdf-hash-conformance` (the
 frozen-vector suites of `purrdf-hash`), `purrdf-cli` (the `purrdf`
 binary), `purrdf-envelope-probe` (the micro-hardware envelope capture tool),

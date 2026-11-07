@@ -524,12 +524,12 @@ black-cat family system — `#cat-head-core` is shared verbatim; only the
 
 Tag-driven trusted publishing: `rust-v*` → crates.io (37 crates, ordered),
 `py-v*` → PyPI (`purrdf`). See [`docs/RELEASE.md`](./docs/RELEASE.md). Version
-is single-sourced in `[workspace.package]`. Twelve members never reach
+is single-sourced in `[workspace.package]`. Thirteen members never reach
 crates.io: `purrdf-capi`, `purrdf-sparql-conformance`,
-`purrdf-conformance-kit`, `purrdf-hash-conformance`, `purrdf-cli`, `purrdf-envelope-probe`,
+`purrdf-conformance-kit`, `purrdf-shacl-conformance`, `purrdf-hash-conformance`, `purrdf-cli`, `purrdf-envelope-probe`,
 `purrdf-bench`, `purrdf-alloc-probe`, `purrdf-testkit`, `wasm-link`,
 `helper-census`, and `purrdf-python` (PyPI via maturin instead).
-`purrdf-alloc-probe`, `purrdf-conformance-kit` and `purrdf-testkit` are
+`purrdf-alloc-probe`, `purrdf-conformance-kit`, `purrdf-shacl-conformance` and `purrdf-testkit` are
 dev-dependencies of published crates, so their root `[workspace.dependencies]` entries are path-only with
 **no `version`** — cargo then strips them from the packaged manifest, which is
 the only way `cargo publish`'s dev-dependency-resolving verification step can

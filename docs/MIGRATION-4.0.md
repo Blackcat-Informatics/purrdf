@@ -1784,8 +1784,8 @@ kept outside the shipping API.
 
 Changes during v4 must preserve existing signatures, variant payloads, public
 construction and matching, ownership and borrow lifetimes, required trait
-methods and bounds, and existing `Clone`, equality, hashing and thread safety
-contracts. Non-exhaustiveness permits additional variants; it does not permit
+methods and bounds, and existing trait implementations, including `Clone`,
+`Copy`, equality, ordering, hashing and thread safety. Non-exhaustiveness permits additional variants; it does not permit
 changing an existing variant's fields or semantics. Private representations and
 provided trait methods can grow without imposing new obligations on existing
 implementations. New entry points use the same underlying execution and native
