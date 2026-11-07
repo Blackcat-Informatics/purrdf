@@ -116,46 +116,31 @@ def audit_empty(path: Path, name: str) -> None:
             raise ValueError(f"{name}: missing/altered bootstrap license {notice}")
 
 
+def compiler_bin() -> Path:
+    return Path(
+        subprocess.check_output(["rustc", "--print", "sysroot"], text=True).strip()
+    ) / "bin"
+
+
 def cargo(directory: Path, *arguments: str) -> None:
-    # A separately installed stable validation toolchain can be selected
-    # without creating a `stable` alias in the operator's primary rustup home.
-    toolchain = os.environ.get("PURRDF_BOOTSTRAP_TOOLCHAIN", "stable")
-    compiler = subprocess.check_output(
-        ["rustup", "run", toolchain, "rustc", "--version"], text=True
-    )
-    if "nightly" in compiler or "beta" in compiler or not compiler.startswith("rustc "):
-        raise ValueError(
-            "empty registry bootstrap verification requires a stable Rust compiler"
-        )
+    binaries = compiler_bin()
+    suffix = ".exe" if os.name == "nt" else ""
+    environment = os.environ.copy()
+    environment.update(RUSTC=str(binaries / f"rustc{suffix}"),
+                       RUSTDOC=str(binaries / f"rustdoc{suffix}"))
+    # Keep archives beside these isolated packages, outside host cache relocation.
     subprocess.run(
-        ["rustup", "run", toolchain, "cargo", *arguments], cwd=directory, check=True
+        [str(binaries / f"cargo{suffix}"), *arguments, "--target-dir", str(directory / "target")],
+        cwd=directory,
+        env=environment,
+        check=True,
     )
 
 
 def self_test() -> None:
-    # These temporary fixtures test package verification and the empty-API
-    # refusal under the admitted development compiler, just like make check.
-    # Real --prepare/--publish always call cargo()'s stable-only lane below.
+    # Exercise the same installed compiler and package path as real preparation.
     def verify_fixture(directory: Path) -> None:
-        compiler_root = Path(
-            subprocess.check_output(["rustc", "--print", "sysroot"], text=True).strip()
-        )
-        executable = (
-            compiler_root / "bin" / ("cargo.exe" if os.name == "nt" else "cargo")
-        )
-        # Use this admitted compiler's Cargo executable so a host wrapper's
-        # unrelated shared target relocation cannot hide the fixture archive.
-        subprocess.run(
-            [
-                str(executable),
-                "package",
-                "--offline",
-                "--target-dir",
-                str(directory / "target"),
-            ],
-            cwd=directory,
-            check=True,
-        )
+        cargo(directory, "package", "--offline")
 
     with tempfile.TemporaryDirectory(prefix="purrdf-empty-selftest-") as raw:
         directory = Path(raw) / "purrdf-bootstrap-fixture"
@@ -282,6 +267,9 @@ def main() -> None:
             json.dumps(
                 {
                     "schema": 1,
+                    "compiler": subprocess.check_output(
+                        [str(compiler_bin() / ("rustc.exe" if os.name == "nt" else "rustc")), "--version"], text=True
+                    ).strip(),
                     "packages": receipts,
                     "existing_records_skipped": existing,
                 },

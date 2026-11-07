@@ -153,10 +153,10 @@ first tagged run can publish the complete workspace in dependency order.
    bash scripts/bootstrap-crates-io.sh --publish --output /tmp/purrdf-empty-publish
    ```
 
-   Verification uses the `stable` Rust toolchain. Operators with a separate
-   stable validation installation may set `PURRDF_BOOTSTRAP_TOOLCHAIN` to that
-   installed toolchain (for example, `1.98.1`); the script rejects a nightly
-   or beta compiler.
+   Empty-package verification uses the installed Rust compiler and its Cargo
+   executable; it installs or selects no other toolchain. The retained receipt
+   records the compiler version. Functional release builds retain their separate
+   stable-toolchain policy.
 
    Both commands use fresh directories outside the workspace. Publication uses
    `CARGO_REGISTRY_TOKEN` or `CARGO_TOKEN` without displaying its value. Normal
@@ -195,19 +195,22 @@ first tagged run can publish the complete workspace in dependency order.
    records; deleting a crate would undo the setup. Yank can be reversed with
    `cargo yank --undo --version 0.0.0 "$new_crate"`.
 
-### Outstanding bootstrap: `purrdf-zstd`, `purrdf-geo-kernel`, `purrdf-mime`, `purrdf-toml`, `purrdf-yaml` and `purrdf-glob`
+### Bootstrap: complete (ledger empty)
 
-Six crates are in the release set above and require new records before tagging.
-`purrdf-zstd` is the **tenth** crate in publish order;
-`purrdf-geo-kernel` is the **fourteenth** crate in publish order;
-`purrdf-mime` is the **twenty-sixth** crate in publish order;
-`purrdf-toml` is the **twenty-eighth** crate in publish order;
-`purrdf-yaml` is the **twenty-ninth** crate in publish order;
-`purrdf-glob` is the **thirty-fifth** crate in publish order. Their implementations
-are part of the workspace; the registry's public index has no records for them.
-Create the isolated empty bootstrap package, configure its Trusted Publisher
-entry and lock, then reconcile the ledger after the public preflight verifies
-the record. No functional publication is authorized by this source addition.
+All 37 release crates have crates.io records. On 2026-11-07, `purrdf-zstd`,
+`purrdf-geo-kernel`, `purrdf-mime`, `purrdf-toml`, `purrdf-yaml` and
+`purrdf-glob` received isolated, empty, dependency-free **0.0.0** versions.
+Native and WASM compilation, normal package verification and exact
+empty-source/license archive audits ran with the installed compiler before
+upload. The public registry confirmed each version. These packages expose no
+runtime API and contain no functional implementation.
+
+Record creation is complete; Trusted Publishing configuration is a separate
+release prerequisite. The maintainer must configure the matching publisher and
+enable **Require trusted publishing** on all six new records before v4.0.
+The strict public preflight checks their locks before functional publication.
+An empty bootstrap ledger does not waive that check or establish that the
+publisher entries exist.
 
 ### Established records
 
@@ -366,7 +369,7 @@ git push origin rust-v0.1.5
 
 The workflow refuses before packaging if any release crate lacks its record
 or publishing lock, or the bootstrap ledger has not been reconciled with the
-registry; see [bootstrap status](#outstanding-bootstrap-purrdf-zstd-purrdf-geo-kernel-purrdf-mime-purrdf-toml-purrdf-yaml-and-purrdf-glob). It publishes
+registry; see [bootstrap status](#bootstrap-complete-ledger-empty). It publishes
 functional crates in the declared dependency order and skips a version already
 present. A partially completed release resumes with `gh run rerun <run-id>`.
 
