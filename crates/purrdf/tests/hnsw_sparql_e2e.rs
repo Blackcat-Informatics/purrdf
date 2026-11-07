@@ -318,6 +318,7 @@ mod bounded_native_workspace {
             format!(
                 "SELECT ?distance WHERE {{ <{candidate}> <{NEAREST}> (<{seed}> 8 ?distance) }} LIMIT 1"
             ),
+            format!("SELECT ?neighbour WHERE {{ ?neighbour <{NEAREST}> (<{seed}> 0 ?distance) }}"),
         ];
         let image = image();
         for (case, query) in queries.iter().enumerate() {
@@ -412,6 +413,93 @@ mod bounded_native_workspace {
         let mut registry = PropertyFunctionRegistry::new();
         registry.register(NEAREST.to_owned(), Arc::new(relation));
         (registry, observations)
+    }
+
+    #[test]
+    fn independent_bounded_searches_repeat_and_release_after_cancellation() {
+        let (space, terms) = space(1024);
+        let TermValue::Iri(seed) = &terms[7] else {
+            panic!("IRI fixture")
+        };
+        let query = format!(
+            "SELECT ?neighbour ?distance WHERE {{ ?neighbour <{NEAREST}> (<{seed}> 8 ?distance) }}"
+        );
+        let expected = answer(&registry(&space), &query);
+        let image = image();
+        let barrier = std::sync::Barrier::new(2);
+        std::thread::scope(|scope| {
+            for _ in 0..2 {
+                scope.spawn(|| {
+                    let source = image
+                        .open_session(SegmentedReadLimits::new(CEILING, 2, 32, 1_000_000, 8))
+                        .unwrap();
+                    let opening = source.evidence();
+                    let owned_bytes = |e: &purrdf_core::SegmentedEvidence| {
+                        e.live_bytes() - e.unpinned_cache_bytes() - e.bookkeeping_bytes()
+                    };
+                    let engine = NativeSparqlEngine::new();
+                    let env = ExtensionEnv::over_relations(registry(&space)).unwrap();
+                    let options = QueryOptions::new().with_env(&env);
+                    let prepared = engine
+                        .prepare_query_with_options(&query, None, &options)
+                        .unwrap();
+                    barrier.wait();
+                    let mut retained_plan = None;
+                    for _ in 0..2 {
+                        let result = run(
+                            &engine,
+                            &source,
+                            &query,
+                            &prepared,
+                            &options,
+                            Route::Prepared,
+                        );
+                        assert_eq!(result.solutions().unwrap().1, expected.as_slice());
+                        drop(result);
+                        // The prepared plan lazily retains its numbered tree under
+                        // the first execution's owner until the plan itself dies.
+                        let released = owned_bytes(&source.evidence());
+                        assert_eq!(released, *retained_plan.get_or_insert(released));
+                    }
+                    let flag = purrdf_sparql_eval::CancellationFlag::new();
+                    flag.cancel();
+                    let error = engine
+                        .query_prepared_governed_fallible_view(
+                            &source,
+                            &prepared,
+                            &[],
+                            &options,
+                            &QueryGovernors::METERED.with_stop_signal(Arc::new(flag)),
+                        )
+                        .unwrap_err();
+                    assert!(matches!(
+                        error,
+                        FallibleSparqlError::BudgetExhausted {
+                            tripped: purrdf_core::TrippedGovernor::Stopped {
+                                cause: purrdf_core::StopCause::Cancelled,
+                            },
+                            ..
+                        }
+                    ));
+                    drop(error);
+                    assert_eq!(owned_bytes(&source.evidence()), retained_plan.unwrap());
+                    let result = run(
+                        &engine,
+                        &source,
+                        &query,
+                        &prepared,
+                        &options,
+                        Route::Prepared,
+                    );
+                    assert_eq!(result.solutions().unwrap().1, expected.as_slice());
+                    drop(result);
+                    assert_eq!(owned_bytes(&source.evidence()), retained_plan.unwrap());
+                    drop(prepared);
+                    drop(engine);
+                    assert_eq!(owned_bytes(&source.evidence()), owned_bytes(&opening));
+                });
+            }
+        });
     }
 
     #[test]
