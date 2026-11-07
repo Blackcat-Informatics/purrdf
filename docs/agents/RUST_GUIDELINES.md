@@ -1,251 +1,195 @@
 <!-- SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca> -->
 <!-- SPDX-License-Identifier: CC-BY-4.0 -->
 
-Generic Rust style and architecture guidance for engineers and coding agents.
-Repository constraints in `AGENTS.md` and the root `Cargo.toml` take precedence,
-including dependency bans and workspace lints. Examples using other libraries
-illustrate patterns; they do not authorize adding those dependencies.
+# Rust engineering guidelines
 
----
+This is PurRDF's complete Rust engineering guide. Read it with
+[AGENTS.md](../../AGENTS.md), whose repository constraints take precedence.
+[Cargo.toml](../../Cargo.toml), [layers.toml](../../layers.toml),
+[helpers-ledger.toml](../../helpers-ledger.toml) and the actual gate definitions
+specify the enforced dependency, implementation and build contracts. The older
+[guide location](../RUST_GUIDELINES.md) redirects here.
 
-# Modern Rust Engineering & Style Guide
+## Architecture and shared implementations
 
-> **Core Philosophy:** Optimize for reading, maintenance, and compile-time guarantees. Use the type system to make illegal states unrepresentable, keep external boundaries strict, and treat tests as living architecture specifications rather than coverage checkboxes.
+Keep engine behavior in Rust libraries. Language bindings and command entry
+points adapt inputs, ownership and output transport to the shared engine.
+Every published crate must build for `wasm32-unknown-unknown`; core algorithms
+must not acquire ambient filesystem, network, clock or random-number access.
+Hosts supply those capabilities explicitly where the API admits them.
 
----
+Follow the dependency edges and ring fences in `layers.toml`. Put third-party
+versions in root `[workspace.dependencies]`; member crates inherit them.
+Dependency examples from other projects do not authorize new packages, optional
+dependencies or semantic Cargo features. The sole Cargo feature exception is
+the empty, non-semantic `capi` marker documented in AGENTS.md.
 
-## 1. Workspace & Crate Architecture
+Each shared job has one home. Consult `helpers-ledger.toml` before adding an
+implementation, and call the existing owner. Examples include:
 
-Large single-crate projects suffer from terrible incremental compile times and tangled dependencies. Structure repositories as **Cargo Workspaces** with strict topological layering.
+| Job | Shared home |
+| --- | --- |
+| JSON, YAML, CBOR and XML syntax | `purrdf_lex::{json, yaml, cbor, xml}` |
+| RDF values and term construction | `purrdf_core::TermValue` |
+| Fixed-key hash tables | `purrdf_core::hash::table` and `purrdf_hash::fixed::FixedState` |
+| Exact integer and decimal arithmetic | `purrdf_xsd` |
+| W3C vocabulary constants | `purrdf_iri::vocab` and `purrdf_xsd::datatype` |
+| Typed error inspection | `purrdf_hash::error` |
 
-### Recommended Repo Layout
+Prefer private or `pub(crate)` implementation details. Public signatures,
+variant payloads, ownership, trait requirements and persisted laws are consumer
+contracts; preserve the [v4 compatibility baseline](../MIGRATION-4.0.md#compatibility-after-40).
+A new abstraction must solve a concrete shared problem rather than provide an
+unused alternative to the production path.
 
-```text
-repo-root/
-├── Cargo.toml              # [workspace] definition & centralized dependencies
-├── crates/
-│   ├── core-domain/        # Pure business logic, types, traits (NO I/O, NO async)
-│   ├── infra-db/           # Database adapters implementing domain traits
-│   ├── infra-http/         # Axum/Tower routers, middleware, DTOs
-│   └── telemetry/          # Tracing, metrics, and non-blocking subscriber setup
-└── apps/
-    └── api-server/         # Thin binary (`main.rs`): wires config, telemetry, and crates
+## Types, ownership and allocation
 
-```
+Represent validated state with types and constructors when that prevents a
+real invalid transition. Borrow existing values where ownership is unnecessary:
+prefer `&str`, slices and borrowed views to cloning complete strings or graphs.
+Retain original owners when answers or errors must outlive a producer.
 
-### Workspace Rules
+Use the shared constructor and conversion macros documented in AGENTS.md.
+An empty value matching the derived default derives `Default`; a meaningful
+constant constructor may use `purrdf_hash::default_from_new!`. Avoid repeating
+thin wrappers or adding a constructor whose only purpose is renaming another.
 
-* **Centralize Dependencies:** Define all third-party versions in the root `Cargo.toml` under `[workspace.dependencies]`. Individual crates must inherit them via `tokio = { workspace = true }`.
-* **Thin Binaries, Thick Libraries:** `main.rs` should only parse configuration, initialize telemetry, construct dependency graphs, and spawn the top-level server or worker. Business logic belongs in library crates.
-* **Strict Visibility:** Default to private. Use `pub(crate)` extensively before reaching for `pub`. Every `pub` item is a maintenance commitment.
-* **No Cyclic Dependencies:** Domain crates must never know about infrastructure crates. Keep `core-domain` free of heavy dependencies (like `sqlx`, `axum`, or `reqwest`) so it compiles in milliseconds.
+Admit storage before retaining it through the established allocation interfaces.
+Preserve typed resource refusals and transactional behavior. Missing dependencies,
+broken invariants and incomplete input must fail actionably, rather than return
+an apparently successful partial result. An estimator is not a guaranteed bound
+unless its implementation and contract establish that fact.
 
----
+## Errors and diagnostics
 
-## 2. Telemetry, Logging & Observability
+Keep semantic failure data typed and retain the original native cause. Implement
+`std::error::Error::source` where a cause exists; the shared
+`purrdf_hash::error_sources!` macro handles the supported source patterns.
+Use `purrdf_hash::error::StructuredError`, `ErrorVisitor` and `ErrorValue` for
+borrowed inspection without rendering or cloning. Producers expose stable codes
+and every semantic field through the existing `error_visit!` protocol.
 
-**BANNED:** `println!`, `eprintln!`, `dbg!`, and the legacy `log` crate in production paths. Standard output locks a global mutex and blocks the thread, which can starve async executors (`tokio`) under high load.
+Use human-readable `Display` output at the presentation boundary. Do not replace
+native fields with formatted strings to cross an internal or host boundary.
+Callers that already hold a typed error can render it explicitly. Genuine
+caller/server text remains text; it must not become a fabricated native cause.
 
-### Structured, Non-Blocking Tracing
+Propagate recoverable errors with `?`. Avoid production `unwrap`, `expect` and
+panics for invalid input or resource exhaustion. An unavoidable invariant check
+needs a local proof explaining why failure cannot occur. Tests may use
+`expect` for required fixture setup. A new refusal needs both the rejected case
+and an adjacent valid case, so stricter admission does not conceal over-refusal.
 
-Use the `tracing` ecosystem with **structured fields** and **non-blocking I/O** (`tracing-appender`).
+## Output and host boundaries
 
-```rust
-use tracing::{info, instrument, warn};
-use tracing_appender::non_blocking::WorkerGuard;
-use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+Libraries return values, bytes, diagnostics and evidence through their APIs.
+Do not add incidental printing or debug output to an engine path. The CLI and
+other command tools intentionally write query results, serialized carriers,
+reports and diagnostics; preserve their output protocol and I/O failures.
+Tracing packages are not blanket dependencies for libraries or bindings.
 
-/// Initializes non-blocking JSON telemetry.
-/// MUST keep the returned `WorkerGuard` alive in `main()` until shutdown!
-pub fn init_telemetry() -> WorkerGuard {
-    let (non_blocking_writer, guard) = tracing_appender::non_blocking(std::io::stdout());
-
-    let fmt_layer = fmt::layer()
-        .json() // Structured JSON for log aggregators
-        .with_writer(non_blocking_writer)
-        .with_target(true)
-        .with_current_span(true);
-
-    tracing_subscriber::registry()
-        .with(EnvFilter::from_default_env())
-        .with(fmt_layer)
-        .init();
-
-    guard
-}
-
-// GOOD: Skip large payloads/secrets, attach key identifiers as structured fields
-#[instrument(skip(db_pool, payload), fields(user_id = %user.id, payload_len = payload.len()))]
-pub async fn process_upload(db_pool: &DbPool, user: &User, payload: &[u8]) -> Result<(), AppError> {
-    info!(status = "started", "Processing user upload");
-    // ...
-    Ok(())
-}
-
-```
-
-### Telemetry Rules
-
-* **Never Interpolate Strings in Logs:**
-* *Bad:* `info!("User {} failed login after {} attempts", user_id, count);` (Hard to query/index).
-* *Good:* `info!(%user_id, attempts = count, "User failed login");` (Emits indexed JSON fields).
-
-
-* **Guard the Appender:** Always bind the `WorkerGuard` in `main` (`let _guard = init_telemetry();`). Dropping it immediately (`let _ = init_telemetry();`) silently kills background log flushing.
-* **Span Discipline:** Put `#[instrument]` on meaningful boundary functions (HTTP handlers, DB queries, RPC calls), not on tiny tight-loop helpers. Always `skip` sensitive data (passwords, tokens) and large buffers.
-
----
-
-## 3. SOTA Type Design & Idioms
-
-Write code where invalid states fail to compile. Leverage zero-cost abstractions to guide both humans and AI agents.
-
-### Parse, Don't Validate (Newtype Pattern)
-
-Do not pass raw `String`, `u64`, or `Uuid` across module boundaries when they have domain meaning.
+For example, a command can write its already-produced payload through the
+caller's output sink and propagate the original I/O error:
 
 ```rust
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct UserId(uuid::Uuid);
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NonEmptyString(String);
-
-impl TryFrom<String> for NonEmptyString {
-    type Error = &'static str;
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        if value.trim().is_empty() {
-            Err("String cannot be empty")
-        } else {
-            Ok(Self(value))
-        }
-    }
+fn write_payload(
+    output: &mut impl std::io::Write,
+    payload: &[u8],
+) -> std::io::Result<()> {
+    output.write_all(payload)
 }
-
 ```
 
-### Advanced Idioms Checklist
+Keep host-specific transport and panic containment at the existing boundary.
+Preserve native ownership and error fields when adapting C, Python and
+JavaScript results. Never put credentials, source documents or large payloads
+into incidental logs.
 
-* **Typestate for Lifecycles:** Encode state machines into generic type parameters (e.g., `Connection<Disconnected>` vs `Connection<Authenticated>`) rather than runtime booleans (`is_connected: bool`).
-* **Native Async in Traits:** Since Rust 1.75+, use native `async fn` in traits instead of the `#[async_trait]` macro, *unless* you specifically need dynamic dispatch (`Box<dyn MyTrait>`). For internal architecture, prefer static dispatch (`impl MyTrait`).
-* **`let...else` for Early Returns:** Avoid deep rightward drift (`if let Some(x) = ...`).
-```rust
-let Some(user) = repo.find_user(id).await? else {
-    return Err(DomainError::UserNotFound(id));
-};
+## Determinism, arithmetic and unsafe boundaries
 
-```
+Preserve exact value semantics and the selected arithmetic law. Integer,
+decimal, rational and temporal operations use their shared native homes;
+a floating approximation cannot silently replace an exact result. Where an API
+explicitly selects floating arithmetic or a numerical output grid, preserve its
+rounding, accumulation and identity contract.
 
+Serializers, content identities and GTS output are deterministic. Sort or retain
+authored order explicitly; no randomized map iteration, time or ambient entropy
+may enter emitted bytes. Update affected goldens only for an intentional,
+explained contract change. Frozen vendor corpora remain unchanged.
 
-* **Borrowing vs. Owning:** Accept `&str` instead of `&String`, `&[T]` instead of `&Vec<T>`, and `impl AsRef<Path>` for file paths. Use `Cow<'_, str>` when a function rarely modifies its input string.
-* **Enforce Safety Attributes:** Place `#[must_use]` on pure functions, builder types, and custom result types so callers cannot accidentally ignore critical return values.
+Keep ordinary engine code safe. Existing FFI, SIMD and host-import boundaries
+may require narrowly scoped unsafe code; a blanket prohibition must not erase
+those supported implementations. Every unsafe operation needs a local safety
+argument covering its actual pointer, length, alignment, aliasing and target
+requirements. Dispatch must establish the instruction set before invoking a
+target-specific kernel, while retaining the declared portable behavior.
 
----
+## Tests and performance evidence
 
-## 4. Error Handling
+Test named production behavior, regressions, boundaries and invariants. Prefer
+existing behavioral cases. Do not add tests for getters, compiler guarantees,
+mechanical forwarding or an implementation's incidental shape. A small fake is
+useful when it models a real failure or state transition; it must not merely
+assert the sequence of private calls.
 
-Treat errors as either **recoverable by a machine** (domain/library) or **diagnostic for a human/operator** (application).
+Use the repository's shared native support:
 
-| Context | Crate | Rule |
-| --- | --- | --- |
-| **Libraries / Domain Crates** | `thiserror` | Define explicit, granular enums. Callers must be able to `match` on specific failure modes. |
-| **Binaries / App Glue** | `anyhow` or `eyre` | Use for top-level orchestration, CLI tools, and attaching `.context("Failed to...")`. |
+- `purrdf_testkit::prop_test!` and `rng` for generated inputs and shrinking.
+- `purrdf_testkit::assert_golden!` for byte-exact goldens.
+- `purrdf_testkit::temp_dir!`, `temp_file!` and unit-test temporary owners.
+- `purrdf_testkit::bench` for benchmarks and `purrdf_alloc_probe` for measured
+  allocation windows. Choose thread or process measurement to match execution.
 
-### Error Rules
+General semantics, grammar, arithmetic, refusal, ownership and conformance run
+natively. WASM execution is restricted to actual dispatch/SIMD, shadow-stack,
+host-interface or explicitly named frozen byte/digest obligations in
+[WASM_TESTING.md](../WASM_TESTING.md). Run the exact named cases; an existing
+runner or portable type does not justify duplicating an ordinary suite.
+`make wasm` establishes build portability separately.
 
-* **BANNED in Production:** `.unwrap()` and `.expect()` are forbidden outside of tests, unless accompanied by a proof comment explaining why failure is mathematically impossible (even then, prefer `.expect("INVARIANT: ...")`).
-* **Preserve the Error Chain:** Always use `#[source]` or `#[from]` in `thiserror` so the underlying root cause is never swallowed when logging.
+Measure a claimed optimization against the same behavioral contract. Reuse
+work counters, allocation probes and benchmark owners. Compare actual work,
+requested storage, retained memory and result fidelity as appropriate; report
+host/build conditions and uncertainty. Timing alone does not prove an algorithm
+or a resource bound. Benchmark lanes are report-only unless a concrete required
+gate says otherwise.
 
----
+## Focused checks and mandatory gates
 
-## 5. High-ROI, Low-Maintenance Testing
+During development, select the affected behavior, test, binary, crate or real
+consumer with the required profile, target, features and warnings. A shared API
+change expands coverage to its actual consumers. It does not automatically
+require workspace, all-target or all-feature matrices. Compile real callers
+early, then reserve expensive qualification for settled changes.
 
-> **The Testing Dilemma:** Every test you write has a permanent maintenance cost. Mechanical unit tests that mock every internal struct lock your implementation details in place, making refactoring painful without catching real integration bugs.
+Required commit hooks run fully with normal signing. Existing release gates
+and explicitly required repository/CI gates remain mandatory. A full-workspace
+command is appropriate when one of those requirements calls for it or the user
+requests it; task completion, review or publication alone does not schedule a
+new whole-workspace run. Do not manually duplicate checks that an imminent hook
+will execute. Reuse valid results and repeat checks when relevant edits,
+failures or unresolved concerns invalidate them.
 
-### The Testing Strategy: Test Behaviors, Not Implementations
+Read the actual gate definitions before selecting verification. `make check`,
+conformance, rustdoc, WASM build and host execution establish different facts;
+a pass in one lane does not stand in for another required lane. Missing tools,
+skips, zero selected cases and interrupted commands are not passes. Preserve
+exit status and state the exact executed scope and remaining acceptance.
 
-1. **Delete Mechanical Coverage Tests:** Do not write tests for getters, setters, simple data mappers, or properties already guaranteed by the Rust compiler.
-2. **Push Logic to the Pure Core:** Extract complex business rules into pure, synchronous functions in `core-domain` (takes structs in, returns structs/enums out). These require zero mocks, run in microseconds, and never flake.
-3. **Property-Based Testing (`proptest`):** Instead of writing 15 copy-pasted unit tests for edge cases, write 1 property test that generates 1,000 random inputs (empty strings, Unicode, `u64::MAX`, negative numbers) and asserts invariants hold.
-4. **Snapshot Testing (`insta`):** When testing complex outputs (serialized JSON, SQL query builders, ASTs, error messages), do not hand-write massive `assert_eq!` blocks. Use `insta::assert_json_snapshot!()`. When formats intentionally change, run `cargo insta review` to update all tests in seconds.
-5. **Fakes over Mocks:** Avoid heavy mocking frameworks (`mockall`) that assert *how* a trait was called (`expect_get_user().times(1)`). Instead, write a lightweight in-memory Fake (e.g., `InMemoryUserRepo` backed by a `HashMap`) or test against a real ephemeral database using `sqlx::test` or `testcontainers`.
+## Compiler and profile contracts
 
-### Self-Documenting Test Structure
+Development and ordinary CI use the floating `nightly` channel declared in
+[rust-toolchain.toml](../../rust-toolchain.toml). Keep shipping source free of
+nightly-only language features. Stable functional release builds and the stable
+MSRV job serve different purposes: the release lane builds artifacts, while
+the MSRV job checks the lower compiler floor in `[workspace.package]`.
+Use the installed, authorized toolchain; do not change compiler selection to
+hide a diagnostic or to make a failing check appear successful.
 
-Every test is an executable specification. Name tests after the **behavior**, not the function name, and document the **invariant** being protected.
-
-```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use proptest::prelude::*;
-
-    /// INVARIANT: Applying a discount must never result in a negative subtotal
-    /// or exceed the original price, regardless of coupon stacking.
-    #[test]
-    fn discount_calculation_clamps_between_zero_and_subtotal() {
-        // Arrange
-        let cart = Cart::with_subtotal(Money::from_cents(1000));
-        let massive_coupon = Coupon::FixedAmount(Money::from_cents(5000));
-
-        // Act
-        let final_price = cart.apply_discount(&massive_coupon);
-
-        // Assert
-        assert_eq!(final_price, Money::ZERO);
-    }
-
-    proptest! {
-        #[test]
-        fn roundtrip_serialization_preserves_id(raw_id in any::<u128>()) {
-            let id = OrderId::from_u128(raw_id);
-            let encoded = id.to_string();
-            let decoded: OrderId = encoded.parse().expect("valid format");
-            prop_assert_eq!(id, decoded);
-        }
-    }
-}
-
-```
-
----
-
-## 6. Automated Guardrails (`Cargo.toml` Lints)
-
-Do not rely on code reviewers or AI prompts to enforce basic hygiene. Configure the compiler and Clippy in your root `Cargo.toml` so bad patterns fail the build automatically:
-
-```toml
-[workspace.lints.rust]
-unsafe_code = "forbid"
-unused_must_use = "deny"
-
-[workspace.lints.clippy]
-all = { level = "deny", priority = -1 }
-pedantic = { level = "warn", priority = -1 }
-
-# Prevent runtime panics & blocking stdout
-unwrap_used = "deny"
-expect_used = "warn"
-panic = "deny"
-print_stdout = "deny"
-print_stderr = "deny"
-dbg_macro = "deny"
-todo = "warn"
-
-# Allow common pedantic false-positives
-module_name_repetitions = "allow"
-missing_errors_doc = "allow"
-
-```
-
----
-
-## 7. Quick-Reference Rules for AI Agents
-
-If you are an AI agent generating or refactoring code in this repository, you must adhere to these constraints before completing any task:
-
-1. **No `println!` / `dbg!`:** Always emit structured events via `tracing::{info, debug, warn, error}`.
-2. **No `.unwrap()`:** Propagate errors with `?` and map them into domain error enums. In tests, use `.expect("reason why test setup is valid")`.
-3. **Check Compiler Lints:** Always run `cargo clippy --workspace --all-targets -- -D warnings` and `cargo nextest run` (or `cargo test`) before declaring a task finished.
-4. **Minimize Visibility:** Keep structs, fields, and functions private or `pub(crate)` unless explicitly required by a downstream crate.
-5. **No Mechanical Tests:** When asked to write tests, test edge cases, boundary conditions, and state invariants—never write tautological tests that just mirror the implementation line-by-line.
+The effective gate profiles retain `opt-level = 3`, debug assertions and overflow
+checks. `[profile.test]` inherits those settings and changes only debug info.
+Cargo's `debug = 1` means limited debug information; it is distinct from
+`debug = "line-tables-only"`. Dependencies and build overrides follow their
+actual manifest settings. Changing this explanation does not change those
+settings or replace the effective-profile gate.

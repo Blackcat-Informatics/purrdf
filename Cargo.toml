@@ -303,8 +303,9 @@ strip = "none"
 #     bugs.
 [profile.dev]
 opt-level = 3
-# Line tables rather than full DWARF: a backtrace keeps its function names and
-# file/line, without the multi-GB symbol trees nothing here consumes.
+# Limited debug information rather than full DWARF, retaining backtrace
+# function names and source locations. Cargo debug = 1 is distinct from
+# debug = "line-tables-only".
 debug = 1
 # Orthogonal to opt-level, and load-bearing. First-party code carries
 # `#[cfg(debug_assertions)]` bodies — the SPARQL parser and the BM25 scorer among
@@ -325,8 +326,8 @@ overflow-checks = true
 # price. The debug-info saving is taken here instead, where nearly every unit in
 # the graph is.
 [profile.test]
-# Test binaries carry no debug info. `[profile.dev]`'s line tables exist so a
-# backtrace from a REPL or an example keeps its function names; a test target is
+# Test binaries carry no debug info. `[profile.dev]`'s limited debug info lets a
+# backtrace from a REPL or an example retain function names; a test target is
 # the one place that buys nothing, because a failing assertion prints its own
 # file and line and a panicking test prints its own message. Meanwhile this is
 # where the artifacts are: every integration-test file is its own linked binary,

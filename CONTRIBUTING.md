@@ -19,13 +19,16 @@ corpora that gate all of it. Issues and pull requests are welcome.
 
 ## Design constraints that PRs must respect
 
-- **No Cargo features.** The workspace deliberately has zero feature flags and CI
-  enforces it (`helper-census --no-features`). PurRDF is a carrier: every consumer
-  in every language must observe identical behavior. Do not add optionality; if a
-  capability seems optional, discuss it in an issue first.
-- **The kernel stays clean.** `purrdf-core` must not grow a dependency on PyO3
-  (enforced by `make rdf-core-hygiene`); `purrdf-iri`, `purrdf-xsd`, and
-  `purrdf-events` stay zero-dependency.
+Read [AGENTS.md](./AGENTS.md) and the canonical
+[Rust engineering guidelines](./docs/agents/RUST_GUIDELINES.md) before editing.
+They define the complete repository contracts and focused verification policy.
+
+- **No semantic Cargo features.** Every consumer observes the same engine
+  behavior. The sole exception is the empty, non-semantic cargo-c marker
+  documented in AGENTS.md; `helper-census --no-features` enforces the contract.
+- **The kernel stays clean.** `purrdf-core` must not depend on PyO3. Preserve
+  the root and foundation dependency ring fences declared in `layers.toml` and
+  enforced by `make rdf-core-hygiene`.
 - **Determinism.** Serializers and the GTS writer are byte-deterministic. A change
   that alters emitted bytes must update the affected goldens/vectors and explain why.
 - **Conformance corpora are the contract.** W3C SPARQL, SHACL, RDFC-1.0 fixtures,
@@ -61,9 +64,11 @@ make wasm-pkg   # build the ESM/wasm package
 make capi-build # build libpurrdf via cargo-c
 ```
 
-`make check` is the gate, but it is not the whole gate: **`make conformance` and
-the rustdoc lane run separately**, so adding a test can leave `make check` green
-while `make conformance` goes red. Run both before claiming a change is done.
+Select focused checks for the behavior and consumers changed. Required hooks
+and release gates still run fully. `make check`, `make conformance` and rustdoc
+are separate lanes; a pass in one does not satisfy another required lane.
+Completion alone does not require running every lane or repeating checks an
+imminent hook will execute. Report the exact scope and any missing acceptance.
 
 ### A SKIP is not a pass
 
@@ -72,7 +77,7 @@ CI instead. `make doctor` prints which ones are inert on your machine and why.
 The distinction that matters most: if `rustup` is not on `PATH`, then
 `rust-toolchain.toml`'s nightly channel is **not enforced locally at all** —
 `cargo` resolves to whatever is on `PATH` — and `make wasm` can neither detect
-nor install the wasm32 target, so it skips silently. That is a different
+nor install the `wasm32` target, so it skips silently. That is a different
 situation from "the target is not installed", and `make doctor` says which one
 you are in.
 
@@ -133,7 +138,7 @@ contributors run. Raising the MSRV is a notable, changelog-recorded change that
 rides a minor bump and never ships in a patch release.
 
 **Development toolchain.** `rust-toolchain.toml` names a **floating nightly** for
-local work and CI gates, because nightly clippy and rustdoc carry lints stable
+local work and ordinary CI gates, because nightly clippy and rustdoc carry lints stable
 lacks and its default borrow checker is the stronger one — so a gate finding is a
 real finding, not a channel artifact. It floats rather than naming a date because
 a date would freeze that surface and turn every later sharpening into debt nobody
@@ -153,11 +158,11 @@ Release mechanics (tag-driven trusted publishing, provenance, SBOMs) live in
 
 ## Before you open a pull request
 
-- Run `make check` and make sure it is green.
-- `cargo clippy --workspace --all-targets` must be warning-free — the workspace
-  lint table (pedantic + nursery) is inherited by every crate, and CI denies
-  warnings. Prefer fixing code over adding `#[allow]`; when an allow is genuinely
-  right, scope it tightly and give it a reason.
+- Run the focused checks selected for the affected behavior and consumers, and
+  all required hooks and release gates. Describe the executed scope accurately.
+- Keep the inherited workspace lint table (pedantic + nursery) warning-free;
+  CI denies warnings. Prefer fixing code over adding `#[allow]`; a justified
+  allowance must be tightly scoped and explain its reason.
 - Every source file must carry an SPDX `MIT OR Apache-2.0 OR MulanPSL-2.0` license header.
 - Keep changes focused; describe **what** changed and **why** in the PR description.
 
