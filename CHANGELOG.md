@@ -8,6 +8,16 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [4.0.0] - 2026-11-07
 
+- **Native execution and transfer efficiency:** Bounded HNSW searches admit lazy
+  visitation pages while retaining ranking and arithmetic identities. ShEx prunes
+  infeasible assignment prefixes and memoizes fully failed residual states,
+  preserving the first witness and operational refusal. MIME transfer validation
+  and digest projection stream decoded bytes without discarded output buffers;
+  quoted-printable extraction no longer allocates per escape. Value sorting and
+  SHACL prepare ordering keys once, preserving their distinct descending rules.
+  Prepared keys reduce repeated parsing and allocation traffic at a higher peak
+  scratch footprint. XSD exposes the shared additive Base64 visitor.
+
 - **Compatibility throughout v4:** Existing public signatures, variant payloads,
   trait implementations and trait-object support, ownership, host contracts and
   valid persisted artifacts remain compatible. C ABI 0.20.0 remains compatible

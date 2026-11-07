@@ -205,12 +205,13 @@ empty-source/license archive audits ran with the installed compiler before
 upload. The public registry confirmed each version. These packages expose no
 runtime API and contain no functional implementation.
 
-Record creation is complete; Trusted Publishing configuration is a separate
-release prerequisite. The maintainer must configure the matching publisher and
-enable **Require trusted publishing** on all six new records before v4.0.
-The strict public preflight checks their locks before functional publication.
-An empty bootstrap ledger does not waive that check or establish that the
-publisher entries exist.
+Record creation and Trusted Publisher setup are complete. On 2026-11-07 the
+maintainer confirmed the matching publisher entries, and the strict public
+preflight verified **Require trusted publishing** on all 37 release records
+(`trustpub_only=true`). Publisher entries have no public read API; the
+maintainer's confirmation and the independently checked registry locks are
+separate evidence. The release lane repeats the strict preflight before any
+functional publication.
 
 ### Established records
 
