@@ -364,6 +364,12 @@ pub const LEDGER: &[ThreadLocal] = &[
         reason: TEST_ONLY,
     },
     ThreadLocal {
+        file: "crates/sparql-eval/src/modifier/value_order/qualification.rs",
+        name: "VALUE_ORDER_WORK",
+        safety: Safety::NotCompiledIn,
+        reason: TEST_ONLY,
+    },
+    ThreadLocal {
         file: "crates/sparql-eval/src/path.rs",
         name: "LEVEL_ADVANCES",
         safety: Safety::NotCompiledIn,

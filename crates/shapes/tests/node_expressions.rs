@@ -749,6 +749,30 @@ fn sh_and_shnex_ordering_spellings_agree() {
     );
 }
 
+/// Descending node-expression order reverses the entire stable ascending bag,
+/// including equal numeric keys and the unbound-key group.
+#[test]
+fn ordering_reverses_equal_and_unbound_key_groups() {
+    let data = "ex:a ex:p ex:b, ex:c, ex:d, ex:e .
+                ex:b ex:k 1 . ex:c ex:k \"01\"^^xsd:integer .";
+    for (descending, expected) in [
+        (false, vec![ex("d"), ex("e"), ex("b"), ex("c")]),
+        (true, vec![ex("c"), ex("b"), ex("e"), ex("d")]),
+    ] {
+        assert_eq!(
+            outputs(
+                data,
+                &format!(
+                    "ex:S a sh:NodeShape ; sh:expression [ sh:path ex:p ;
+             sh:orderby [ sh:path ex:k ] ; sh:desc {descending} ] ."
+                ),
+                "a"
+            ),
+            expected
+        );
+    }
+}
+
 /// A node carrying BOTH the `sh:` and the `shnex:` spelling of the same kind is
 /// AMBIGUOUS and hard-fails — the writer is asked which they meant, never silently
 /// given one of them.

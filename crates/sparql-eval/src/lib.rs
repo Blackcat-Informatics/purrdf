@@ -252,7 +252,8 @@ pub use predicate_use::{PredicateUse, predicate_use};
 // `sh:min`/`sh:max`/`sh:sum`/`sh:orderby` node expressions are the motivating
 // caller) and must get exactly the answer a query would have computed.
 pub use modifier::{
-    ValueAggregate, compare_values, fold_values, fold_values_with_division, order_values,
+    ValueAggregate, compare_values, fold_values, fold_values_with_division,
+    order_value_permutation, order_values,
 };
 // The kernel's governor vocabulary, re-exported so a host that governs queries through
 // this crate can NAME what it gets back — the ceilings it set, what was spent, and which
