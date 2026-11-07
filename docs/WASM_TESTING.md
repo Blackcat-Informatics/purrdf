@@ -82,6 +82,25 @@ JavaScript class construction, native return-field transport, HTTP responses
 and SARIF string transport. Native Rust owns canonicalization equivalence,
 UPDATE rollback and SHACL conformance.
 
+The package gate also retains these exact host cases. Their RDF fixtures supply
+values for the JavaScript interfaces; native Rust owns the underlying query,
+matching and validation semantics. The packed SARIF probe requires nonempty runs
+and results so an empty JSON envelope cannot satisfy result transport.
+
+| Target / exact case | Concrete host obligation |
+| --- | --- |
+| `roundtrip.test.mjs` / `DatasetCore.add/delete chain (RDF/JS return-this)` | JavaScript mutation methods return the same dataset wrapper for chaining |
+| `roundtrip.test.mjs` / `Term.equals does not consume its argument` | wasm-bindgen comparison borrows the supplied term handle, which remains usable afterward |
+| `roundtrip.test.mjs` / `Quad.equals does not consume its argument` | wasm-bindgen comparison preserves the supplied quad handle for access and subsequent dataset insertion |
+| `roundtrip.test.mjs` / `datasetToStream → streamToDataset round-trips via the Sink` | The package async iterable carries quad wrappers into the native streaming Sink |
+| `cloudflare.test.mjs` / `a request to a bound origin goes through its binding; any other through fetch` | The Worker resolver dispatches through the configured service binding or Fetch implementation |
+| `cloudflare.test.mjs` / `a non-2xx answer is a transport failure and its body is cancelled, unread` | A failed Fetch Response cancels its ReadableStream without pulling its body |
+| `cloudflare.test.mjs` / `the cache answers a repeated cacheable request, and a different request is a miss` | Cache API Request keys, Response bodies and cache-control headers survive storage and reuse |
+| `cloudflare.test.mjs` / `every request form answers` | Fetch GET, direct POST and form POST requests reach the endpoint and return query bodies or empty UPDATE responses |
+| `cloudflare.test.mjs` / `each Accept is answered in its format, byte for byte what queryRaw writes` | HTTP content negotiation sets Content-Type and Vary and transports the selected serializer body |
+| `cloudflare.test.mjs` / `refusal pair: a body over maxRequestBytes is a 413, by Content-Length, by streaming past it with none, or with a lying smaller one; the valid neighbour answers at exactly the limit` | Fetch body admission checks declared length before reading and enforces the running byte limit while streaming |
+| `cloudflare.test.mjs` / `refusal pair: a resolveService that throws is a 500 with a correlation id, never the exception's own words; a healthy resolver is the 200 neighbour and the hook is never called for it` | JavaScript resolver exceptions become sanitized HTTP responses while the original error and matching correlation identity reach the host hook |
+
 The packaged case `isomorphic refusal crosses the wasm boundary as a JavaScript
 Error` in `canonicalization-host-error.test.mjs` exercises the wasm-bindgen
 `JsError` construction/import and JavaScript exception prototype. It distinguishes

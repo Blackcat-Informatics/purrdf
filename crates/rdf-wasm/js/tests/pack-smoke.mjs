@@ -133,9 +133,8 @@ assert.deepEqual(await endpoint.json(), { head: {}, boolean: true });
 
 const sarif = JSON.parse(shaclValidateToSarif(shapes, data));
 assert.equal(sarif.version, "2.1.0");
-for (const run of sarif.runs) {
-  assert.ok(Array.isArray(run.results), "a completed SARIF run always carries results");
-}
+assert.ok(sarif.runs.length > 0 && sarif.runs.every((run) => Array.isArray(run.results)), "SARIF runs carry result arrays across the packed package boundary");
+assert.ok(sarif.runs.some((run) => run.results.length > 0), "SARIF results cross the packed package boundary");
 `;
 
 const root = await mkdtemp(join(tmpdir(), "purrdf-pack-smoke-"));

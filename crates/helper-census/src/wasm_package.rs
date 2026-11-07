@@ -17,6 +17,10 @@ const CASES: &[(&str, &[&str])] = &[
         &[
             "literal_component_native_error_transport",
             "an unsupported format crosses the wasm boundary as a JavaScript Error",
+            "DatasetCore.add/delete chain (RDF/JS return-this)",
+            "Term.equals does not consume its argument",
+            "Quad.equals does not consume its argument",
+            "datasetToStream → streamToDataset round-trips via the Sink",
         ],
     ),
     (
@@ -46,7 +50,16 @@ const CASES: &[(&str, &[&str])] = &[
     ),
     (
         "cloudflare.test.mjs",
-        &["CORS: preflight, echo and Vary with cors; no CORS header and a 405 OPTIONS without"],
+        &[
+            "CORS: preflight, echo and Vary with cors; no CORS header and a 405 OPTIONS without",
+            "a request to a bound origin goes through its binding; any other through fetch",
+            "a non-2xx answer is a transport failure and its body is cancelled, unread",
+            "the cache answers a repeated cacheable request, and a different request is a miss",
+            "every request form answers",
+            "each Accept is answered in its format, byte for byte what queryRaw writes",
+            "refusal pair: a body over maxRequestBytes is a 413, by Content-Length, by streaming past it with none, or with a lying smaller one; the valid neighbour answers at exactly the limit",
+            "refusal pair: a resolveService that throws is a 500 with a correlation id, never the exception's own words; a healthy resolver is the 200 neighbour and the hook is never called for it",
+        ],
     ),
     (
         "sync-coordinates.test.mjs",
