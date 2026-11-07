@@ -269,3 +269,56 @@ fn custom_extension_fires_once_per_matched_arc_with_value_and_predicate() {
         .collect();
     assert_eq!(q1_values, vec![TermValue::iri("http://a.example/o3")]);
 }
+
+#[test]
+fn pruned_ambiguous_occurrences_keep_first_witness_and_action_order() {
+    const EXT: &str = "http://example.org/Recorder";
+    let mut builder = RdfDatasetBuilder::new();
+    let focus = builder.intern_iri("http://a.example/s1").unwrap();
+    let predicate = builder.intern_iri("http://a.example/p1").unwrap();
+    for suffix in ["o1", "o2"] {
+        let object = builder
+            .intern_iri(&format!("http://a.example/{suffix}"))
+            .unwrap();
+        builder.push_quad(focus, predicate, object, None).unwrap();
+    }
+    let data = builder.freeze().unwrap();
+    let schema = parse_shexc(
+        &format!(
+            "<S1> {{ ( <p1> . {{0}} %<{EXT}>{{ forbidden %}} ; \
+         <p1> . {{1}} %<{EXT}>{{ first %}} ; \
+         <p1> . {{1}} %<{EXT}>{{ second %}} ) %<{EXT}>{{ group %}} }}"
+        ),
+        Some("http://a.example/"),
+    )
+    .unwrap();
+    let calls = RefCell::new(Vec::new());
+    let mut registry = SemActRegistry::default();
+    registry.register(
+        EXT,
+        Box::new(
+            |act: &purrdf_shex::SemAct, ctx: &purrdf_shex::SemActContext| {
+                calls
+                    .borrow_mut()
+                    .push((act.code.clone().unwrap(), ctx.value.clone()));
+                true
+            },
+        ),
+    );
+    let options = ValidationOptions::default().with_sem_acts(registry);
+    let map = [(
+        TermValue::iri("http://a.example/s1"),
+        ShapeSelector::Label("http://a.example/S1".into()),
+    )];
+    assert!(
+        validate_with(&schema, &data, &map, &options)
+            .unwrap()
+            .all_conformant()
+    );
+    drop(options);
+    let calls = calls.into_inner();
+    let codes: Vec<_> = calls.iter().map(|(code, _)| code.trim()).collect();
+    assert_eq!(codes, ["first", "second", "group"]);
+    assert_eq!(calls[0].1, Some(TermValue::iri("http://a.example/o1")));
+    assert_eq!(calls[1].1, Some(TermValue::iri("http://a.example/o2")));
+}

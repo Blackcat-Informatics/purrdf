@@ -731,6 +731,9 @@ fn inverse_triple_constraint_matches_arcs_in() {
     assert!(check(schema, &data, TermValue::iri("http://a.example/s1"), S1).is_ok());
     // No incoming arc → cardinality failure.
     assert!(check(schema, &data, TermValue::iri("http://a.example/parent"), S1).is_err());
+    // Repeated inverse occurrences use the same pruned assignment route.
+    let ambiguous = "<S1> { ^<p1> . {0} ; ^<p1> IRI }";
+    assert!(check(ambiguous, &data, TermValue::iri("http://a.example/s1"), S1).is_ok());
     // Arcs-in never violate CLOSED (it constrains arcs-out only).
     let closed = "<S1> CLOSED { ^<p1> IRI }";
     assert!(check(closed, &data, TermValue::iri("http://a.example/s1"), S1).is_ok());
