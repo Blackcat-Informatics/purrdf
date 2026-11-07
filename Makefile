@@ -879,7 +879,7 @@ wasm-pkg: ## Build the purrdf npm/ESM package (release wasm + wasm-bindgen web b
 		RUSTFLAGS="$${RUSTFLAGS} -D warnings -C target-feature=+simd128 --remap-path-prefix=$(CURDIR)=/purrdf --remap-path-prefix=$${CARGO_HOME:-$$HOME/.cargo}=/cargo" \
 		python3 scripts/build-private-wasm.py "$$capture/purrdf_wasm.wasm" purrdf_wasm \
 			-p purrdf-wasm --lib --crate-type cdylib --target wasm32-unknown-unknown --release --locked && \
-		PATH="$$HOME/.cargo/bin:$$PATH" wasm-bindgen "$$capture/purrdf_wasm.wasm" \
+		wasm-bindgen "$$capture/purrdf_wasm.wasm" \
 			--out-dir crates/rdf-wasm/js/pkg --target web
 	@# The asynchronous lane's suspending import comes from ./purrdf_jspi.mjs, which the
 	@# glue imports by relative path and wires into the instance's import object as is.
