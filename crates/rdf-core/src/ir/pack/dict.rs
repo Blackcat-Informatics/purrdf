@@ -1586,9 +1586,9 @@ mod tests {
                 ),
                 (
                     "\u{01c5}",
-                    PackDictError::Malformed(
-                        purrdf_iri::langtag::LanguageTagError::TerminalPrimaryNotAlpha.message(),
-                    ),
+                    PackDictError::LiteralComponents(crate::LiteralComponentError::LanguageTag(
+                        purrdf_iri::langtag::LanguageTagError::TerminalPrimaryNotAlpha,
+                    )),
                 ),
             ] {
                 let datatype = RdfLiteral::language_datatype_iri(direction);

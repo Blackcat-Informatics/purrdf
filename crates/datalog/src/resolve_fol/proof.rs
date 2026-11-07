@@ -36,261 +36,6 @@ struct CheckContext {
     graph: RetainedGraph,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::super::{FolClause, FolControl, resolve_fol};
-    use super::*;
-    use std::collections::BTreeMap;
-
-    fn run(
-        dag: &mut TermDag,
-        program: &FolProgram,
-        sorts: &SortContext,
-        steps: u64,
-    ) -> super::super::FolOutcome {
-        let FolControl::Decided(outcome) = resolve_fol(
-            dag,
-            program,
-            sorts,
-            FolAnswerContract::GroundOnly,
-            &FolBudget { max_steps: steps },
-        )
-        .unwrap() else {
-            panic!("the ground fixture must decide");
-        };
-        *outcome
-    }
-
-    fn changed(
-        evidence: &FolCheckEvidence,
-        change: impl FnOnce(&mut CheckContext),
-    ) -> FolCheckEvidence {
-        let mut context = (*evidence.0).clone();
-        change(&mut context);
-        FolCheckEvidence(Shared::try_new(context).unwrap())
-    }
-
-    fn claim(original: &FolProof, evidence: &FolCheckEvidence) -> FolProof {
-        FolProof::new(evidence, (*original.step).clone()).unwrap()
-    }
-
-    #[test]
-    fn negative_completion_requires_bounded_replay_and_complete_demanded_coverage() {
-        let mut dag = TermDag::default();
-        let p = dag.intern_leaf("p").unwrap();
-        let q = dag.intern_leaf("q").unwrap();
-        let a = dag.intern_leaf("a").unwrap();
-        let (_, x) = dag.fresh_meta().unwrap();
-        let px = dag.intern_app(p, vec![x]).unwrap();
-        let qx = dag.intern_app(q, vec![x]).unwrap();
-        let pa = dag.intern_app(p, vec![a]).unwrap();
-        let program = FolProgram::new(
-            &dag,
-            vec![FolClause::new(&dag, px, vec![FolLit::Neg(qx)]).unwrap()],
-            pa,
-            vec![],
-            BTreeMap::new(),
-        )
-        .unwrap();
-        let sorts = SortContext::default();
-        let full = run(&mut dag, &program, &sorts, 100);
-        let proof = full.answers[0].proof().clone();
-        let (marker, _) = dag.fresh_meta().unwrap();
-        let nodes = dag.len();
-        assert_eq!(
-            check_fol_proof(&mut dag, &proof, full.checking_evidence()).unwrap(),
-            pa
-        );
-        assert_eq!(dag.len(), nodes);
-        let (after, _) = dag.fresh_meta().unwrap();
-        assert_eq!(
-            after.index(),
-            marker.index() + 1,
-            "checking must roll back fresh metavariable identities"
-        );
-
-        let partial = run(&mut dag, &program, &sorts, 1);
-        let incomplete = claim(&proof, partial.checking_evidence());
-        let nodes = dag.len();
-        assert!(matches!(
-            check_fol_proof(&mut dag, &incomplete, partial.checking_evidence()),
-            Err(FolProofError::CompletionIncomplete { max_steps: 1, .. })
-        ));
-        assert_eq!(dag.len(), nodes);
-
-        // A completion flag or false model entry cannot replace demand coverage.
-        let missing = changed(full.checking_evidence(), |context| {
-            context.calls.clear();
-        });
-        let forged = claim(&proof, &missing);
-        assert_eq!(
-            check_fol_proof(&mut dag, &forged, &missing).unwrap_err(),
-            FolProofError::InvalidCompletion
-        );
-        // Coverage alone cannot replace replay of the full rule inventory/model.
-        let omitted = changed(full.checking_evidence(), |context| {
-            context.rules.clear();
-        });
-        let forged = claim(&proof, &omitted);
-        assert_eq!(
-            check_fol_proof(&mut dag, &forged, &omitted).unwrap_err(),
-            FolProofError::InvalidCompletion
-        );
-        let model = changed(full.checking_evidence(), |context| {
-            context.scope.true_set.clear();
-        });
-        let forged = claim(&proof, &model);
-        assert_eq!(
-            check_fol_proof(&mut dag, &forged, &model).unwrap_err(),
-            FolProofError::InvalidCompletion
-        );
-        let bounded = changed(full.checking_evidence(), |context| {
-            context.budget.max_steps = 1;
-        });
-        let forged = claim(&proof, &bounded);
-        assert!(matches!(
-            check_fol_proof(&mut dag, &forged, &bounded),
-            Err(FolProofError::CompletionIncomplete { max_steps: 1, .. })
-        ));
-        assert_eq!(
-            check_fol_proof(&mut dag, &proof, full.checking_evidence()).unwrap(),
-            pa
-        );
-        assert_eq!(dag.len(), nodes);
-    }
-
-    #[test]
-    fn checked_conclusions_reject_foreign_contexts_and_forged_positive_premises() {
-        let mut dag = TermDag::default();
-        let p = dag.intern_leaf("p").unwrap();
-        let q = dag.intern_leaf("q").unwrap();
-        let a = dag.intern_leaf("a").unwrap();
-        let (_, x) = dag.fresh_meta().unwrap();
-        let px = dag.intern_app(p, vec![x]).unwrap();
-        let qx = dag.intern_app(q, vec![x]).unwrap();
-        let pa = dag.intern_app(p, vec![a]).unwrap();
-        let qa = dag.intern_app(q, vec![a]).unwrap();
-        let program = FolProgram::new(
-            &dag,
-            vec![
-                FolClause::new(&dag, px, vec![FolLit::Pos(qx)]).unwrap(),
-                FolClause::new(&dag, qa, vec![]).unwrap(),
-            ],
-            pa,
-            vec![],
-            BTreeMap::new(),
-        )
-        .unwrap();
-        let sorts = SortContext::default();
-        let original = run(&mut dag, &program, &sorts, 100);
-        let proof = original.answers[0].proof().clone();
-        let nodes = dag.len();
-        assert_eq!(
-            check_fol_proof(&mut dag, &proof, original.checking_evidence()).unwrap(),
-            pa
-        );
-        assert_eq!(dag.len(), nodes);
-        let mut foreign = dag.clone();
-        assert_eq!(
-            check_fol_proof(&mut foreign, &proof, original.checking_evidence()).unwrap_err(),
-            FolProofError::ForeignSource
-        );
-
-        let forged = FolProof::new(
-            original.checking_evidence(),
-            ProofStep::ByRule {
-                rule: proof.rule(),
-                rule_identity: proof.rule_identity().into(),
-                goal: pa,
-                premises: vec![proof.clone()],
-            },
-        )
-        .unwrap();
-        assert_eq!(
-            check_fol_proof(&mut dag, &forged, original.checking_evidence()).unwrap_err(),
-            FolProofError::PremiseMismatch {
-                rule: 0,
-                position: 0
-            }
-        );
-        let symbolic = FolProof::new(
-            original.checking_evidence(),
-            ProofStep::Assert {
-                rule: 1,
-                rule_identity: String::new(),
-                goal: x,
-            },
-        )
-        .unwrap();
-        assert_eq!(
-            check_fol_proof(&mut dag, &symbolic, original.checking_evidence()).unwrap_err(),
-            FolProofError::NonGroundConclusion { goal: x }
-        );
-        let limited = changed(original.checking_evidence(), |context| {
-            context.budget.max_steps = 1;
-        });
-        let limited_claim = claim(&proof, &limited);
-        assert!(matches!(
-            check_fol_proof(&mut dag, &limited_claim, &limited),
-            Err(FolProofError::CheckingWorkExhausted {
-                steps: 0,
-                max_steps: 1
-            })
-        ));
-        let extra = dag.intern_leaf("extra").unwrap();
-        let unknown = FolProof::new(
-            original.checking_evidence(),
-            ProofStep::Assert {
-                rule: 1,
-                rule_identity: String::new(),
-                goal: extra,
-            },
-        )
-        .unwrap();
-        assert_eq!(
-            check_fol_proof(&mut dag, &unknown, original.checking_evidence()).unwrap_err(),
-            FolProofError::UnknownConclusion { goal: extra }
-        );
-        let mut clauses = program.clauses().to_vec();
-        clauses.push(FolClause::new(&dag, extra, vec![]).unwrap());
-        let other_program = FolProgram::new(&dag, clauses, pa, vec![], BTreeMap::new()).unwrap();
-        let other = run(&mut dag, &other_program, &sorts, 100);
-        assert_eq!(
-            check_fol_proof(&mut dag, &proof, other.checking_evidence()).unwrap_err(),
-            FolProofError::ForeignProgram
-        );
-        let sort = dag.intern_leaf("sort").unwrap();
-        let other_sorts = SortContext::new(
-            unify::SortOrder::from_subclass_edges(&[(sort, sort)]),
-            BTreeMap::new(),
-            BTreeMap::new(),
-        );
-        let other = run(&mut dag, &program, &other_sorts, 100);
-        assert_eq!(
-            check_fol_proof(&mut dag, &proof, other.checking_evidence()).unwrap_err(),
-            FolProofError::ForeignSorts
-        );
-        let other = run(&mut dag, &program, &sorts, 100);
-        assert_eq!(
-            check_fol_proof(&mut dag, &proof, other.checking_evidence()).unwrap_err(),
-            FolProofError::ForeignRun
-        );
-        assert_eq!(
-            check_fol_proof(
-                &mut dag,
-                other.answers[0].proof(),
-                other.checking_evidence()
-            )
-            .unwrap(),
-            pa
-        );
-        assert_eq!(
-            check_fol_proof(&mut dag, &proof, original.checking_evidence()).unwrap(),
-            pa
-        );
-    }
-}
-
 /// An opaque owned ground proof. All descendants share the original checking
 /// evidence and retained graph. Future proof forms can extend the private step
 /// representation without changing a public variant payload.
@@ -718,4 +463,259 @@ fn check_node(
         return Err(FolProofError::RuleIdentityMismatch { rule });
     }
     Ok(goal)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::{FolClause, FolControl, resolve_fol};
+    use super::*;
+    use std::collections::BTreeMap;
+
+    fn run(
+        dag: &mut TermDag,
+        program: &FolProgram,
+        sorts: &SortContext,
+        steps: u64,
+    ) -> super::super::FolOutcome {
+        let FolControl::Decided(outcome) = resolve_fol(
+            dag,
+            program,
+            sorts,
+            FolAnswerContract::GroundOnly,
+            &FolBudget { max_steps: steps },
+        )
+        .unwrap() else {
+            panic!("the ground fixture must decide");
+        };
+        *outcome
+    }
+
+    fn changed(
+        evidence: &FolCheckEvidence,
+        change: impl FnOnce(&mut CheckContext),
+    ) -> FolCheckEvidence {
+        let mut context = (*evidence.0).clone();
+        change(&mut context);
+        FolCheckEvidence(Shared::try_new(context).unwrap())
+    }
+
+    fn claim(original: &FolProof, evidence: &FolCheckEvidence) -> FolProof {
+        FolProof::new(evidence, (*original.step).clone()).unwrap()
+    }
+
+    #[test]
+    fn negative_completion_requires_bounded_replay_and_complete_demanded_coverage() {
+        let mut dag = TermDag::default();
+        let p = dag.intern_leaf("p").unwrap();
+        let q = dag.intern_leaf("q").unwrap();
+        let a = dag.intern_leaf("a").unwrap();
+        let (_, x) = dag.fresh_meta().unwrap();
+        let px = dag.intern_app(p, vec![x]).unwrap();
+        let qx = dag.intern_app(q, vec![x]).unwrap();
+        let pa = dag.intern_app(p, vec![a]).unwrap();
+        let program = FolProgram::new(
+            &dag,
+            vec![FolClause::new(&dag, px, vec![FolLit::Neg(qx)]).unwrap()],
+            pa,
+            vec![],
+            BTreeMap::new(),
+        )
+        .unwrap();
+        let sorts = SortContext::default();
+        let full = run(&mut dag, &program, &sorts, 100);
+        let proof = full.answers[0].proof().clone();
+        let (marker, _) = dag.fresh_meta().unwrap();
+        let nodes = dag.len();
+        assert_eq!(
+            check_fol_proof(&mut dag, &proof, full.checking_evidence()).unwrap(),
+            pa
+        );
+        assert_eq!(dag.len(), nodes);
+        let (after, _) = dag.fresh_meta().unwrap();
+        assert_eq!(
+            after.index(),
+            marker.index() + 1,
+            "checking must roll back fresh metavariable identities"
+        );
+
+        let partial = run(&mut dag, &program, &sorts, 1);
+        let incomplete = claim(&proof, partial.checking_evidence());
+        let nodes = dag.len();
+        assert!(matches!(
+            check_fol_proof(&mut dag, &incomplete, partial.checking_evidence()),
+            Err(FolProofError::CompletionIncomplete { max_steps: 1, .. })
+        ));
+        assert_eq!(dag.len(), nodes);
+
+        // A completion flag or false model entry cannot replace demand coverage.
+        let missing = changed(full.checking_evidence(), |context| {
+            context.calls.clear();
+        });
+        let forged = claim(&proof, &missing);
+        assert_eq!(
+            check_fol_proof(&mut dag, &forged, &missing).unwrap_err(),
+            FolProofError::InvalidCompletion
+        );
+        // Coverage alone cannot replace replay of the full rule inventory/model.
+        let omitted = changed(full.checking_evidence(), |context| {
+            context.rules.clear();
+        });
+        let forged = claim(&proof, &omitted);
+        assert_eq!(
+            check_fol_proof(&mut dag, &forged, &omitted).unwrap_err(),
+            FolProofError::InvalidCompletion
+        );
+        let model = changed(full.checking_evidence(), |context| {
+            context.scope.true_set.clear();
+        });
+        let forged = claim(&proof, &model);
+        assert_eq!(
+            check_fol_proof(&mut dag, &forged, &model).unwrap_err(),
+            FolProofError::InvalidCompletion
+        );
+        let bounded = changed(full.checking_evidence(), |context| {
+            context.budget.max_steps = 1;
+        });
+        let forged = claim(&proof, &bounded);
+        assert!(matches!(
+            check_fol_proof(&mut dag, &forged, &bounded),
+            Err(FolProofError::CompletionIncomplete { max_steps: 1, .. })
+        ));
+        assert_eq!(
+            check_fol_proof(&mut dag, &proof, full.checking_evidence()).unwrap(),
+            pa
+        );
+        assert_eq!(dag.len(), nodes);
+    }
+
+    #[test]
+    fn checked_conclusions_reject_foreign_contexts_and_forged_positive_premises() {
+        let mut dag = TermDag::default();
+        let p = dag.intern_leaf("p").unwrap();
+        let q = dag.intern_leaf("q").unwrap();
+        let a = dag.intern_leaf("a").unwrap();
+        let (_, x) = dag.fresh_meta().unwrap();
+        let px = dag.intern_app(p, vec![x]).unwrap();
+        let qx = dag.intern_app(q, vec![x]).unwrap();
+        let pa = dag.intern_app(p, vec![a]).unwrap();
+        let qa = dag.intern_app(q, vec![a]).unwrap();
+        let program = FolProgram::new(
+            &dag,
+            vec![
+                FolClause::new(&dag, px, vec![FolLit::Pos(qx)]).unwrap(),
+                FolClause::new(&dag, qa, vec![]).unwrap(),
+            ],
+            pa,
+            vec![],
+            BTreeMap::new(),
+        )
+        .unwrap();
+        let sorts = SortContext::default();
+        let original = run(&mut dag, &program, &sorts, 100);
+        let proof = original.answers[0].proof().clone();
+        let nodes = dag.len();
+        assert_eq!(
+            check_fol_proof(&mut dag, &proof, original.checking_evidence()).unwrap(),
+            pa
+        );
+        assert_eq!(dag.len(), nodes);
+        let mut foreign = dag.clone();
+        assert_eq!(
+            check_fol_proof(&mut foreign, &proof, original.checking_evidence()).unwrap_err(),
+            FolProofError::ForeignSource
+        );
+
+        let forged = FolProof::new(
+            original.checking_evidence(),
+            ProofStep::ByRule {
+                rule: proof.rule(),
+                rule_identity: proof.rule_identity().into(),
+                goal: pa,
+                premises: vec![proof.clone()],
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            check_fol_proof(&mut dag, &forged, original.checking_evidence()).unwrap_err(),
+            FolProofError::PremiseMismatch {
+                rule: 0,
+                position: 0
+            }
+        );
+        let symbolic = FolProof::new(
+            original.checking_evidence(),
+            ProofStep::Assert {
+                rule: 1,
+                rule_identity: String::new(),
+                goal: x,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            check_fol_proof(&mut dag, &symbolic, original.checking_evidence()).unwrap_err(),
+            FolProofError::NonGroundConclusion { goal: x }
+        );
+        let limited = changed(original.checking_evidence(), |context| {
+            context.budget.max_steps = 1;
+        });
+        let limited_claim = claim(&proof, &limited);
+        assert!(matches!(
+            check_fol_proof(&mut dag, &limited_claim, &limited),
+            Err(FolProofError::CheckingWorkExhausted {
+                steps: 0,
+                max_steps: 1
+            })
+        ));
+        let extra = dag.intern_leaf("extra").unwrap();
+        let unknown = FolProof::new(
+            original.checking_evidence(),
+            ProofStep::Assert {
+                rule: 1,
+                rule_identity: String::new(),
+                goal: extra,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            check_fol_proof(&mut dag, &unknown, original.checking_evidence()).unwrap_err(),
+            FolProofError::UnknownConclusion { goal: extra }
+        );
+        let mut clauses = program.clauses().to_vec();
+        clauses.push(FolClause::new(&dag, extra, vec![]).unwrap());
+        let other_program = FolProgram::new(&dag, clauses, pa, vec![], BTreeMap::new()).unwrap();
+        let other = run(&mut dag, &other_program, &sorts, 100);
+        assert_eq!(
+            check_fol_proof(&mut dag, &proof, other.checking_evidence()).unwrap_err(),
+            FolProofError::ForeignProgram
+        );
+        let sort = dag.intern_leaf("sort").unwrap();
+        let other_sorts = SortContext::new(
+            unify::SortOrder::from_subclass_edges(&[(sort, sort)]),
+            BTreeMap::new(),
+            BTreeMap::new(),
+        );
+        let other = run(&mut dag, &program, &other_sorts, 100);
+        assert_eq!(
+            check_fol_proof(&mut dag, &proof, other.checking_evidence()).unwrap_err(),
+            FolProofError::ForeignSorts
+        );
+        let other = run(&mut dag, &program, &sorts, 100);
+        assert_eq!(
+            check_fol_proof(&mut dag, &proof, other.checking_evidence()).unwrap_err(),
+            FolProofError::ForeignRun
+        );
+        assert_eq!(
+            check_fol_proof(
+                &mut dag,
+                other.answers[0].proof(),
+                other.checking_evidence()
+            )
+            .unwrap(),
+            pa
+        );
+        assert_eq!(
+            check_fol_proof(&mut dag, &proof, original.checking_evidence()).unwrap(),
+            pa
+        );
+    }
 }

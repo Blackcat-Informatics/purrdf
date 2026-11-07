@@ -6035,7 +6035,7 @@
   },
   "info": {
     "title": "PURRDF",
-    "version": "3.0.1"
+    "version": "4.0.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -7653,7 +7653,7 @@
   },
   "info": {
     "title": "PURRDF",
-    "version": "3.0.1"
+    "version": "4.0.0"
   },
   "openapi": "3.1.0",
   "paths": {

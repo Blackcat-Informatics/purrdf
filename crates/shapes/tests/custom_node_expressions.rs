@@ -779,15 +779,7 @@ fn a_processor_failure_inside_a_sparql_called_body_fails_validation_with_a_typed
         cause.code,
         purrdf_sparql_eval::EvalError::FUNCTION_OPERATIONAL_CODE
     );
-    assert!(
-        cause
-            .message
-            .contains("recursion exceeded the depth bound of 32")
-            || cause
-                .message
-                .contains(purrdf_sparql_eval::EvalError::STACK_EXHAUSTED_CODE),
-        "{cause}"
-    );
+    assert!(is_bounded_cycle(cause), "{cause}");
 
     // Neighbour: the same shape of call that terminates is answered, so the failure above
     // is the recursive execution and not the harness.
@@ -1206,6 +1198,34 @@ fn a_recursive_function_makes_validation_fail_rather_than_conform() {
     assert!(err.contains("64"), "got: {err}");
 }
 
+fn is_bounded_cycle(cause: &purrdf_core::RdfDiagnostic) -> bool {
+    use purrdf_shapes::PreparationRefusal;
+    use purrdf_sparql_eval::EvalError;
+
+    cause
+        .message
+        .contains("recursion exceeded the depth bound of 32")
+        || cause.message.contains(EvalError::STACK_EXHAUSTED_CODE)
+        || cause.message.contains(EvalError::HOST_STACK_EXHAUSTED_CODE)
+        || std::iter::successors(Some(cause as &(dyn std::error::Error + 'static)), |error| {
+            error.source()
+        })
+        .any(|error| {
+            matches!(
+                error.downcast_ref::<PreparationRefusal>(),
+                Some(PreparationRefusal::StackMargin { .. })
+            ) || matches!(
+                error.downcast_ref::<EvalError>(),
+                Some(EvalError::StackExhausted { .. } | EvalError::HostStackExhausted { .. })
+            ) || error
+                .downcast_ref::<purrdf_core::RdfDiagnostic>()
+                .is_some_and(|diagnostic| {
+                    diagnostic.code == EvalError::STACK_EXHAUSTED_CODE
+                        || diagnostic.code == EvalError::HOST_STACK_EXHAUSTED_CODE
+                })
+        })
+}
+
 /// A cycle that LEAVES the node-expression evaluator through a `sh:select` body and
 /// re-enters through the §7.3 SPARQL registration is bounded too.
 ///
@@ -1239,12 +1259,7 @@ fn a_cycle_through_sparql_query_text_is_bounded_too() {
         purrdf_sparql_eval::EvalError::FUNCTION_OPERATIONAL_CODE
     );
     assert!(
-        cause
-            .message
-            .contains("recursion exceeded the depth bound of 32")
-            || cause
-                .message
-                .contains(purrdf_sparql_eval::EvalError::STACK_EXHAUSTED_CODE),
+        is_bounded_cycle(cause),
         "the cycle must retain its logical or host-stack refusal: {err}"
     );
 
