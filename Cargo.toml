@@ -179,11 +179,11 @@ windows-sys = { version = "0.61", features = ["Win32_System_Threading"] }
 # the library version byte-for-byte or it refuses to run. `make wasm-pkg`, the
 # wasm32 test runner (scripts/wasm-test-runner.sh, which reads this line and
 # refuses any other CLI version) and the CI Node lane use
-# `wasm-bindgen-cli@0.2.129` to match this.
-wasm-bindgen = "=0.2.129"
+# `wasm-bindgen-cli@0.2.130` to match this.
+wasm-bindgen = "=0.2.130"
 # Encoding support for the private host linker. Native byte-preserving reads
 # and the existing Binaryen validator avoid wasmparser and its banned closure.
-wasm-encoder = { version = "0.262", default-features = false }
+wasm-encoder = { version = "0.263", default-features = false }
 
 [workspace.lints.rust]
 missing_docs = "warn"

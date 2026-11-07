@@ -18,11 +18,11 @@ Source: registry+https://github.com/rust-lang/crates.io-index
 Notice: dependencies/aead-0.6.1/LICENSE-APACHE
 Notice: dependencies/aead-0.6.1/LICENSE-MIT
 
-aes-0.9.3: MIT OR Apache-2.0
+aes-0.9.4: MIT OR Apache-2.0
 Scope: resolved normal/build input, including target-specific alternatives
 Source: registry+https://github.com/rust-lang/crates.io-index
-Notice: dependencies/aes-0.9.3/LICENSE-APACHE
-Notice: dependencies/aes-0.9.3/LICENSE-MIT
+Notice: dependencies/aes-0.9.4/LICENSE-APACHE
+Notice: dependencies/aes-0.9.4/LICENSE-MIT
 
 aes-gcm-0.11.1: Apache-2.0 OR MIT
 Scope: resolved normal/build input, including target-specific alternatives
@@ -121,11 +121,11 @@ Source: registry+https://github.com/rust-lang/crates.io-index
 Notice: dependencies/ctr-0.10.1/LICENSE-APACHE
 Notice: dependencies/ctr-0.10.1/LICENSE-MIT
 
-ctutils-0.4.6: Apache-2.0 OR MIT
+ctutils-0.4.8: Apache-2.0 OR MIT
 Scope: resolved normal/build input, including target-specific alternatives
 Source: registry+https://github.com/rust-lang/crates.io-index
-Notice: dependencies/ctutils-0.4.6/LICENSE-APACHE
-Notice: dependencies/ctutils-0.4.6/LICENSE-MIT
+Notice: dependencies/ctutils-0.4.8/LICENSE-APACHE
+Notice: dependencies/ctutils-0.4.8/LICENSE-MIT
 
 digest-0.11.3: MIT OR Apache-2.0
 Scope: resolved normal/build input, including target-specific alternatives
@@ -214,12 +214,6 @@ Scope: source-only conformance data; original notices remain authoritative
 Source: https://github.com/geneontology/obographs
 Evidence: LICENSING.md
 Notice: third-party/obographs/0-BSD-3-Clause.txt
-
-once_cell-1.21.4: MIT OR Apache-2.0
-Scope: resolved normal/build input, including target-specific alternatives
-Source: registry+https://github.com/rust-lang/crates.io-index
-Notice: dependencies/once_cell-1.21.4/LICENSE-APACHE
-Notice: dependencies/once_cell-1.21.4/LICENSE-MIT
 
 polyval-0.7.3: Apache-2.0 OR MIT
 Scope: resolved normal/build input, including target-specific alternatives
@@ -377,29 +371,29 @@ Notice: third-party/visual-hashing-native/0-LICENSE-MIT
 Notice: third-party/visual-hashing-native/1-LICENSE-APACHE
 Notice: third-party/visual-hashing-native/2-LICENSE-MULAN
 
-wasm-bindgen-0.2.129: MIT OR Apache-2.0
+wasm-bindgen-0.2.130: MIT OR Apache-2.0
 Scope: resolved normal/build input, including target-specific alternatives
 Source: registry+https://github.com/rust-lang/crates.io-index
-Notice: dependencies/wasm-bindgen-0.2.129/LICENSE-APACHE
-Notice: dependencies/wasm-bindgen-0.2.129/LICENSE-MIT
+Notice: dependencies/wasm-bindgen-0.2.130/LICENSE-APACHE
+Notice: dependencies/wasm-bindgen-0.2.130/LICENSE-MIT
 
-wasm-bindgen-macro-0.2.129: MIT OR Apache-2.0
+wasm-bindgen-macro-0.2.130: MIT OR Apache-2.0
 Scope: resolved normal/build input, including target-specific alternatives
 Source: registry+https://github.com/rust-lang/crates.io-index
-Notice: dependencies/wasm-bindgen-macro-0.2.129/LICENSE-APACHE
-Notice: dependencies/wasm-bindgen-macro-0.2.129/LICENSE-MIT
+Notice: dependencies/wasm-bindgen-macro-0.2.130/LICENSE-APACHE
+Notice: dependencies/wasm-bindgen-macro-0.2.130/LICENSE-MIT
 
-wasm-bindgen-macro-support-0.2.129: MIT OR Apache-2.0
+wasm-bindgen-macro-support-0.2.130: MIT OR Apache-2.0
 Scope: resolved normal/build input, including target-specific alternatives
 Source: registry+https://github.com/rust-lang/crates.io-index
-Notice: dependencies/wasm-bindgen-macro-support-0.2.129/LICENSE-APACHE
-Notice: dependencies/wasm-bindgen-macro-support-0.2.129/LICENSE-MIT
+Notice: dependencies/wasm-bindgen-macro-support-0.2.130/LICENSE-APACHE
+Notice: dependencies/wasm-bindgen-macro-support-0.2.130/LICENSE-MIT
 
-wasm-bindgen-shared-0.2.129: MIT OR Apache-2.0
+wasm-bindgen-shared-0.2.130: MIT OR Apache-2.0
 Scope: resolved normal/build input, including target-specific alternatives
 Source: registry+https://github.com/rust-lang/crates.io-index
-Notice: dependencies/wasm-bindgen-shared-0.2.129/LICENSE-APACHE
-Notice: dependencies/wasm-bindgen-shared-0.2.129/LICENSE-MIT
+Notice: dependencies/wasm-bindgen-shared-0.2.130/LICENSE-APACHE
+Notice: dependencies/wasm-bindgen-shared-0.2.130/LICENSE-MIT
 
 whatwg-html-references: BSD-3-Clause
 Scope: named character-reference and numeric recovery DATA incorporated into generated source under WHATWG's explicit BSD-3-Clause grant; independently written resolver and generator retain the first-party grant

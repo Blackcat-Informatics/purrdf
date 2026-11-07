@@ -443,11 +443,11 @@ holder = "regex"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.once_cell]
-category = "transitive:wasm-bindgen"
-reason = "lazy statics for wasm-bindgen and pyo3"
-distinct = "lazy statics inside wasm-bindgen and pyo3; no first-party code calls it"
-holder = "wasm-bindgen"
-metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
+category = "transitive:pyo3"
+reason = "lazy statics for pyo3"
+distinct = "lazy statics inside pyo3; no first-party code calls it"
+holder = "pyo3"
+metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
 
 [packages.once_cell_polyfill]
 category = "transitive:clap"
@@ -480,7 +480,7 @@ metrics = { direct = true, exclusive_closure = 0, release = true, wasm = true, b
 category = "binding"
 reason = "Python extension-module bindings (purrdf-python)"
 distinct = "the CPython extension-module boundary for purrdf-python; PurRDF has no Python FFI of its own"
-metrics = { direct = true, exclusive_closure = 7, release = false, wasm = false, build_script = true, proc_macro = false }
+metrics = { direct = true, exclusive_closure = 8, release = false, wasm = false, build_script = true, proc_macro = false }
 
 [packages.pyo3-build-config]
 category = "transitive:pyo3"
