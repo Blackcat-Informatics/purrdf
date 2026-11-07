@@ -30,6 +30,7 @@
 //!    interval contains 1.
 
 use purrdf_core::FastMap;
+use purrdf_lex::allocation::{Ceiling, Memory, OrderedTable, StorageError};
 use purrdf_lex::walk::WorkList;
 
 use crate::ast::{SemAct, ShapeExpr, TripleConstraint, TripleExpr};
@@ -288,6 +289,8 @@ fn collect_participating<'a>(
 /// Whether the expression (used exactly once) can consume per-slot counts in
 /// the given `[lo, hi]` ranges.
 pub(crate) fn counts_match(compiled: &Compiled<'_>, counts: &[(u64, u64)]) -> bool {
+    #[cfg(test)]
+    record_work(|work| work.checks += 1);
     reps(&compiled.root, &compiled.slots, counts)
         .is_some_and(|iv| iv.lo <= 1 && iv.hi.is_none_or(|h| h >= 1))
 }
@@ -321,7 +324,7 @@ pub(crate) fn assignment_search(
     let mut counts = vec![(0u64, 0u64); compiled.slots.len()];
     let mut assignment = vec![None; arcs.len()];
     let mut budget = limits.maximum_states();
-    let found = search(
+    let found = search::<MEMO_BYTES>(
         compiled,
         arcs,
         &mut counts,
@@ -332,10 +335,188 @@ pub(crate) fn assignment_search(
     Ok(found.then_some((counts, assignment)))
 }
 
+/// Cache capacity is a performance policy, never a logical matching limit.
+/// The native account includes keys, tree arrays and replacement overlap.
+const MEMO_BYTES: usize = 64 * 1024;
+const MEMO_ENTRIES: usize = 1024;
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct FailedState {
+    index: usize,
+    // The residual suffix is fixed by index, so its full intervals identify the
+    // same assigned-count state without allocating an independent lookup key.
+    counts: Vec<(u64, u64)>,
+}
+
+fn residual(counts: &mut [(u64, u64)], arc: &ArcOptions, add: bool) {
+    // Every candidate may receive this arc; only a sole candidate without
+    // EXTRA must receive it. These independent bounds include every reachable
+    // completion, even when their cross-slot combinations are impossible.
+    // Applying the full group calculus can therefore prove refusal, never a
+    // witness until the suffix is empty and all count intervals are exact.
+    let adjust = |value: &mut u64| {
+        if add {
+            *value += 1;
+        } else {
+            *value -= 1;
+        }
+    };
+    for &slot in &arc.candidates {
+        adjust(&mut counts[slot].1);
+    }
+    if !arc.extra_allowed
+        && let [slot] = arc.candidates.as_slice()
+    {
+        adjust(&mut counts[*slot].0);
+    }
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default)]
+struct SearchWork {
+    states: u64,
+    attempts: u64,
+    checks: u64,
+    memo_entries: usize,
+    memo_bytes: usize,
+}
+
+#[cfg(test)]
+thread_local! {
+    static SEARCH_WORK: std::cell::Cell<SearchWork> = const { std::cell::Cell::new(SearchWork {
+        states: 0, attempts: 0, checks: 0, memo_entries: 0, memo_bytes: 0,
+    }) };
+}
+
+#[cfg(test)]
+fn record_work(update: impl FnOnce(&mut SearchWork)) {
+    SEARCH_WORK.with(|work| {
+        let mut next = work.get();
+        update(&mut next);
+        work.set(next);
+    });
+}
+
+// Keep one bounded, independently inspectable matcher frame. All alternatives
+// retain their original order; only proven impossible completions are skipped.
+#[inline(never)]
+fn search<const CACHE_BYTES: usize>(
+    compiled: &Compiled<'_>,
+    arcs: &[ArcOptions],
+    counts: &mut [(u64, u64)],
+    assignment: &mut [Option<usize>],
+    budget: &mut u64,
+    maximum: u64,
+) -> Result<bool, crate::ValidationError> {
+    enum Frame {
+        Enter(usize),
+        NextCandidate(usize, usize),
+        Restore(usize),
+    }
+    for arc in arcs {
+        residual(counts, arc, true);
+    }
+    let mut ceiling = Ceiling(CACHE_BYTES);
+    let mut memory = Memory::new(&mut ceiling);
+    let mut failed = OrderedTable::<FailedState, ()>::default();
+    let mut recording = CACHE_BYTES != 0;
+    let mut pending = WorkList::<_, 16>::with(Frame::Enter(0));
+    while let Some(frame) = pending.pop() {
+        match frame {
+            Frame::Enter(index) => {
+                // Admission remains at the original entry boundary, including
+                // a terminal, interval refusal or cached failed state.
+                *budget = budget
+                    .checked_sub(1)
+                    .ok_or(crate::ValidationError::MatcherWork {
+                        attempted: u128::from(maximum) + 1,
+                        maximum,
+                    })?;
+                #[cfg(test)]
+                record_work(|work| work.states += 1);
+                if !counts_match(compiled, counts) {
+                    continue;
+                }
+                if index == arcs.len() {
+                    return Ok(true);
+                }
+                if failed
+                    .get_by(|key| {
+                        index
+                            .cmp(&key.index)
+                            .then_with(|| counts[..].cmp(key.counts.as_slice()))
+                    })
+                    .is_some()
+                {
+                    continue;
+                }
+                residual(counts, &arcs[index], false);
+                // Restore only after every candidate and EXTRA continuation.
+                pending.push(Frame::Restore(index));
+                pending.push(Frame::NextCandidate(index, 0));
+            }
+            Frame::NextCandidate(index, next) => {
+                if let Some(slot) = assignment[index].take() {
+                    counts[slot].0 -= 1;
+                    counts[slot].1 -= 1;
+                }
+                let arc = &arcs[index];
+                if let Some(&slot) = arc.candidates.get(next) {
+                    #[cfg(test)]
+                    record_work(|work| work.attempts += 1);
+                    counts[slot].0 += 1;
+                    counts[slot].1 += 1;
+                    assignment[index] = Some(slot);
+                    pending.push(Frame::NextCandidate(index, next + 1));
+                    pending.push(Frame::Enter(index + 1));
+                } else if arc.extra_allowed {
+                    #[cfg(test)]
+                    record_work(|work| work.attempts += 1);
+                    pending.push(Frame::Enter(index + 1));
+                }
+            }
+            Frame::Restore(index) => {
+                residual(counts, &arcs[index], true);
+                if recording && failed.len() < MEMO_ENTRIES {
+                    // A fully exhausted subtree has restored its entry counts.
+                    // A budget-cut subtree exits above and is never cached.
+                    let result = memory.try_scope(|memory| {
+                        let mut owned = Vec::new();
+                        memory.reserve(&mut owned, counts.len())?;
+                        owned.extend_from_slice(counts);
+                        failed.insert(
+                            FailedState {
+                                index,
+                                counts: owned,
+                            },
+                            (),
+                            memory,
+                        )?;
+                        Ok::<_, StorageError>(())
+                    });
+                    match result {
+                        Ok(()) => {}
+                        // Saturating this private cache only stops recording;
+                        // exact interval search continues under caller admission.
+                        Err(StorageError::AdmissionFailed) => recording = false,
+                        Err(cause) => return Err(crate::ValidationError::MatcherStorage(cause)),
+                    }
+                    #[cfg(test)]
+                    record_work(|work| {
+                        work.memo_entries = failed.len();
+                        work.memo_bytes = memory.admitted_bytes();
+                    });
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+
 // Keep one bounded, independently inspectable matcher frame. The continuation
 // loop replaces recursion without erasing this kernel's assembly boundary.
-#[inline(never)]
-fn search(
+#[cfg(test)]
+fn exhaustive_search(
     compiled: &Compiled<'_>,
     arcs: &[ArcOptions],
     counts: &mut [(u64, u64)],
@@ -360,6 +541,7 @@ fn search(
                         attempted: u128::from(maximum) + 1,
                         maximum,
                     })?;
+                record_work(|work| work.states += 1);
                 if index == arcs.len() {
                     if counts_match(compiled, counts) {
                         return Ok(true);
@@ -375,12 +557,14 @@ fn search(
                 }
                 let arc = &arcs[index];
                 if let Some(&slot) = arc.candidates.get(next) {
+                    record_work(|work| work.attempts += 1);
                     counts[slot].0 += 1;
                     counts[slot].1 += 1;
                     assignment[index] = Some(slot);
                     pending.push(Frame::NextCandidate(index, next + 1));
                     pending.push(Frame::Enter(index + 1));
                 } else if arc.extra_allowed {
+                    record_work(|work| work.attempts += 1);
                     // EXTRA is the final alternative, so no choice continuation
                     // is needed and this arc contributes to no slot count.
                     pending.push(Frame::Enter(index + 1));
@@ -390,6 +574,10 @@ fn search(
     }
     Ok(false)
 }
+
+#[cfg(test)]
+#[path = "matcher/qualification.rs"]
+mod qualification;
 
 #[cfg(test)]
 mod tests {
@@ -423,7 +611,7 @@ mod tests {
             let mut counts = [(0, 0); 2];
             let mut assignment = [None];
             let mut budget = allowed;
-            let result = search(
+            let result = search::<MEMO_BYTES>(
                 &compiled,
                 &arcs,
                 &mut counts,
@@ -451,7 +639,7 @@ mod tests {
         let mut assignment = [None];
         let mut exhausted = 0;
         assert_eq!(
-            search(
+            search::<MEMO_BYTES>(
                 &compiled,
                 &arcs,
                 &mut counts,
@@ -484,7 +672,7 @@ mod tests {
         let mut assignment = [None; 2];
         let mut budget = 3;
         assert_eq!(
-            search(
+            search::<MEMO_BYTES>(
                 &compiled,
                 &arcs,
                 &mut counts,

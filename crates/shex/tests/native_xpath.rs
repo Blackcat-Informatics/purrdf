@@ -717,26 +717,18 @@ fn matcher_refusal_aborts_every_validation_path_and_cannot_be_negated() {
             Err(expected.clone())
         );
     }
-    let error = validate(&parsed, &data, &[association("S")]).unwrap_err();
-    assert_eq!(
-        error,
-        ValidationError::MatcherWork {
-            attempted: 200_001,
-            maximum: 200_000
-        }
+    // The zero-capacity occurrence is pruned without enumerating partitions.
+    assert!(
+        validate(&parsed, &data, &[association("S")])
+            .unwrap()
+            .all_conformant()
     );
-    let fields = Capture::read(&error);
+    let fields = Capture::read(&expected);
     assert_eq!(fields.code, "shex-matcher-work");
-    assert!(matches!(
-        fields.field("attempted"),
-        ErrorValue::Unsigned(200_001)
-    ));
-    assert!(matches!(
-        fields.field("maximum"),
-        ErrorValue::Unsigned(200_000)
-    ));
+    assert!(matches!(fields.field("attempted"), ErrorValue::Unsigned(1)));
+    assert!(matches!(fields.field("maximum"), ErrorValue::Unsigned(0)));
 
-    let admitted = ValidationOptions::default().with_matcher_limits(MatcherLimits::new(1_000_000));
+    let admitted = ValidationOptions::default().with_matcher_limits(MatcherLimits::new(37));
     // Repeat settled successes and failures to exercise their memoized verdicts.
     let map = ["S", "N", "A", "O", "C", "V", "S", "N", "V"].map(association);
     let mut validator = XPathValidator::exact(&exact);

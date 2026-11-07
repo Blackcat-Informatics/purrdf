@@ -344,6 +344,8 @@ pub enum ValidationError {
     ShapeMap(ShexError),
     /// Native pattern execution or construction was operationally refused.
     Regex(purrdf_core::xsd_regex::xpath::Error),
+    /// Native matcher working storage could not be allocated.
+    MatcherStorage(purrdf_lex::allocation::StorageError),
     /// Assignment search refused its next state, including terminal count checks.
     MatcherWork {
         /// The attempted state number (the maximum plus one on refusal).
@@ -357,12 +359,14 @@ impl purrdf_hash::error::StructuredError for ValidationError {
     purrdf_hash::error_visit! {
         ShapeMap(cause) => "shex-xpath-shape-map" { "cause" => Cause(cause) },
         Regex(cause) => "shex-xpath-regex" { "cause" => Cause(cause) },
+        MatcherStorage(cause) => "shex-matcher-storage" { "cause" => Cause(cause) },
         MatcherWork { attempted, maximum } => "shex-matcher-work" { "attempted" => Unsigned(*attempted), "maximum" => Unsigned(u128::from(*maximum)) },
     }
 }
 
 purrdf_lex::variant_from!(ValidationError {
-    ShapeMap(ShexError), Regex(purrdf_core::xsd_regex::xpath::Error)
+    ShapeMap(ShexError), Regex(purrdf_core::xsd_regex::xpath::Error),
+    MatcherStorage(purrdf_lex::allocation::StorageError)
 });
 
 impl fmt::Display for ValidationError {
@@ -370,6 +374,7 @@ impl fmt::Display for ValidationError {
         match self {
             Self::ShapeMap(error) => error.fmt(f),
             Self::Regex(error) => error.fmt(f),
+            Self::MatcherStorage(error) => error.fmt(f),
             Self::MatcherWork { attempted, maximum } => write!(
                 f,
                 "ShEx matcher attempted state {attempted}, exceeding admitted maximum {maximum}"
@@ -383,6 +388,7 @@ impl std::error::Error for ValidationError {
         match self {
             Self::ShapeMap(error) => Some(error),
             Self::Regex(error) => Some(error),
+            Self::MatcherStorage(error) => Some(error),
             Self::MatcherWork { .. } => None,
         }
     }
