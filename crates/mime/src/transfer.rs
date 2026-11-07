@@ -5,6 +5,7 @@
 
 use crate::TransferEncoding;
 
+#[derive(Debug)]
 pub(crate) struct DecodeError {
     pub(crate) at: usize,
     pub(crate) reason: &'static str,
@@ -42,14 +43,44 @@ pub(crate) fn validate_identity(source: &[u8], seven_bit: bool) -> Result<(), De
 }
 
 pub(crate) fn decode(source: &[u8], encoding: &TransferEncoding) -> Result<Vec<u8>, DecodeError> {
+    let mut length = 0;
+    visit(source, encoding, |bytes| length += bytes.len())?;
+    let mut output = Vec::with_capacity(length);
+    visit(source, encoding, |bytes| output.extend_from_slice(bytes))?;
+    Ok(output)
+}
+
+/// Parse one transfer law. A failing parse never publishes its provisional sink.
+pub(crate) fn visit(
+    source: &[u8],
+    encoding: &TransferEncoding,
+    mut emit: impl FnMut(&[u8]),
+) -> Result<(), DecodeError> {
     match encoding {
         TransferEncoding::SevenBit | TransferEncoding::EightBit => {
             validate_identity(source, *encoding == TransferEncoding::SevenBit)?;
-            Ok(source.to_vec())
+            emit(source);
+            Ok(())
         }
-        TransferEncoding::Binary => Ok(source.to_vec()),
-        TransferEncoding::Base64 => base64(source),
-        TransferEncoding::QuotedPrintable => quoted_printable(source, false),
+        TransferEncoding::Binary => {
+            emit(source);
+            Ok(())
+        }
+        TransferEncoding::Base64 => {
+            // RFC2045 §6.8 ignores bytes outside the alphabet; '=' remains so
+            // the one native decoder can refuse malformed groups and padding.
+            purrdf_xsd::binary::visit_base64(
+                source.iter().copied().filter(|byte| {
+                    byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'=')
+                }),
+                emit,
+            )
+            .map_err(|_| DecodeError {
+                at: 0,
+                reason: "malformed base64 groups or padding",
+            })
+        }
+        TransferEncoding::QuotedPrintable => visit_quoted_printable(source, false, emit),
         TransferEncoding::Unknown(_) => Err(DecodeError {
             at: 0,
             reason: "unsupported declared transfer encoding",
@@ -61,24 +92,11 @@ pub(crate) fn decode(source: &[u8], encoding: &TransferEncoding) -> Result<Vec<u
     }
 }
 
-fn base64(source: &[u8]) -> Result<Vec<u8>, DecodeError> {
-    // RFC2045 §6.8 tells decoders to ignore characters outside the alphabet.
-    // This lexical policy is MIME's; the actual bit/padding decoder remains the
-    // one XSD binary home. Padding '=' is retained so malformed padding refuses.
-    let lexical: String = source
-        .iter()
-        .copied()
-        .filter(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'='))
-        .map(char::from)
-        .collect();
-    purrdf_xsd::parse_base64(&lexical).map_err(|_| DecodeError {
-        at: 0,
-        reason: "malformed base64 groups or padding",
-    })
-}
-
-pub(crate) fn quoted_printable(source: &[u8], encoded_word: bool) -> Result<Vec<u8>, DecodeError> {
-    let mut out = Vec::new();
+fn visit_quoted_printable(
+    source: &[u8],
+    encoded_word: bool,
+    mut emit: impl FnMut(&[u8]),
+) -> Result<(), DecodeError> {
     let mut at = 0;
     while at < source.len() {
         let byte = source[at];
@@ -98,14 +116,15 @@ pub(crate) fn quoted_printable(source: &[u8], encoded_word: bool) -> Result<Vec<
                 at,
                 reason: "non-ASCII quoted-printable escape",
             })?;
-            let decoded = purrdf_xsd::parse_hex(lexical).map_err(|_| DecodeError {
+            let mut decoded = [0_u8; 1];
+            purrdf_hash::hex::decode_to_slice(lexical, &mut decoded).map_err(|_| DecodeError {
                 at,
                 reason: "invalid quoted-printable hexadecimal escape",
             })?;
-            out.extend_from_slice(&decoded);
+            emit(&decoded);
             at += 3;
         } else if encoded_word && byte == b'_' {
-            out.push(b' ');
+            emit(b" ");
             at += 1;
         } else if matches!(byte, b'\t' | b' ') && !encoded_word {
             let start = at;
@@ -118,14 +137,20 @@ pub(crate) fn quoted_printable(source: &[u8], encoded_word: bool) -> Result<Vec<
             // RFC2045 §6.7: unencoded transport padding at a physical line end
             // is not part of decoded content; encoded =20/=09 remains payload.
             if at < source.len() && source.get(at..at + 2) != Some(b"\r\n") {
-                out.extend_from_slice(&source[start..at]);
+                emit(&source[start..at]);
             }
         } else if !encoded_word && source.get(at..at + 2) == Some(b"\r\n") {
-            out.extend_from_slice(b"\r\n");
+            emit(b"\r\n");
             at += 2;
         } else if (33..=126).contains(&byte) && byte != b'=' {
-            out.push(byte);
+            let start = at;
             at += 1;
+            while source.get(at).is_some_and(|byte| {
+                (33..=126).contains(byte) && *byte != b'=' && !(encoded_word && *byte == b'_')
+            }) {
+                at += 1;
+            }
+            emit(&source[start..at]);
         } else {
             return Err(DecodeError {
                 at,
@@ -133,7 +158,7 @@ pub(crate) fn quoted_printable(source: &[u8], encoded_word: bool) -> Result<Vec<
             });
         }
     }
-    Ok(out)
+    Ok(())
 }
 
 pub(crate) fn encoded_words_valid(source: &[u8], name: Option<&[u8]>) -> Result<bool, ()> {
@@ -305,9 +330,7 @@ fn encoded_word_valid(word: &[u8], phrase: bool, comment: bool) -> bool {
         return false;
     }
     match encoding.to_ascii_lowercase() {
-        b'b' => {
-            core::str::from_utf8(encoded).is_ok_and(|text| purrdf_xsd::parse_base64(text).is_ok())
-        }
+        b'b' => purrdf_xsd::binary::visit_base64(encoded.iter().copied(), |_| {}).is_ok(),
         b'q' => {
             (!phrase
                 || encoded.iter().all(|byte| {
@@ -318,7 +341,7 @@ fn encoded_word_valid(word: &[u8], phrase: bool, comment: bool) -> bool {
                     || !encoded
                         .iter()
                         .any(|byte| matches!(byte, b'(' | b')' | b'\\')))
-                && quoted_printable(encoded, true).is_ok()
+                && visit_quoted_printable(encoded, true, |_| {}).is_ok()
         }
         _ => false,
     }

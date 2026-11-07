@@ -3,7 +3,7 @@
 
 use std::ops::Range;
 
-use purrdf_core::{ContentDigest, cover::ByteCover};
+use purrdf_core::{ContentDigest, content_store::ContentHasher, cover::ByteCover};
 
 use crate::{MimeError, transfer};
 
@@ -322,6 +322,23 @@ impl<'a> Document<'a> {
         })?;
         let digest = ContentDigest::of(&bytes);
         Ok(DecodedAttachment { bytes, digest })
+    }
+
+    /// Compute the attachment identity without retaining its decoded payload.
+    pub(crate) fn decoded_digest(&self, part: usize) -> Result<ContentDigest, MimeError> {
+        let entry = self.parts.get(part).ok_or(MimeError::UnknownPart(part))?;
+        let mut hasher = ContentHasher::default();
+        transfer::visit(
+            &self.source.bytes[entry.body.clone()],
+            &entry.transfer_encoding,
+            |bytes| hasher.update(bytes),
+        )
+        .map_err(|error| MimeError::Transfer {
+            part,
+            at: entry.body.start + error.at,
+            reason: error.reason,
+        })?;
+        Ok(hasher.finish())
     }
 
     /// Cover a nested part's exact original octets under the shared identity
