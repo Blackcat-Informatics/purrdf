@@ -95,7 +95,7 @@
 //!   a SPARQL-based expression returns its query's solution sequence unchanged.
 //!
 //! [`Term`] is intentionally not `Ord`, which is why the Set arms name their
-//! comparator. The evaluator is wasm32-clean: no clocks, threads, RNG, or
+//! comparator. The evaluator supports `wasm32`: no clocks, threads, RNG, or
 //! filesystem.
 
 pub(crate) mod named_outputs;
@@ -2248,16 +2248,26 @@ fn eval_node_expr_at_depth(
                 let first = descend!(&element, key, 1)?.first().map(Term::to_term_value);
                 keyed.push((first, element));
             }
-            keyed.sort_by(|(left, _), (right, _)| match (left, right) {
-                (None, None) => core::cmp::Ordering::Equal,
-                (None, Some(_)) => core::cmp::Ordering::Less,
-                (Some(_), None) => core::cmp::Ordering::Greater,
-                (Some(left), Some(right)) => purrdf_sparql_eval::compare_values(left, right),
-            });
-            let mut out: Vec<Term> = keyed.into_iter().map(|(_, element)| element).collect();
+            let mut order = purrdf_sparql_eval::order_value_permutation(
+                keyed.iter().map(|(key, _)| key.as_ref()),
+                false,
+            );
             if *descending {
-                out.reverse();
+                // SHACL reverses equal-key groups as well as key order.
+                order.reverse();
             }
+            let mut slots: Vec<_> = keyed
+                .into_iter()
+                .map(|(_, element)| Some(element))
+                .collect();
+            let out = order
+                .into_iter()
+                .map(|index| {
+                    slots[index]
+                        .take()
+                        .expect("one element per permutation index")
+                })
+                .collect();
             Ok(out)
         }
         NodeExpr::Offset { of, n } => {

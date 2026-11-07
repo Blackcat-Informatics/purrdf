@@ -1628,6 +1628,8 @@ impl<V> SortKey<'_, V> {
 /// exist — so a term nested to any depth costs no more machine stack. Every other
 /// term is projected directly.
 pub(crate) fn project(value: Option<&TermValue>) -> SortKey<'_> {
+    #[cfg(test)]
+    value_order::note_projection();
     enum Step<'v> {
         Term(&'v TermValue),
         Assemble,
@@ -1661,6 +1663,8 @@ pub(crate) fn project_admitted<'a>(
     value: Option<&'a TermValue>,
     workspace: &crate::WorkspaceCapability,
 ) -> Result<OwnedSortKey<'a>, EvalError> {
+    #[cfg(test)]
+    value_order::note_projection();
     enum Step<'v> {
         Term(&'v TermValue),
         Assemble,
@@ -1896,15 +1900,7 @@ fn shallow_order_admitted<V: std::borrow::Borrow<XsdValue>>(
 /// duplicates are preserved (an `ORDER BY` applies no `DISTINCT`).
 #[must_use]
 pub fn order_values(values: Vec<TermValue>, descending: bool) -> Vec<TermValue> {
-    // The keys BORROW their value, so the projection is taken per comparison
-    // over an index permutation rather than stored beside the value. A
-    // `SortKey<'_>` cannot outlive the `TermValue` it reads, and moving the
-    // values into a keyed pair would invalidate every borrow.
-    let mut order: Vec<usize> = (0..values.len()).collect();
-    order.sort_by(|&i, &j| {
-        let ord = total_order(&project(Some(&values[i])), &project(Some(&values[j])));
-        if descending { ord.reverse() } else { ord }
-    });
+    let order = order_value_permutation(values.iter().map(Some), descending);
     let mut slots: Vec<Option<TermValue>> = values.into_iter().map(Some).collect();
     order
         .into_iter()
@@ -1915,6 +1911,9 @@ pub fn order_values(values: Vec<TermValue>, descending: bool) -> Vec<TermValue> 
         })
         .collect()
 }
+
+mod value_order;
+pub use value_order::order_value_permutation;
 
 /// Compare two term values under SPARQL `ORDER BY` semantics.
 ///
