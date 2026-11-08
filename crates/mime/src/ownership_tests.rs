@@ -5,7 +5,7 @@
 
 use std::cell::Cell;
 
-use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
+use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow, Measurement};
 
 use crate::{Limits, Profile, SourceDocument, Vocabulary, analyze, project};
 
@@ -139,7 +139,7 @@ fn transfer_allocation_tracks_outputs_rather_than_escape_density() {
             )
             .unwrap();
             let analysis = window.close();
-            assert!(document.problems().is_empty());
+            assert_eq!(document.problems(), []);
             let part = &document.parts()[0];
             let window = CurrentThreadWindow::open();
             crate::transfer::visit(&source[part.body.clone()], &part.transfer_encoding, |_| {})
@@ -147,7 +147,7 @@ fn transfer_allocation_tracks_outputs_rather_than_escape_density() {
             let validation = window.close();
             assert_eq!(
                 validation,
-                Default::default(),
+                Measurement::default(),
                 "validation retained decoded output"
             );
             let window = CurrentThreadWindow::open();
@@ -165,7 +165,7 @@ fn transfer_allocation_tracks_outputs_rather_than_escape_density() {
             assert_eq!(digest, attachment.digest);
             assert_eq!(
                 digest_work,
-                Default::default(),
+                Measurement::default(),
                 "digest retained decoded output"
             );
             eprintln!(

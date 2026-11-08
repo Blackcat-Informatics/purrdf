@@ -114,7 +114,7 @@ fn prepared_value_order_preserves_pairwise_permutation_and_reports_phase_costs()
                 cell.set(Work {
                     measure_phases: true,
                     ..Work::default()
-                })
+                });
             });
             let actual = order_value_permutation(values.iter().map(Option::as_ref), descending);
             let optimized_work = VALUE_ORDER_WORK.with(Cell::get);
