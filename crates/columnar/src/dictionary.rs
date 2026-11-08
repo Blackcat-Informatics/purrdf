@@ -6,7 +6,12 @@
 use core::cmp::Ordering;
 use std::collections::BTreeMap;
 
-use purrdf_core::{BlankScope, Nested, RdfTextDirection, ShallowTermKey, TermBox, TermValue};
+use purrdf_core::{BlankScope, RdfTextDirection, ShallowTermKey, TermRef, TermValue};
+
+#[cfg(test)]
+use purrdf_core::{Nested, TermBox};
+
+use crate::error::ProjectionReason;
 
 /// Dependency IDs name records, never recursively owned child values.
 /// Derived ordering is only an exact identity-map key, not RDF term order.
@@ -28,6 +33,92 @@ pub(crate) enum TermRecord {
         p: usize,
         o: usize,
     },
+}
+
+impl purrdf_hash::error::StructuredError for TermRecord {
+    purrdf_hash::error_visit! {
+        Iri(iri) => "rdf-term-iri" { "iri" => Iri(iri) },
+        Blank { label, scope } => "rdf-term-blank" {
+            "label" => Text(label), "scope" => Unsigned(u128::from(scope.ordinal())),
+        },
+        Literal { lexical, datatype, language, direction } => "rdf-term-literal-reference" {
+            "lexical_form" => Text(lexical), "datatype" => Unsigned(*datatype as u128),
+            "language" => Value(language.as_deref().map_or(purrdf_hash::error::ErrorValue::Absent,
+                purrdf_hash::error::ErrorValue::Text)),
+            "direction" => Value(direction.map_or(purrdf_hash::error::ErrorValue::Absent,
+                |value| purrdf_hash::error::ErrorValue::Code(value.as_str()))),
+        },
+        Triple { s, p, o } => "rdf-term-triple-reference" {
+            "subject" => Unsigned(*s as u128), "predicate" => Unsigned(*p as u128),
+            "object" => Unsigned(*o as u128),
+        },
+    }
+}
+
+/// An exact rejected term graph retained without expanding shared children.
+///
+/// Identifiers address this owner's flat records. Their order is internal and
+/// does not identify source ordinals. All referenced records remain available
+/// after the source is dropped, including original scalar values and scopes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectionTermGraph {
+    records: Vec<TermRecord>,
+    root: usize,
+}
+
+impl ProjectionTermGraph {
+    /// The rejected operand's identifier within this graph.
+    #[must_use]
+    pub const fn root(&self) -> usize {
+        self.root
+    }
+
+    /// The number of retained distinct records, including resolved dependencies.
+    #[must_use]
+    pub fn term_count(&self) -> usize {
+        self.records.len()
+    }
+
+    /// Borrow one original record, or `None` if the identifier is out of range.
+    #[must_use]
+    pub fn resolve(&self, id: usize) -> Option<TermRef<'_, usize>> {
+        self.records.get(id).map(|record| match record {
+            TermRecord::Iri(iri) => TermRef::Iri(iri),
+            TermRecord::Blank { label, scope } => TermRef::Blank {
+                label,
+                scope: *scope,
+            },
+            TermRecord::Literal {
+                lexical,
+                datatype,
+                language,
+                direction,
+            } => TermRef::Literal {
+                lexical,
+                datatype: *datatype,
+                language: language.as_deref(),
+                direction: *direction,
+            },
+            TermRecord::Triple { s, p, o } => TermRef::Triple {
+                s: *s,
+                p: *p,
+                o: *o,
+            },
+        })
+    }
+}
+
+impl purrdf_hash::error::StructuredError for ProjectionTermGraph {
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        use purrdf_hash::error::{ErrorValue, visit_list};
+        visitor.variant("rdf-term-graph");
+        visitor.value(Some("root"), ErrorValue::Unsigned(self.root as u128));
+        visit_list(
+            visitor,
+            Some("records"),
+            self.records.iter().map(|record| ErrorValue::Record(record)),
+        );
+    }
 }
 
 impl TermRecord {
@@ -161,8 +252,44 @@ impl TermDictionary {
         order
     }
 
-    /// Only malformed-input diagnostics require an owned native operand.
-    /// Successful projection and reconstruction keep every child as an ID.
+    /// Retain the rejected operand without ever unfolding triple dependencies.
+    pub(crate) fn datatype_refusal(&mut self, root: usize) -> ProjectionReason {
+        let actual = match &self.records[root] {
+            TermRecord::Triple { .. } => {
+                return ProjectionReason::DatatypeGraphNotIri {
+                    actual: ProjectionTermGraph {
+                        records: core::mem::take(&mut self.records),
+                        root,
+                    },
+                };
+            }
+            TermRecord::Blank { label, scope } => TermValue::Blank {
+                label: label.clone(),
+                scope: *scope,
+            },
+            TermRecord::Literal {
+                lexical,
+                datatype,
+                language,
+                direction,
+            } => {
+                let TermRecord::Iri(datatype) = &self.records[*datatype] else {
+                    unreachable!("dictionary literal datatype already validated")
+                };
+                TermValue::Literal {
+                    lexical_form: lexical.clone(),
+                    datatype: datatype.clone(),
+                    language: language.clone(),
+                    direction: *direction,
+                }
+            }
+            TermRecord::Iri(_) => unreachable!("IRI datatypes are accepted"),
+        };
+        ProjectionReason::DatatypeNotIri { actual }
+    }
+
+    /// Only the small recursive reference tests unfold native values.
+    #[cfg(test)]
     pub(crate) fn diagnostic_value(&self, root: usize) -> TermValue {
         let mut dictionary = self;
         let result = purrdf_core::try_fold_nested(

@@ -398,12 +398,8 @@ impl<'a, D: DatasetView> Resolver<'a, D> {
                     // A completed literal frame has resolved its one datatype dependency.
                     let datatype = resolved.next().expect("a literal's datatype is resolved");
                     if !matches!(self.dictionary.records[datatype], TermRecord::Iri(_)) {
-                        let actual = self.dictionary.diagnostic_value(datatype);
-                        return Err(ColumnarError::projection(
-                            "literal datatype",
-                            ProjectionReason::DatatypeNotIri { actual },
-                        )
-                        .into());
+                        let reason = self.dictionary.datatype_refusal(datatype);
+                        return Err(ColumnarError::projection("literal datatype", reason).into());
                     }
                     TermRecord::Literal {
                         lexical: lexical.to_owned(),
@@ -702,6 +698,7 @@ mod tests {
     struct GraphView {
         inner: std::sync::Arc<RdfDataset>,
         triples: BTreeMap<purrdf_core::TermId, [purrdf_core::TermId; 3]>,
+        literal: Option<(purrdf_core::TermId, purrdf_core::TermId)>,
     }
 
     impl DatasetView for GraphView {
@@ -711,10 +708,25 @@ mod tests {
         type ProbePlan = <RdfDataset as DatasetView>::ProbePlan;
 
         fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
-            self.inner.quads()
+            self.inner.quads().map(|mut quad| {
+                if let Some((literal, _)) = self.literal {
+                    quad.o = literal;
+                }
+                quad
+            })
         }
 
         fn resolve(&self, id: Self::Id) -> Result<TermRef<'_>, Self::ReadError> {
+            if let Some((literal, datatype)) = self.literal
+                && id == literal
+            {
+                return Ok(TermRef::Literal {
+                    lexical: "original invalid datatype",
+                    datatype,
+                    language: None,
+                    direction: None,
+                });
+            }
             if let Some(&[s, p, o]) = self.triples.get(&id) {
                 Ok(TermRef::Triple { s, p, o })
             } else {
@@ -799,6 +811,7 @@ mod tests {
         GraphView {
             inner: builder.freeze().unwrap(),
             triples,
+            literal: None,
         }
     }
 
@@ -884,6 +897,56 @@ mod tests {
                 }
             }
         }
+
+        // Even a rejected datatype must retain shared structure. Expanding this
+        // operand's 256 shared levels would allocate exponentially before refusal.
+        let mut invalid = shared_graph(256, 1, true, false);
+        let datatype = invalid.inner.quads().next().unwrap().o;
+        let literal =
+            purrdf_core::TermId::from_index(u32::try_from(invalid.inner.term_count()).unwrap())
+                .unwrap();
+        invalid.literal = Some((literal, datatype));
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let error = write(&invalid, &blobs, Compression::Uncompressed).unwrap_err();
+        let refusal = window.close();
+        assert!(refusal.peak_working_bytes < 512 * 1024, "{refusal:?}");
+        let mut output = false;
+        assert!(
+            write_to(&invalid, &blobs, &WriteOptions::default(), |_, _| {
+                output = true;
+                Ok::<_, core::convert::Infallible>(())
+            })
+            .is_err()
+        );
+        assert!(!output);
+        assert!(project(&invalid, &blobs).is_err());
+        drop(invalid);
+        let ColumnarWriteError::Codec(ColumnarError::Projection {
+            context: "literal datatype",
+            reason: ProjectionReason::DatatypeGraphNotIri { actual },
+        }) = error
+        else {
+            panic!("original datatype refusal must retain its flat operand")
+        };
+        assert_eq!(actual.term_count(), 259);
+        let mut id = actual.root();
+        for _ in 0..256 {
+            let Some(TermRef::Triple { s, p, o }) = actual.resolve(id) else {
+                panic!("each original shared triple must remain inspectable")
+            };
+            assert_eq!(s, o);
+            assert_eq!(actual.resolve(p), Some(TermRef::Iri("urn:predicate")));
+            id = s;
+        }
+        assert_eq!(actual.resolve(id), Some(TermRef::Iri("urn:leaf")));
+        assert_eq!(actual.resolve(usize::MAX), None);
+        let capture = purrdf_testkit::error_capture::Capture::read(&actual);
+        assert_eq!(capture.code, "rdf-term-graph");
+        assert!(matches!(capture.field("root"),
+            purrdf_hash::error::ErrorValue::Unsigned(root) if root == actual.root() as u128));
+        let records = capture.records("records");
+        assert_eq!(records.len(), actual.term_count());
+        assert_eq!(records[actual.root()].code, "rdf-term-triple-reference");
     }
 
     #[test]

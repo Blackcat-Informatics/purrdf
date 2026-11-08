@@ -36,6 +36,7 @@ mod reader;
 pub mod schema;
 mod writer;
 
+pub use dictionary::ProjectionTermGraph;
 pub use error::{
     CanonicalReason, ColumnarError, ColumnarSinkError, ColumnarWriteError, CompactReason,
     ConstructionReason, EncodingReason, MetadataReason, PageBodyReason, ProjectionReason,
