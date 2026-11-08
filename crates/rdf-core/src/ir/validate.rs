@@ -366,8 +366,7 @@ pub(super) fn validate_rows_with_memory<S: Admission + ?Sized>(
     }
 
     // 1. Every interned triple term references in-range ids, has an IRI predicate
-    //    and a non-literal subject, and the whole nesting forest is acyclic and
-    //    acyclic.
+    //    and a non-literal subject, and the whole nesting forest is acyclic.
     validate_triple_terms_with_memory(builder, term_count, memory)?;
 
     // 2. Every declared named graph names an in-range IRI or blank node, exactly as

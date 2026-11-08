@@ -1222,8 +1222,8 @@ impl PackDict {
         // reasoner's `resolve` follow a triple term's `s`/`p`/`o`, so a CYCLE (an id
         // whose component transitively references it) — which no `encode` of a finite
         // dataset can produce, but hostile pack bytes can — would never finish
-        // resolving. Cycle admission is independent of structural nesting depth,
-        // as malformed. (Component ids are NOT ordered relative to their triple's own
+        // resolving. Cycles are rejected as malformed; finite nesting depth is not
+        // bounded. (Component ids are NOT ordered relative to their triple's own
         // id — a triple term's object may itself be a triple term that sorts after it —
         // so a plain id-comparison cannot stand in for this reachability check.)
         self.validate_triple_terms_acyclic()
