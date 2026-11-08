@@ -1,0 +1,21 @@
+{
+  "scope": "Only automatic HTML attribution comments rejected by the installed guard are omitted. Substantive feedback and metadata remain. Original API bodies remain at the forge.",
+  "files": [
+    {
+      "file": "review-evidence.json",
+      "original_sha256": "a40d150c0f7f5db3a4ca46098a061634ba25f16e5cf3f1fad8dff4d2e712335f",
+      "projection_sha256": "3090273a0684ef2fa9deba7c3d5066ee4dfd3b5443eb699b568993731ff4c382",
+      "omitted_automatic_comments": [
+        "b933cb41fc4870569122642ce2fdb8a34b141220cfb72d47af20d249430664df"
+      ]
+    },
+    {
+      "file": "pr-comments.md",
+      "original_sha256": "3670e15e319aad6a0ce62843427426c325a2b5bfd49e80495025d3430f679039",
+      "projection_sha256": "454eabafc89d6a1b9d5752cb0d49906cf1d5e0c7fce60ec67a286c55d3c7a8d0",
+      "omitted_automatic_comments": [
+        "b933cb41fc4870569122642ce2fdb8a34b141220cfb72d47af20d249430664df"
+      ]
+    }
+  ]
+}

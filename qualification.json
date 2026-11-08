@@ -1,0 +1,11 @@
+{
+  "scope": "Mechanical standalone-workspace test iterator correction after the mandatory main release preflight caught a unit-target Clippy warning. Eight native path cases and strict release testkit Clippy including test targets pass. Full main release preflight remains mandatory.",
+  "exit_codes": [
+    0,
+    0
+  ],
+  "logs": {
+    "testkit-tests-clippy.log": "    Checking purrdf-testkit v4.0.1 (/home/paudley/Active/purrdf/.worktrees/1235-release-4-0-1-and-publish-shared-test/crates/testkit)\n    Finished `release` profile [optimized] target(s) in 3.39s\n",
+    "path-tests.log": "   Compiling purrdf-testkit v4.0.1 (/home/paudley/Active/purrdf/.worktrees/1235-release-4-0-1-and-publish-shared-test/crates/testkit)\n    Finished `release` profile [optimized] target(s) in 21.40s\n     Running unittests src/lib.rs (/opt/.cargo/5b/96c52b178be547/release/build/purrdf-testkit/6e0af61c9bb04cad/out/purrdf_testkit-6e0af61c9bb04cad)\n\nrunning 8 tests\ntest paths::tests::collect_rs_refuses_an_unreadable_directory - should panic ... ok\ntest paths::tests::an_unreadable_manifest_cannot_silently_select_an_ancestor - should panic ... ok\ntest paths::tests::collect_rs_finds_nested_rust_sources_in_name_order_and_nothing_else ... ok\ntest paths::tests::collect_rs_appends_to_what_the_caller_already_holds ... ok\ntest paths::tests::a_member_manifest_without_the_workspace_table_is_passed_over ... ok\ntest paths::tests::a_standalone_package_is_its_own_workspace ... ok\ntest paths::tests::a_filtered_walk_keeps_nested_sources_and_excludes_whole_directories ... ok\ntest paths::tests::a_workspace_key_inside_another_line_is_not_the_table ... ok\n\ntest result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 24 filtered out; finished in 0.01s\n\n"
+  }
+}
