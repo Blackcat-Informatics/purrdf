@@ -1,68 +1,25 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! How deeply an input document may nest, and the two ways that is enforced.
+//! Resource bounds for recursively processed document structures.
 //!
-//! # A parser without a nesting bound is not a parser, it is a crash
+//! Quoted and reifying RDF terms use admitted heap continuations in the native
+//! text parsers. Their structural depth does not consume this document guard.
+//! Turtle/TriG property lists, collections and annotation blocks still recurse
+//! while lowering to flat statements, so their independent syntactic descent is
+//! refused before the next recursive frame exceeds the document policy.
 //!
-//! Every document grammar this crate reads nests without limit on paper — a quoted triple
-//! term inside a quoted triple term, a blank-node property list inside a collection inside
-//! an annotation block, an element inside an element — and every parser reads that nesting
-//! with recursion. An input is therefore an instruction about how much stack to consume, and
-//! a stack overflow is not an error: nothing unwinds, no [`RdfDiagnostic`] reaches the
-//! caller, `catch_unwind` does not see it, and a host process that embedded this library
-//! dies with it. Twenty thousand levels of `<<( … )>>` in one N-Triples line, or twenty
-//! thousand nested `rdf:Description` elements, aborted the `purrdf` binary with `SIGABRT`.
-//!
-//! So the depth is REFUSED, with an ordinary located diagnostic, like any other malformed
-//! input — and the refusal happens where the recursion starts rather than after it.
-//!
-//! # Two enforcement points, because there are two readers
-//!
-//! * The first-party text parsers (N-Triples, N-Quads, Turtle, TriG) count their own
-//!   descent. See `native_codecs::text_parse`.
-//! * Every XML document (RDF/XML, TriX, GraphML, DataCite) is read by [`parse_xml`], which
-//!   hands [`MAX_PARSE_NESTING_DEPTH`] to the workspace's one XML reader as its
-//!   [`Options::max_depth`]. That reader keeps its open elements on a heap stack, so no
-//!   input can exhaust the machine stack while it reads; the cap exists for the walks over
-//!   the tree it returns, which recurse once per element. Those walks therefore need no
-//!   depth counter of their own: the tree they descend is bounded by the call that built
-//!   it.
-//!
-//! JSON-LD needs neither: the workspace's one JSON reader (`purrdf_lex::json`) is handed
-//! the same 128 as its depth limit and returns an excess as an error. TriX, HexTuples and
-//! the OKF binary reader do not nest.
+//! XML readers keep open elements on a heap stack and receive the same explicit
+//! document-depth ceiling for the later format-specific tree processors. JSON-LD
+//! separately supplies this document envelope to its JSON/context reader. These
+//! are document resource policies, independent of native RDF term admissibility.
 
 use purrdf_lex::xml::{Document, Dtd, Options, XmlError, XmlErrorKind};
 
 use crate::RdfDiagnostic;
 
-/// The deepest nesting any document parser in this crate descends into.
-///
-/// # Why 128, and deliberately not the IR's 16
-///
-/// [`RdfDatasetBuilder::freeze`](purrdf_core::RdfDatasetBuilder::freeze) already refuses a
-/// TRIPLE-TERM nesting deeper than 16, and the GTS transport agrees on the same cliff — so
-/// for triple terms the stack's real ceiling is far below anything a parse-time bound needs
-/// to police, and 128 can never reject a triple term the IR would have held.
-///
-/// 16 would nonetheless be a bound on the wrong thing, because most nesting a parser
-/// descends never reaches the IR AS nesting. Turtle's `[ … ]`, `( … )` and `{| … |}` and
-/// RDF/XML's element striping all lower to FLAT statements, so nothing downstream bounds
-/// them and a 16 there would refuse documents the rest of the stack round-trips happily.
-///
-/// What does bound them is the thread's stack, and the smallest one PurRDF supports is
-/// wasm32's 1 MiB. Measured there (`ulimit -s 1024`, one construct per document, release and
-/// debug builds of the shipped CLI), the abort thresholds were: nested `rdf:Description`
-/// 438, Turtle `[ … ]` 475, Turtle `<< … >>` 610, Turtle `<<( … )>>` 642, Turtle `{| … |}`
-/// 778, N-Triples `<<( … )>>` 951, Turtle `( … )` 1049. 128 sits at least 3.4× below the
-/// worst of those, and the most expensive construct per level (`[ … ]`, which descends
-/// through both `DocParser::term` and `DocParser::predicate_object_list`) spends two of
-/// these levels per syntactic one, so it stops at 64 real levels — 7.4× below its own cliff.
-///
-/// 128 is also the envelope this crate's structured lanes already publish: a JSON-LD
-/// document is refused past `MAX_JSON_LD_DOCUMENT_DEPTH` open containers and every strict
-/// JSON read is capped at the same 128. One number for the whole surface.
+/// Maximum syntactic descent for remaining recursive document productions.
+/// Quoted/reifying term continuations do not consume these levels.
 pub(crate) const MAX_PARSE_NESTING_DEPTH: usize = 128;
 
 /// Why [`parse_xml`] refused a document.
@@ -119,21 +76,8 @@ pub(crate) fn parse_xml(text: &str) -> Result<Document<'_>, XmlReadError> {
     Ok(document)
 }
 
-/// The diagnostic every first-party text codec returns for an input nested past
-/// [`MAX_PARSE_NESTING_DEPTH`], located at the token that would have opened the level too
-/// many. One spelling, so a caller matches one message whichever grammar produced it.
-pub(crate) fn nesting_too_deep(line: u64, column: u32) -> RdfDiagnostic {
-    match nesting_too_deep_with_memory(
-        line,
-        column,
-        &mut purrdf_lex::allocation::Memory::new(&mut purrdf_lex::allocation::Resident),
-    ) {
-        Ok(diagnostic) => diagnostic,
-        Err(cause) => cause.into(),
-    }
-}
-
-/// The same native depth refusal through its original diagnostic owner.
+/// Report the located refusal of the next recursive document production through
+/// its original caller storage/progress authority.
 pub(crate) fn nesting_too_deep_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
     line: u64,
     column: u32,

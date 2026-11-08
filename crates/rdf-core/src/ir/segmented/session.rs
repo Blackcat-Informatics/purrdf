@@ -1497,7 +1497,7 @@ impl SegmentedSession {
             } else {
                 let offset = id.index() - first;
                 if id.index() < end {
-                    // Narrow only an in-block offset, including on wasm32.
+                    // Narrow only an in-block offset, including on `wasm32`.
                     let index =
                         usize::try_from(offset).map_err(|_| SegmentedError::AddressExhausted)?;
                     if let Some(records) = block.records() {
@@ -1551,15 +1551,47 @@ impl SegmentedSession {
         Ok((self.compare_key(id, key)? == core::cmp::Ordering::Equal).then_some(id))
     }
 
-    fn lookup_value(
+    fn lookup_value(&self, value: &TermValue) -> Result<Option<GlobalTermId>, SegmentedError> {
+        self.ready()?;
+        let mut storage = super::query::QueryStorage {
+            reservation: self.reserve_workspace(0)?,
+            cause: None,
+        };
+        storage.run(|memory| {
+            let result = crate::ir::try_fold_nested_with_memory(
+                value,
+                &mut (),
+                |(), value, _| match value {
+                    TermValue::Triple { s, p, o } => {
+                        Ok(crate::ir::Nested::Triple(&**s, &**p, &**o))
+                    }
+                    _ => self
+                        .lookup_scalar_value(value)
+                        .map_err(Some)?
+                        .map(crate::ir::Nested::Leaf)
+                        .ok_or(None),
+                },
+                |(), _, s, p, o, _| {
+                    self.lookup_term_ref(TermRef::Triple { s, p, o })
+                        .map_err(Some)?
+                        .ok_or(None)
+                },
+                |(), _, _| {},
+                |cause, _| Some(SegmentedError::Storage(cause)),
+                memory,
+            );
+            match result {
+                Ok(id) => Ok(Some(id)),
+                Err(None) => Ok(None),
+                Err(Some(cause)) => Err(cause),
+            }
+        })
+    }
+
+    fn lookup_scalar_value(
         &self,
         value: &TermValue,
-        depth: u32,
     ) -> Result<Option<GlobalTermId>, SegmentedError> {
-        self.ready()?;
-        if depth > 16 {
-            return Ok(None);
-        }
         let term = match value {
             TermValue::Iri(iri) => TermRef::Iri(iri),
             TermValue::Blank { label, scope } => TermRef::Blank {
@@ -1600,18 +1632,7 @@ impl SegmentedSession {
                     direction: *direction,
                 });
             }
-            TermValue::Triple { s, p, o } => {
-                let Some(s) = self.lookup_value(s, depth + 1)? else {
-                    return Ok(None);
-                };
-                let Some(p) = self.lookup_value(p, depth + 1)? else {
-                    return Ok(None);
-                };
-                let Some(o) = self.lookup_value(o, depth + 1)? else {
-                    return Ok(None);
-                };
-                TermRef::Triple { s, p, o }
-            }
+            TermValue::Triple { .. } => unreachable!("triple components are folded before lookup"),
         };
         self.lookup_term_ref(term)
     }
@@ -2112,8 +2133,7 @@ impl DatasetView for SegmentedSession {
         })
     }
     fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError> {
-        self.lookup_value(value, 0)
-            .or_else(|error| self.fail(error))
+        self.lookup_value(value).or_else(|error| self.fail(error))
     }
     fn quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
         self.stream(0, (None, None, None, GraphMatch::Any))
@@ -2212,7 +2232,7 @@ impl DatasetView for SegmentedSession {
         Some(self.header.streams[0].rows)
     }
     fn triple_term_nesting_bound(&self) -> Option<usize> {
-        Some(16)
+        None
     }
     fn capabilities(&self) -> RdfStoreCapabilities {
         RdfStoreCapabilities {

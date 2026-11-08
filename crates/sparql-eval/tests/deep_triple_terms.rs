@@ -10,8 +10,7 @@
 //! * a deep triple term written as a value (`VALUES`, `BIND`) is an answer like any
 //!   other, returned whole;
 //! * writing one into a dataset (`INSERT DATA`, an `INSERT` template, a `CONSTRUCT`
-//!   graph) is refused with the dataset's own limit, `rdf-ir-triple-nesting-limit`,
-//!   past 16 levels, and admitted at 16;
+//!   graph) preserves its complete structural depth;
 //! * however deep they nest, the answer is the value the request computes or the typed
 //!   stack refusal of the evaluation's own nesting, never an abort — however deep the
 //!   evaluation stands when it walks the term, because every walk over a term runs over
@@ -34,10 +33,7 @@ use purrdf_sparql_eval::{
 
 const EX: &str = "http://example.org/";
 
-/// The code a frozen dataset refuses a triple term nested past 16 levels with.
-const DATASET_LIMIT: &str = "rdf-ir-triple-nesting-limit";
-
-/// The deepest triple term a frozen dataset holds.
+/// The depth stored by this fixture, independent of any carrier policy.
 const DATASET_DEPTH: usize = 16;
 
 /// `<<( <s> <p> … core … )>>`, `levels` triple terms deep, `core` the innermost object.
@@ -93,9 +89,7 @@ fn dataset() -> Arc<RdfDataset> {
         o = builder.intern_triple(s, p, o).unwrap();
     }
     builder.push_quad(a, q, o, None).unwrap();
-    builder
-        .freeze()
-        .expect("a 16-deep triple term is within the dataset limit")
+    builder.freeze().expect("the finite triple term freezes")
 }
 
 /// A view over [`dataset`] that vouches for a chosen triple-term nesting bound and counts
@@ -362,64 +356,54 @@ fn update(dataset: &mut Arc<RdfDataset>, text: &str) -> Result<(), RdfDiagnostic
     )
 }
 
-/// Writing a triple term into a dataset is held to the dataset's own limit: 16 levels are
-/// inserted and then matched by a query, 17 are refused with the dataset's typed error
-/// and leave it as it was — through `INSERT DATA` and through an `INSERT` template alike.
+/// Both update forms retain a deep inserted term and match its innermost value.
 #[test]
-fn inserting_a_triple_term_is_held_to_the_dataset_limit() {
+fn inserting_a_deep_triple_term_preserves_its_complete_value() {
     for form in ["INSERT DATA", "INSERT WHERE"] {
-        let text = |levels: usize| match form {
-            "INSERT DATA" => format!(
-                "INSERT DATA {{ <{EX}b> <{EX}q> {} }}",
-                chain(levels, &format!("<{EX}o>"))
-            ),
-            _ => format!(
-                "INSERT {{ <{EX}b> <{EX}q> {} }} WHERE {{}}",
-                chain(levels, &format!("<{EX}o>"))
-            ),
-        };
-        let mut data = RdfDatasetBuilder::new().freeze().expect("empty");
-        let refused = update(&mut data, &text(DATASET_DEPTH + 1))
-            .expect_err("17 levels exceed the dataset limit");
-        assert_eq!(refused.code, DATASET_LIMIT, "{form}: {refused:?}");
-        assert_eq!(data.quads().count(), 0, "{form}: the refusal wrote nothing");
-
-        update(&mut data, &text(DATASET_DEPTH)).expect("16 levels are inserted");
-        let select = format!(
-            "SELECT ?b ?o WHERE {{ ?b <{EX}q> {} }}",
-            chain(DATASET_DEPTH, "?o")
-        );
-        let (_, rows) = solutions(query_on(&data, &select).expect("queryable"));
-        assert_eq!(
-            rows,
-            [vec![iri("b"), iri("o")]],
-            "{form}: the insert is matched"
-        );
+        for levels in [16, 17, 256] {
+            let text = match form {
+                "INSERT DATA" => format!(
+                    "INSERT DATA {{ <{EX}b> <{EX}q> {} }}",
+                    chain(levels, &format!("<{EX}o>"))
+                ),
+                _ => format!(
+                    "INSERT {{ <{EX}b> <{EX}q> {} }} WHERE {{}}",
+                    chain(levels, &format!("<{EX}o>"))
+                ),
+            };
+            let mut data = RdfDatasetBuilder::new().freeze().expect("empty");
+            update(&mut data, &text).expect("finite terms are inserted");
+            let select = format!(
+                "SELECT ?b ?o WHERE {{ ?b <{EX}q> {} }}",
+                chain(levels, "?o")
+            );
+            let (_, rows) = solutions(query_on(&data, &select).expect("queryable"));
+            assert_eq!(rows, [vec![iri("b"), iri("o")]], "{form}, {levels}");
+        }
     }
 }
 
-/// A `CONSTRUCT` builds a dataset, so its graph is held to the same limit: a template
-/// nesting 17 levels is refused with the dataset's typed error, one nesting 16 builds the
-/// statement.
+/// A template may add arbitrary quoted structure around an already nested value.
 #[test]
-fn a_constructed_graph_is_held_to_the_dataset_limit() {
+fn a_constructed_graph_preserves_deep_template_and_stored_terms() {
     let data = dataset();
-    let construct = |levels: usize| {
-        format!(
+    for levels in [0, 1, 129] {
+        let construct = format!(
             "CONSTRUCT {{ ?a <{EX}r> {} }} WHERE {{ ?a <{EX}q> ?t }}",
             chain(levels, "?t")
-        )
-    };
-    // The stored term is 16 deep, so a template nesting one level around it is 17 deep.
-    let refused = query_on(&data, &construct(1)).expect_err("17 levels are refused");
-    assert_eq!(refused.code, DATASET_LIMIT, "{refused:?}");
-    let construct_flat = format!(
-        "CONSTRUCT {{ ?a <{EX}r> {} }} WHERE {{ ?a <{EX}q> ?t }}",
-        chain(DATASET_DEPTH, &format!("<{EX}o>"))
-    );
-    match query_on(&data, &construct_flat).expect("16 levels are built") {
-        SparqlResult::Graph(graph) => assert_eq!(graph.quads().count(), 1),
-        other => panic!("CONSTRUCT answers a graph, got {other:?}"),
+        );
+        match query_on(&data, &construct).expect("finite terms are constructed") {
+            SparqlResult::Graph(graph) => {
+                assert_eq!(graph.quads().count(), 1);
+                let object = graph.quads().next().unwrap().o;
+                let actual = DatasetView::term_value(graph.as_ref(), object).unwrap();
+                assert_eq!(
+                    actual,
+                    chain_value(levels + DATASET_DEPTH, iri("o").unwrap())
+                );
+            }
+            other => panic!("CONSTRUCT answers a graph, got {other:?}"),
+        }
     }
 }
 

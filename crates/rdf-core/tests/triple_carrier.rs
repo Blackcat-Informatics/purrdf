@@ -222,7 +222,7 @@ fn compact_statement_probes_populate_only_the_requested_ordinal_arrays() {
 fn owned_transfer_preserves_lexical_owner_and_flat_statement_identity() {
     let (quad, [s, p, o, reifier]) = statement_fixture("claim", BlankScope(71));
     let nesting_bound = quad.triple_term_nesting_bound();
-    assert_eq!(nesting_bound, Some(purrdf_events::MAX_TERM_NESTING_DEPTH));
+    assert_eq!(nesting_bound, None);
     let before = try_canonicalize_flat_view(
         &quad,
         CanonHash::Sha256,
