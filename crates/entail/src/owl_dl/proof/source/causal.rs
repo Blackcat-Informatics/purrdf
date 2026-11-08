@@ -395,6 +395,15 @@ pub struct CausalKeyValue<'a> {
     value: &'a crate::owl_dl::key_values::Common,
 }
 
+/// The checked reason two original key values denote the same element.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CausalKeyEquality {
+    /// Both assertions use the same original RDF term.
+    TermIdentity,
+    /// Distinct literal terms have the same independently checked datatype value.
+    LiteralValue,
+}
+
 impl<'a> CausalKeyValue<'a> {
     /// Original key property in the consumer's vocabulary.
     #[must_use]
@@ -405,10 +414,26 @@ impl<'a> CausalKeyValue<'a> {
         )
     }
 
-    /// Native value whose equality licensed the selected pair of assertions.
+    /// Original first-member value; no canonical literal is invented.
     #[must_use]
     pub fn value(&self) -> ResolvedTerm<'a> {
         term(self.kb, self.value.value)
+    }
+
+    /// Original second-member value, retaining its exact datatype and lexical form.
+    #[must_use]
+    pub fn right_value(&self) -> ResolvedTerm<'a> {
+        term(self.kb, self.value.right_value)
+    }
+
+    /// Equality checked against both original terms in the consumer context.
+    #[must_use]
+    pub fn equality(&self) -> CausalKeyEquality {
+        if self.value.value == self.value.right_value {
+            CausalKeyEquality::TermIdentity
+        } else {
+            CausalKeyEquality::LiteralValue
+        }
     }
 
     /// Original first-member assertion, retaining its exact RDF terms.
@@ -429,6 +454,8 @@ impl std::fmt::Debug for CausalKeyValue<'_> {
         f.debug_struct("CausalKeyValue")
             .field("property", &self.property())
             .field("value", &self.value())
+            .field("right_value", &self.right_value())
+            .field("equality", &self.equality())
             .field("left", &self.left())
             .field("right", &self.right())
             .finish()
