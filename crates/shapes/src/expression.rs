@@ -2196,6 +2196,7 @@ fn eval_node_expr_at_depth(
                     )
                 })?;
             let form = sparql_ns_lowering(local)?;
+            let profile = plan.binding().validation_request().shacl_profile;
             let catches = form.catches_evaluation_failures();
             let mut arguments = Vec::with_capacity(args.len());
             for (position, arg) in args.iter().enumerate() {
@@ -2221,7 +2222,9 @@ fn eval_node_expr_at_depth(
                             iri.as_str()
                         )
                         .into();
-                        if catches {
+                        // Earlier laws reject cardinality before SPARQL masking;
+                        // November treats it as a catchable argument failure.
+                        if catches && profile.reads_november_draft_semantics() {
                             arguments.push(Err(error));
                             continue;
                         }
@@ -2236,13 +2239,7 @@ fn eval_node_expr_at_depth(
             // `SELECT (EXPR AS ?result) WHERE {}`, which is SPARQL's own unbound.
             // The prepared-handle cache is keyed by the parameter list, so each
             // bound/unbound shape of a call gets, and reuses, its own handle.
-            let result = finish_sparql_arguments(
-                store,
-                form,
-                query,
-                arguments,
-                plan.binding().validation_request().shacl_profile,
-            )?;
+            let result = finish_sparql_arguments(store, form, query, arguments, profile)?;
             Ok(result.into_iter().collect())
         }
         // §4.2.1 Distinct expression: first occurrences, in input order, by term

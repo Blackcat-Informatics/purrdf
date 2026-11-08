@@ -53,30 +53,45 @@ fn free_outputs(
 }
 
 fn sparql_node_calls_mask_catchable_argument_failures() {
-    let error = "[ shnex:instancesOf 42 ]";
-    for (call, expected) in [
-        (format!("coalesce (\"ok\" {error})"), "\"ok\""),
-        (format!("logical-and (false {error})"), "false"),
-        (format!("logical-and ({error} false)"), "false"),
-        (format!("logical-or (true {error})"), "true"),
-        (format!("logical-or ({error} true)"), "true"),
-        (format!("coalesce ({error} \"ok\")"), "\"ok\""),
-        (format!("if (true \"ok\" {error})"), "\"ok\""),
-        (format!("if (false {error} \"ok\")"), "\"ok\""),
-        (format!("in (ex:x {error} ex:x)"), "true"),
-        (format!("not-in (ex:x {error} ex:x)"), "false"),
-    ] {
-        let expected = if expected.starts_with('"') {
-            expected.to_owned()
-        } else {
-            format!("\"{expected}\"^^<{}>", purrdf_xsd::datatype::XSD_BOOLEAN)
-        };
-        assert_eq!(
-            free_outputs(&format!("_:e sparql:{call} ."), ShaclProfile::ED_20261106)
-                .unwrap_or_else(|error| panic!("{call}: {error}")),
-            vec![expected],
-            "{call}",
-        );
+    for (error, cardinality) in [("[ shnex:instancesOf 42 ]", false), ("(ex:x ex:y)", true)] {
+        for (call, expected) in [
+            (format!("coalesce (\"ok\" {error})"), "\"ok\""),
+            (format!("logical-and (false {error})"), "false"),
+            (format!("logical-and ({error} false)"), "false"),
+            (format!("logical-or (true {error})"), "true"),
+            (format!("logical-or ({error} true)"), "true"),
+            (format!("coalesce ({error} \"ok\")"), "\"ok\""),
+            (format!("if (true \"ok\" {error})"), "\"ok\""),
+            (format!("if (false {error} \"ok\")"), "\"ok\""),
+            (format!("in (ex:x {error} ex:x)"), "true"),
+            (format!("not-in (ex:x {error} ex:x)"), "false"),
+        ] {
+            let expected = if expected.starts_with('"') {
+                expected.to_owned()
+            } else {
+                format!("\"{expected}\"^^<{}>", purrdf_xsd::datatype::XSD_BOOLEAN)
+            };
+            for profile in [
+                ShaclProfile::LEGACY,
+                ShaclProfile::ED_20261016,
+                ShaclProfile::ED_20261106,
+            ] {
+                let outcome = free_outputs(&format!("_:e sparql:{call} ."), profile);
+                if cardinality && profile != ShaclProfile::ED_20261106 {
+                    let error = outcome.expect_err("earlier laws reject multivalued arguments");
+                    assert_eq!(
+                        error.failure_class(),
+                        purrdf_shapes::FailureClass::Evaluation
+                    );
+                } else {
+                    assert_eq!(
+                        outcome.unwrap_or_else(|error| panic!("{profile}: {call}: {error}")),
+                        vec![expected.clone()],
+                        "{profile}: {call}",
+                    );
+                }
+            }
+        }
     }
 }
 
