@@ -1233,6 +1233,27 @@ impl UserFunctionRegistry {
         self.exprs.get(iri)
     }
 
+    /// Adjust a resident registration only while it still names `original`'s
+    /// physical body. Replaced or admitted producers retain their own signature.
+    /// This lets a selected execution law adapt an owned declaration without
+    /// replacing an override or changing the original registry's identity.
+    pub fn set_expr_arity_if_same_body(
+        &mut self,
+        iri: &str,
+        original: &ExprFnBody,
+        arity: Arity,
+    ) -> bool {
+        let Some(function) = self.exprs.get_mut(iri) else {
+            return false;
+        };
+        if matches!(&function.body, ExprBody::Resident(body) if Arc::ptr_eq(body, original)) {
+            function.arity = arity;
+            true
+        } else {
+            false
+        }
+    }
+
     /// Whether a registered expression-bodied function requires an owned focus graph.
     #[must_use]
     pub fn requires_focus_graph(&self) -> bool {

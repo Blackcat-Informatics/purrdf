@@ -1736,6 +1736,71 @@ fn prepared_and_restored_callback_requests_agree_in_complete_reports() {
     }
 }
 
+/// Selecting November execution after parsing or restoring must adapt owned
+/// undocumented list functions while preserving the product and host signatures.
+#[test]
+fn selected_list_function_arity_survives_preparation_and_restore() {
+    use purrdf_shapes::engine::{PreparedShapes, ValidationOptions};
+    use purrdf_shapes::product::{HostBindings, ShapesProduct, ShapesProfile};
+    use purrdf_shapes::profile::ShaclProfile;
+    use purrdf_sparql_eval::Arity;
+
+    let source = format!(
+        "{PREFIXES} ex:identity a sh:ListParameterExpressionFunction ;
+        sh:bodyExpression [ shnex:arg 0 ] .
+        ex:S a sh:NodeShape ; sh:targetNode ex:n ;
+        sh:expression [ sh:sparqlExpr \"ex:identity($this) = $this\" ] ."
+    );
+    let parsed = parse_shapes(&source, None).unwrap();
+    let iri = "http://example.org/ns#identity";
+    let mut overridden = parsed.clone();
+    Arc::make_mut(&mut overridden.functions).register_expr(
+        iri.to_owned(),
+        Arity::Exact(0),
+        Arc::new(|_| Ok(None)),
+    );
+    let prepared = PreparedShapes::new(Arc::new(parsed));
+    let bytes = prepared
+        .to_product(
+            &ShapesProfile::CORE,
+            &mut purrdf_core::CanonicalizationControl::new(
+                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                None,
+            ),
+        )
+        .unwrap();
+    let options = ValidationOptions::default().with_profile(ShaclProfile::ED_20261106);
+    let restored = ShapesProduct::open(&bytes)
+        .unwrap()
+        .admit_with_options(&ShapesProfile::CORE, &HostBindings::empty(), &options)
+        .unwrap();
+    let configured = prepared.clone().with_validation_options(options.clone());
+    let data = data_of("");
+    for model in [&configured, &restored] {
+        assert!(
+            model
+                .bind_shared_dataset(Arc::clone(&data))
+                .unwrap()
+                .validate()
+                .unwrap()
+                .conforms
+        );
+    }
+    // The old law and a host replacement still reject supplied arguments.
+    for model in [
+        prepared,
+        PreparedShapes::new(Arc::new(overridden)).with_validation_options(options),
+    ] {
+        assert!(
+            model
+                .bind_shared_dataset(Arc::clone(&data))
+                .unwrap()
+                .validate()
+                .is_err()
+        );
+    }
+}
+
 /// The binding's explicit graph placement overrides the parsed document's
 /// default, and remains available inside a shape reached from either callback.
 #[test]

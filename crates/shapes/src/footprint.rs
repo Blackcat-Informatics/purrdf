@@ -275,6 +275,7 @@ pub(crate) enum Root {
 pub(crate) struct ChainState {
     chain: Option<Vec<Path>>,
     declaring: Option<Vec<Path>>,
+    property_value_focus: bool,
 }
 
 /// The footprint accumulator carried by the shapes-lowering walk.
@@ -295,6 +296,7 @@ pub(crate) struct FootprintWalk {
     chain: Option<Vec<Path>>,
     /// The same, for the node that declared the constraints being walked.
     declaring: Option<Vec<Path>>,
+    property_value_focus: bool,
     /// Every cross-focus read recorded so far.
     broadcasts: Vec<Broadcast>,
     /// The position of the top-level shape the walk is currently inside, or
@@ -315,6 +317,7 @@ impl Default for FootprintWalk {
             opaque: None,
             chain: Some(Vec::new()),
             declaring: Some(Vec::new()),
+            property_value_focus: false,
             broadcasts: Vec::new(),
             root: None,
             declared_targets: false,
@@ -378,6 +381,7 @@ impl FootprintWalk {
     pub(crate) fn enter_shape(&mut self) -> ChainState {
         let saved = self.save();
         self.declaring.clone_from(&self.chain);
+        self.property_value_focus = false;
         saved
     }
 
@@ -385,6 +389,7 @@ impl FootprintWalk {
     /// currently being walked, then move to that path's VALUE nodes.
     pub(crate) fn enter_values(&mut self, path: &Path) -> ChainState {
         let saved = self.save();
+        self.property_value_focus = true;
         self.record_path_steps(path, &[]);
         self.declaring.clone_from(&self.chain);
         if let Some(chain) = &mut self.chain {
@@ -405,10 +410,24 @@ impl FootprintWalk {
         saved
     }
 
+    /// Property expressions run at the value node under the compatibility law
+    /// and at the declaring focus under dated laws. A shared lowering cannot
+    /// choose one chain: retain a conservative footprint if this expression
+    /// actually reads data at either of the two distinct roots.
+    pub(crate) fn enter_expression_focus(&mut self) -> ChainState {
+        let saved = self.save();
+        if self.property_value_focus {
+            self.chain = None;
+            self.declaring = None;
+        }
+        saved
+    }
+
     /// Restore the chain state a matching `enter_*` displaced.
     pub(crate) fn leave(&mut self, saved: ChainState) {
         self.chain = saved.chain;
         self.declaring = saved.declaring;
+        self.property_value_focus = saved.property_value_focus;
     }
 
     /// Snapshot the two chains so a later [`Self::leave`] can put them back.
@@ -422,6 +441,7 @@ impl FootprintWalk {
         ChainState {
             chain: self.chain.clone(),
             declaring: self.declaring.clone(),
+            property_value_focus: self.property_value_focus,
         }
     }
 

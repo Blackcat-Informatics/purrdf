@@ -2118,7 +2118,10 @@ impl Parser<'_> {
         // A custom function's argument is evaluated where its body reads it, in the
         // empty scope (§6.3), so it is parsed in that scope; every other call's
         // arguments are evaluated in the call site's own scope.
-        let custom = self.custom_fns.get(fn_iri.as_str()).is_some();
+        let custom = self.custom_fns.get(fn_iri.as_str()).is_some_and(|func| {
+            func.kind != CustomFnKind::ListParameter
+                || !self.profile().reads_november_draft_semantics()
+        });
         let mut args = Vec::with_capacity(items.len());
         for item in items {
             args.push(if custom {
@@ -2144,7 +2147,9 @@ impl Parser<'_> {
             // call are in hand: a call with too few or too many arguments would
             // otherwise read a missing `shnex:arg` as the empty list and quietly
             // contribute nothing.
-            if args.len() < func.required || args.len() > func.params.len() {
+            if !func.params.is_empty()
+                && (args.len() < func.required || args.len() > func.params.len())
+            {
                 return Err(format!(
                     "sh:ListParameterExpressionFunction <{}> called on {node} with {} argument(s), \
                      but it declares {}..={}",

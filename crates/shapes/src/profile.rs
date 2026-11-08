@@ -23,6 +23,7 @@ enum Identity {
     Recommendation,
     WorkingDraft,
     EditorsDraft,
+    EditorsDraft20261106,
 }
 
 /// An immutable, explicitly dated SHACL semantic law.
@@ -40,6 +41,7 @@ impl purrdf_hash::error::StructuredError for ShaclProfile {
             Self(Identity::Recommendation) => "shacl-profile-rec-2017-07-20",
             Self(Identity::WorkingDraft) => "shacl-profile-wd-2026-09-18",
             Self(Identity::EditorsDraft) => "shacl-profile-ed-2026-10-16",
+            Self(Identity::EditorsDraft20261106) => "shacl-profile-ed-2026-11-06",
         });
     }
 }
@@ -68,6 +70,12 @@ impl ShaclProfile {
     /// arguments, and rule sets as `sh:entailment` values.
     pub const ED_20261016: Self = Self(Identity::EditorsDraft);
 
+    /// The editor's drafts at W3C commit
+    /// `40231dfb97c5b606d22ae733947c0d14b4f45c07` (2026-11-06).
+    /// List-function arguments are evaluated in the caller's scope before the
+    /// body runs; a shared run-once rule executes once per distinct focus node.
+    pub const ED_20261106: Self = Self(Identity::EditorsDraft20261106);
+
     /// The stable identifier accepted by [`Self::from_id`].
     #[must_use]
     pub const fn id(self) -> &'static str {
@@ -76,6 +84,7 @@ impl ShaclProfile {
             Identity::Recommendation => "shacl-rec-2017-07-20",
             Identity::WorkingDraft => "shacl-wd-2026-09-18",
             Identity::EditorsDraft => "shacl-ed-2026-10-16",
+            Identity::EditorsDraft20261106 => "shacl-ed-2026-11-06",
         }
     }
 
@@ -90,6 +99,7 @@ impl ShaclProfile {
             "shacl-rec-2017-07-20" => Ok(Self::REC_20170720),
             "shacl-wd-2026-09-18" => Ok(Self::WD_20260918),
             "shacl-ed-2026-10-16" => Ok(Self::ED_20261016),
+            "shacl-ed-2026-11-06" => Ok(Self::ED_20261106),
             _ => Err(UnsupportedProfile { id: id.to_owned() }),
         }
     }
@@ -103,6 +113,9 @@ impl ShaclProfile {
             Identity::WorkingDraft => Some("https://www.w3.org/TR/2026/WD-shacl12-core-20260917/"),
             Identity::EditorsDraft => Some(
                 "https://github.com/w3c/data-shapes/blob/4cd469867a1cc6d2fff80e8a40723b26c695d67a/shacl12-core/index.html",
+            ),
+            Identity::EditorsDraft20261106 => Some(
+                "https://github.com/w3c/data-shapes/blob/40231dfb97c5b606d22ae733947c0d14b4f45c07/shacl12-core/index.html",
             ),
         }
     }
@@ -119,6 +132,9 @@ impl ShaclProfile {
             Identity::EditorsDraft => Some(
                 "https://github.com/w3c/data-shapes/blob/4cd469867a1cc6d2fff80e8a40723b26c695d67a/shacl12-sparql/index.html",
             ),
+            Identity::EditorsDraft20261106 => Some(
+                "https://github.com/w3c/data-shapes/blob/40231dfb97c5b606d22ae733947c0d14b4f45c07/shacl12-sparql/index.html",
+            ),
         }
     }
 
@@ -126,7 +142,10 @@ impl ShaclProfile {
     /// that extends it. Every semantic the working draft states is shared by both.
     #[must_use]
     pub const fn is_shacl12(self) -> bool {
-        matches!(self.0, Identity::WorkingDraft | Identity::EditorsDraft)
+        matches!(
+            self.0,
+            Identity::WorkingDraft | Identity::EditorsDraft | Identity::EditorsDraft20261106
+        )
     }
 
     /// Whether the engine reads the semantics first published after the working
@@ -137,13 +156,23 @@ impl ShaclProfile {
     /// exactly their own texts, which state none of them.
     #[must_use]
     pub(crate) const fn reads_editors_draft_semantics(self) -> bool {
-        matches!(self.0, Identity::Legacy | Identity::EditorsDraft)
+        matches!(
+            self.0,
+            Identity::Legacy | Identity::EditorsDraft | Identity::EditorsDraft20261106
+        )
+    }
+
+    /// Whether the November draft's eager list arguments and shared run-once
+    /// focus identity apply. Earlier dated laws and the default stay unchanged.
+    pub(crate) const fn reads_november_draft_semantics(self) -> bool {
+        matches!(self.0, Identity::EditorsDraft20261106)
     }
 
     /// The required native XPath law's exact specification.
     ///
-    /// REC20170720 uses XPath 2.0 Second Edition's incorporated errata. The draft
-    /// uses the XPath 3.1 Recommendation referenced by SPARQL 1.2 WD20260820.
+    /// The 2017 Recommendation uses XPath 2.0 Second Edition's incorporated errata.
+    /// The drafts use the XPath 3.1 Recommendation referenced by the SPARQL 1.2
+    /// Working Draft of 20 August 2026.
     /// The compatibility law leaves regex selection to the caller.
     #[must_use]
     pub const fn xpath_specification(self) -> Option<&'static str> {
@@ -152,7 +181,7 @@ impl ShaclProfile {
             Identity::Recommendation => {
                 Some("https://www.w3.org/TR/2010/REC-xpath-functions-20101214/")
             }
-            Identity::WorkingDraft | Identity::EditorsDraft => {
+            Identity::WorkingDraft | Identity::EditorsDraft | Identity::EditorsDraft20261106 => {
                 Some("https://www.w3.org/TR/2017/REC-xpath-functions-31-20170321/")
             }
         }
@@ -168,7 +197,9 @@ impl ShaclProfile {
         match self.0 {
             Identity::Legacy => None,
             Identity::Recommendation => Some(Profile::Xpath20),
-            Identity::WorkingDraft | Identity::EditorsDraft => Some(Profile::Xpath31),
+            Identity::WorkingDraft | Identity::EditorsDraft | Identity::EditorsDraft20261106 => {
+                Some(Profile::Xpath31)
+            }
         }
     }
 

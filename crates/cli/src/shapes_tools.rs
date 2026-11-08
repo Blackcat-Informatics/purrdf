@@ -528,6 +528,8 @@ pub(crate) struct NodeExprOptions<'a> {
     pub(crate) focus: &'a str,
     /// `--scope NAME=TERM`, repeatable.
     pub(crate) scope: &'a [String],
+    /// Explicit dated SHACL law for standalone node-expression evaluation.
+    pub(crate) shacl_profile: Option<&'a str>,
     /// `--xpath-regex`: the dated native XPath pattern law every pattern the expression
     /// decides is evaluated under. `None` keeps the compatibility pattern engine.
     pub(crate) xpath_regex: Option<Profile>,
@@ -587,6 +589,9 @@ pub(crate) fn run_node_expr(
     jsonld_options: Option<&JsonLdSerializeOptions>,
     canonical: &mut crate::canonical::Request,
 ) -> Result<(), CliError> {
+    let shacl_profile =
+        purrdf_validate::requested_shacl_profile(options.shacl_profile, options.xpath_regex)
+            .map_err(|error| CliError::Usage(error.to_string()))?;
     refuse_text_report_flags("node-expr", ledger_target, jsonld_options)?;
     refuse_shared_stdin(&[
         ("IN".to_owned(), options.input),
@@ -706,9 +711,14 @@ pub(crate) fn run_node_expr(
         imports: &table,
     };
     let refused = |error| shapes_error(error, &context, &root_document, "--shapes-base");
-    let evaluated = match options.xpath_regex {
-        None => free_expression::evaluate(&expression).map_err(refused)?,
-        Some(profile) => {
+    let evaluated = match (shacl_profile, options.xpath_regex) {
+        (Some(profile), _) => free_expression::evaluate_with_profile(&expression, profile)
+            .map_err(|error| match error {
+                XPathValidationError::Shapes(error) => refused(error),
+                other => CliError::Runtime(format!("--shacl-profile {profile}: {other}")),
+            })?,
+        (None, None) => free_expression::evaluate(&expression).map_err(refused)?,
+        (None, Some(profile)) => {
             purrdf::shapes::xpath::evaluate_free_expression(&expression, profile, Limits::new())
                 .map_err(|error| match error {
                     XPathValidationError::Shapes(error) => refused(error),

@@ -5,8 +5,7 @@ SPDX-License-Identifier: CC-BY-4.0
 
 # Vendored W3C SHACL 1.2 vocabularies and `shacl12-test-suite`
 
-Frozen copy of the upstream `w3c/data-shapes` SHACL 1.2 vocabularies and the whole
-`shacl12-test-suite/tests/` tree, vendored for the `purrdf-shapes`
+Frozen copy of the upstream `w3c/data-shapes` SHACL 1.2 vocabularies and the SHACL manifest tree, vendored for the `purrdf-shapes`
 declared-vs-implemented ratchet and its SHACL 1.2 conformance harness.
 **Do not hand-edit** — treat exactly like the GTS vectors and the
 `vectors/shexTest` corpus: byte-frozen third-party conformance data,
@@ -22,22 +21,24 @@ fails the build. A deliberate re-vendor regenerates that manifest with
 - Upstream: <https://github.com/w3c/data-shapes> — the W3C Data Shapes Working Group's
   repository for SHACL 1.2 (Core, the node-expression extension `shnex`, the
   SPARQL bindings, and the conformance test suite).
-- Pinned commit: `4cd469867a1cc6d2fff80e8a40723b26c695d67a` — pinned for reproducible builds and to track
-  upstream errata explicitly, the same hygiene every vendored suite in this
-  repo follows.
+- Pinned commit: `40231dfb97c5b606d22ae733947c0d14b4f45c07` for the vocabularies and SHACL manifest tree.
+- Separate SPARQL 1.2 RL pin: `4cd469867a1cc6d2fff80e8a40723b26c695d67a` for `tests/sparql-rl/`.
+  That independent root tests the supported 2026-09-19 Working Draft. Later
+  editor's-draft GROUP syntax is outside both that law and the SHACL EARL.
+  Both revisions are fixed for reproducible builds and explicit upstream updates.
 - License: **W3C Software and Document License** (<http://www.w3.org/Consortium/Legal/copyright-software>), per the upstream
   repository's own `LICENSE.md`; that file is vendored verbatim alongside
   this tree as `LICENSE.md`.
 - Retrieval: `scripts/vendor-shacl12.py` fetches the pinned commit's full
-  source tree as a tarball from the GitHub REST API
-  (`GET https://api.github.com/repos/w3c/data-shapes/tarball/4cd469867a1cc6d2fff80e8a40723b26c695d67a`, which redirects
+  source trees as tarballs from the GitHub REST API
+  (`GET https://api.github.com/repos/w3c/data-shapes/tarball/40231dfb97c5b606d22ae733947c0d14b4f45c07`, which redirects
   to a `codeload.github.com` archive of that exact commit) and extracts the
   `shacl12-vocabularies/` and `shacl12-test-suite/tests/` subtrees verbatim —
-  no per-file API calls, no upstream `git` clone.
+  SPARQL RL is extracted separately at its recorded pin; no source clone is needed.
 - Vendored subset:
   - `vocabularies/`: `shacl.ttl`, `shnex.ttl`, `shnex-sparql.ttl` and
     `shacl-shacl.ttl` from upstream `shacl12-vocabularies/`.
-  - `tests/`: the entire upstream `shacl12-test-suite/tests/` tree —
+  - `tests/`: the upstream `shacl12-test-suite/tests/` tree at the two pins above —
     `core/`, `node-expr/`, `sparql/`, `inference-rules/` and `sparql-rl/`,
     every manifest, every `.srl` file, and the upstream `tests/README.md`,
     `tests/node-expr/README.md` and `tests/sparql-rl/README.md` (kept

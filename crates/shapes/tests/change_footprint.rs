@@ -1391,6 +1391,54 @@ const TYPED_ALICE: &str = concat!(
     "<http://example.org/ns#alice> <http://example.org/ns#name> \"Alice\" .\n",
 );
 
+/// A property expression reads the declaring focus under the dated law. An edit
+/// there must reach the change validator even though it is not a path value.
+#[test]
+fn dated_property_expression_changes_agree_with_full_validation() {
+    use purrdf_shapes::{ShaclProfile, engine};
+    let source = format!(
+        "{PREFIXES}
+        @prefix shnex: <http://www.w3.org/ns/shacl-node-expr#> .
+        ex:S a sh:NodeShape; sh:targetNode ex:alice;
+          sh:property [ sh:path ex:value;
+            sh:expression [ shnex:exists [ shnex:pathValues ex:allowed ] ] ] ."
+    );
+    let prepared = PreparedShapes::new(Arc::new(parse_shapes(&source, None).unwrap()))
+        .with_validation_options(
+            engine::ValidationOptions::default().with_profile(ShaclProfile::ED_20261106),
+        );
+    let base = parse_ntriples_to_dataset(concat!(
+        "<http://example.org/ns#alice> <http://example.org/ns#value> \"value\" .\n",
+        "<http://example.org/ns#alice> <http://example.org/ns#allowed> \"value\" .\n",
+    ))
+    .unwrap();
+    assert!(
+        prepared
+            .bind_dataset(&base)
+            .unwrap()
+            .validate()
+            .unwrap()
+            .conforms
+    );
+    let mut mutation = MutableDataset::new(base);
+    assert!(mutation.remove(&quad((
+        "alice",
+        "http://example.org/ns#allowed",
+        Obj::Lit("value")
+    ))));
+    let snapshot = Arc::new(mutation.snapshot_view().unwrap());
+    let validator = prepared
+        .bind_delta_with_shapes_graph(Arc::clone(&snapshot), None, ViewLimits::default())
+        .unwrap();
+    let full = validator.validate().unwrap();
+    let changed = engine::validate_change(&validator, &snapshot).unwrap();
+    assert!(
+        !full.conforms,
+        "removing the allowed value must move the verdict"
+    );
+    assert_eq!(changed.report.result_tuples(), full.result_tuples());
+}
+
 /// HALF ONE of the over-refusal pair: a shapes graph this walk can read in full must
 /// produce a BOUNDED expansion.
 ///

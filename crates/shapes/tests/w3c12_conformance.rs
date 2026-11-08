@@ -22,7 +22,7 @@
 //!   parser itself ([`purrdf_shapes::shapes::from_dataset_with_node_expressions`],
 //!   so custom functions and shape references bind exactly as they do in a
 //!   shapes graph), and evaluated with `sht:focusNode` as the focus node and every
-//!   `sht:scope-NAME` bound through the public [`Scope`]/[`Binding`] API. The
+//!   `sht:scope-NAME` bound through the public scope API. The
 //!   output must equal the `mf:result` list TERM FOR TERM (RDF 1.2 term
 //!   equality: lexical form, datatype, language and direction), in order unless
 //!   the entry sets `sht:ignoreOrder true`, in which case as a multiset. There is
@@ -72,14 +72,14 @@ use std::sync::Arc;
 
 use purrdf_rdf::{RdfDataset, RdfDatasetBuilder, RdfQuad, try_canonicalize};
 use purrdf_shapes::data::{GraphFilter, ShaclData, native_quads};
-use purrdf_shapes::expression::{
-    Binding, NodeExpr, RecursionGuard, Scope, eval_node_expr_in_scope,
-};
+use purrdf_shapes::expression::{RecursionGuard, Scope, eval_node_expr_in_scope};
 use purrdf_shapes::srl::{self, SrlError};
 use purrdf_shapes::term::{Literal, NamedNode, Term};
 use purrdf_shapes::{ShaclProfile, apply_rules, engine, shapes, sparql, text_ingest};
 
-use shacl_corpora::node_expr_grading::{ABSENT_FOCUS, compare_outputs};
+use shacl_corpora::node_expr_grading::{
+    ABSENT_FOCUS, compare_outputs, evaluate_case, grade_evaluation,
+};
 use shacl_corpora::report_grading::{grade, grade_against, no_panic, produce};
 use shacl_corpora::shacl12::{
     Body, Case12, InferCase, InferExpected, NodeExprCase, Root12, SPEC_CONTRADICTED,
@@ -248,97 +248,53 @@ fn run_validate(id: &str, listed: bool, tc: &W3cCase) -> Result<(), String> {
 
 // ── sht:EvalNodeExpr ──────────────────────────────────────────────────────────
 
-/// Evaluate `expr` with `bindings` pushed as scope frames on top of `scope`.
-fn eval_in_scope(
-    data: &ShaclData,
-    focus: &Term,
-    expr: &NodeExpr,
-    guard: &mut RecursionGuard,
-    bindings: &[(String, Term)],
-    scope: Scope<'_>,
-) -> Result<Vec<Term>, String> {
-    match bindings.split_first() {
-        None => eval_node_expr_in_scope(data, focus, expr, guard, scope)
-            .map_err(|error| error.to_string()),
-        Some(((name, value), rest)) => {
-            let frame = Binding::new(name, value, scope);
-            eval_in_scope(data, focus, expr, guard, rest, Scope::bound(&frame))
-        }
-    }
-}
-
-/// Parse and evaluate an entry's node expression through the library.
-fn eval_node_expr_case(tc: &NodeExprCase) -> Result<Vec<Term>, String> {
-    let text = fs::read_to_string(&tc.file)
-        .map_err(|e| format!("cannot read {}: {e}", tc.file.display()))?;
-    let doc_prefixes = text_ingest::parse_turtle_document(&text, Some(&file_iri(&tc.file)))
-        .map_err(|errors| format!("node-expression graph parse error: {errors}"))?
-        .prefixes;
-    // The node-expression loader and evaluator take no profile: node expressions exist
-    // only in SHACL 1.2, so there is no compatibility alternative to select. The
-    // report's law sentence (`shacl-ed-2026-10-16`) therefore covers the `sht:Validate`
-    // and rule records, which load and run under that law, and not these records,
-    // which no law selects.
-    let (shapes, mut exprs) = shapes::from_dataset_with_node_expressions(
-        &tc.dataset,
-        &doc_prefixes,
-        None,
-        std::slice::from_ref(&tc.expr),
-        &purrdf_shapes::ShapesImports::new(),
-    )
-    .map_err(|e| format!("shapes/node-expression parse error: {e}"))?;
-    let expr = exprs
-        .pop()
-        .ok_or("the parser returned no expression for the one root it was given")?;
-
-    let projected =
-        engine::project_dataset(tc.dataset.as_ref()).map_err(|error| error.to_string())?;
-    let data = ShaclData::new(Arc::clone(&projected), projected, None);
-    let focus = match &tc.focus {
-        Some(focus) => focus.clone(),
-        None => {
-            let absent = Term::blank(ABSENT_FOCUS);
-            let mentioned = !native_quads(
-                tc.dataset.as_ref(),
-                Some(&absent),
-                None,
-                None,
-                GraphFilter::AnyGraph,
-            )
-            .is_empty()
-                || !native_quads(
-                    tc.dataset.as_ref(),
-                    None,
-                    None,
-                    Some(&absent),
-                    GraphFilter::AnyGraph,
-                )
-                .is_empty();
-            if mentioned {
-                return Err(format!("the test graph mentions the harness's {absent}"));
-            }
-            absent
-        }
-    };
-
-    let _function_scope = sparql::enter_function_scope(
-        sparql::bind_in_current_env(&shapes, None).map_err(|error| error.to_string())?,
-    );
-    let _aggregate_scope = sparql::enter_aggregate_scope(Arc::clone(&shapes.aggregates));
-    let mut guard = RecursionGuard::default();
-    eval_in_scope(&data, &focus, &expr, &mut guard, &tc.scope, Scope::EMPTY)
-}
-
-/// Grade one `sht:EvalNodeExpr` entry.
+/// Grade one `sht:EvalNodeExpr` entry through the standalone production evaluator.
 fn run_node_expr(tc: &NodeExprCase) -> Result<(), String> {
-    let produced = no_panic(|| eval_node_expr_case(tc))?;
-    compare_outputs(&produced, &tc.expected, tc.ignore_order)
+    let produced = no_panic(|| evaluate_case(tc, ShaclProfile::ED_20261106))?;
+    grade_evaluation(produced, &tc.expected, tc.ignore_order)
+}
+
+/// A declared evaluation failure cannot be satisfied by empty output, a stopped
+/// processor or an invalid test setup.
+#[test]
+fn node_expression_failures_are_graded_by_their_semantic_class() {
+    use shacl_corpora::shacl12::NodeExprExpected;
+
+    let cases = shacl12_cases();
+    let tc = cases
+        .iter()
+        .find_map(|case| match &case.body {
+            Body::NodeExpr(tc) if matches!(tc.expected, NodeExprExpected::Failure) => Some(tc),
+            _ => None,
+        })
+        .expect("an approved evaluation-failure fixture");
+    let failure = evaluate_case(tc, ShaclProfile::ED_20261106).expect("fixture setup");
+    assert!(failure.is_err(), "the fixture must actually fail");
+    assert!(grade_evaluation(failure, &tc.expected, tc.ignore_order).is_ok());
+    assert!(grade_evaluation(Ok(Vec::new()), &tc.expected, false).is_err());
+    assert!(
+        grade_evaluation(
+            Err(purrdf_shapes::ShapesError::Processor(
+                purrdf_shapes::ProcessorFailure::ExpressionDepth { depth: 2, limit: 1 },
+            )),
+            &tc.expected,
+            false,
+        )
+        .is_err()
+    );
 }
 
 // ── sht:Infer ─────────────────────────────────────────────────────────────────
 
 /// Run the rules; `Ok((inferred graph, projected base))`.
 fn infer(tc: &InferCase) -> Result<(Arc<RdfDataset>, Arc<RdfDataset>), String> {
+    infer_with_profile(tc, ShaclProfile::ED_20261106)
+}
+
+fn infer_with_profile(
+    tc: &InferCase,
+    profile: ShaclProfile,
+) -> Result<(Arc<RdfDataset>, Arc<RdfDataset>), String> {
     let shapes_text = fs::read_to_string(&tc.shapes_path)
         .map_err(|e| format!("cannot read shapes {}: {e}", tc.shapes_path.display()))?;
     let text_ingest::TurtleDocument {
@@ -355,7 +311,7 @@ fn infer(tc: &InferCase) -> Result<(Arc<RdfDataset>, Arc<RdfDataset>), String> {
         None,
         Some(tc.shapes_graph_iri.clone()),
         &purrdf_shapes::ShapesImports::new(),
-        &engine::ValidationOptions::default().with_profile(ShaclProfile::ED_20261016),
+        &engine::ValidationOptions::default().with_profile(profile),
     )
     .map_err(|e| format!("shapes parse error: {e}"))?;
     let data_dataset = if tc.data_path == tc.shapes_path {
@@ -368,6 +324,70 @@ fn infer(tc: &InferCase) -> Result<(Arc<RdfDataset>, Arc<RdfDataset>), String> {
     let holder = ShaclData::new(Arc::clone(&projected), Arc::clone(&projected), None);
     let inferred = apply_rules(&holder, &shapes).map_err(|e| format!("apply_rules failed: {e}"))?;
     Ok((inferred, projected))
+}
+
+/// The November draft deduplicates a shared run-once rule by focus node;
+/// the October draft and compatibility law retain one execution per shape.
+#[test]
+fn shared_run_once_focus_is_selected_by_the_dated_law() {
+    let cases = shacl12_cases();
+    let case = cases
+        .iter()
+        .find(|case| case.id == "inference-rules/run-once-shared-shapes")
+        .expect("the shared-rule regression");
+    let Body::Infer(tc) = &case.body else {
+        panic!("an inference fixture")
+    };
+    for (profile, count) in [
+        (ShaclProfile::LEGACY, 2),
+        (ShaclProfile::ED_20261016, 2),
+        (ShaclProfile::ED_20261106, 1),
+    ] {
+        let (inferred, _) = infer_with_profile(tc, profile).expect("rule execution");
+        assert_eq!(
+            native_quads(
+                &inferred,
+                None,
+                Some(&Term::NamedNode(NamedNode::new_unchecked(
+                    "http://example.com/ns#head"
+                ))),
+                None,
+                GraphFilter::AnyGraph
+            )
+            .len(),
+            count,
+            "{profile}"
+        );
+    }
+}
+
+/// A list argument sees caller bindings only under the new selected law.
+#[test]
+fn list_argument_scope_is_selected_by_the_dated_law() {
+    let cases = shacl12_cases();
+    let case = cases
+        .iter()
+        .find(|case| case.id == "node-expr/custom/listParameter-argument-sees-outer-scope")
+        .expect("the caller-scope regression");
+    let Body::NodeExpr(tc) = &case.body else {
+        panic!("a node-expression fixture")
+    };
+    for profile in [ShaclProfile::LEGACY, ShaclProfile::ED_20261016] {
+        assert!(
+            evaluate_case(tc, profile)
+                .expect("fixture setup")
+                .expect("evaluation")
+                .is_empty(),
+            "{profile}"
+        );
+    }
+    let output = evaluate_case(tc, ShaclProfile::ED_20261106)
+        .expect("fixture setup")
+        .expect("evaluation");
+    assert_eq!(
+        output,
+        vec![Term::Literal(Literal::new_simple_literal("bound"))]
+    );
 }
 
 /// The expected inferred triples as a dataset of their own.
@@ -607,8 +627,7 @@ const SUITE: w3c_earl::Suite = w3c_earl::Suite {
     file_name: "purrdf-shacl12-earl.ttl",
     commit: W3C12_SUITE_COMMIT,
     profile: "shacl-1.2",
-    law: ShaclProfile::ED_20261016.id(),
-    law_independent_records: true,
+    law: ShaclProfile::ED_20261106.id(),
 };
 
 /// The EARL-scope scoreboard line's label and the name its failed count carries.
@@ -946,7 +965,7 @@ fn the_entries_resting_on_post_wd_text_need_the_editors_draft_law() {
         let Body::Validate(mut tc) = case.body else {
             panic!("{} is an sht:Validate test", case.id);
         };
-        assert_eq!(tc.profile, ShaclProfile::ED_20261016, "{}", case.id);
+        assert_eq!(tc.profile, ShaclProfile::ED_20261106, "{}", case.id);
         grade_against(&tc, &tc.expected)
             .unwrap_or_else(|error| panic!("{} fails under the editor's draft: {error}", case.id));
         tc.profile = ShaclProfile::WD_20260918;
@@ -1156,6 +1175,8 @@ fn the_suite_commit_is_the_vendored_one() {
         provenance.contains(&format!("Pinned commit: `{W3C12_SUITE_COMMIT}`")),
         "PROVENANCE.md does not pin {W3C12_SUITE_COMMIT}"
     );
+    let rules_commit = purrdf_shacl_conformance::shacl12::W3C12_SPARQL_RL_SUITE_COMMIT;
+    assert!(provenance.contains(&format!("Separate SPARQL 1.2 RL pin: `{rules_commit}`")));
 }
 
 // ── The completion gate ───────────────────────────────────────────────────────
@@ -1261,14 +1282,27 @@ const INVENTORY: &[&str] = &[
 /// Every `sht:Infer` entry, by name. [`every_planned_inventory_id_passes`] also
 /// proves this is exactly the discovered set of `sht:Infer` entries.
 const INFER_INVENTORY: &[&str] = &[
+    "inference-rules/SPARQLRule-focus-nodes-isolated",
+    "inference-rules/SPARQLRule-syntax-error",
     "inference-rules/SPARQLRuleTemplate-example-Multiply",
     "inference-rules/SPARQLRuleTemplate-example-SymmetricProperty",
     "inference-rules/SPARQLRuleTemplate-missing-param",
+    "inference-rules/SPARQLRuleTemplate-optional-param",
+    "inference-rules/TripleRule-cross-product",
     "inference-rules/TripleRule-example-childCount",
     "inference-rules/TripleRule-example-squares",
+    "inference-rules/TripleRule-failure",
+    "inference-rules/TripleRule-global",
+    "inference-rules/TripleRule-skips-ill-formed",
+    "inference-rules/condition-shape-class-superclass",
+    "inference-rules/deactivated-shape",
+    "inference-rules/expectedPredicate-also-inferred",
     "inference-rules/expectedPredicate-example",
+    "inference-rules/expectedPredicate-layers",
     "inference-rules/global-symmetric",
+    "inference-rules/layers-decimal",
     "inference-rules/layers-example",
+    "inference-rules/multiple-rule-types",
     "inference-rules/rdfs/rdfs-domain-1",
     "inference-rules/rdfs/rdfs-domain-2",
     "inference-rules/rdfs/rdfs-range-1",
@@ -1281,10 +1315,12 @@ const INFER_INVENTORY: &[&str] = &[
     "inference-rules/rectangle-order",
     "inference-rules/rectangle-prefixes",
     "inference-rules/rectangle-simple",
+    "inference-rules/rule-order-visibility",
     "inference-rules/ruleProcessor-unknown-at-rule",
     "inference-rules/ruleProcessor-unknown-at-ruleset",
     "inference-rules/run-once-blank-node-feed",
     "inference-rules/run-once-example",
+    "inference-rules/run-once-shared-shapes",
     "inference-rules/same-order",
     "inference-rules/temp-triples-example",
     "inference-rules/unknown-rule-type",
@@ -2212,9 +2248,8 @@ fn w3c12_earl_subject_and_assertor_are_exact() {
     w3c_earl::check_descriptions(
         &w3c_earl::sample_bytes(&SUITE, &scope_entries(graded())),
         w3c_earl::SAMPLE_COMMIT,
-        "4cd469867a1cc6d2fff80e8a40723b26c695d67a",
-        "shacl-ed-2026-10-16",
-        true,
+        "40231dfb97c5b606d22ae733947c0d14b4f45c07",
+        "shacl-ed-2026-11-06",
     )
     .unwrap_or_else(|error| panic!("{error}"));
 }
@@ -2354,14 +2389,8 @@ fn w3c12_earl_report_is_written_when_configured() {
         &scope_entries(graded()),
     ))
     .expect("the report renders");
-    w3c_earl::check_descriptions(
-        &bytes,
-        &config.commit,
-        W3C12_SUITE_COMMIT,
-        SUITE.law,
-        SUITE.law_independent_records,
-    )
-    .unwrap_or_else(|error| panic!("{error}"));
+    w3c_earl::check_descriptions(&bytes, &config.commit, W3C12_SUITE_COMMIT, SUITE.law)
+        .unwrap_or_else(|error| panic!("{error}"));
     let path = w3c_earl::write_report(&config.dir, SUITE.file_name, &bytes)
         .unwrap_or_else(|error| panic!("{error}"));
     println!(
