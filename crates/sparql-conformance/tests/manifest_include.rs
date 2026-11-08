@@ -44,6 +44,17 @@ fn refusal(relative: &str) -> String {
     }
 }
 
+#[test]
+fn an_unreadable_ancestor_cargo_manifest_returns_a_loader_error() {
+    let directory = purrdf_testkit::temp_dir!().expect("manifest directory");
+    let manifest_path = directory.path().join("manifest.ttl");
+    std::fs::write(&manifest_path, "").expect("existing manifest");
+    std::fs::write(directory.path().join("Cargo.toml"), [0xff]).expect("invalid UTF-8");
+    let error = manifest::load(&manifest_path).expect_err("return the ancestor read failure");
+    assert!(error.contains("read ancestor Cargo manifest"), "{error}");
+    assert!(error.contains("manifest.ttl"), "{error}");
+}
+
 /// The positive control for the whole feature: a pure aggregator loads the UNION
 /// of its children's cases.
 ///
@@ -266,7 +277,7 @@ fn an_index_with_entries_or_an_undiscoverable_member_is_refused() {
 #[test]
 fn the_vendored_cdt_aggregator_loads_every_group() {
     let aggregator =
-        purrdf_testkit::paths::workspace_root().join("vectors/sparql-cdt/manifest-all.ttl");
+        purrdf_testkit::paths::workspace_root!().join("vectors/sparql-cdt/manifest-all.ttl");
     let cases =
         manifest::load(&aggregator).expect("the vendored CDT aggregator manifest must load");
 

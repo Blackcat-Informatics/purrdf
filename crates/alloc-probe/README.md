@@ -9,8 +9,13 @@ across several crates each need the same instrument — a pass-through
 each hand-rolled copy of it was free to drift in what it counted and in which
 threads it counted on. This crate is that instrument, once.
 
-Never published, never a runtime dependency: it appears only in
-`[dev-dependencies]`, so no release crate and no wasm build ever sees it.
+Available as a development dependency for downstream allocation tests and
+benchmarks. The library also builds for `wasm32-unknown-unknown`.
+
+```toml
+[dev-dependencies]
+purrdf-alloc-probe = "4.0.1"
+```
 
 ## Using it
 
@@ -49,3 +54,14 @@ high-water mark of live bytes). A phase that allocates and frees one large
 buffer repeatedly has high traffic and a modest peak; a phase that assembles one
 large structure has the reverse. There is deliberately no single combined
 figure, because collapsing them erases the only interesting distinction.
+
+Retained and peak bytes reflect allocator layout sizes, not resident memory.
+A per-thread window counts calls on its opening thread: transferring a buffer
+to another thread can therefore change the meaning of its retained-byte delta.
+Use a whole-process window when allocation and deallocation cross threads, and
+isolate it from unrelated concurrent work.
+
+## License
+
+MIT OR Apache-2.0 OR MulanPSL-2.0. See `licenses/NOTICE.txt` and the
+accompanying complete license texts.

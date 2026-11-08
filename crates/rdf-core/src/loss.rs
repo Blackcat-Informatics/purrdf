@@ -2684,7 +2684,7 @@ mod tests {
     /// changes.
     #[test]
     fn generated_artifact_has_not_drifted() {
-        let path = purrdf_testkit::paths::workspace_root().join("generated/rdf-loss-matrix.json");
+        let path = purrdf_testkit::paths::workspace_root!().join("generated/rdf-loss-matrix.json");
         let committed = std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
         assert_eq!(
@@ -2702,7 +2702,7 @@ mod tests {
     #[test]
     fn transcode_matrix_has_not_drifted() {
         let path =
-            purrdf_testkit::paths::workspace_root().join("generated/transcode-loss-matrix.json");
+            purrdf_testkit::paths::workspace_root!().join("generated/transcode-loss-matrix.json");
         let on_disk = std::fs::read_to_string(&path)
             .unwrap_or_else(|_| panic!("generated file missing: {}", path.display()));
         assert_eq!(

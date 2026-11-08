@@ -14,7 +14,7 @@ use purrdf_lex::cbor::Value;
 
 /// The workspace's frozen `vectors/` directory.
 pub fn vectors_dir() -> PathBuf {
-    purrdf_testkit::paths::workspace_root().join("vectors")
+    purrdf_testkit::paths::workspace_root!().join("vectors")
 }
 
 /// The bytes of the frozen vector `name`.

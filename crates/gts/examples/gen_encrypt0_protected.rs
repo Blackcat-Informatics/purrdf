@@ -48,7 +48,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Err(error) => return Err(error.into()),
         }
         let path =
-            purrdf_testkit::paths::workspace_root().join(format!("vectors/encrypt0/{name}.json"));
+            purrdf_testkit::paths::workspace_root!().join(format!("vectors/encrypt0/{name}.json"));
         std::fs::write(path, format!("{}\n", json::write_pretty(&record.into())))?;
     }
     Ok(())

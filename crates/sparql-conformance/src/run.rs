@@ -662,7 +662,7 @@ pub fn query_dataset_sources(
         .with_base_iri(&case.base)
         .parse_query_with(query_text, &query_eval_parser_options())
         .map_err(|error| format!("parse dataset clauses for {}: {error}", case.iri))?;
-    let workspace = purrdf_testkit::paths::workspace_root();
+    let workspace = purrdf_testkit::paths::workspace_root!();
     query
         .dataset()
         .default

@@ -420,7 +420,7 @@ mod tests {
 
     #[test]
     fn every_standpoint_file_matches_committed() {
-        let root = workspace_root();
+        let root = workspace_root!();
         // Committed-artifact parity: the committed queries were generated with
         // the blackcatinformatics purrdf namespace (prefix `purrdf`), so this
         // cross-check must use it (pure fixtures elsewhere use example.org).

@@ -13,13 +13,11 @@ documentation = "https://docs.rs/purrdf-jsonschema"
 rust-version.workspace = true
 keywords = ["json-schema", "validation", "json", "wasm", "rdf"]
 categories = ["encoding", "parser-implementations"]
-# The vendored JSON-Schema-Test-Suite and meta-schemas are test data under
-# their own licences, never part of the published crate (which carries no
-# meta-schema: callers register them). The suite targets read nothing else,
-# so they stay with their data.
+# The vendored JSON-Schema-Test-Suite remains checkout-only test data.
+# Meta-schemas are supplied by the published testkit; this engine embeds none.
+# The suite targets stay with their excluded data.
 exclude = [
   "tests/suite/**",
-  "tests/metaschemas/**",
   "tests/suite.rs",
   "tests/suite_draft2019_09.rs",
   "tests/suite_draft7.rs",
@@ -64,7 +62,7 @@ purrdf-alloc-probe = { workspace = true }
 # natively, the running stack under a fresh floor on wasm32.
 purrdf-stack = { workspace = true }
 # The `harness = false` suite runner and the frozen differential vectors.
-# Path-only and unpublished, so it is stripped from the packaged manifest.
+# Published in dependency order so packaged verification resolves the runner.
 purrdf-testkit = { workspace = true }
 
 [[bench]]

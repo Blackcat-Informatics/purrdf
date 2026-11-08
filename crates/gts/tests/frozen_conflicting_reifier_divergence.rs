@@ -78,7 +78,7 @@ const VECTOR: &str = "12-conflicting-reifier";
 
 /// Fold the frozen vector through the real reader, exactly as a consumer would.
 fn fold_frozen_vector() -> Graph {
-    let path = purrdf_testkit::paths::workspace_root()
+    let path = purrdf_testkit::paths::workspace_root!()
         .join("vectors")
         .join(format!("{VECTOR}.gts"));
     let bytes = std::fs::read(&path)
@@ -88,7 +88,7 @@ fn fold_frozen_vector() -> Graph {
 
 /// Parse the frozen cross-engine expectation that ships beside the vector.
 fn frozen_expectation() -> Json {
-    let path = purrdf_testkit::paths::workspace_root()
+    let path = purrdf_testkit::paths::workspace_root!()
         .join("vectors")
         .join(format!("{VECTOR}.expected.json"));
     let text = std::fs::read_to_string(&path)

@@ -52,7 +52,7 @@ fn document_framing_matches_and_embeds_native_structure() {
         .unwrap(),
         json::read(r#"[{"@id":null,"@type":[],"urn:p":[{"@value":"x"}]}]"#).unwrap()
     );
-    let root = purrdf_testkit::paths::workspace_root().join("vectors/yaml-ld/tests/cases/frame");
+    let root = purrdf_testkit::paths::workspace_root!().join("vectors/yaml-ld/tests/cases/frame");
     // Pinned YAML-LD frame-t0001: the complete independent expected document
     // retains the Book/Chapter properties absent from the pattern.
     let source = std::fs::read(root.join("0001-in.yamlld")).unwrap();
@@ -963,7 +963,7 @@ fn document_compaction_preserves_structure_and_native_terms() {
     assert!(compact_expanded_with_context(&source, &output, &policy, &limits).is_ok());
 
     // Unchanged pinned local-context compaction and context-bearing flatten output.
-    let root = purrdf_testkit::paths::workspace_root().join("vectors/yaml-ld/tests");
+    let root = purrdf_testkit::paths::workspace_root!().join("vectors/yaml-ld/tests");
     let manifest =
         json::read(&std::fs::read_to_string(root.join("manifest.jsonld")).unwrap()).unwrap();
     for id in [
@@ -1827,7 +1827,7 @@ fn okf_frontmatter_reads_scalar_keys_as_text_and_keeps_them_unique() {
 /// Three unchanged upstream samples compared as expanded document structures.
 #[test]
 fn pinned_w3c_structural_expansion_samples() {
-    let root = purrdf_testkit::paths::workspace_root().join("vectors/yaml-ld/tests");
+    let root = purrdf_testkit::paths::workspace_root!().join("vectors/yaml-ld/tests");
     let manifest = purrdf_lex::json::read_slice(
         &std::fs::read(root.join("manifest.jsonld")).unwrap(),
         purrdf_lex::json::Limits::DEFAULT,
@@ -1898,7 +1898,7 @@ fn pinned_w3c_normative_rdf_construction() {
         "#cir-scalar-core-2-positive",
         "#cir-scalar-other-2-positive",
     ];
-    let root = purrdf_testkit::paths::workspace_root().join("vectors/yaml-ld/tests");
+    let root = purrdf_testkit::paths::workspace_root!().join("vectors/yaml-ld/tests");
     let manifest = json::read_slice(
         &std::fs::read(root.join("manifest.jsonld")).expect("pinned YAML-LD manifest exists"),
         Limits::DEFAULT,

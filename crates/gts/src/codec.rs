@@ -517,7 +517,7 @@ mod tests {
             let encoded = [frames[0].as_slice(), frames[1].as_slice()].concat();
             if dictionary.is_none() {
                 purrdf_testkit::golden::check_bytes(
-                    &purrdf_testkit::paths::workspace_root()
+                    &purrdf_testkit::paths::workspace_root!()
                         .join("crates/gts/tests/golden/zstd-checksummed-concat.bin"),
                     &encoded,
                     purrdf_testkit::golden::REGENERATE_ENV,

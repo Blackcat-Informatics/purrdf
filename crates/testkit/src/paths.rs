@@ -5,50 +5,82 @@
 //!
 //! A test that reads the repository — a vendored corpus, the committed
 //! vocabulary, every crate's sources for a hygiene scan — needs the workspace
-//! root. It is the nearest ancestor whose `Cargo.toml` declares `[workspace]`,
-//! which is what Cargo itself resolves, and it is found from a directory rather
-//! than by counting `..` segments, so a crate's depth below the root is not
-//! part of the answer. Every member resolves the same root, so this crate's own
-//! manifest directory is as good a starting point as the caller's.
+//! root. [`crate::workspace_root!`] supplies the calling crate's manifest
+//! directory. An explicit ancestor `[workspace]` takes precedence over a
+//! `[package]`; without one, the nearest package is an implicit workspace.
+//! This helper recognizes those table-header lines, including trailing comments;
+//! it does not resolve Cargo's explicit `package.workspace` override.
 //!
 //! The root is canonical where the file system can canonicalize it, so paths
 //! joined onto it compare equal to canonicalized paths found by a walk.
 
+use std::io;
 use std::path::{Path, PathBuf};
 
-/// The workspace root: the nearest ancestor of `start` (itself included) whose
-/// `Cargo.toml` has a line that is exactly `[workspace]` after trimming, or
-/// `None` when no ancestor has one.
+pub use crate::workspace_root;
+
+/// The nearest explicit workspace ancestor of `start`, or its nearest package
+/// ancestor when no explicit workspace exists; `None` if neither exists.
 ///
 /// For a caller holding a path of its own — a manifest it was handed, a
 /// directory it was asked to scan — rather than one inside the workspace
-/// already. [`workspace_root`] is this from the workspace's own members.
-#[must_use]
-pub fn workspace_root_from(start: &Path) -> Option<PathBuf> {
-    start
-        .ancestors()
-        .find(|dir| {
-            std::fs::read_to_string(dir.join("Cargo.toml"))
-                .is_ok_and(|text| text.lines().any(|line| line.trim() == "[workspace]"))
-        })
-        .map(Path::to_path_buf)
-}
-
-/// The workspace root, canonicalized when the file system allows.
+/// already. [`crate::workspace_root!`] supplies the caller's manifest directory.
+/// Table-header lines may have surrounding whitespace and trailing comments.
+/// The result is canonicalized when the file system allows it.
 ///
 /// # Panics
-///
-/// When no ancestor of this crate's manifest directory declares `[workspace]`,
-/// which only a copy of the crate outside its workspace can observe.
+/// When an existing ancestor manifest cannot be read as UTF-8.
 #[must_use]
-pub fn workspace_root() -> PathBuf {
-    let root = workspace_root_from(Path::new(env!("CARGO_MANIFEST_DIR"))).unwrap_or_else(|| {
+pub fn workspace_root_from(start: &Path) -> Option<PathBuf> {
+    try_workspace_root_from(start).unwrap_or_else(|error| {
         panic!(
-            "no ancestor of {} has a Cargo.toml declaring [workspace]",
-            env!("CARGO_MANIFEST_DIR")
+            "read Cargo manifest ancestor of {}: {error}",
+            start.display()
         )
+    })
+}
+
+/// Resolve the workspace as [`workspace_root_from`], returning manifest read errors.
+///
+/// # Errors
+/// Returns the original I/O error when an existing ancestor manifest cannot be
+/// read as UTF-8. Ancestors above the first explicit workspace are not read.
+pub fn try_workspace_root_from(start: &Path) -> io::Result<Option<PathBuf>> {
+    let manifests = start.ancestors().filter_map(|directory| {
+        let manifest = directory.join("Cargo.toml");
+        match std::fs::read_to_string(&manifest) {
+            Ok(text) => Some(Ok((directory, text))),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+                ) =>
+            {
+                None
+            }
+            Err(error) => Some(Err(error)),
+        }
     });
-    root.canonicalize().unwrap_or(root)
+    Ok(manifest_root(manifests)?.map(|root| root.canonicalize().unwrap_or(root)))
+}
+
+fn manifest_root<'a>(
+    manifests: impl Iterator<Item = io::Result<(&'a Path, String)>>,
+) -> io::Result<Option<PathBuf>> {
+    let mut package = None;
+    for manifest in manifests {
+        let (directory, manifest) = manifest?;
+        for line in manifest.lines() {
+            let header = line.split('#').next().unwrap_or_default().trim();
+            if header == "[workspace]" {
+                return Ok(Some(directory.to_path_buf()));
+            }
+            if header == "[package]" && package.is_none() {
+                package = Some(directory.to_path_buf());
+            }
+        }
+    }
+    Ok(package)
 }
 
 /// Append every `.rs` file under `dir`, at any depth, to `out`.
@@ -97,22 +129,39 @@ pub fn collect_rs_filtered(dir: &Path, out: &mut Vec<PathBuf>, descend: &impl Fn
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-    use super::{collect_rs, collect_rs_filtered, workspace_root, workspace_root_from};
+    use super::{
+        collect_rs, collect_rs_filtered, manifest_root, try_workspace_root_from,
+        workspace_root_from,
+    };
     use crate::TempDir;
+    use std::path::Path;
 
     #[test]
-    fn the_workspace_root_holds_the_workspace_manifest_and_this_crate() {
-        let root = workspace_root();
-        let manifest = std::fs::read_to_string(root.join("Cargo.toml")).expect("root manifest");
-        assert!(manifest.lines().any(|line| line.trim() == "[workspace]"));
-        assert!(root.join("crates/testkit/Cargo.toml").is_file());
+    #[should_panic(expected = "read Cargo manifest")]
+    fn an_unreadable_manifest_cannot_silently_select_an_ancestor() {
+        let directory = TempDir::for_unit_test().expect("test directory");
+        std::fs::write(directory.path().join("Cargo.toml"), [0xff]).expect("invalid UTF-8");
+        assert_eq!(
+            try_workspace_root_from(directory.path())
+                .expect_err("the fallible scan retains the read failure")
+                .kind(),
+            std::io::ErrorKind::InvalidData
+        );
+        let _ = workspace_root_from(directory.path());
     }
 
     #[test]
-    fn a_member_directory_resolves_to_the_same_root() {
-        let root = workspace_root();
-        let from_member = workspace_root_from(&root.join("crates/testkit/src")).expect("found");
-        assert_eq!(from_member, root);
+    fn a_standalone_package_is_its_own_workspace() {
+        let package = Path::new("standalone/package");
+        assert_eq!(
+            manifest_root(
+                [(package, "[package] # standalone\nname = \"p\"\n".to_owned())]
+                    .into_iter()
+                    .map(Ok)
+            )
+            .expect("read manifest records"),
+            Some(package.to_path_buf())
+        );
     }
 
     #[test]
@@ -123,13 +172,18 @@ mod tests {
         std::fs::write(member.join("Cargo.toml"), "[package]\nname = \"m\"\n").expect("member");
         std::fs::write(
             dir.path().join("outer/Cargo.toml"),
-            "[package]\nname = \"o\"\n\n  [workspace]  \n",
+            "[package]\nname = \"o\"\n\n  [workspace]  # explicit ancestor\n",
         )
         .expect("outer");
         assert_eq!(
             workspace_root_from(&member),
             Some(dir.path().join("outer")),
             "the nearest ancestor declaring [workspace], trimmed"
+        );
+        assert_eq!(
+            workspace_root_from(&member.join("Cargo.toml")),
+            Some(dir.path().join("outer")),
+            "a caller may start from a manifest path"
         );
     }
 
@@ -140,7 +194,7 @@ mod tests {
         std::fs::create_dir_all(&inner).expect("dirs");
         std::fs::write(
             dir.path().join("a/Cargo.toml"),
-            "[package]\nworkspace = \"..\"\n# [workspace]\n",
+            "workspace = \"..\"\n# [workspace]\n",
         )
         .expect("manifest");
         let found = workspace_root_from(&inner);

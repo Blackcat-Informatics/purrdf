@@ -461,7 +461,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn vectors_dir() -> PathBuf {
-        purrdf_testkit::paths::workspace_root().join("vectors/openpgp")
+        purrdf_testkit::paths::workspace_root!().join("vectors/openpgp")
     }
 
     fn fixture(name: &str) -> String {

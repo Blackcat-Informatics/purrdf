@@ -97,7 +97,7 @@ fn own_relative_path() -> String {
         .join("no_purrdf_dev_vocabulary.rs")
         .canonicalize()
         .expect("this test's own source file resolves")
-        .strip_prefix(workspace_root())
+        .strip_prefix(workspace_root!())
         .expect("this test file lives under the workspace root")
         .to_string_lossy()
         .replace('\\', "/")
@@ -127,7 +127,7 @@ fn tracked_files(root: &Path) -> Vec<String> {
 
 #[test]
 fn no_branded_vocabulary_iri_is_minted_outside_the_closed_exemption_list() {
-    let root = workspace_root();
+    let root = workspace_root!();
     let files = tracked_files(&root);
     assert!(
         files.len() > 500,

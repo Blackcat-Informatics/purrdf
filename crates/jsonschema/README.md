@@ -80,7 +80,7 @@ shorthand.
 * **Formats**: an annotation by default; `Registry::set_format_assertion`
   (or a meta-schema declaring format assertion) checks every format the
   dialect defines in full — `hostname`, `idn-hostname` and `idn-email` through
-  IDNA2008 in `purrdf_iri::idna`, `ipv4`/`ipv6` and the address literals of
+  `IDNA2008` in `purrdf_iri::idna`, `ipv4`/`ipv6` and the address literals of
   `email`/`idn-email` through `purrdf_iri::host`.
 * **Output**: `flag`, `basic` and `detailed`.
 
@@ -154,6 +154,6 @@ the Unicode Character Database, so the crate's licence expression is
 apply alongside whichever of the three you choose. See
 [`LICENSING.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSING.md).
 
-The vendored meta-schemas under `tests/metaschemas/` and the vendored
-JSON-Schema-Test-Suite under `tests/suite/` are test data under their own
-licences (see `PROVENANCE.md`) and are not part of the published package.
+The shared meta-schemas are packaged by `purrdf-testkit` under BSD-3-Clause.
+The vendored JSON-Schema-Test-Suite under `tests/suite/` is test data under its
+own licence and is excluded from this package. See `PROVENANCE.md`.

@@ -516,7 +516,7 @@ fn f6_neighbour_a_new_shell_script_embedding_python_with_a_reason_is_accepted() 
 
 #[test]
 fn f7_f8_every_enforcement_point_runs_the_ratchet() {
-    let root = purrdf_testkit::paths::workspace_root();
+    let root = purrdf_testkit::paths::workspace_root!();
     let read = |relative: &str| {
         std::fs::read_to_string(root.join(relative))
             .unwrap_or_else(|error| panic!("{relative}: {error}"))

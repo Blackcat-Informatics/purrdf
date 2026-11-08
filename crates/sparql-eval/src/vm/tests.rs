@@ -612,7 +612,7 @@ fn assert_same(expr: &Expression, context: &str) {
 
 #[test]
 fn the_vm_matches_the_tree_walk_over_every_suite_expression() {
-    let root = purrdf_testkit::paths::workspace_root();
+    let root = purrdf_testkit::paths::workspace_root!();
     let suites = root.join("crates/sparql-conformance");
     let vectors = root.join("vectors");
     let mut files = Vec::new();
