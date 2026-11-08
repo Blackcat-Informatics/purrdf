@@ -12,8 +12,8 @@
 //!   phase buffers raw [`EventTermId`] → term
 //!   declarations and raw quad / reifier / annotation rows verbatim (resolving
 //!   nothing, so a forward reference is fine), and [`finish`](DatasetSink::finish)
-//!   resolves every id into a fresh [`RdfDatasetBuilder`] inner-first (depth-bounded
-//!   by [`purrdf_events::MAX_TERM_NESTING_DEPTH`]) and HARD-fails on any id still
+//!   resolves every id into a fresh [`RdfDatasetBuilder`] inner-first over admitted
+//!   heap continuations and HARD-fails on any id still
 //!   undeclared.
 //!
 //! * [`FrozenDatasetSource`] — an
@@ -28,15 +28,17 @@ use std::sync::Arc;
 use core::ops::ControlFlow;
 
 use purrdf_events::{
-    EventError, EventQuad, EventTerm, EventTermId, EventTriple, MAX_TERM_NESTING_DEPTH,
-    RdfEventSink, RdfEventSource, ScopeId, TextDirection,
+    EventError, EventQuad, EventTerm, EventTermId, EventTriple, RdfEventSink, RdfEventSource,
+    ScopeId, TextDirection,
 };
 
 use super::builder::RdfDatasetBuilder;
 use super::dataset::{RdfDataset, TermRef};
 use super::term::{BlankScope, TermId};
-use crate::{FastMap, FastSet, RdfLiteral};
-use purrdf_lex::allocation::{CapacityError, CapacitySpace, StorageError};
+#[cfg(test)]
+use crate::FastSet;
+use crate::{FastMap, RdfLiteral};
+use purrdf_lex::allocation::{CapacityError, CapacitySpace, Memory, Resident, StorageError};
 
 mod error;
 use error::IngestError;
@@ -59,7 +61,7 @@ fn event_storage_error(error: StorageError) -> EventError {
 /// A buffered term declaration, owned so it survives until phase-2 resolution. The
 /// borrowed [`EventTerm`] strings are copied into owned form on receipt, because the
 /// source's borrow does not outlive the `term` call.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 enum RawTerm {
     Iri(String),
     Blank {
@@ -72,7 +74,10 @@ enum RawTerm {
         language: Option<String>,
         direction: Option<TextDirection>,
     },
-    Triple(EventTriple),
+    Triple {
+        triple: EventTriple,
+        active: bool,
+    },
 }
 
 impl RawTerm {
@@ -95,7 +100,10 @@ impl RawTerm {
                 language: language.map(str::to_owned),
                 direction,
             },
-            EventTerm::Triple(triple) => Self::Triple(triple),
+            EventTerm::Triple(triple) => Self::Triple {
+                triple,
+                active: false,
+            },
         }
     }
 }
@@ -114,13 +122,6 @@ pub struct DatasetSink {
     /// Phase-2 memo: EventTermId → the interned [`TermId`]. A successfully resolved id
     /// is recorded here so later references hit the memo instead of re-resolving.
     remaps: FastMap<EventTermId, TermId>,
-    /// Phase-2 in-progress guard: the set of [`EventTermId`]s currently mid-resolution
-    /// (their nested components are still being resolved). Re-entering an id already in
-    /// this set is a cyclic triple term ([`EventError::CyclicTerm`]) — distinct from a
-    /// genuinely never-declared id ([`EventError::Unresolved`]). A raw term is removed
-    /// from `raw_terms` only AFTER its components resolve, so a self/transitive cycle
-    /// trips this guard rather than reading as a (removed-therefore-)missing term.
-    resolving: FastSet<EventTermId>,
     /// RAW quad rows, resolved in phase 2.
     raw_quads: Vec<EventQuad>,
     /// RAW reifier bindings `(reifier id, triple, graph)`, resolved in phase 2. The
@@ -164,7 +165,6 @@ impl DatasetSink {
             raw_terms: FastMap::default(),
             declared_in: FastMap::default(),
             remaps: FastMap::default(),
-            resolving: FastSet::default(),
             raw_quads: Vec::new(),
             raw_reifiers: Vec::new(),
             raw_annotations: Vec::new(),
@@ -202,47 +202,70 @@ impl DatasetSink {
     }
 
     /// Phase-2 primitive: resolve an [`EventTermId`] to its interned [`TermId`],
-    /// resolving (and interning) it on demand. Three failure modes are kept distinct:
-    /// a never-declared id is [`EventError::Unresolved`]; an over-deep but acyclic
-    /// triple-term chain is [`EventError::NestingDepthExceeded`]; and a self/transitive
-    /// cycle is [`EventError::CyclicTerm`], caught by the in-progress guard below.
-    fn resolve(&mut self, id: EventTermId, depth: usize) -> Result<TermId, EventError> {
-        if let Some(&existing) = self.remaps.get(&id) {
-            return Ok(existing);
+    /// resolving (and interning) it on demand. Never-declared ids remain
+    /// [`EventError::Unresolved`], cycles remain [`EventError::CyclicTerm`], and
+    /// continuation allocation failures retain their native storage identity.
+    fn resolve(&mut self, id: EventTermId) -> Result<TermId, EventError> {
+        use super::term_walk::{Nested, try_fold_nested_with_memory};
+        let result = try_fold_nested_with_memory(
+            id,
+            self,
+            |sink, id, _memory| {
+                if let Some(&existing) = sink.remaps.get(&id) {
+                    return Ok(Nested::Leaf(existing));
+                }
+                let raw = sink
+                    .raw_terms
+                    .get_mut(&id)
+                    .ok_or(EventError::Unresolved { id })?;
+                if let RawTerm::Triple {
+                    triple: EventTriple { s, p, o },
+                    active,
+                } = raw
+                {
+                    if *active {
+                        return Err(EventError::CyclicTerm { id });
+                    }
+                    *active = true;
+                    return Ok(Nested::Triple(*s, *p, *o));
+                }
+                let raw = sink
+                    .raw_terms
+                    .remove(&id)
+                    .ok_or(EventError::Unresolved { id })?;
+                let resolved = sink.intern_raw(raw)?;
+                sink.remaps.insert(id, resolved);
+                Ok(Nested::Leaf(resolved))
+            },
+            |sink, id, _s, _p, _o, _memory| {
+                let raw = sink
+                    .raw_terms
+                    .remove(&id)
+                    .ok_or(EventError::Unresolved { id })?;
+                let resolved = sink.intern_raw(raw)?;
+                sink.remaps.insert(id, resolved);
+                Ok(resolved)
+            },
+            |_sink, _answer, _memory| {},
+            |cause, _memory| event_storage_error(cause),
+            &mut Memory::new(&mut Resident),
+        );
+        // The buffered records already own their cycle colors, so lifting depth
+        // needs no second allocation for an active set. Failed folds retire every
+        // unfinished color after releasing their admitted continuation scratch.
+        if result.is_err() {
+            for raw in self.raw_terms.values_mut() {
+                if let RawTerm::Triple { active, .. } = raw {
+                    *active = false;
+                }
+            }
         }
-        if depth > MAX_TERM_NESTING_DEPTH {
-            return Err(EventError::NestingDepthExceeded { id });
-        }
-        // In-progress guard: if this id is already being resolved further up the stack,
-        // its components reference itself — a cyclic triple term. Report it as such
-        // rather than as a missing declaration.
-        if !self.resolving.insert(id) {
-            return Err(EventError::CyclicTerm { id });
-        }
-        // BORROW (clone) the raw term, leaving it in `raw_terms` until its components
-        // resolve, so a re-entry hits the in-progress guard above (not a missing term).
-        // A genuinely never-declared id lands here as `Unresolved`.
-        let Some(raw) = self.raw_terms.get(&id).cloned() else {
-            self.resolving.remove(&id);
-            return Err(EventError::Unresolved { id });
-        };
-        let resolved = self.intern_raw(raw, depth);
-        self.resolving.remove(&id);
-        let our_id = resolved?;
-        // Resolution succeeded: drop the raw term (it resolves at most once) and memo.
-        self.raw_terms.remove(&id);
-        self.remaps.insert(id, our_id);
-        Ok(our_id)
+        result
     }
 
-    /// Intern one already-located raw term, recursing inner-first for triple terms.
-    ///
-    /// The `builder` borrow is taken *inside* each arm that actually mutates it,
-    /// never across the whole `match`. This keeps the borrow structure explicit and
-    /// robust: the `Triple` arm needs `&mut self` (to recurse through `resolve`)
-    /// before it touches the builder, so a single match-wide `&mut self.builder`
-    /// would only compile thanks to NLL dropping it — fragile under refactor.
-    fn intern_raw(&mut self, raw: RawTerm, depth: usize) -> Result<TermId, EventError> {
+    /// Intern an already-located raw term. Triple components have been completed
+    /// by the shared fold before this interning boundary is reached.
+    fn intern_raw(&mut self, raw: RawTerm) -> Result<TermId, EventError> {
         let our_id = match raw {
             RawTerm::Iri(iri) => self.builder_mut().intern_iri(&iri),
             RawTerm::Blank { label, scope } => {
@@ -273,12 +296,22 @@ impl DatasetSink {
                 };
                 self.builder_mut().intern_literal(literal)
             }
-            RawTerm::Triple(EventTriple { s, p, o }) => {
-                // Resolve the components first (needs `&mut self`), THEN borrow the
-                // builder — the two borrows never overlap.
-                let s = self.resolve(s, depth + 1)?;
-                let p = self.resolve(p, depth + 1)?;
-                let o = self.resolve(o, depth + 1)?;
+            RawTerm::Triple {
+                triple: EventTriple { s, p, o },
+                ..
+            } => {
+                let s = *self
+                    .remaps
+                    .get(&s)
+                    .ok_or(EventError::Unresolved { id: s })?;
+                let p = *self
+                    .remaps
+                    .get(&p)
+                    .ok_or(EventError::Unresolved { id: p })?;
+                let o = *self
+                    .remaps
+                    .get(&o)
+                    .ok_or(EventError::Unresolved { id: o })?;
                 self.builder_mut().intern_triple(s, p, o)
             }
         };
@@ -410,17 +443,17 @@ impl RdfEventSink for DatasetSink {
         let mut ids: Vec<EventTermId> = self.raw_terms.keys().copied().collect();
         ids.sort_unstable();
         for id in ids {
-            self.resolve(id, 0)?;
+            self.resolve(id)?;
         }
 
         // Quads.
         let raw_quads = std::mem::take(&mut self.raw_quads);
         for q in raw_quads {
-            let s = self.resolve(q.s, 0)?;
-            let p = self.resolve(q.p, 0)?;
-            let o = self.resolve(q.o, 0)?;
+            let s = self.resolve(q.s)?;
+            let p = self.resolve(q.p)?;
+            let o = self.resolve(q.o)?;
             let g = match q.g {
-                Some(g) => Some(self.resolve(g, 0)?),
+                Some(g) => Some(self.resolve(g)?),
                 None => None,
             };
             self.builder
@@ -434,12 +467,12 @@ impl RdfEventSink for DatasetSink {
         // preserving the graph the binding was declared in.
         let raw_reifiers = std::mem::take(&mut self.raw_reifiers);
         for (reifier, EventTriple { s, p, o }, g) in raw_reifiers {
-            let reifier_id = self.resolve(reifier, 0)?;
-            let s = self.resolve(s, 0)?;
-            let p = self.resolve(p, 0)?;
-            let o = self.resolve(o, 0)?;
+            let reifier_id = self.resolve(reifier)?;
+            let s = self.resolve(s)?;
+            let p = self.resolve(p)?;
+            let o = self.resolve(o)?;
             let g = match g {
-                Some(g) => Some(self.resolve(g, 0)?),
+                Some(g) => Some(self.resolve(g)?),
                 None => None,
             };
             let builder = self.builder.as_mut().expect("builder present");
@@ -454,11 +487,11 @@ impl RdfEventSink for DatasetSink {
         // Annotations `(reifier, predicate, object, graph)`.
         let raw_annotations = std::mem::take(&mut self.raw_annotations);
         for (r, p, v, g) in raw_annotations {
-            let r = self.resolve(r, 0)?;
-            let p = self.resolve(p, 0)?;
-            let v = self.resolve(v, 0)?;
+            let r = self.resolve(r)?;
+            let p = self.resolve(p)?;
+            let v = self.resolve(v)?;
             let g = match g {
-                Some(g) => Some(self.resolve(g, 0)?),
+                Some(g) => Some(self.resolve(g)?),
                 None => None,
             };
             self.builder
@@ -472,7 +505,7 @@ impl RdfEventSink for DatasetSink {
         // interns exactly as it always did.
         let raw_named_graphs = std::mem::take(&mut self.raw_named_graphs);
         for g in raw_named_graphs {
-            let g = self.resolve(g, 0)?;
+            let g = self.resolve(g)?;
             self.builder
                 .as_mut()
                 .expect("builder present")
@@ -1116,39 +1149,79 @@ mod tests {
     }
 
     #[test]
-    fn nesting_bound_is_enforced() {
-        // Build a chain of triple terms nested past depth 16, terminating in real
-        // IRIs so the ONLY failure is the depth bound (not an unresolved leaf): the
-        // outermost triple's object is the next triple, recursing the full chain.
-        let mut sink = DatasetSink::new();
-        let s = EventTermId(0);
-        let p = EventTermId(1);
-        let leaf = EventTermId(2);
-        decl(&mut sink, s, EventTerm::Iri("http://example.org/s"));
-        decl(&mut sink, p, EventTerm::Iri("http://example.org/p"));
-        decl(&mut sink, leaf, EventTerm::Iri("http://example.org/leaf"));
-        // Chain: triple id (3+k) has object = triple id (3+k+1); the deepest triple's
-        // object is the real IRI `leaf`, so every leaf is declared. Depth of the chain
-        // exceeds MAX_TERM_NESTING_DEPTH, so resolving the head recurses past the bound.
-        let chain = MAX_TERM_NESTING_DEPTH + 4;
-        for k in 0..chain {
-            let this = EventTermId(3 + k as u64);
-            let object = if k + 1 < chain {
-                EventTermId(3 + k as u64 + 1)
-            } else {
-                leaf
-            };
-            decl(
-                &mut sink,
-                this,
-                EventTerm::Triple(EventTriple { s, p, o: object }),
-            );
-        }
-        let err = sink.finish().expect_err("nesting past 16 must fail");
-        assert!(
-            matches!(err, EventError::NestingDepthExceeded { .. }),
-            "deep nesting hits the depth bound, got {err:?}"
-        );
-        assert!(sink.dataset().is_none(), "no freeze on depth-bound failure");
+    fn deep_forward_terms_preserve_identity_and_original_refusals() {
+        purrdf_stack::on_stack(128 * 1024, || {
+            for chain in [16_u64, 17, 4096] {
+                let endings = if chain == 4096 { 3 } else { 1 };
+                for ending in 0..endings {
+                    let mut sink = DatasetSink::new();
+                    let s = EventTermId(0);
+                    let p = EventTermId(1);
+                    let leaf = EventTermId(2);
+                    let head = EventTermId(3);
+                    let missing = EventTermId(chain + 3);
+                    decl(&mut sink, s, EventTerm::Iri("http://example.org/s"));
+                    decl(&mut sink, p, EventTerm::Iri("http://example.org/p"));
+                    decl(&mut sink, leaf, EventTerm::Iri("http://example.org/leaf"));
+                    for k in 0..chain {
+                        let object = if k + 1 < chain {
+                            EventTermId(4 + k)
+                        } else {
+                            match ending {
+                                0 => leaf,
+                                1 => missing,
+                                _ => head,
+                            }
+                        };
+                        decl(
+                            &mut sink,
+                            EventTermId(3 + k),
+                            EventTerm::Triple(EventTriple { s, p, o: object }),
+                        );
+                    }
+                    let flow = sink
+                        .quad(EventQuad {
+                            s,
+                            p,
+                            o: head,
+                            g: None,
+                        })
+                        .expect("buffer row");
+                    assert!(flow.is_continue());
+                    let result = sink.finish();
+                    match ending {
+                        0 => {
+                            result.expect("finite depth is admitted");
+                            let dataset = sink.dataset().expect("frozen dataset");
+                            let row = dataset.quads().next().expect("one row");
+                            assert_eq!(
+                                row.o, sink.remaps[&head],
+                                "original event remap identifies the row"
+                            );
+                            let mut current = row.o;
+                            for _ in 0..chain {
+                                let TermRef::Triple { o, .. } = dataset.resolve(current) else {
+                                    panic!("the full nested chain is retained")
+                                };
+                                current = o;
+                            }
+                            assert_eq!(current, sink.remaps[&leaf]);
+                        }
+                        1 => assert_eq!(result, Err(EventError::Unresolved { id: missing })),
+                        _ => assert_eq!(result, Err(EventError::CyclicTerm { id: head })),
+                    }
+                    if ending != 0 {
+                        assert!(sink.dataset().is_none(), "failed resolution cannot freeze");
+                        assert!(
+                            sink.raw_terms
+                                .values()
+                                .all(|raw| !matches!(raw, RawTerm::Triple { active: true, .. })),
+                            "failure retires every active color"
+                        );
+                    }
+                }
+            }
+        })
+        .expect("small-stack event drive");
     }
 }

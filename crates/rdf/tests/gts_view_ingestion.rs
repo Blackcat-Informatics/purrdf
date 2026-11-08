@@ -649,8 +649,8 @@ fn native_snapshot_quoted_objects_preserve_structure_identity_and_scopes() {
     }
 }
 
-/// An external view can expose malformed cycles or excessive nesting even
-/// though the native dataset validator refuses to freeze those structures.
+/// An external view can expose malformed cycles that native freeze refuses,
+/// as well as finite chains whose depth is limited only by real storage.
 fn quoted_chain_view(levels: usize, cyclic: bool) -> ProbeView {
     let mut builder = RdfDatasetBuilder::new();
     let s = builder.intern_iri("https://example.org/s").unwrap();
@@ -676,37 +676,50 @@ fn quoted_chain_view(levels: usize, cyclic: bool) -> ProbeView {
 }
 
 #[test]
-fn quoted_term_cycles_and_excessive_nesting_refuse_but_the_boundary_ingests() {
-    let limit = purrdf_events::MAX_TERM_NESTING_DEPTH;
-    let mut valid = SnapshotBuilder::new();
-    let _ = valid
-        .add_view(&quoted_chain_view(limit, false))
-        .expect("the native maximum nesting remains admitted");
-    import_gts_events(&emitted(&valid)).expect("the boundary snapshot imports");
-    for (levels, cyclic, reason) in [(2, true, "cyclic"), (limit + 1, false, "nesting limit")] {
-        let mut refused = SnapshotBuilder::new();
-        let accepted = refused.snapshot_payload();
-        let error = refused
-            .add_view(&quoted_chain_view(levels, cyclic))
-            .expect_err("malformed quoted structure must fail closed");
-        let GtsIngestError::UnrepresentableTerm { term, .. } = &error else {
-            panic!("expected native term evidence")
-        };
-        let mut leaf = term;
-        let mut depth = 0;
-        while let OffendingTerm::Triple { o, .. } = leaf {
-            depth += 1;
-            leaf = o;
+fn quoted_term_cycles_refuse_while_deep_finite_terms_ingest() {
+    purrdf_stack::on_stack(128 * 1024, || {
+        for levels in [16, 17, 2048] {
+            let mut valid = SnapshotBuilder::new();
+            let _ = valid
+                .add_view(&quoted_chain_view(levels, false))
+                .expect("finite nesting is admitted");
+            let imported = import_gts_events(&emitted(&valid)).expect("deep snapshot imports");
+            let mut id = imported.dataset.quads().next().expect("ordinary row").o;
+            for _ in 0..levels {
+                let TermRef::Triple { o, .. } = imported.dataset.as_ref().resolve(id) else {
+                    panic!("complete nested term survives")
+                };
+                id = o;
+            }
+            assert_eq!(
+                imported.dataset.as_ref().resolve(id),
+                TermRef::Iri("https://example.org/leaf")
+            );
         }
-        assert!(depth <= 8);
-        if cyclic {
+        for levels in [2, 2048] {
+            let mut refused = SnapshotBuilder::new();
+            let accepted = refused.snapshot_payload();
+            let error = refused
+                .add_view(&quoted_chain_view(levels, true))
+                .expect_err("malformed quoted structure must fail closed");
+            let GtsIngestError::UnrepresentableTerm { term, .. } = &error else {
+                panic!("expected native term evidence")
+            };
+            let mut leaf = term;
+            let mut depth = 0;
+            while let OffendingTerm::Triple { o, .. } = leaf {
+                depth += 1;
+                leaf = o;
+            }
+            assert!(depth <= 8);
             assert!(matches!(leaf, OffendingTerm::Cutoff));
+            let message = error.to_string();
+            assert!(message.contains("cyclic"), "{message}");
+            assert_eq!(refused.snapshot_payload(), accepted);
+            assert!(refused.poison().is_some());
         }
-        let message = error.to_string();
-        assert!(message.contains(reason), "{message}");
-        assert_eq!(refused.snapshot_payload(), accepted);
-        assert!(refused.poison().is_some());
-    }
+    })
+    .expect("small-stack generic snapshot ingestion");
 }
 
 #[test]

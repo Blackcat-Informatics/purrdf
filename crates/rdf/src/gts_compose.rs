@@ -28,10 +28,10 @@ use std::collections::BTreeMap;
 use std::hash::BuildHasher;
 
 use purrdf_core::hash::table::HashTable;
-use purrdf_events::MAX_TERM_NESTING_DEPTH;
 use purrdf_gts::model::{AnnotationRow, ReifierRow, Term, TermKind, is_literal_direction};
 use purrdf_gts::wire::{canonical, digest_str};
 use purrdf_gts::writer::Writer;
+use purrdf_lex::allocation::{Admission, Memory, StorageError};
 use purrdf_lex::cbor::Value;
 use purrdf_lex::walk::WorkList;
 
@@ -214,6 +214,28 @@ struct TableMark {
     quads: usize,
     reifies: usize,
     annot: usize,
+}
+
+/// Exact requested-layout peak of one ingestion's temporary term traversal.
+/// Dictionary rows retain their existing owner; this account covers only the
+/// source-id memo and continuation spill, including replacement allocations.
+#[derive(Default)]
+struct TermScratchAccount {
+    peak: usize,
+}
+
+impl Admission for TermScratchAccount {
+    fn resize(&mut self, live_bytes: usize) -> Result<(), StorageError> {
+        self.peak = self.peak.max(live_bytes);
+        Ok(())
+    }
+}
+
+struct SourceTerms<I> {
+    /// None is active on the current chain; Some is its completed target id.
+    ids: crate::FastMap<I, Option<usize>>,
+    /// Original physical map charge, retained across removals and reuse.
+    bytes: usize,
 }
 
 /// An accumulating snapshot builder mirroring `gts_producer._Builder`.
@@ -654,11 +676,13 @@ impl SnapshotBuilder {
         let mut occupied_graphs: std::collections::BTreeSet<D::Id> =
             std::collections::BTreeSet::new();
         let mut row_error: Option<GtsIngestError> = None;
+        let mut term_scratch = 0;
         let drained = checkpointed_drain(view, |v| {
             match self.consume_rows(v, default_graph_name, scope) {
-                Ok((rows, graphs)) => {
+                Ok((rows, graphs, scratch)) => {
                     rows_consumed = rows;
                     occupied_graphs = graphs;
+                    term_scratch = scratch;
                 }
                 Err(err) => row_error = Some(err),
             }
@@ -688,7 +712,7 @@ impl SnapshotBuilder {
             rows_consumed,
             terms_interned: self.terms.len() - terms_before,
             declarations_omitted,
-            scratch_bytes: self.scratch_bytes(),
+            scratch_bytes: self.scratch_bytes().saturating_add(term_scratch),
         };
         self.totals.rows_consumed = self.totals.rows_consumed.saturating_add(rows_consumed);
         self.totals.terms_interned = self
@@ -724,75 +748,110 @@ impl SnapshotBuilder {
         view: &D,
         default_graph_name: Option<&str>,
         scope: Option<&str>,
-    ) -> Result<(usize, std::collections::BTreeSet<D::Id>), GtsIngestError> {
-        let mut rows_consumed = 0_usize;
-        let mut occupied_graphs: std::collections::BTreeSet<D::Id> =
-            std::collections::BTreeSet::new();
-        let default_gid = default_graph_name.map(|name| self.intern_iri(name));
+    ) -> Result<(usize, std::collections::BTreeSet<D::Id>, usize), GtsIngestError> {
+        let mut account = TermScratchAccount::default();
+        let mut memory = Memory::new(&mut account);
+        let mut terms = SourceTerms {
+            ids: crate::FastMap::default(),
+            bytes: 0,
+        };
+        let result = (|| {
+            let mut rows_consumed = 0_usize;
+            let mut occupied_graphs: std::collections::BTreeSet<D::Id> =
+                std::collections::BTreeSet::new();
+            let default_gid = default_graph_name.map(|name| self.intern_iri(name));
 
-        // Objects admit native quoted terms. Subject, predicate and graph slots
-        // retain their RDF 1.2 position restrictions; no refused row is omitted.
-        for quad in view.quads() {
-            let sid = self.intern_view_term(view, quad.s, scope, "quad subject")?;
-            let pid = self.intern_view_iri(view, quad.p, "quad predicate")?;
-            let oid = self.intern_view_object(view, quad.o, scope, "quad object", 0)?;
-            let gid = match quad.g {
-                None => default_gid,
-                Some(graph) => {
-                    occupied_graphs.insert(graph);
-                    Some(self.intern_view_term(view, graph, scope, "quad graph name")?)
-                }
-            };
-            self.quads.push((sid, pid, oid, gid));
-            rows_consumed += 1;
-        }
+            // Objects admit native quoted terms. Subject, predicate and graph slots
+            // retain their RDF 1.2 position restrictions; no refused row is omitted.
+            for quad in view.quads() {
+                let sid = self.intern_view_term(view, quad.s, scope, "quad subject")?;
+                let pid = self.intern_view_iri(view, quad.p, "quad predicate")?;
+                let oid = self.intern_view_object(
+                    view,
+                    quad.o,
+                    scope,
+                    "quad object",
+                    &mut terms,
+                    &mut memory,
+                )?;
+                let gid = match quad.g {
+                    None => default_gid,
+                    Some(graph) => {
+                        occupied_graphs.insert(graph);
+                        Some(self.intern_view_term(view, graph, scope, "quad graph name")?)
+                    }
+                };
+                self.quads.push((sid, pid, oid, gid));
+                rows_consumed += 1;
+            }
 
-        // The RDF 1.2 statement layer rides the NATIVE side-table accessors, never
-        // `quads()`: its virtual rows are excluded from the ordinary row partition,
-        // so reading them here neither double-ingests them nor routes a binding's
-        // quoted-triple object into an ordinary quad.
-        for binding in view.reifier_quads() {
-            let rid = self.intern_view_term(view, binding.s, scope, "reifier term")?;
-            let guard = view
-                .resolve(binding.o)
-                .map_err(GtsIngestError::source_read)?;
-            let TermRef::Triple { s, p, o } = guard.term() else {
-                return Err(GtsIngestError::UnrepresentableTerm {
-                    position: "reifier binding object",
-                    term: term_evidence(view, binding.o)?,
-                });
-            };
-            let qs = self.intern_view_term(view, s, scope, "reified subject")?;
-            let qp = self.intern_view_iri(view, p, "reified predicate")?;
-            // The binding's enclosing quoted triple consumes one nesting level.
-            let qo = self.intern_view_object(view, o, scope, "reified object", 1)?;
-            let gid = match binding.g {
-                None => default_gid,
-                Some(graph) => {
-                    occupied_graphs.insert(graph);
-                    Some(self.intern_view_term(view, graph, scope, "reifier graph name")?)
-                }
-            };
-            self.reifies.push((rid, (qs, qp, qo), gid));
-            rows_consumed += 1;
-        }
+            // The RDF 1.2 statement layer rides the NATIVE side-table accessors, never
+            // `quads()`: its virtual rows are excluded from the ordinary row partition,
+            // so reading them here neither double-ingests them nor routes a binding's
+            // quoted-triple object into an ordinary quad.
+            for binding in view.reifier_quads() {
+                let rid = self.intern_view_term(view, binding.s, scope, "reifier term")?;
+                let guard = view
+                    .resolve(binding.o)
+                    .map_err(GtsIngestError::source_read)?;
+                let TermRef::Triple { s, p, o } = guard.term() else {
+                    return Err(GtsIngestError::UnrepresentableTerm {
+                        position: "reifier binding object",
+                        term: term_evidence(view, binding.o)?,
+                    });
+                };
+                let qs = self.intern_view_term(view, s, scope, "reified subject")?;
+                let qp = self.intern_view_iri(view, p, "reified predicate")?;
+                let qo = self.intern_view_object(
+                    view,
+                    o,
+                    scope,
+                    "reified object",
+                    &mut terms,
+                    &mut memory,
+                )?;
+                let gid = match binding.g {
+                    None => default_gid,
+                    Some(graph) => {
+                        occupied_graphs.insert(graph);
+                        Some(self.intern_view_term(view, graph, scope, "reifier graph name")?)
+                    }
+                };
+                self.reifies.push((rid, (qs, qp, qo), gid));
+                rows_consumed += 1;
+            }
 
-        for annotation in view.annotation_quads() {
-            let rid = self.intern_view_term(view, annotation.s, scope, "annotation reifier")?;
-            let pid = self.intern_view_iri(view, annotation.p, "annotation predicate")?;
-            let oid = self.intern_view_object(view, annotation.o, scope, "annotation object", 0)?;
-            let gid = match annotation.g {
-                None => default_gid,
-                Some(graph) => {
-                    occupied_graphs.insert(graph);
-                    Some(self.intern_view_term(view, graph, scope, "annotation graph name")?)
-                }
-            };
-            self.annot.push((rid, pid, oid, gid));
-            rows_consumed += 1;
-        }
+            for annotation in view.annotation_quads() {
+                let rid = self.intern_view_term(view, annotation.s, scope, "annotation reifier")?;
+                let pid = self.intern_view_iri(view, annotation.p, "annotation predicate")?;
+                let oid = self.intern_view_object(
+                    view,
+                    annotation.o,
+                    scope,
+                    "annotation object",
+                    &mut terms,
+                    &mut memory,
+                )?;
+                let gid = match annotation.g {
+                    None => default_gid,
+                    Some(graph) => {
+                        occupied_graphs.insert(graph);
+                        Some(self.intern_view_term(view, graph, scope, "annotation graph name")?)
+                    }
+                };
+                self.annot.push((rid, pid, oid, gid));
+                rows_consumed += 1;
+            }
 
-        Ok((rows_consumed, occupied_graphs))
+            Ok((rows_consumed, occupied_graphs))
+        })();
+        drop(terms.ids);
+        let released = memory
+            .release_bytes(terms.bytes)
+            .map_err(GtsIngestError::from);
+        let (rows, graphs) = result?;
+        released?;
+        Ok((rows, graphs, memory.admission().peak))
     }
 
     /// Intern a scalar view term in a slot that does not admit quoted triples.
@@ -825,46 +884,67 @@ impl SnapshotBuilder {
         id: D::Id,
         scope: Option<&str>,
         position: &'static str,
-        outer_nesting: usize,
+        terms: &mut SourceTerms<D::Id>,
+        memory: &mut Memory<'_, TermScratchAccount>,
     ) -> Result<usize, GtsIngestError> {
-        // The native bound fits wholly inline: this traversal adds no heap
-        // scratch allocation to the ingestion report's capacity accounting.
-        let mut parents: WorkList<(D::Id, usize, usize), MAX_TERM_NESTING_DEPTH> = WorkList::new();
-        let mut current = id;
-        let mut object = loop {
-            let guard = view.resolve(current).map_err(GtsIngestError::source_read)?;
-            let term = guard.term();
-            let TermRef::Triple { s, p, o } = term else {
-                break self.intern_resolved_term(view, current, term, scope, position)?;
+        let mut parents: WorkList<(D::Id, usize, usize), 16> = WorkList::new();
+        let result = (|| {
+            let mut current = id;
+            let mut object = loop {
+                if let Some(&held) = terms.ids.get(&current) {
+                    match held {
+                        Some(id) => break id,
+                        None => {
+                            return Err(GtsIngestError::UnrepresentableTerm {
+                                position: "cyclic quoted triple",
+                                term: term_evidence(view, current)?,
+                            });
+                        }
+                    }
+                }
+                let guard = view.resolve(current).map_err(GtsIngestError::source_read)?;
+                let term = guard.term();
+                let required = terms
+                    .ids
+                    .len()
+                    .checked_add(1)
+                    .ok_or(StorageError::SizeOverflow)?;
+                purrdf_core::hash::reserve_map_with_retained_memory(
+                    &mut terms.ids,
+                    &mut terms.bytes,
+                    required,
+                    memory,
+                )?;
+                let TermRef::Triple { s, p, o } = term else {
+                    let id = self.intern_resolved_term(view, current, term, scope, position)?;
+                    terms.ids.insert(current, Some(id));
+                    break id;
+                };
+                terms.ids.insert(current, None);
+                let subject = view.resolve(s).map_err(GtsIngestError::source_read)?;
+                if !matches!(subject.term(), TermRef::Iri(_) | TermRef::Blank { .. }) {
+                    return Err(GtsIngestError::UnrepresentableTerm {
+                        position: "quoted triple subject",
+                        term: term_evidence(view, s)?,
+                    });
+                }
+                let sid =
+                    self.intern_resolved_term(view, s, subject.term(), scope, "quoted subject")?;
+                let pid = self.intern_view_iri(view, p, "quoted predicate")?;
+                parents.try_push_admitted((current, sid, pid), memory)?;
+                current = o;
             };
-            if parents.iter().any(|&(held, _, _)| held == current) {
-                return Err(GtsIngestError::UnrepresentableTerm {
-                    position: "cyclic quoted triple",
-                    term: term_evidence(view, current)?,
-                });
+            while let Some((source, s, p)) = parents.pop() {
+                object = self.intern_triple(s, p, object);
+                terms.ids.insert(source, Some(object));
             }
-            if parents.len() + outer_nesting == MAX_TERM_NESTING_DEPTH {
-                return Err(GtsIngestError::UnrepresentableTerm {
-                    position: "quoted triple exceeding the native nesting limit",
-                    term: term_evidence(view, current)?,
-                });
-            }
-            let subject = view.resolve(s).map_err(GtsIngestError::source_read)?;
-            if !matches!(subject.term(), TermRef::Iri(_) | TermRef::Blank { .. }) {
-                return Err(GtsIngestError::UnrepresentableTerm {
-                    position: "quoted triple subject",
-                    term: term_evidence(view, s)?,
-                });
-            }
-            let sid =
-                self.intern_resolved_term(view, s, subject.term(), scope, "quoted subject")?;
-            let pid = self.intern_view_iri(view, p, "quoted predicate")?;
-            parents.push((current, sid, pid));
-            current = o;
-        };
-        while let Some((_, s, p)) = parents.pop() {
-            object = self.intern_triple(s, p, object);
-        }
+            Ok(object)
+        })();
+        let released = parents
+            .release_admitted(memory)
+            .map_err(GtsIngestError::from);
+        let object = result?;
+        released?;
         Ok(object)
     }
 
@@ -1057,6 +1137,28 @@ impl SnapshotBuilder {
         let annot: Vec<AnnotationRow> = annot_set.into_iter().collect();
 
         (wire_terms, quads, reifies, annot)
+    }
+
+    /// Feed the legacy canonical writer from the same flat native interner.
+    /// Its graph spelling omits a triple term's unused value field; the frozen
+    /// snapshot payload retains its own existing empty-string spelling.
+    pub(crate) fn into_graph(self) -> Result<purrdf_gts::model::Graph, GtsIngestError> {
+        if let Some(poison) = &self.poison {
+            return Err(poison.clone());
+        }
+        let (mut terms, quads, reifiers, annotations) = self.canonical_tables();
+        for term in &mut terms {
+            if term.kind == TermKind::Triple {
+                term.value = None;
+            }
+        }
+        Ok(purrdf_gts::model::Graph {
+            terms,
+            quads,
+            reifiers,
+            annotations,
+            ..purrdf_gts::model::Graph::default()
+        })
     }
 
     /// The canonical `snapshot` frame payload (`_Builder._snapshot_payload`).

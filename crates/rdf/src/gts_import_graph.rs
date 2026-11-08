@@ -28,7 +28,8 @@ use crate::{
     BlankScope, GtsBundle, RdfDatasetBuilder, RdfDiagnostic, RdfEnvelope, RdfLiteral, RdfLocation,
     TermId, TermRef,
 };
-use purrdf_events::MAX_TERM_NESTING_DEPTH;
+use purrdf_lex::allocation::{Memory, Resident, StorageError};
+use purrdf_lex::walk::WorkList;
 
 /// The single, flattened blank-node scope every folded blank is interned under.
 ///
@@ -48,43 +49,99 @@ struct GraphInterner {
     /// Reifier-id → `(s, p, o)` component term ids.
     reifier_bindings: crate::FastMap<usize, (usize, usize, usize)>,
     /// GTS term id → interned [`TermId`]. A term interns at most once.
-    remap: crate::FastMap<usize, TermId>,
+    remap: crate::FastMap<usize, Option<TermId>>,
+    remap_bytes: usize,
+}
+
+#[derive(Clone, Copy)]
+enum InternStep {
+    Visit(usize),
+    Finish(usize),
 }
 
 impl GraphInterner {
     /// Intern the term at `gts_id` (once), returning its [`TermId`]. Leaf kinds MOVE
     /// their owned strings out of `self.terms[gts_id]`; a quoted-triple term resolves
-    /// its `(s, p, o)` recursively, depth-bounded. Idempotent through the remap.
-    fn intern(&mut self, gts_id: usize, depth: usize) -> Result<TermId, RdfDiagnostic> {
-        if let Some(&id) = self.remap.get(&gts_id) {
+    /// its `(s, p, o)` over admitted continuations. Idempotent through the remap;
+    /// a vacant remap answer marks an active node and preserves cycle refusal.
+    fn intern(
+        &mut self,
+        gts_id: usize,
+        memory: &mut Memory<'_, Resident>,
+    ) -> Result<TermId, RdfDiagnostic> {
+        if let Some(&Some(id)) = self.remap.get(&gts_id) {
             return Ok(id);
         }
-        if depth > MAX_TERM_NESTING_DEPTH {
-            return Err(RdfDiagnostic::error(
-                "gts-term-nesting-limit",
-                "GTS term nesting depth limit exceeded",
-            )
-            .with_location(self.location(gts_id)));
-        }
-        let kind = self
-            .terms
-            .get(gts_id)
-            .ok_or_else(|| {
-                RdfDiagnostic::error(
-                    "gts-term-out-of-range",
-                    format!("GTS term id {gts_id} is out of range"),
-                )
-                .with_location(self.location(gts_id))
-            })?
-            .kind;
-
-        let id = match kind {
-            TermKind::Iri => self.intern_iri(gts_id)?,
-            TermKind::Bnode => self.intern_blank(gts_id)?,
-            TermKind::Literal => self.intern_literal(gts_id, depth)?,
-            TermKind::Triple => self.intern_triple(gts_id, depth)?,
-        };
-        self.remap.insert(gts_id, id);
+        let mut pending: WorkList<InternStep, 32> = WorkList::new();
+        let result = (|| {
+            pending.try_push_admitted(InternStep::Visit(gts_id), memory)?;
+            while let Some(step) = pending.pop() {
+                match step {
+                    InternStep::Visit(id) => {
+                        match self.remap.get(&id) {
+                            Some(Some(_)) => continue,
+                            Some(None) => return Err(RdfDiagnostic::error(
+                                "gts-self-reaching-term",
+                                format!("GTS term {id} resolves through itself, so no walk of its components can terminate"),
+                            ).with_location(self.location(id))),
+                            None => {},
+                        }
+                        let term = self.terms.get(id).ok_or_else(|| {
+                            RdfDiagnostic::error(
+                                "gts-term-out-of-range",
+                                format!("GTS term id {id} is out of range"),
+                            )
+                            .with_location(self.location(id))
+                        })?;
+                        let kind = term.kind;
+                        let datatype = term.datatype;
+                        let components = if kind == TermKind::Triple {
+                            Some(self.triple_components(id)?)
+                        } else {
+                            None
+                        };
+                        let required = self
+                            .remap
+                            .len()
+                            .checked_add(1)
+                            .ok_or(StorageError::SizeOverflow)?;
+                        purrdf_core::hash::reserve_map_with_retained_memory(
+                            &mut self.remap,
+                            &mut self.remap_bytes,
+                            required,
+                            memory,
+                        )?;
+                        self.remap.insert(id, None);
+                        pending.try_push_admitted(InternStep::Finish(id), memory)?;
+                        if let Some((s, p, o)) = components {
+                            pending.try_push_admitted(InternStep::Visit(o), memory)?;
+                            pending.try_push_admitted(InternStep::Visit(p), memory)?;
+                            pending.try_push_admitted(InternStep::Visit(s), memory)?;
+                        } else if kind == TermKind::Literal
+                            && let Some(datatype) = datatype
+                        {
+                            pending.try_push_admitted(InternStep::Visit(datatype), memory)?;
+                        }
+                    }
+                    InternStep::Finish(id) => {
+                        let resolved = match self.terms[id].kind {
+                            TermKind::Iri => self.intern_iri(id)?,
+                            TermKind::Bnode => self.intern_blank(id)?,
+                            TermKind::Literal => self.intern_literal(id)?,
+                            TermKind::Triple => self.intern_triple(id)?,
+                        };
+                        self.remap.insert(id, Some(resolved));
+                    }
+                }
+            }
+            // Every scheduled root has completed before the work list empties.
+            Ok(self.remap[&gts_id].expect("root completed its interning continuation"))
+        })();
+        let released = pending
+            .release_admitted(memory)
+            .map_err(RdfDiagnostic::from);
+        let id = result?;
+        released?;
         Ok(id)
     }
 
@@ -108,12 +165,12 @@ impl GraphInterner {
         Ok(self.builder.intern_blank(&label, FLATTENED_BLANK_SCOPE)?)
     }
 
-    fn intern_literal(&mut self, gts_id: usize, depth: usize) -> Result<TermId, RdfDiagnostic> {
+    fn intern_literal(&mut self, gts_id: usize) -> Result<TermId, RdfDiagnostic> {
         // The datatype is a term id; resolve (and intern) it first, then read its
         // interned IRI string. This applies the SAME datatype-must-be-IRI rule the
         // shared resolver enforces.
         let datatype = match self.terms[gts_id].datatype {
-            Some(dt_id) => Some(self.resolve_datatype_iri(dt_id, depth + 1)?),
+            Some(dt_id) => Some(self.resolve_datatype_iri(dt_id)?),
             None => None,
         };
         // MOVE the lexical form and language tag out.
@@ -144,9 +201,9 @@ impl GraphInterner {
     /// and since `rdf:reifies` is not functional, that id may bind several
     /// triples, of which such a term can only mean the first (the GTS reader
     /// raises `ConflictingReifier` for exactly that shape).
-    fn intern_triple(&mut self, gts_id: usize, depth: usize) -> Result<TermId, RdfDiagnostic> {
-        let (s, p, o) = match (self.terms[gts_id].triple, self.terms[gts_id].reifier) {
-            (Some(components), _) => components,
+    fn triple_components(&self, gts_id: usize) -> Result<(usize, usize, usize), RdfDiagnostic> {
+        match (self.terms[gts_id].triple, self.terms[gts_id].reifier) {
+            (Some(components), _) => Ok(components),
             (None, Some(reifier_id)) => {
                 let Some(&components) = self.reifier_bindings.get(&reifier_id) else {
                     return Err(RdfDiagnostic::error(
@@ -155,30 +212,30 @@ impl GraphInterner {
                     )
                     .with_location(self.location(gts_id).with_gts_reifier(reifier_id as u64)));
                 };
-                components
+                Ok(components)
             }
-            (None, None) => {
-                return Err(RdfDiagnostic::error(
-                    "gts-unbound-triple-term",
-                    "GTS triple term names neither its own components nor a reifier",
-                )
-                .with_location(self.location(gts_id)));
-            }
-        };
-        let s = self.intern(s, depth + 1)?;
-        let p = self.intern(p, depth + 1)?;
-        let o = self.intern(o, depth + 1)?;
+            (None, None) => Err(RdfDiagnostic::error(
+                "gts-unbound-triple-term",
+                "GTS triple term names neither its own components nor a reifier",
+            )
+            .with_location(self.location(gts_id))),
+        }
+    }
+
+    fn intern_triple(&mut self, gts_id: usize) -> Result<TermId, RdfDiagnostic> {
+        let (s, p, o) = self.triple_components(gts_id)?;
+        // The Visit continuation completed all three dependencies first.
+        let s = self.remap[&s].expect("subject dependency completed");
+        let p = self.remap[&p].expect("predicate dependency completed");
+        let o = self.remap[&o].expect("object dependency completed");
         Ok(self.builder.intern_triple(s, p, o)?)
     }
 
     /// Intern a literal datatype term (which MUST resolve to an IRI) and return its
     /// IRI string for the literal interner.
-    fn resolve_datatype_iri(
-        &mut self,
-        dt_id: usize,
-        depth: usize,
-    ) -> Result<String, RdfDiagnostic> {
-        let id = self.intern(dt_id, depth)?;
+    fn resolve_datatype_iri(&self, dt_id: usize) -> Result<String, RdfDiagnostic> {
+        // The literal's Visit continuation completed its datatype first.
+        let id = self.remap[&dt_id].expect("datatype dependency completed");
         match self.builder.resolve(id) {
             TermRef::Iri(iri) => Ok(iri.to_string()),
             other => Err(RdfDiagnostic::error(
@@ -196,6 +253,7 @@ impl GraphInterner {
         gts_id: usize,
         role: &str,
         location: &RdfLocation,
+        memory: &mut Memory<'_, Resident>,
     ) -> Result<TermId, RdfDiagnostic> {
         if gts_id >= self.terms.len() {
             return Err(RdfDiagnostic::error(
@@ -204,7 +262,7 @@ impl GraphInterner {
             )
             .with_location(location.clone().with_gts_term(gts_id as u64)));
         }
-        self.intern(gts_id, 0)
+        self.intern(gts_id, memory)
     }
 
     fn location(&self, gts_id: usize) -> RdfLocation {
@@ -223,6 +281,13 @@ impl GraphInterner {
 /// Malformed structure (dangling ids, non-IRI predicate/datatype, unbound or cyclic
 /// quoted-triple terms) hard-fails as `Err`.
 pub fn import_gts_graph(graph: Graph) -> Result<GtsBundle, RdfDiagnostic> {
+    Memory::new(&mut Resident).try_scope(|memory| import_graph_with_memory(graph, memory))
+}
+
+fn import_graph_with_memory(
+    graph: Graph,
+    memory: &mut Memory<'_, Resident>,
+) -> Result<GtsBundle, RdfDiagnostic> {
     // Read the envelope/lookaside from the SAME graph fields `gts.rs` reads, BEFORE
     // moving term strings out (it touches only meta/segment/blob/etc., never the
     // term `value`/`lang` we move).
@@ -256,22 +321,23 @@ pub fn import_gts_graph(graph: Graph) -> Result<GtsBundle, RdfDiagnostic> {
         terms,
         reifier_bindings,
         remap: crate::FastMap::default(),
+        remap_bytes: 0,
     };
 
     // Intern every term up front (idempotent through the remap), so leaf strings are
     // moved out in one forward sweep and triple terms resolve their components.
     for gts_id in 0..interner.terms.len() {
-        interner.intern(gts_id, 0)?;
+        interner.intern(gts_id, memory)?;
     }
 
     // Quads, resolved through the remap; a dangling id hard-fails.
     for (index, (s, p, o, g)) in quads.iter().copied().enumerate() {
         let location = RdfLocation::logical("gts:quad").with_gts_quad(index as u64);
-        let s = interner.resolve_row_term(s, "quad subject", &location)?;
-        let p = interner.resolve_row_term(p, "quad predicate", &location)?;
-        let o = interner.resolve_row_term(o, "quad object", &location)?;
+        let s = interner.resolve_row_term(s, "quad subject", &location, memory)?;
+        let p = interner.resolve_row_term(p, "quad predicate", &location, memory)?;
+        let o = interner.resolve_row_term(o, "quad object", &location, memory)?;
         let g = match g {
-            Some(g) => Some(interner.resolve_row_term(g, "quad graph name", &location)?),
+            Some(g) => Some(interner.resolve_row_term(g, "quad graph name", &location, memory)?),
             None => None,
         };
         let handle = interner.builder.push_quad_with_handle(s, p, o, g)?;
@@ -282,12 +348,12 @@ pub fn import_gts_graph(graph: Graph) -> Result<GtsBundle, RdfDiagnostic> {
     // the reifier declaration's own named graph (`None` = default graph).
     for (reifier_id, (s, p, o), graph) in reifiers.iter().copied() {
         let location = RdfLocation::logical("gts:reifier").with_gts_reifier(reifier_id as u64);
-        let reifier = interner.resolve_row_term(reifier_id, "reifier", &location)?;
-        let s = interner.resolve_row_term(s, "reified subject", &location)?;
-        let p = interner.resolve_row_term(p, "reified predicate", &location)?;
-        let o = interner.resolve_row_term(o, "reified object", &location)?;
+        let reifier = interner.resolve_row_term(reifier_id, "reifier", &location, memory)?;
+        let s = interner.resolve_row_term(s, "reified subject", &location, memory)?;
+        let p = interner.resolve_row_term(p, "reified predicate", &location, memory)?;
+        let o = interner.resolve_row_term(o, "reified object", &location, memory)?;
         let g = graph
-            .map(|g| interner.resolve_row_term(g, "reifier graph", &location))
+            .map(|g| interner.resolve_row_term(g, "reifier graph", &location, memory))
             .transpose()?;
         let triple = interner.builder.intern_triple(s, p, o)?;
         interner.builder.push_reifier_in_graph(reifier, triple, g)?;
@@ -296,16 +362,24 @@ pub fn import_gts_graph(graph: Graph) -> Result<GtsBundle, RdfDiagnostic> {
     // Annotations `(reifier, predicate, value, graph?)`.
     for (r, p, v, graph) in annotations.iter().copied() {
         let location = RdfLocation::logical("gts:annotation").with_gts_reifier(r as u64);
-        let r = interner.resolve_row_term(r, "annotation reifier", &location)?;
-        let p = interner.resolve_row_term(p, "annotation predicate", &location)?;
-        let v = interner.resolve_row_term(v, "annotation object", &location)?;
+        let r = interner.resolve_row_term(r, "annotation reifier", &location, memory)?;
+        let p = interner.resolve_row_term(p, "annotation predicate", &location, memory)?;
+        let v = interner.resolve_row_term(v, "annotation object", &location, memory)?;
         let g = graph
-            .map(|g| interner.resolve_row_term(g, "annotation graph", &location))
+            .map(|g| interner.resolve_row_term(g, "annotation graph", &location, memory))
             .transpose()?;
         interner.builder.push_annotation_in_graph(r, p, v, g)?;
     }
 
-    let dataset = interner.builder.freeze()?;
+    let GraphInterner {
+        builder,
+        remap,
+        remap_bytes,
+        ..
+    } = interner;
+    drop(remap);
+    memory.release_bytes(remap_bytes)?;
+    let dataset = builder.freeze()?;
     Ok(GtsBundle::new(dataset, RdfEnvelope::new(lookaside)))
 }
 
@@ -484,10 +558,9 @@ mod tests {
         }
     }
 
-    /// A cyclic quoted-triple term (a triple that nests itself) hits the depth bound
-    /// and hard-fails rather than recursing forever.
+    /// A cyclic quoted-triple term remains a hard failure during iterative resolution.
     #[test]
-    fn cyclic_triple_term_hits_nesting_limit() {
+    fn cyclic_triple_term_retains_explicit_cycle_refusal() {
         let mut graph = Graph::default();
         // Triple term 0 bound to reifier 0, whose object is term 0 itself.
         graph.terms.push(GtsTerm {
@@ -501,8 +574,8 @@ mod tests {
         }); // 0
         graph.terms.push(iri_term("http://example.org/p")); // 1
         graph.reifiers.push((0, (1, 1, 0), None));
-        let err = import_gts_graph(graph).expect_err("cycle must hit nesting limit");
-        assert_eq!(err.code, "gts-term-nesting-limit");
+        let err = import_gts_graph(graph).expect_err("cycle must fail");
+        assert_eq!(err.code, "gts-self-reaching-term");
     }
 
     /// A literal carries its lexical form and (lowercased) language through the move.

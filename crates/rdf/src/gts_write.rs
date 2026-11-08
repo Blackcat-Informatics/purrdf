@@ -7,24 +7,19 @@
 //! [`purrdf_gts::writer::Writer`] to canonicalise it. All interning, term remapping,
 //! and frame authoring is delegated to `purrdf-gts`.
 //!
-//! The writer consumes the IR directly: it reads the
-//! frozen dataset's quad/reifier/annotation tables and resolves each row to the
-//! owned model at the boundary, then interns into the GTS term table. Out-of-band material
+//! The writer consumes native identifiers through the shared snapshot interner,
+//! retaining flat component keys for quoted terms. Out-of-band material
 //! (GTS metadata, suppressions) is passed in explicitly as an [`RdfLookaside`]
 //! (it lives in the bundle envelope, not the hot graph).
 
 use purrdf_gts::codec::CodecError;
-use purrdf_gts::model::{Graph, Suppression, Term, TermKind};
+use purrdf_gts::model::{Graph, Suppression, TermKind};
 use purrdf_gts::writer::Writer;
 use purrdf_lex::cbor::Value;
 
 use crate::ir::RdfDataset;
-use crate::{
-    RdfAnnotation, RdfDiagnostic, RdfLiteral, RdfLookaside, RdfMetadataValue, RdfQuad, RdfReifier,
-    RdfTerm,
-};
+use crate::{RdfDiagnostic, RdfLookaside, RdfMetadataValue};
 
-use purrdf_events::MAX_TERM_NESTING_DEPTH;
 /// Convert a frozen [`RdfDataset`] into a canonical GTS [`Writer`].
 ///
 /// `lookaside` carries the out-of-band envelope material (GTS metadata,
@@ -37,69 +32,12 @@ pub fn to_writer(
     lookaside: &RdfLookaside,
     profile: &str,
 ) -> Result<Writer, RdfDiagnostic> {
-    let mut graph = Graph::default();
-
-    // First pass: resolve the frozen IR tables to the owned model in stable
-    // frozen order so terms intern deterministically and reifier bindings are
-    // resolved before quad terms reference them. The resolution is infallible
-    // (the dataset is already validated at freeze) and reuses the same
-    // owned-boundary helpers the IR exposes for legacy consumers.
-    let quads: Vec<RdfQuad> = dataset.owned_quads().collect();
-    let reifiers: Vec<RdfReifier> = dataset.owned_reifiers().collect();
-    let annotations: Vec<RdfAnnotation> = dataset.owned_annotations().collect();
-
-    let mut state = InternState::new();
-
-    // Explicit reifiers take precedence over auto-generated blank-node
-    // reifiers for the same triple content.
-    for reifier in &reifiers {
-        bind_explicit_reifier(&mut state, reifier)?;
-    }
-
-    for quad in &quads {
-        let s = intern_term(&mut state, &quad.subject)?;
-        let p = intern_iri(&mut state, &quad.predicate)?;
-        let o = intern_term(&mut state, &quad.object)?;
-        let g = quad
-            .graph_name
-            .as_ref()
-            .map(|g| intern_graph_name(&mut state, g))
-            .transpose()?;
-        graph.quads.push((s, p, o, g));
-    }
-
-    for reifier in &reifiers {
-        let rid = intern_term(&mut state, &reifier.reifier)?;
-        let s = intern_term(&mut state, &reifier.statement.subject)?;
-        let p = intern_iri(&mut state, &reifier.statement.predicate)?;
-        let o = intern_term(&mut state, &reifier.statement.object)?;
-        // purrdf-gts row-array `(rid, (s,p,o), graph?)`: the graph slot records the
-        // named graph the reifier was declared in (`None` = default graph), so a
-        // reifier inside a TriG `GRAPH g { … }` block round-trips through GTS.
-        let g = reifier
-            .graph
-            .as_ref()
-            .map(|g| intern_graph_name(&mut state, g))
-            .transpose()?;
-        graph.reifiers.push((rid, (s, p, o), g));
-    }
-
-    for annotation in &annotations {
-        let r = intern_term(&mut state, &annotation.reifier)?;
-        let p = intern_iri(&mut state, &annotation.predicate)?;
-        let v = intern_term(&mut state, &annotation.object)?;
-        // Row-array `(reifier, predicate, value, graph?)`; the graph slot mirrors the
-        // reifier row above.
-        let g = annotation
-            .graph
-            .as_ref()
-            .map(|g| intern_graph_name(&mut state, g))
-            .transpose()?;
-        graph.annotations.push((r, p, v, g));
-    }
-
-    apply_lookaside(&state, &mut graph, lookaside.clone());
-    graph.terms = state.terms;
+    let mut snapshot = crate::gts_compose::SnapshotBuilder::default();
+    snapshot
+        .add_dataset(dataset)
+        .map_err(ingest_error_to_diagnostic)?;
+    let mut graph = snapshot.into_graph().map_err(ingest_error_to_diagnostic)?;
+    apply_lookaside(dataset, &mut graph, lookaside.clone())?;
 
     Writer::deterministic(&graph, profile).map_err(|err| codec_error_to_diagnostic(&err))
 }
@@ -114,203 +52,24 @@ pub fn to_gts(
     to_writer(dataset, lookaside, profile).map(Writer::into_bytes)
 }
 
-struct InternState {
-    terms: Vec<Term>,
-    index: crate::FastMap<RdfTerm, usize>,
+fn ingest_error_to_diagnostic(error: crate::gts_compose::GtsIngestError) -> RdfDiagnostic {
+    use purrdf_lex::allocation::{Memory, Resident, retain_native_cause};
+    let result = (|| {
+        let cause = retain_native_cause(error)?;
+        RdfDiagnostic::error(
+            "gts-writer-ingest",
+            "native dataset ingestion into GTS failed",
+        )
+        .with_native_cause(cause, &mut Memory::new(&mut Resident))
+    })();
+    result.unwrap_or_else(RdfDiagnostic::from)
 }
 
-impl InternState {
-    fn new() -> Self {
-        Self {
-            terms: Vec::new(),
-            index: crate::FastMap::default(),
-        }
-    }
-}
-
-/// Intern an explicit reifier declaration's terms and enforce the ONE structural
-/// rule RDF 1.2 puts on a reifier: it is an IRI or a blank node.
-///
-/// It deliberately records no reifier↔triple association: `rdf:reifies` is not
-/// functional, so one reifier id may bind several triples and one triple may
-/// have several reifiers. Every declaration is emitted as its own
-/// `graph.reifiers` row, and a quoted-triple TERM carries its own components
-/// (`Term::triple`) rather than borrowing some reifier's binding.
-fn bind_explicit_reifier(
-    state: &mut InternState,
-    reifier: &RdfReifier,
+fn apply_lookaside(
+    dataset: &RdfDataset,
+    graph: &mut Graph,
+    lookaside: RdfLookaside,
 ) -> Result<(), RdfDiagnostic> {
-    let rid = intern_term(state, &reifier.reifier)?;
-    if !is_iri_or_bnode(&state.terms[rid]) {
-        return Err(RdfDiagnostic::error(
-            "rdf-reifier-not-node",
-            "RDF 1.2 reifier must be an IRI or blank node",
-        ));
-    }
-    intern_term(state, &reifier.statement.subject)?;
-    intern_iri(state, &reifier.statement.predicate)?;
-    intern_term(state, &reifier.statement.object)?;
-    Ok(())
-}
-
-fn intern_iri(state: &mut InternState, iri: &str) -> Result<usize, RdfDiagnostic> {
-    intern_term(state, &RdfTerm::Iri(iri.to_owned()))
-}
-
-fn intern_graph_name(state: &mut InternState, term: &RdfTerm) -> Result<usize, RdfDiagnostic> {
-    if !is_iri_or_bnode_term(term) {
-        return Err(RdfDiagnostic::error(
-            "rdf-graph-name-not-node",
-            format!(
-                "named graph name must be an IRI or blank node, got {:?}",
-                term.kind()
-            ),
-        ));
-    }
-    intern_term(state, term)
-}
-
-fn intern_term(state: &mut InternState, term: &RdfTerm) -> Result<usize, RdfDiagnostic> {
-    intern_term_depth(state, term, 0)
-}
-
-fn intern_term_depth(
-    state: &mut InternState,
-    term: &RdfTerm,
-    depth: usize,
-) -> Result<usize, RdfDiagnostic> {
-    if depth > MAX_TERM_NESTING_DEPTH {
-        return Err(RdfDiagnostic::error(
-            "rdf-term-nesting-limit",
-            "RDF term nesting depth limit exceeded while building GTS graph",
-        ));
-    }
-    if let Some(id) = state.index.get(term) {
-        return Ok(*id);
-    }
-
-    match term {
-        RdfTerm::Iri(iri) => {
-            let id = push_term(
-                state,
-                term,
-                Term {
-                    kind: TermKind::Iri,
-                    value: Some(iri.clone()),
-                    datatype: None,
-                    lang: None,
-                    direction: None,
-                    reifier: None,
-                    triple: None,
-                },
-            );
-            Ok(id)
-        }
-        RdfTerm::BlankNode(label) => {
-            let id = push_term(
-                state,
-                term,
-                Term {
-                    kind: TermKind::Bnode,
-                    value: Some(label.clone()),
-                    datatype: None,
-                    lang: None,
-                    direction: None,
-                    reifier: None,
-                    triple: None,
-                },
-            );
-            Ok(id)
-        }
-        RdfTerm::Literal(literal) => intern_literal(state, literal, depth),
-        RdfTerm::Triple(triple) => intern_triple_term(state, triple, depth),
-    }
-}
-
-fn intern_literal(
-    state: &mut InternState,
-    literal: &RdfLiteral,
-    depth: usize,
-) -> Result<usize, RdfDiagnostic> {
-    let datatype = if let Some(dt) = &literal.datatype {
-        Some(intern_term_depth(
-            state,
-            &RdfTerm::Iri(dt.clone()),
-            depth + 1,
-        )?)
-    } else {
-        None
-    };
-
-    // RDF 1.2 literal base direction now round-trips through GTS:
-    // map the IR's RdfTextDirection onto the GTS Term.direction string. Lexical
-    // form, datatype, language tag, and direction are all preserved.
-    let lang = literal.language.clone();
-    let direction = literal.direction.map(|d| d.as_str().to_string());
-
-    let id = push_term(
-        state,
-        &RdfTerm::Literal(literal.clone()),
-        Term {
-            kind: TermKind::Literal,
-            value: Some(literal.lexical_form.clone()),
-            datatype,
-            lang,
-            direction,
-            reifier: None,
-            triple: None,
-        },
-    );
-    Ok(id)
-}
-
-fn intern_triple_term(
-    state: &mut InternState,
-    triple: &crate::RdfTriple,
-    depth: usize,
-) -> Result<usize, RdfDiagnostic> {
-    let s = intern_term_depth(state, &triple.subject, depth + 1)?;
-    let p = intern_iri(state, &triple.predicate)?;
-    let o = intern_term_depth(state, &triple.object, depth + 1)?;
-
-    // The quoted triple names its OWN components. It borrows no reifier: a
-    // triple term is a term, not a statement, and the reifier id it used to be
-    // routed through can bind several different triples — which is exactly how
-    // a multi-binding reifier used to collapse two distinct triple terms into
-    // one. No anonymous reifier is fabricated either, so the term table carries
-    // no blank node the dataset never contained.
-    let id = push_term(
-        state,
-        &RdfTerm::Triple(Box::new(triple.clone())),
-        Term {
-            kind: TermKind::Triple,
-            value: None,
-            datatype: None,
-            lang: None,
-            direction: None,
-            reifier: None,
-            triple: Some((s, p, o)),
-        },
-    );
-    Ok(id)
-}
-
-fn push_term(state: &mut InternState, key: &RdfTerm, term: Term) -> usize {
-    let id = state.terms.len();
-    state.terms.push(term);
-    state.index.insert(key.clone(), id);
-    id
-}
-
-fn is_iri_or_bnode(term: &Term) -> bool {
-    matches!(term.kind, TermKind::Iri | TermKind::Bnode)
-}
-
-fn is_iri_or_bnode_term(term: &RdfTerm) -> bool {
-    matches!(term, RdfTerm::Iri(_) | RdfTerm::BlankNode(_))
-}
-
-fn apply_lookaside(state: &InternState, graph: &mut Graph, lookaside: RdfLookaside) {
     for entry in lookaside.metadata {
         let key = entry.key;
         let value = metadata_value_to_cbor(&entry.value);
@@ -318,10 +77,11 @@ fn apply_lookaside(state: &InternState, graph: &mut Graph, lookaside: RdfLookasi
     }
 
     for suppression in lookaside.suppressions {
-        let by = suppression
-            .by
-            .as_deref()
-            .and_then(|label| term_id_by_display(state, label));
+        let by = match suppression.by.as_deref() {
+            Some(label) => legacy_display_kind(dataset, label)?
+                .and_then(|kind| term_id_by_display(graph, label, kind)),
+            None => None,
+        };
         graph.suppressions.push(Suppression {
             targets: suppression
                 .targets
@@ -344,13 +104,103 @@ fn apply_lookaside(state: &InternState, graph: &mut Graph, lookaside: RdfLookasi
     // through `graph.blobs` is blocked until purrdf-gts grows a reference-only blob
     // entry — see `docs/design/819-rdf-ir-dataflow.md` Appendix Z.
     let _ = lookaside.blobs;
+    Ok(())
 }
 
-fn term_id_by_display(state: &InternState, label: &str) -> Option<usize> {
-    state
+fn term_id_by_display(graph: &Graph, label: &str, kind: TermKind) -> Option<usize> {
+    graph
         .terms
         .iter()
-        .position(|term| term.value.as_deref() == Some(label) && is_iri_or_bnode(term))
+        .position(|term| term.value.as_deref() == Some(label) && term.kind == kind)
+}
+
+/// Preserve the historical untyped suppression label's first interned node:
+/// explicit bindings, ordinary rows, binding graphs, then annotations.
+fn legacy_display_kind(
+    dataset: &RdfDataset,
+    label: &str,
+) -> Result<Option<TermKind>, RdfDiagnostic> {
+    use purrdf_lex::allocation::{Memory, Resident};
+    let mut resident = Resident;
+    let mut memory = Memory::new(&mut resident);
+    let mut seen = Vec::new();
+    memory.reserve(&mut seen, dataset.term_count())?;
+    seen.resize(dataset.term_count(), false);
+    let result = (|| {
+        let roots = dataset
+            .reifier_quads()
+            .flat_map(|row| [Some(row.s), Some(row.o)])
+            .chain(
+                dataset
+                    .quads()
+                    .flat_map(|row| [Some(row.s), Some(row.p), Some(row.o), row.g]),
+            )
+            .chain(dataset.reifier_quads().map(|row| row.g))
+            .chain(
+                dataset
+                    .annotation_quads()
+                    .flat_map(|row| [Some(row.s), Some(row.p), Some(row.o), row.g]),
+            );
+        for mut id in roots.flatten() {
+            loop {
+                if seen[id.index()] {
+                    break;
+                }
+                seen[id.index()] = true;
+                match dataset.resolve(id) {
+                    crate::TermRef::Iri(iri) => {
+                        if iri == label {
+                            return Some(TermKind::Iri);
+                        }
+                        break;
+                    }
+                    crate::TermRef::Blank {
+                        label: blank,
+                        scope,
+                    } => {
+                        if scope.qualify_label(blank) == label {
+                            return Some(TermKind::Bnode);
+                        }
+                        break;
+                    }
+                    crate::TermRef::Literal {
+                        datatype, language, ..
+                    } => {
+                        // The owned boundary omitted the implicit string datatype
+                        // and every language literal's implied datatype.
+                        if language.is_none()
+                            && let crate::TermRef::Iri(iri) = dataset.resolve(datatype)
+                            && iri != purrdf_xsd::datatype::XSD_STRING
+                            && iri == label
+                        {
+                            return Some(TermKind::Iri);
+                        }
+                        break;
+                    }
+                    crate::TermRef::Triple { s, p, o } => {
+                        // Frozen RDF permits nested triples only in object slots.
+                        match dataset.resolve(s) {
+                            crate::TermRef::Iri(iri) if iri == label => return Some(TermKind::Iri),
+                            crate::TermRef::Blank {
+                                label: blank,
+                                scope,
+                            } if scope.qualify_label(blank) == label => {
+                                return Some(TermKind::Bnode);
+                            }
+                            _ => {}
+                        }
+                        if matches!(dataset.resolve(p), crate::TermRef::Iri(iri) if iri == label) {
+                            return Some(TermKind::Iri);
+                        }
+                        id = o;
+                    }
+                }
+            }
+        }
+        None
+    })();
+    memory.release_vec(seen)?;
+    Ok(result)
 }
 
 fn metadata_value_to_cbor(value: &RdfMetadataValue) -> Value {
@@ -644,30 +494,155 @@ mod tests {
     }
 
     #[test]
-    fn moderately_nested_triple_term_roundtrips() {
-        // The writer now consumes a frozen `RdfDataset`, whose `freeze` already
-        // enforces the SAME triple-term nesting bound (validate.rs reuses
-        // `MAX_TERM_NESTING_DEPTH`), so the writer's own guard is unreachable from a
-        // valid dataset — the depth-limit error path is tested upstream at freeze.
-        // Here we prove a legal, moderately nested triple term round-trips intact.
-        let mut term = RdfTerm::iri("https://example.org/leaf");
-        for _ in 0..4 {
-            term = RdfTerm::triple(RdfTriple::new(
-                RdfTerm::iri("https://example.org/s"),
-                "https://example.org/p",
-                term,
-            ));
-        }
-        let ds = freeze_rows(
-            &[RdfQuad::new(
-                RdfTerm::iri("https://example.org/s"),
-                "https://example.org/p",
-                term,
-            )],
-            &[],
-            &[],
+    fn shallow_wire_spelling_and_legacy_suppression_owner_are_preserved() {
+        use purrdf_gts::model::Term;
+        let mut builder = RdfDatasetBuilder::new();
+        let r = builder
+            .intern_blank("urn:claim", crate::BlankScope::DEFAULT)
+            .expect("reifier");
+        let s = builder.intern_iri("urn:claim").expect("same-spelled IRI");
+        let p = builder.intern_iri("urn:p").expect("predicate");
+        let o = builder.intern_iri("urn:o").expect("object");
+        let g = builder.intern_iri("urn:g").expect("graph");
+        let triple = builder.intern_triple(s, p, o).expect("quoted term");
+        builder
+            .push_quad(s, p, triple, Some(g))
+            .expect("ordinary row");
+        builder
+            .push_reifier_in_graph(r, triple, Some(g))
+            .expect("binding");
+        builder
+            .push_annotation_in_graph(r, p, triple, Some(g))
+            .expect("annotation");
+        let dataset = builder.freeze().expect("valid native statements");
+        let mut lookaside = RdfLookaside::default();
+        lookaside.suppressions.push(RdfSuppressionRecord {
+            by: Some("urn:claim".to_owned()),
+            reason: Some("kept".to_owned()),
+            targets: vec![RdfMetadataValue::Text("proof".to_owned())],
+        });
+        let scalar = |kind, value: &str| Term {
+            kind,
+            value: Some(value.to_owned()),
+            datatype: None,
+            lang: None,
+            direction: None,
+            reifier: None,
+            triple: None,
+        };
+        // These are the legacy graph's concrete fields: the explicit reifier
+        // prepass minted the blank first, and quoted terms omitted `v` entirely.
+        let mut quoted = scalar(TermKind::Triple, "");
+        quoted.value = None;
+        quoted.triple = Some((1, 2, 3));
+        let reference = Graph {
+            terms: vec![
+                scalar(TermKind::Bnode, "urn:claim"),
+                scalar(TermKind::Iri, "urn:claim"),
+                scalar(TermKind::Iri, "urn:p"),
+                scalar(TermKind::Iri, "urn:o"),
+                quoted,
+                scalar(TermKind::Iri, "urn:g"),
+            ],
+            quads: vec![(1, 2, 4, Some(5))],
+            reifiers: vec![(0, (1, 2, 3), Some(5))],
+            annotations: vec![(0, 2, 4, Some(5))],
+            suppressions: vec![Suppression {
+                targets: vec![Value::Text("proof".to_owned())],
+                reason: Some("kept".to_owned()),
+                by: Some(0),
+            }],
+            ..Graph::default()
+        };
+        let expected = Writer::deterministic(&reference, "purrdf-test")
+            .expect("legacy graph bytes")
+            .into_bytes();
+        assert_eq!(
+            to_gts(&dataset, &lookaside, "purrdf-test").expect("native writer"),
+            expected
         );
-        let graph = roundtrip(&ds, &RdfLookaside::default(), "purrdf-test");
-        assert!(graph.terms.iter().any(|t| t.kind == TermKind::Triple));
+    }
+
+    #[test]
+    fn deep_native_terms_roundtrip_with_flat_writer_storage() {
+        purrdf_stack::on_stack(128 * 1024, || {
+            for depth in [16_usize, 17, 2048] {
+                let mut builder = RdfDatasetBuilder::new();
+                let s = builder
+                    .intern_iri("https://example.org/s")
+                    .expect("subject");
+                let p = builder
+                    .intern_iri("https://example.org/p")
+                    .expect("predicate");
+                let leaf = builder
+                    .intern_iri("https://example.org/leaf")
+                    .expect("leaf");
+                let g = builder.intern_iri("https://example.org/g").expect("graph");
+                let r = builder
+                    .intern_blank("claim", crate::BlankScope::DEFAULT)
+                    .expect("reifier");
+                let mut root = leaf;
+                for _ in 0..depth {
+                    root = builder.intern_triple(s, p, root).expect("finite term");
+                }
+                builder.push_quad(s, p, root, None).expect("ordinary row");
+                builder
+                    .push_reifier_in_graph(r, root, Some(g))
+                    .expect("named binding");
+                builder
+                    .push_annotation_in_graph(r, p, root, Some(g))
+                    .expect("named annotation");
+                let dataset = builder.freeze().expect("valid object-only nesting");
+                let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+                let bytes = to_gts(&dataset, &RdfLookaside::default(), "purrdf-test")
+                    .expect("deep GTS writer");
+                let allocation = window.close();
+                assert!(allocation.requested_bytes > 0, "counting allocator active");
+                assert!(
+                    allocation.peak_working_bytes <= (depth * 8192 + 262_144) as i64,
+                    "{depth}: {allocation:?}"
+                );
+                assert!(
+                    allocation.requested_bytes <= (depth * 32_768 + 1_048_576) as u64,
+                    "{depth}: {allocation:?}"
+                );
+                let graph = purrdf_gts::reader::read(&bytes, false, None);
+                assert!(graph.diagnostics.is_empty(), "{:?}", graph.diagnostics);
+                assert_eq!(
+                    graph
+                        .terms
+                        .iter()
+                        .filter(|term| term.kind == TermKind::Triple)
+                        .count(),
+                    depth
+                );
+                let folded = crate::import_gts_graph(graph).expect("consuming flat graph importer");
+                assert_eq!(
+                    to_gts(&folded.dataset, &RdfLookaside::default(), "purrdf-test")
+                        .expect("stable re-emit"),
+                    bytes
+                );
+                let streamed = crate::import_gts_events(&bytes).expect("streamed GTS importer");
+                for result in [&folded.dataset, &streamed.dataset] {
+                    assert_eq!(result.quad_count(), 1);
+                    assert_eq!(result.reifier_quads().count(), 1);
+                    assert_eq!(result.annotation_quads().count(), 1);
+                    let mut id = result.quads().next().expect("ordinary row").o;
+                    for _ in 0..depth {
+                        let crate::TermRef::Triple { o, .. } = result.resolve(id) else {
+                            panic!("all nested terms survive")
+                        };
+                        id = o;
+                    }
+                    assert_eq!(
+                        result.resolve(id),
+                        crate::TermRef::Iri("https://example.org/leaf")
+                    );
+                    assert!(result.reifier_quads().all(|row| row.g.is_some()));
+                    assert!(result.annotation_quads().all(|row| row.g.is_some()));
+                }
+            }
+        })
+        .expect("small-stack GTS round trip");
     }
 }

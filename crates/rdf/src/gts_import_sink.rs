@@ -861,6 +861,126 @@ mod tests {
         }
     }
 
+    #[test]
+    fn deep_resolution_preserves_explicit_indirect_shared_ids_and_owners() {
+        purrdf_stack::on_stack(128 * 1024, || {
+            for depth in [16_usize, 17, 2048] {
+                let mut expected = None;
+                for indirect in [false, true] {
+                    let mut resolver = SegmentResolver::new(RecordingSink::new());
+                    resolver.term(0, 0, Arc::new(iri_term("http://example.org/s")));
+                    resolver.term(0, 1, Arc::new(iri_term("http://example.org/p")));
+                    let leaf = Arc::new(iri_term("http://example.org/leaf"));
+                    resolver.term(0, 2, Arc::clone(&leaf));
+                    let mut retained = Vec::new();
+                    for k in 0..depth {
+                        let components = (0, 1, if k + 1 < depth { 4 + k } else { 2 });
+                        let mut term = iri_term("");
+                        term.kind = TermKind::Triple;
+                        term.value = None;
+                        term.triple = (!indirect).then_some(components);
+                        // Explicit components override even an unbound legacy id.
+                        term.reifier = Some(if indirect { depth + 4 + k } else { usize::MAX });
+                        let term = Arc::new(term);
+                        retained.push(Arc::clone(&term));
+                        resolver.term(0, 3 + k, term);
+                        resolver.term(0, depth + 4 + k, Arc::new(blank_term(&format!("r{k}"))));
+                        resolver.reifier(0, (depth + 4 + k, components, None));
+                    }
+                    let mut shared = iri_term("");
+                    shared.kind = TermKind::Triple;
+                    shared.value = None;
+                    shared.triple = Some((0, 1, 3));
+                    resolver.term(0, depth + 3, Arc::new(shared));
+                    resolver.quad(0, (0, 1, depth + 3, None));
+                    resolver.finish().expect("finite nested GTS terms resolve");
+                    assert_eq!(resolver.buffered_remap_count(), 0);
+                    assert_eq!(resolver.buffered_reifier_binding_count(), 0);
+                    let recording = resolver.into_sink();
+                    let ids: Vec<_> = (0..2 * depth + 4)
+                        .map(|id| recording.id(0, id).expect("all original ids retained"))
+                        .collect();
+                    if let Some(expected) = &expected {
+                        assert_eq!(
+                            &ids, expected,
+                            "indirect binding preserves allocation order"
+                        );
+                    } else {
+                        expected = Some(ids);
+                    }
+                    assert_eq!(leaf.value.as_deref(), Some("http://example.org/leaf"));
+                    assert_eq!(retained.len(), depth);
+                    assert!(retained.iter().all(|term| Arc::strong_count(term) == 1));
+                    let head = recording.id(0, depth + 3).expect("shared root id");
+                    let mut current = head;
+                    for _ in 0..=depth {
+                        let TermRef::Triple { o, .. } = recording.inner.builder.resolve(current)
+                        else {
+                            panic!("full object chain retained")
+                        };
+                        current = o;
+                    }
+                    assert_eq!(current, recording.id(0, 2).expect("leaf id"));
+                    recording
+                        .inner
+                        .builder
+                        .freeze()
+                        .expect("native positional validation");
+                }
+            }
+        })
+        .expect("small-stack GTS resolver");
+    }
+
+    #[test]
+    fn resolution_cycles_and_failed_callbacks_cannot_be_silently_retried() {
+        for datatype_cycle in [false, true] {
+            let mut resolver = SegmentResolver::new(RecordingSink::new());
+            resolver.term(0, 0, Arc::new(iri_term("http://example.org/s")));
+            resolver.term(0, 1, Arc::new(iri_term("http://example.org/p")));
+            let mut term = iri_term("literal");
+            if datatype_cycle {
+                term.kind = TermKind::Literal;
+                term.datatype = Some(2);
+            } else {
+                term.kind = TermKind::Triple;
+                term.triple = Some((0, 1, 2));
+            }
+            resolver.term(0, 2, Arc::new(term));
+            let error = resolver.finish().expect_err("cycle hard-fails");
+            assert_eq!(error.code, "rdf-ir-dangling-term-ref");
+            assert!(error.message.contains(if datatype_cycle {
+                "literal datatype"
+            } else {
+                "reified object"
+            }));
+            assert_eq!(
+                error
+                    .location
+                    .as_ref()
+                    .expect("original location")
+                    .gts_term_id,
+                Some(2)
+            );
+            assert!(
+                resolver.finish().is_err(),
+                "an active failed path remains a hard failure"
+            );
+        }
+        let mut resolver = SegmentResolver::new(RecordingSink::new());
+        let mut term = iri_term("literal");
+        term.kind = TermKind::Literal;
+        term.direction = Some("sideways".to_owned());
+        term.lang = Some("en".to_owned());
+        resolver.term(0, 0, Arc::new(term));
+        let error = resolver.finish().expect_err("original sink refusal");
+        assert_eq!(error.code, "gts-invalid-direction");
+        assert!(
+            resolver.finish().is_err(),
+            "a consumed failed term cannot disappear from finish"
+        );
+    }
+
     /// GATE 2 (a) — multi-segment blank-node scope isolation, driven DIRECTLY
     /// through the `StreamingSink` callbacks (no GTS bytes needed).
     ///

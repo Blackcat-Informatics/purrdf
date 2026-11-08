@@ -1,29 +1,17 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The shared GTS term resolver (C2).
+//! Shared GTS graph termination and literal-direction checks.
 //!
-//! GTS graph readers and the consuming [`super::import_graph`] importer both fold a
-//! *folded* `purrdf_gts::model::Graph` into RDF terms, and both need the SAME
-//! depth-bounded structural traversal: term-kind dispatch, the non-empty-IRI and
-//! datatype-must-be-IRI checks, reifier lookup for quoted-triple terms, and the
-//! cyclic-nesting depth guard.
+//! [`ensure_terms_terminate`] checks caller-built folded graphs iteratively.
+//! Production importers also resolve identifiers iteratively, preserving their
+//! non-empty-IRI, datatype-position and reifier-binding contracts while moving
+//! leaf strings into native storage.
 //!
-//! This module keeps the shared nesting bound, the shared **termination check**
-//! ([`ensure_terms_terminate`]) every caller-built graph is admitted through, and the
-//! literal-direction parser used by the production importers. A test-only eager
-//! resolver remains here for regression coverage over malformed folded graphs.
-//!
-//! The consuming `import_graph` importer cannot reuse these directly: it consumes a
-//! `Graph` *by value* and MOVES term strings into the interner, which is structurally
-//! incompatible with borrowing the same `Graph` for a clone-based resolver. It
-//! therefore mirrors this traversal in move form, sharing the
-//! [`purrdf_events::MAX_TERM_NESTING_DEPTH`] bound and the `gts-*` diagnostic codes so the two
-//! cannot drift on structural contract.
-//!
-//! The diagnostic codes here are the historical `gts-*` codes (preserved verbatim
-//! from the original `gts.rs` implementation), so error contracts are unchanged by
-//! the extraction.
+//! A test-only eager resolver remains here as a bounded malformed-graph
+//! reference. Its legacy [`purrdf_events::MAX_TERM_NESTING_DEPTH`] guard is not a
+//! production storage or import limit. The literal-direction parser below is
+//! shared by the production consuming and streaming importers.
 
 use purrdf_gts::model::{Graph, TermKind};
 
