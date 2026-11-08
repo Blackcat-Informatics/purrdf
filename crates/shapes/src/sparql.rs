@@ -2309,8 +2309,25 @@ pub fn bind_in_current_env(
     }) {
         return Ok(bound);
     }
+    let mut effective = functions.as_ref().clone();
+    if shapes
+        .validation_options
+        .shacl_profile
+        .reads_november_draft_semantics()
+        && let Some(bodies) = shapes.owner.list_function_bodies.get()
+    {
+        for (iri, weak) in bodies {
+            if let Some(body) = weak.upgrade() {
+                effective.set_expr_arity_if_same_body(
+                    iri,
+                    &body,
+                    purrdf_sparql_eval::Arity::AtLeast(0),
+                );
+            }
+        }
+    }
     let bound = SPARQL_ENGINE
-        .with(|engine| engine.bind_functions(functions.as_ref().clone(), &env))
+        .with(|engine| engine.bind_functions(effective, &env))
         .map_err(OperationError::binding)?;
     if !bound.requires_focus_graph()
         && shapes.validation_options.is_default()

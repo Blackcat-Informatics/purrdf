@@ -816,6 +816,12 @@ paper_cases! {
         admission: Admission::Acyclic,
         pairs: &[("a", "S", true, true), ("b", "S", true, true)],
     };
+    static_conformance_empty_shape_output: PaperCase {
+        data: ":a :p :b .",
+        shapes: ":S a sh:NodeShape ; sh:expression [ shnex:conformsToShape ( sh:this [] ) ] .",
+        admission: Admission::Acyclic,
+        pairs: &[("a", "S", false, false)],
+    };
     static_conformance_anonymous_node: PaperCase {
         data: ":a :p :b .",
         shapes: ":S a sh:NodeShape ; sh:expression [ shnex:conformsToShape ( sh:this [ sh:hasValue :b ] ) ] .",
@@ -1653,17 +1659,13 @@ fn computed_conformance_targets_preserve_lazy_shape_errors() {
     for (node, shape, error) in [
         ("sh:this", "( :T )", None),
         ("sh:this", "[ sh:union ( :T :T ) ]", None),
-        ("sh:this", "[]", Some("exactly one shape IRI, got 0")),
+        ("sh:this", "[]", None),
         (
             "sh:this",
             "[ shnex:concat ( :T :T ) ]",
             Some("exactly one shape IRI, got 2"),
         ),
-        (
-            "sh:this",
-            "[ shnex:if false ]",
-            Some("exactly one shape IRI, got 0"),
-        ),
+        ("sh:this", "[ shnex:if false ]", None),
         (
             "sh:this",
             "[ shnex:if true ; shnex:then :Missing ; shnex:else :T ]",
@@ -1683,26 +1685,44 @@ fn computed_conformance_targets_preserve_lazy_shape_errors() {
         let source = format!(
             "{PREFIXES} :S a sh:NodeShape ; sh:targetNode :a ; sh:expression [ shnex:conformsToShape ( {node} {shape} ) ] . :T a sh:NodeShape ; sh:node :T ."
         );
-        for semantics in [RecursionSemantics::Lfp, RecursionSemantics::Gfp] {
+        for (semantics, profile) in [RecursionSemantics::Lfp, RecursionSemantics::Gfp]
+            .into_iter()
+            .flat_map(|semantics| {
+                [
+                    purrdf_shapes::ShaclProfile::LEGACY,
+                    purrdf_shapes::ShaclProfile::ED_20261106,
+                ]
+                .map(|profile| (semantics, profile))
+            })
+        {
             let shapes = parse_shapes_with_options(
                 &source,
                 None,
                 None,
                 None,
                 &ShapesImports::new(),
-                &options(semantics),
+                &options(semantics).with_profile(profile),
             )
             .unwrap();
             let dataset = parse_turtle_to_dataset(&format!("{PREFIXES} :a :p :a ."), None).unwrap();
             let data = ShaclData::new(Arc::clone(&dataset), dataset, None);
             let actual = validate_with(&data, &shapes);
+            let error = if profile == purrdf_shapes::ShaclProfile::ED_20261106
+                && node == "[ shnex:if false ]"
+            {
+                Some("exactly one shape IRI, got 2")
+            } else {
+                error
+            };
             if let Some(expected) = error {
                 let actual = actual.unwrap_err().to_string();
                 assert!(actual.contains(expected), "{shape}: {actual}");
             } else {
                 assert_eq!(
                     actual.unwrap().conforms,
-                    node == "sh:this" && semantics == RecursionSemantics::Gfp,
+                    node == "sh:this"
+                        && !matches!(shape, "[]" | "[ shnex:if false ]")
+                        && semantics == RecursionSemantics::Gfp,
                     "{shape}"
                 );
             }

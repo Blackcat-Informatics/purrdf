@@ -4157,8 +4157,8 @@ fn eval_constraint<'a, S: ResultSink>(
         }
 
         // ── Expression (SHACL-AF §5.7) ─────────────────────────────────────────
-        // Each value node is evaluated as the focus of the node expression; the
-        // constraint is satisfied iff the result is exactly the canonical
+        // Dated laws evaluate at the declaring focus with the judged value in
+        // scope; compatibility evaluates at that value. The result must be the canonical
         // `"true"^^xsd:boolean` term (`is_true`). A sub-expression evaluation
         // failure is a hard validation error (mirroring sh:sparql). The
         // expression node may carry its own sh:message / sh:severity overriding
@@ -4202,6 +4202,8 @@ fn eval_constraint<'a, S: ResultSink>(
             // so its in-flight set is empty between value nodes, and `depth` is
             // loop-invariant — reusing it only avoids re-allocating the set.
             let mut guard = crate::expression::RecursionGuard::with_depth(depth);
+            let legacy_focus = context.plan.binding().validation_request().shacl_profile
+                == crate::profile::ShaclProfile::LEGACY;
             for value_node in value_nodes {
                 let conforms = if let Some((crate::expression::NodeExpr::This, Some(target))) =
                     recursive_target
@@ -4213,10 +4215,16 @@ fn eval_constraint<'a, S: ResultSink>(
                     // `is_true` of that canonical singleton is the verdict
                     // itself. Keep it native here, without a synthetic term or
                     // vector during fixed-point rounds.
-                    conforms_memoized(context, target, &value_node.as_focus(ds))?
+                    if legacy_focus {
+                        conforms_memoized(context, target, &value_node.as_focus(ds))?
+                    } else {
+                        conforms_memoized(context, target, focus_node)?
+                    }
                 } else {
                     // General expressions may produce non-interned terms.
                     let value_node = value_node.to_term(ds);
+                    let dated_focus = (!legacy_focus).then(|| focus_node.to_term(ds));
+                    let expression_focus = dated_focus.as_ref().unwrap_or(&value_node);
                     // Node Expressions §7.1 binds the judged value under `value`.
                     let binding = crate::expression::Binding::new(
                         crate::expression::VALUE_VAR,
@@ -4226,7 +4234,7 @@ fn eval_constraint<'a, S: ResultSink>(
                     let evaluated = if let Some((node, target)) = recursive_target {
                         crate::expression::eval_planned_conformance_focus(
                             store,
-                            &value_node,
+                            expression_focus,
                             node,
                             lowered.operand(0)?,
                             context.plan,
@@ -4234,39 +4242,51 @@ fn eval_constraint<'a, S: ResultSink>(
                             crate::expression::Scope::bound(&binding),
                         )
                         .and_then(|focus| {
-                            focus.map_or(Ok(false), |focus| {
-                                let target = match target {
-                                    Some(target) => target,
-                                    None => {
-                                        let crate::expression::NodeExpr::ConformsToShape {
-                                            shape: crate::expression::ShapeArg::Computed { expr, .. },
-                                            ..
-                                        } = expr else {
-                                            return Err(crate::error::ShapesError::internal(
-                                                "computed conformance target lost its original operand",
-                                            ));
-                                        };
-                                        let produced = crate::expression::eval_planned_conformance_operand(
-                                            store,
-                                            &value_node,
-                                            expr,
-                                            lowered.operand(1)?,
-                                            context.plan,
-                                            &mut guard,
-                                            crate::expression::Scope::bound(&binding),
-                                        )?;
-                                        crate::expression::conformance_target(
-                                            &produced, context.plan, lowered.index()?,
-                                        )?
-                                    }
+                            let november = context.plan.binding().validation_request()
+                                .shacl_profile.reads_november_draft_semantics();
+                            if focus.is_none() && !november {
+                                return Ok(false);
+                            }
+                            let produced = if target.is_none() {
+                                let crate::expression::NodeExpr::ConformsToShape {
+                                    shape: crate::expression::ShapeArg::Computed { expr, .. },
+                                    ..
+                                } = expr else {
+                                    return Err(crate::error::ShapesError::internal(
+                                        "computed conformance target lost its original operand",
+                                    ));
                                 };
-                                conforms_memoized(context, target, &FocusNode::resolve(ds, &focus))
-                            })
+                                let produced = crate::expression::eval_planned_conformance_operand(
+                                    store, expression_focus, expr, lowered.operand(1)?,
+                                    context.plan, &mut guard,
+                                    crate::expression::Scope::bound(&binding),
+                                )?;
+                                if produced.len() > 1 {
+                                    return Err(format!("shnex:conformsToShape shape argument must produce exactly one shape IRI, got {}", produced.len()).into());
+                                }
+                                if produced.is_empty() {
+                                    return Ok(false);
+                                }
+                                Some(produced)
+                            } else {
+                                None
+                            };
+                            let Some(focus) = focus else { return Ok(false) };
+                            let target = match (target, produced) {
+                                (Some(target), _) => target,
+                                (None, Some(produced)) => crate::expression::conformance_target(
+                                    &produced, context.plan, lowered.index()?,
+                                )?,
+                                (None, None) => return Err(crate::error::ShapesError::internal(
+                                    "computed conformance target lost its evaluated operand",
+                                )),
+                            };
+                            conforms_memoized(context, target, &FocusNode::resolve(ds, &focus))
                         })
                     } else {
                         crate::expression::eval_planned_node_expr_in_scope(
                             store,
-                            &value_node,
+                            expression_focus,
                             expr,
                             lowered,
                             context.plan,

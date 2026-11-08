@@ -394,6 +394,7 @@ pub(crate) fn register_expression_bodied_functions(
     owner: &Arc<crate::shapes::ModelOwner>,
     registry: &mut UserFunctionRegistry,
 ) {
+    let mut owned_bodies = Vec::new();
     for func in custom_fns {
         if !matches!(func.kind, CustomFnKind::ListParameter) {
             continue;
@@ -409,16 +410,34 @@ pub(crate) fn register_expression_bodied_functions(
                 max: func.params.len(),
             }
         };
-        let declared = Arc::clone(func);
-        let owner = Arc::clone(owner);
-        let iri = declared.iri.as_str().to_owned();
-        registry.register_expr(
-            iri,
-            arity,
+        let iri = func.iri.as_str().to_owned();
+        // Product admission assembles another registry before replacing the
+        // first. Keep the original physical body so its weak ownership anchor
+        // remains valid in the installed registry.
+        let original = owner.list_function_bodies.get().and_then(|bodies| {
+            bodies
+                .iter()
+                .find(|(name, _)| name == &iri)
+                .and_then(|(_, body)| body.upgrade())
+        });
+        let body: purrdf_sparql_eval::ExprFnBody = original.unwrap_or_else(|| {
+            let declared = Arc::clone(func);
+            let owner = Arc::clone(owner);
             Arc::new(move |call: &ExprFnCall<'_>| {
                 invoke_expression_function(&owner, &declared, call)
-            }),
-        );
+            })
+        });
+        if func.params.is_empty() {
+            owned_bodies.push((iri.clone(), Arc::downgrade(&body)));
+        }
+        registry.register_expr(iri, arity, body);
+    }
+    if !owned_bodies.is_empty() {
+        // The first installed registry establishes ownership. Later product
+        // fingerprint re-derivations must not replace those original anchors.
+        owner
+            .list_function_bodies
+            .get_or_init(|| owned_bodies.into_boxed_slice());
     }
 }
 

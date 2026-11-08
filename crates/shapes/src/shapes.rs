@@ -948,7 +948,13 @@ pub struct ModelOwner {
     pub(crate) index: link::ShapeIndex,
     pub(crate) functions: Box<[Arc<crate::expression::CustomFunction>]>,
     pub(crate) recursion_admission: crate::recursion::cache::Admission,
+    /// Non-owning anchors of installed undocumented list functions. The closures
+    /// own this model, so retaining them strongly here would create a cycle.
+    pub(crate) list_function_bodies: OnceLock<Box<[(String, WeakExpressionBody)]>>,
 }
+
+pub(crate) type WeakExpressionBody =
+    std::sync::Weak<<purrdf_sparql_eval::ExprFnBody as std::ops::Deref>::Target>;
 
 purrdf_hash::debug_non_exhaustive!(ModelOwner {});
 
@@ -970,6 +976,7 @@ impl ModelOwner {
             index: Arc::new(OnceLock::from(FastMap::default())),
             functions: Box::new([]),
             recursion_admission: crate::recursion::cache::Admission::default(),
+            list_function_bodies: OnceLock::new(),
         }
     }
 
@@ -987,6 +994,7 @@ impl ModelOwner {
             index,
             functions: functions.into_boxed_slice(),
             recursion_admission: crate::recursion::cache::Admission::default(),
+            list_function_bodies: OnceLock::new(),
         }))
     }
 
@@ -1932,6 +1940,7 @@ pub fn from_dataset_with_node_expressions(
         roots,
         &[],
         imports,
+        crate::profile::ShaclProfile::LEGACY,
     )
 }
 
@@ -1945,6 +1954,7 @@ pub(crate) fn from_dataset_with_scoped_node_expressions(
     roots: &[Term],
     scope: &[&str],
     imports: &ShapesImports,
+    profile: crate::profile::ShaclProfile,
 ) -> Result<(Shapes, Vec<NodeExpr>), ShapesError> {
     let resolved = resolve_shapes_imports(dataset, doc_prefixes, &[], imports)?;
     let mut parser = Parser::new(
@@ -1954,11 +1964,13 @@ pub(crate) fn from_dataset_with_scoped_node_expressions(
         None,
         Arc::clone(&resolved.dataset),
         shapes_graph,
-        crate::profile::ShaclProfile::LEGACY,
+        profile,
     );
     let (mut shapes, expressions) = parser
         .parse_with_expressions(roots, scope)
         .map_err(|message| parser.load_error(message))?;
+    shapes
+        .set_validation_options(crate::engine::ValidationOptions::default().with_profile(profile));
     shapes
         .parse_provenance
         .set_included_graphs(resolved.included);
