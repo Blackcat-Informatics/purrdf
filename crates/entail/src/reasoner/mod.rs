@@ -99,7 +99,7 @@ use crate::EntailError;
 use crate::owl_dl::concept::Concept;
 use crate::owl_dl::graph::{Assumptions, Budget};
 use crate::owl_dl::parser::{self, Vocab};
-use crate::owl_dl::query::{build_data_index_until, collect_named_classes_until};
+use crate::owl_dl::query::collect_named_classes_until;
 use crate::owl_dl::{Kb, class_concept};
 use crate::report::Construct;
 
@@ -110,6 +110,7 @@ pub mod classify;
 mod hierarchy;
 pub mod module;
 pub mod object_properties;
+pub mod positive;
 pub mod profile;
 pub mod proof;
 pub mod realize;
@@ -130,6 +131,10 @@ pub use module::{
     ConservativeKeep, ModuleExtraction, ModuleMethod, extract_module, extract_module_with_proofs,
 };
 pub use object_properties::ObjectPropertyHierarchy;
+pub use positive::{
+    PositiveUpdateRefusal, PositiveUpdateWork, PositiveWorld, PositiveWorldError,
+    PositiveWorldLimits,
+};
 pub use profile::{OwlProfile, ProfileCertificate, ProfileViolation, profile};
 pub use proof::{
     Claim, ClaimBasis, ClaimSubject, Question, RunAssumptions, RunProof, Service, ServiceProof,
@@ -424,7 +429,16 @@ impl Reasoner {
         preparation: SchemaPreparationBudget,
         stop: Option<std::sync::Arc<dyn purrdf_datalog::StopSignal>>,
     ) -> Result<Self, EntailError<D::ReadError>> {
-        let mut kb = Kb::from_dataset_recording(ds, stop, preparation, input)?;
+        Self::build_prepared(ds, input, preparation, stop).map(|(reasoner, _)| reasoner)
+    }
+
+    pub(crate) fn build_prepared<D: DatasetView>(
+        ds: &D,
+        input: Option<[u8; 32]>,
+        preparation: SchemaPreparationBudget,
+        stop: Option<std::sync::Arc<dyn purrdf_datalog::StopSignal>>,
+    ) -> Result<(Self, parser::Ingress), EntailError<D::ReadError>> {
+        let (mut kb, ingress) = Kb::from_dataset_recording_prepared(ds, stop, preparation, input)?;
         let signal = kb.stop.clone();
         let mut poll = || {
             if purrdf_core::governor::is_stopped(signal.as_deref()) {
@@ -435,8 +449,7 @@ impl Reasoner {
         };
         poll()?;
         let vocab = Vocab::intern(&mut kb.interner);
-        let index = build_data_index_until(ds, &mut kb.interner, &mut poll)?;
-        let named = collect_named_classes_until(&kb.interner, &index, &vocab, &mut poll)?;
+        let named = collect_named_classes_until(&kb.interner, &ingress.index, &vocab, &mut poll)?;
         let classes: Vec<(u32, u32)> = named
             .iter()
             .map(|&c| {
@@ -458,16 +471,44 @@ impl Reasoner {
         let boundaries = kb.boundaries().clone();
         let fresh = FreshSymbols::for_interner(&kb.interner);
         poll()?;
-        Ok(Self {
-            kb,
-            vocab,
-            classes,
-            individuals,
-            budget,
-            boundaries,
-            fresh,
-            input,
-        })
+        Ok((
+            Self {
+                kb,
+                vocab,
+                classes,
+                individuals,
+                budget,
+                boundaries,
+                fresh,
+                input,
+            },
+            ingress,
+        ))
+    }
+
+    pub(crate) fn bind_positive(&mut self, term: TermValue) -> Result<u32, EntailError> {
+        Ok(self.kb.source_terms.intern(&mut self.kb.interner, term)?)
+    }
+
+    pub(crate) fn append_positive(
+        &mut self,
+        ingress: &mut parser::Ingress,
+        triples: &[(u32, u32, u32)],
+        input: Option<[u8; 32]>,
+    ) -> Result<(), EntailError> {
+        if !triples.is_empty() || input != self.input {
+            self.kb.begin_positive_update(input);
+            let classes = parser::append_positive(&mut self.kb, ingress, triples)?;
+            self.classes.extend(classes);
+            self.classes.sort_unstable();
+            self.classes.dedup();
+            self.kb.apply_keys()?;
+            self.individuals = self.kb.individuals.iter().copied().collect();
+            self.boundaries = self.kb.boundaries().clone();
+            self.budget = Budget::for_kb(&self.kb);
+        }
+        self.input = input;
+        Ok(())
     }
 
     /// Apply `question`'s own interning, exactly as the service answering it would.

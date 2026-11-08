@@ -131,6 +131,15 @@ pub struct SearchWork {
     events: [u64; 5],
 }
 
+impl purrdf_hash::error::StructuredError for SearchWork {
+    purrdf_hash::error_visit! {
+        @record self { total, events } => "canonical-search-work" {
+            "total" => Unsigned(u128::from(self.total)),
+            "events" => List(self.events.iter().map(|count| purrdf_hash::error::ErrorValue::Unsigned(u128::from(*count)))),
+        }
+    }
+}
+
 impl SearchWork {
     /// Total charged events. This is not a count of completed events or CPU time.
     #[must_use]
@@ -154,6 +163,14 @@ pub enum SearchRefusal {
     Stopped,
     /// Another exact event count cannot be represented.
     CounterCapacity,
+}
+
+impl purrdf_hash::error::StructuredError for SearchRefusal {
+    purrdf_hash::error_visit! {
+        Limit => "canonical-search-limit" {},
+        Stopped => "canonical-search-stopped" {},
+        CounterCapacity => "canonical-search-counter-capacity" {},
+    }
 }
 
 /// Immutable execution evidence finalized by the actual engine on every return.

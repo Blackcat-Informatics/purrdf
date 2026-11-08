@@ -16,6 +16,16 @@ pub(crate) struct SourceTerms {
 }
 
 impl SourceTerms {
+    pub(crate) fn intern(
+        &mut self,
+        interner: &mut crate::interner::Interner,
+        value: purrdf_core::TermValue,
+    ) -> Result<u32, StorageError> {
+        let id = interner.try_intern(value)?;
+        self.record(id)?;
+        Ok(id)
+    }
+
     pub(crate) fn from_prefix(prefix: u32) -> Self {
         Self {
             prefix,

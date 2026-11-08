@@ -150,6 +150,8 @@ use crate::owl_dl::graph::{Assumptions, Budget, GeneratedRoot, NominalId, State,
 use crate::owl_dl::hyper::{Ground, ground_head};
 use crate::report::Construct;
 
+purrdf_lex::variant_from!(impl<E> DlProofError<E> { Storage(purrdf_lex::allocation::StorageError) });
+
 // ── The wire format's fixed vocabulary ──────────────────────────────────────────
 
 mod inspect;
@@ -163,6 +165,7 @@ mod schema;
 mod schema_tests;
 
 pub(crate) mod capture;
+pub(crate) mod layout;
 pub mod source;
 use schema::{decode_schema_clash, encode_schema_clash};
 
@@ -3016,6 +3019,7 @@ impl CompletionReplay {
 /// present; their checked journals are retained without a second search for provenance.
 /// Borrowing a prepared source only derives its native clauses.
 pub struct DlProofContext<'kb> {
+    pub(crate) positive_stamp: Option<[u8; 32]>,
     /// The knowledge base the consumer's own dataset reverse-maps to.
     pub(crate) kb: OwnedOrBorrowed<'kb, Kb>,
     /// The DL-clause set the consumer's own knowledge base produces.
@@ -3023,7 +3027,7 @@ pub struct DlProofContext<'kb> {
     /// The producer-independent identity of the consumer's dataset.
     input: [u8; 32],
     /// The calculus/clausification contract of the consumer's clause set.
-    contract: [u8; 32],
+    pub(crate) contract: [u8; 32],
 }
 
 impl std::fmt::Debug for DlProofContext<'_> {
@@ -3121,6 +3125,7 @@ impl<'kb> DlProofContext<'kb> {
         let clauses = derive(&kb);
         let contract = contract_digest(&clauses, &kb.schema);
         Self {
+            positive_stamp: None,
             kb,
             clauses,
             input,

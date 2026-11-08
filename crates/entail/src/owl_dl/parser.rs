@@ -425,6 +425,7 @@ pub(crate) fn index_insert(index: &mut TripleIndex, s: u32, p: u32, o: u32) {
 /// concept-interning [`ConceptTable`] is *not* needed here (extraction returns a
 /// [`Concept`] tree; interning is the caller's concern).
 pub(crate) struct CeExtractor<'a> {
+    ambiguous_operand: std::cell::Cell<Option<(u32, u32, u32, u32)>>,
     property_kinds: RefCell<PropertyKinds>,
     syntax: RefCell<Syntax>,
     index: &'a TripleIndex,
@@ -479,6 +480,7 @@ impl<'a> CeExtractor<'a> {
         stop: Option<&'a dyn StopSignal>,
     ) -> Self {
         Self {
+            ambiguous_operand: std::cell::Cell::new(None),
             syntax: RefCell::new(Syntax::default()),
             property_kinds: RefCell::new(PropertyKinds::default()),
             index,
@@ -498,12 +500,7 @@ impl<'a> CeExtractor<'a> {
     /// Record only named source operands; an inverse expression names its operand.
     fn property(&self, node: u32, allowed: u8) -> Option<u32> {
         let (property, allowed) = if matches!(self.interner.value(node), TermValue::Blank { .. }) {
-            let target = self
-                .index
-                .get(&node)?
-                .get(&self.v.inverse_of)?
-                .first()
-                .copied()?;
+            let target = self.sole_operand(node, self.v.inverse_of)?;
             (target, allowed & OBJECT)
         } else {
             (node, allowed)
@@ -569,16 +566,35 @@ impl<'a> CeExtractor<'a> {
         if let Some(original) = self.syntax.borrow().refusal {
             return Err(EntailError::Storage(original));
         }
-        poll(self.stop)
+        poll(self.stop)?;
+        if let Some((node, predicate, first, second)) = self.ambiguous_operand.get() {
+            return Err(OwlSyntaxError::AmbiguousOperand {
+                node: self.interner.value(node).clone(),
+                predicate: self.interner.value(predicate).clone(),
+                operands: purrdf_lex::allocation::Memory::new(
+                    &mut purrdf_lex::allocation::Resident,
+                )
+                .boxed([
+                    self.interner.value(first).clone(),
+                    self.interner.value(second).clone(),
+                ])?,
+            }
+            .into());
+        }
+        Ok(())
     }
 
     pub(crate) fn into_syntax(self) -> Result<Syntax, EntailError> {
+        self.into_prepared().map(|(syntax, _)| syntax)
+    }
+
+    fn into_prepared(self) -> Result<(Syntax, BTreeMap<u32, Concept>), EntailError> {
         self.poll()?;
         let syntax = self.syntax.into_inner();
         if !syntax.complete() {
             return Err(OwlSyntaxError::IncompleteCapture.into());
         }
-        Ok(syntax)
+        Ok((syntax, self.expr_cache))
     }
 
     fn source_scope<T>(
@@ -978,13 +994,13 @@ impl<'a> CeExtractor<'a> {
                 return Ok(None);
             };
             let mut stated = false;
-            for (predicate, objects) in predicates {
+            for predicate in predicates.keys() {
                 self.poll()?;
                 let Some(slot) = self.facet_slot(*predicate) else {
                     continue;
                 };
                 stated = true;
-                let Some(&value) = objects.first() else {
+                let Some(value) = self.sole_operand(cell, *predicate) else {
                     return Ok(None);
                 };
                 self.syntax.borrow_mut().triple(cell, *predicate, value);
@@ -1299,9 +1315,21 @@ impl<'a> CeExtractor<'a> {
         ids.into_iter().map(|n| self.expr(n)).collect()
     }
 
-    /// The first object of `(s, p, ·)`, if any.
+    /// A functional source operand; ambiguity is refused at the next native boundary.
+    fn sole_operand(&self, s: u32, p: u32) -> Option<u32> {
+        let objects = self.index.get(&s)?.get(&p)?;
+        let first = *objects.first()?;
+        if let Some(&second) = objects.iter().find(|&&object| object != first)
+            && self.ambiguous_operand.get().is_none()
+        {
+            self.ambiguous_operand.set(Some((s, p, first, second)));
+        }
+        Some(first)
+    }
+
+    /// The functional object of `(s, p, ·)`, if any.
     fn get(&self, s: u32, p: u32) -> Option<u32> {
-        let object = self.index.get(&s)?.get(&p)?.first().copied()?;
+        let object = self.sole_operand(s, p)?;
         self.syntax.borrow_mut().triple(s, p, object);
         Some(object)
     }
@@ -1348,11 +1376,28 @@ pub(crate) fn build_until<D: DatasetView>(
     build_with_preparation(ds, stop, super::bounds::SchemaPreparationBudget::default())
 }
 
+#[cfg(test)]
 pub(crate) fn build_with_preparation<D: DatasetView>(
     ds: &D,
     stop: Option<&dyn StopSignal>,
     budget: super::bounds::SchemaPreparationBudget,
 ) -> Result<Kb, EntailError<D::ReadError>> {
+    build_prepared(ds, stop, budget).map(|(kb, _)| kb)
+}
+
+pub(crate) struct Ingress {
+    pub(crate) index: TripleIndex,
+    pub(crate) initial_order: Vec<(u32, u32, u32)>,
+    pub(crate) source_term_reads: u64,
+    expressions: BTreeMap<u32, Concept>,
+    literals: LiteralIngress,
+}
+
+pub(crate) fn build_prepared<D: DatasetView>(
+    ds: &D,
+    stop: Option<&dyn StopSignal>,
+    budget: super::bounds::SchemaPreparationBudget,
+) -> Result<(Kb, Ingress), EntailError<D::ReadError>> {
     ds.checked_read(|ds| {
         poll(stop)?;
         let mut interner = Interner::default();
@@ -1367,18 +1412,44 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
         // Intern every default-graph triple and build the subject index.
         let mut index: TripleIndex = BTreeMap::new();
         let mut triples: Vec<(u32, u32, u32)> = Vec::new();
+        let mut seen = purrdf_lex::allocation::OrderedTable::default();
+        let mut storage = purrdf_lex::allocation::Resident;
+        let mut memory = purrdf_lex::allocation::Memory::new(&mut storage);
+        let mut source_term_reads = 0_u64;
         for q in ds.quads() {
             poll(stop)?;
             if q.g.is_some() {
                 continue;
             }
-            let s = interner.intern(ds.term_value(q.s)?);
-            let p = interner.intern(ds.term_value(q.p)?);
-            let o = interner.intern(ds.term_value(q.o)?);
-            for term in [s, p, o] {
-                source_terms.record(term)?;
+            source_term_reads = source_term_reads
+                .checked_add(3)
+                .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?;
+            let s = source_terms.intern(
+                &mut interner,
+                ds.term_value_with_storage(q.s, EntailError::from, |_| {
+                    EntailError::Storage(purrdf_lex::allocation::StorageError::AllocationFailed)
+                })?,
+            )?;
+            let p = source_terms.intern(
+                &mut interner,
+                ds.term_value_with_storage(q.p, EntailError::from, |_| {
+                    EntailError::Storage(purrdf_lex::allocation::StorageError::AllocationFailed)
+                })?,
+            )?;
+            let o = source_terms.intern(
+                &mut interner,
+                ds.term_value_with_storage(q.o, EntailError::from, |_| {
+                    EntailError::Storage(purrdf_lex::allocation::StorageError::AllocationFailed)
+                })?,
+            )?;
+            // RDF statement identity is a set identity, including a provider
+            // that repeats one physical row. Its provenance anchor is the same
+            // triple, so only its first occurrence is semantically decoded.
+            if seen.get(&(s, p, o)).is_some() {
+                continue;
             }
-            triples.push((s, p, o));
+            seen.insert((s, p, o), (), &mut memory)?;
+            memory.push(&mut triples, (s, p, o))?;
             index_insert(&mut index, s, p, o);
         }
         // This predicate is source-driven. Looking it up after the source pass
@@ -1422,6 +1493,7 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
         let mut acc = Accums::default();
         let mut ranges = DataRangeTable::default();
         let syntax;
+        let expressions;
         let property_kinds;
         {
             let mut ce = CeExtractor::new_until(&index, &interner, &v, &mut ranges, stop);
@@ -1514,7 +1586,7 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
                 }
             }
             property_kinds = ce.property_kinds.take();
-            syntax = ce.into_syntax().map_err(EntailError::with_read_error)?;
+            (syntax, expressions) = ce.into_prepared().map_err(EntailError::with_read_error)?;
         }
 
         {
@@ -1564,13 +1636,20 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
         // graph, and the literals' value classes decide which of them are one element of the data
         // domain and which are provably different ones.
         let authored_types = acc.abox_types.len();
-        let literal_class = register_literals(
+        let mut literals = LiteralIngress::default();
+        let mut literal_class = BTreeMap::new();
+        LiteralRegistration {
+            roles: &acc.abox_roles,
+            types: &mut acc.abox_types,
+            boundaries: &mut acc.boundaries,
+            classes: &mut literal_class,
+        }
+        .register(
+            &mut literals,
             &interner,
             &mut table,
             &mut ranges,
-            &acc.abox_roles,
-            &mut acc.abox_types,
-            &mut acc.boundaries,
+            None,
             stop,
         )
         .map_err(EntailError::with_read_error)?;
@@ -1601,6 +1680,7 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
             schema: super::bounds::Preparation::default(),
             schema_budget: budget,
             keys_applied: false,
+            key_equalities_start: None,
             key_proofs: super::key_proofs::Records::default(),
             #[cfg(test)]
             schema_reference: false,
@@ -1653,9 +1733,137 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
         constrain_bottom_roles(&mut kb, triples.iter().copied().flat_map(<[_; 3]>::from));
         kb.syntax.bind_tbox(builtin_start, kb.tbox.len(), None)?;
         kb.encode_until(|| poll(stop))?;
-        Ok(kb)
+        Ok((
+            kb,
+            Ingress {
+                index,
+                initial_order: triples,
+                source_term_reads,
+                expressions,
+                literals,
+            },
+        ))
     })
     .map_err(EntailError::source_read)?
+}
+
+/// Extend only the ABox through the original source decoder and provenance owners.
+pub(crate) fn append_positive(
+    kb: &mut Kb,
+    ingress: &mut Ingress,
+    triples: &[(u32, u32, u32)],
+) -> Result<Vec<(u32, u32)>, EntailError> {
+    let signal = kb.stop.clone();
+    let stop = signal.as_deref();
+    let v = Vocab::intern(&mut kb.interner);
+    for &(s, p, o) in triples {
+        poll(stop)?;
+        let assertion = if p == v.ty {
+            o == v.named_individual || !v.structural_types.contains(&o)
+        } else {
+            p == v.same_as
+                || p == v.different_from
+                || bottom_role_index(&kb.interner, p).is_some()
+                || matches!(kb.interner.value(p), TermValue::Iri(iri)
+                    if iri == purrdf_iri::vocab::owl::TOP_OBJECT_PROPERTY
+                        || matches!(support_of(iri), None | Some(Support::Inert(_))))
+        };
+        if !assertion || v.facets.iter().any(|&(facet, _)| facet == p) {
+            return Err(EntailError::PositiveUpdate(Box::new(
+                crate::reasoner::positive::PositiveUpdateRefusal::FrozenSchema {
+                    subject: kb.interner.value(s).clone(),
+                    predicate: kb.interner.value(p).clone(),
+                    object: kb.interner.value(o).clone(),
+                },
+            )));
+        }
+        index_insert(&mut ingress.index, s, p, o);
+    }
+    let mut acc = Accums {
+        inputs: std::mem::take(&mut kb.inputs),
+        abox_types: std::mem::take(&mut kb.abox_types),
+        abox_roles: std::mem::take(&mut kb.abox_roles),
+        same_as: std::mem::take(&mut kb.same_as),
+        different_from: std::mem::take(&mut kb.different_from),
+        individuals: std::mem::take(&mut kb.individuals),
+        boundaries: std::mem::take(&mut kb.boundaries),
+        ..Accums::default()
+    };
+    let role_start = acc.abox_roles.len();
+    let type_start = acc.abox_types.len();
+    {
+        let mut ce =
+            CeExtractor::new_until(&ingress.index, &kb.interner, &v, &mut kb.data_ranges, stop);
+        ce.syntax = RefCell::new(std::mem::take(&mut kb.syntax));
+        ce.property_kinds = RefCell::new(std::mem::take(&mut kb.property_kinds));
+        ce.expr_cache = std::mem::take(&mut ingress.expressions);
+        for &spo in triples {
+            acc.source = super::AxiomSource::Triple(spo.0, spo.1, spo.2);
+            ce.source_scope(&mut acc, |ce, acc| {
+                axiom(ce, &mut kb.table, acc, &v, &kb.interner, spo)
+            })?;
+        }
+        acc.boundaries.extend(ce.boundaries().iter().copied());
+        kb.property_kinds = ce.property_kinds.take();
+        (kb.syntax, ingress.expressions) = ce.into_prepared()?;
+    }
+    let authored_types = acc.abox_types.len();
+    let mut storage = purrdf_lex::allocation::Resident;
+    let mut memory = purrdf_lex::allocation::Memory::new(&mut storage);
+    let roots = memory.collect(
+        acc.abox_types[type_start..]
+            .iter()
+            .map(|&(_, concept)| concept),
+    )?;
+    LiteralRegistration {
+        roles: &acc.abox_roles[role_start..],
+        types: &mut acc.abox_types,
+        boundaries: &mut acc.boundaries,
+        classes: &mut kb.literal_class,
+    }
+    .register(
+        &mut ingress.literals,
+        &kb.interner,
+        &mut kb.table,
+        &mut kb.data_ranges,
+        Some(&roots),
+        stop,
+    )?;
+    for index in authored_types..acc.abox_types.len() {
+        poll(stop)?;
+        acc.inputs.record(
+            Input::Type(index),
+            Source::LiteralValue(acc.abox_types[index].0),
+        )?;
+    }
+    if !kb.data_ranges.exactly_decided() {
+        acc.boundaries.insert(Construct::DataRange);
+    }
+    kb.inputs = acc.inputs;
+    kb.abox_types = acc.abox_types;
+    kb.abox_roles = acc.abox_roles;
+    kb.same_as = acc.same_as;
+    kb.different_from = acc.different_from;
+    kb.individuals = acc.individuals;
+    kb.boundaries = acc.boundaries;
+    let builtin_start = kb.tbox.len();
+    constrain_bottom_roles(kb, triples.iter().copied().flat_map(<[_; 3]>::from));
+    kb.syntax.bind_tbox(builtin_start, kb.tbox.len(), None)?;
+    let mut delta = TripleIndex::new();
+    for &(s, p, o) in triples {
+        index_insert(&mut delta, s, p, o);
+    }
+    let classes =
+        super::query::collect_named_classes_until(&kb.interner, &delta, &v, &mut || poll(stop))?;
+    let classes = classes
+        .into_iter()
+        .map(|class| {
+            poll(stop)?;
+            Ok((class, kb.table.intern(super::class_concept(&v, class))))
+        })
+        .collect::<Result<_, EntailError>>()?;
+    kb.finalize_until(|| poll(stop))?;
+    Ok(classes)
 }
 
 /// Record unsupported role operands through the same vocabulary contract whether
@@ -1747,6 +1955,7 @@ fn bottom_role_index(interner: &Interner, term: u32) -> Option<usize> {
 /// axiom and has no [`Accums`] to hand; the alternative was a second copy of the ill-typed,
 /// unmodelled and value-class rules, which is exactly the drift a differential exists to
 /// prevent.
+#[cfg(test)]
 pub(crate) fn register_literals(
     interner: &Interner,
     table: &mut ConceptTable,
@@ -1756,52 +1965,135 @@ pub(crate) fn register_literals(
     boundaries: &mut BTreeSet<Construct>,
     stop: Option<&dyn StopSignal>,
 ) -> Result<BTreeMap<u32, u32>, EntailError> {
-    let mut terms = BTreeSet::new();
-    for &(_, _, object) in abox_roles {
-        poll(stop)?;
-        terms.insert(object);
+    let mut classes = BTreeMap::new();
+    LiteralRegistration {
+        roles: abox_roles,
+        types: abox_types,
+        boundaries,
+        classes: &mut classes,
     }
-    for id in 0..table.len() {
-        poll(stop)?;
-        if let Decomp::Nominal(members) | Decomp::NegNominal(members) =
-            table.decomp(u32::try_from(id).expect("concept id fits u32"))
-        {
-            for &member in members {
-                poll(stop)?;
-                terms.insert(member);
+    .register(
+        &mut LiteralIngress::default(),
+        interner,
+        table,
+        ranges,
+        None,
+        stop,
+    )?;
+    Ok(classes)
+}
+
+#[derive(Default)]
+struct LiteralIngress {
+    known: BTreeSet<u32>,
+    partition: data::LiteralPartition,
+}
+
+struct LiteralRegistration<'a> {
+    roles: &'a [(u32, u32, u32)],
+    types: &'a mut Vec<(u32, u32)>,
+    boundaries: &'a mut BTreeSet<Construct>,
+    classes: &'a mut BTreeMap<u32, u32>,
+}
+
+impl LiteralRegistration<'_> {
+    fn register(
+        self,
+        state: &mut LiteralIngress,
+        interner: &Interner,
+        table: &mut ConceptTable,
+        ranges: &mut DataRangeTable,
+        concept_roots: Option<&[u32]>,
+        stop: Option<&dyn StopSignal>,
+    ) -> Result<(), EntailError> {
+        let mut terms = BTreeSet::new();
+        for &(_, _, object) in self.roles {
+            poll(stop)?;
+            terms.insert(object);
+        }
+        // Follow the actual new source assertions, including a reused concept.
+        // Prior query nominals are not source axioms merely because one of
+        // their literals later appears in an ignored statement family.
+        let mut pending = purrdf_lex::walk::WorkList::<u32, 32>::new();
+        if let Some(roots) = concept_roots {
+            for &root in roots {
+                pending
+                    .try_push(root)
+                    .map_err(|_| purrdf_lex::allocation::StorageError::AllocationFailed)?;
+            }
+        } else {
+            for id in 0..table.len() {
+                pending
+                    .try_push(u32::try_from(id).expect("concept id fits u32"))
+                    .map_err(|_| purrdf_lex::allocation::StorageError::AllocationFailed)?;
             }
         }
-    }
-    let mut described = Vec::with_capacity(terms.len());
-    for term in terms {
-        poll(stop)?;
-        if let Some(value) = data::literal_value(interner.value(term)) {
-            described.push((term, value));
+        let mut visited = BTreeSet::new();
+        while let Some(id) = pending.pop() {
+            poll(stop)?;
+            if !visited.insert(id) {
+                continue;
+            }
+            match table.decomp(id) {
+                Decomp::Nominal(members) | Decomp::NegNominal(members) => {
+                    for &member in members {
+                        poll(stop)?;
+                        terms.insert(member);
+                    }
+                }
+                Decomp::And(children) | Decomp::Or(children) => {
+                    for &child in children {
+                        pending
+                            .try_push(child)
+                            .map_err(|_| purrdf_lex::allocation::StorageError::AllocationFailed)?;
+                    }
+                }
+                Decomp::Some(_, child)
+                | Decomp::All(_, child)
+                | Decomp::Min(_, _, child)
+                | Decomp::Max(_, _, child) => pending
+                    .try_push(*child)
+                    .map_err(|_| purrdf_lex::allocation::StorageError::AllocationFailed)?,
+                _ => {}
+            }
         }
+        let mut described = Vec::with_capacity(terms.len());
+        for term in terms {
+            poll(stop)?;
+            if state.known.contains(&term) {
+                continue;
+            }
+            if let Some(value) = data::literal_value(interner.value(term)) {
+                described.push((term, value));
+                state.known.insert(term);
+            }
+        }
+        if described.is_empty() {
+            return Ok(());
+        }
+        let any_unmodelled = state
+            .partition
+            .extend_until(&described, self.classes, || poll(stop))?;
+        for (term, value) in &described {
+            poll(stop)?;
+            let range = match value {
+                LiteralValue::Value(value) => DataRange::OneOf(vec![value.clone()]),
+                LiteralValue::IllTyped => DataRange::OneOf(Vec::new()),
+                LiteralValue::TermIdentified(space) => DataRange::TermOneOf {
+                    space: *space,
+                    values: vec![*term],
+                },
+                LiteralValue::Unmodelled => continue,
+            };
+            let id = ranges.intern(range);
+            let concept = table.intern(Concept::Data(id));
+            self.types.push((*term, concept));
+        }
+        if any_unmodelled {
+            self.boundaries.insert(Construct::DataRange);
+        }
+        Ok(())
     }
-    if described.is_empty() {
-        return Ok(BTreeMap::new());
-    }
-    let classes = data::literal_classes_until(&described, || poll(stop))?;
-    for (term, value) in &described {
-        poll(stop)?;
-        let range = match value {
-            LiteralValue::Value(value) => DataRange::OneOf(vec![value.clone()]),
-            LiteralValue::IllTyped => DataRange::OneOf(Vec::new()),
-            LiteralValue::TermIdentified(space) => DataRange::TermOneOf {
-                space: *space,
-                values: vec![*term],
-            },
-            LiteralValue::Unmodelled => continue,
-        };
-        let id = ranges.intern(range);
-        let concept = table.intern(Concept::Data(id));
-        abox_types.push((*term, concept));
-    }
-    if classes.any_unmodelled {
-        boundaries.insert(Construct::DataRange);
-    }
-    Ok(classes.class_of)
 }
 
 /// Whether any sub-role or inverse partner has the requested characteristic.
@@ -1864,13 +2156,20 @@ struct Accums {
 }
 
 impl Accums {
-    /// Record `individual` as a NAMED individual — a tableau root and a realization
-    /// candidate. A literal is deliberately not one: `i rdf:type C` with a literal `i` is
-    /// a generalized-RDF triple the dataset IR cannot hold.
-    fn name(&mut self, interner: &Interner, individual: u32) {
-        if interner.is_subject(individual) {
-            self.individuals.insert(individual);
+    fn assertion(
+        &mut self,
+        interner: &Interner,
+        assertion: super::assertions::Assertion,
+    ) -> Result<(), purrdf_lex::allocation::StorageError> {
+        super::assertions::Target {
+            inputs: &mut self.inputs,
+            types: &mut self.abox_types,
+            roles: &mut self.abox_roles,
+            equalities: &mut self.same_as,
+            distinctions: &mut self.different_from,
+            individuals: &mut self.individuals,
         }
+        .record(interner, assertion, Source::Anchor(self.source))
     }
 }
 
@@ -1999,12 +2298,7 @@ fn negative_assertion(
         Box::new(Concept::Not(Box::new(Concept::Nominal(vec![target])))),
     );
     let cid = table.intern(concept);
-    acc.inputs.record(
-        Input::Type(acc.abox_types.len()),
-        Source::Anchor(acc.source),
-    )?;
-    acc.abox_types.push((source, cid));
-    acc.individuals.insert(source);
+    acc.assertion(ce.interner, super::assertions::Assertion::Type(source, cid))?;
     Ok(())
 }
 
@@ -2107,21 +2401,9 @@ fn axiom(
             .record(Input::Key(acc.keys.len()), Source::Anchor(acc.source))?;
         acc.keys.push((cid, properties));
     } else if p == v.same_as {
-        acc.inputs.record(
-            Input::Equality(acc.same_as.len()),
-            Source::Anchor(acc.source),
-        )?;
-        acc.same_as.push((s, o));
-        acc.name(interner, s);
-        acc.name(interner, o);
+        acc.assertion(interner, super::assertions::Assertion::Equality(s, o))?;
     } else if p == v.different_from {
-        acc.inputs.record(
-            Input::Distinct(acc.different_from.len()),
-            Source::Anchor(acc.source),
-        )?;
-        acc.different_from.push((s, o));
-        acc.name(interner, s);
-        acc.name(interner, o);
+        acc.assertion(interner, super::assertions::Assertion::Distinct(s, o))?;
     } else if p == v.ty {
         type_assertion(ce, table, acc, v, interner, s, o)?;
     } else {
@@ -2188,14 +2470,8 @@ fn role_or_boundary(
     if bottom_role_index(interner, p).is_some()
         || matches!(interner.value(p), TermValue::Iri(iri) if iri == purrdf_iri::vocab::owl::TOP_OBJECT_PROPERTY)
     {
-        acc.inputs.record(
-            Input::Role(acc.abox_roles.len()),
-            Source::Anchor(acc.source),
-        )?;
         ce.assertion_property(p, o);
-        acc.abox_roles.push((s, p, o));
-        acc.name(interner, s);
-        acc.name(interner, o);
+        acc.assertion(interner, super::assertions::Assertion::Role(s, p, o))?;
         return Ok(());
     }
     if v.facets.iter().any(|&(facet, _)| facet == p) {
@@ -2216,14 +2492,8 @@ fn role_or_boundary(
             acc.boundaries.insert(construct);
         }
         None => {
-            acc.inputs.record(
-                Input::Role(acc.abox_roles.len()),
-                Source::Anchor(acc.source),
-            )?;
             ce.assertion_property(p, o);
-            acc.abox_roles.push((s, p, o));
-            acc.name(interner, s);
-            acc.name(interner, o);
+            acc.assertion(interner, super::assertions::Assertion::Role(s, p, o))?;
         }
     }
     Ok(())
@@ -2348,12 +2618,7 @@ fn type_assertion(
     // An instance-typing assertion `s : C` for a (possibly anonymous) class C.
     let c = ce.expr(o)?;
     let cid = table.intern(c);
-    acc.inputs.record(
-        Input::Type(acc.abox_types.len()),
-        Source::Anchor(acc.source),
-    )?;
-    acc.abox_types.push((s, cid));
-    acc.individuals.insert(s);
+    acc.assertion(interner, super::assertions::Assertion::Type(s, cid))?;
     Ok(())
 }
 

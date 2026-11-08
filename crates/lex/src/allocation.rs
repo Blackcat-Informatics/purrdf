@@ -57,6 +57,16 @@ impl fmt::Display for StorageError {
 
 impl std::error::Error for StorageError {}
 
+/// Increase an exact operation count, preserving its value on overflow.
+///
+/// # Errors
+/// Returns [`StorageError::SizeOverflow`] when another count is unrepresentable.
+#[inline]
+pub fn increment_count(value: &mut u64) -> Result<(), StorageError> {
+    *value = value.checked_add(1).ok_or(StorageError::SizeOverflow)?;
+    Ok(())
+}
+
 impl purrdf_hash::error::StructuredError for StorageError {
     purrdf_hash::error_visit! {
         Capacity(error) => "storage-capacity" { "cause" => Cause(error) },

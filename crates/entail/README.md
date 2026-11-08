@@ -30,6 +30,7 @@ external reasoner, no `tokio`, and no string round-trip.
 | `materialize_dl_reported(ds, bgp)` | `OWL-Direct` | Open-world OWL DL over the hypertableau with regular SROIQ role languages, directed by the query's class expressions — what `materialize(ds, Materialization::OwlDirect(bgp))` delegates to. Answers a BGP whose variables are all distinguished; a query blank node is a non-distinguished variable and raises the `NonDistinguishedVariable` boundary rather than being answered incompletely in silence. |
 | `Reasoner::new(ds)` | `OWL-Direct` | The Description-Logic services — consistency, class satisfiability, classification, realization, instance retrieval and axiom entailment. Each answer arrives as a `Certified<T>` carrying a `DlCertificate`: the DL lane's own completeness notion, which reports both the constructs the reverse mapping could not read and a search that ran out of deterministic steps. Records no proof term: `Certified::proof()` is `None`. |
 | `Reasoner::with_proofs(ds)` | `OWL-Direct` | The same services, each answer additionally carrying a `ServiceProof` a consumer replays against their own copy of the data. Opt-in because it costs an RDFC-1.0 canonicalization of the dataset, a clausification contract per call, and one instrumented tableau trace per run; the verdict and every `DlCertificate` counter are identical either way. |
+| `PositiveWorld` | `OWL-Direct` | Retain a caller-owned complete source and frozen schema across positive assertion updates, using the original parser, datatype, equality, key and proof owners. Explicit retention limits are required. |
 | `extract_module(ds, signature, method)` | — | Syntactic locality module extraction (`BOT` / `TOP` / `STAR`). Sound, not minimal: a construct whose locality is not decided exactly is kept conservatively and the keep is reported. |
 | `extract_module_with_proofs(ds, signature, method)` | — | The same extraction, carrying a proof term that binds the signature, the notion and the extracted module's own canonical identity. Its ZERO run count is a real measurement — this service opens no tableau — which is why an unrecorded answer says `None` rather than shipping an empty proof. |
 | `profile(ds)` | — | OWL 2 profile certification: which of EL, QL, RL, DL and Full the ontology is *provably* in, with a violation list. A certification proves membership; a violation proves only that the cheap structural condition failed. |
@@ -38,6 +39,75 @@ external reasoner, no `tokio`, and no string round-trip.
 | `Regime::from_iri(iri)` | — | Parse a `sparql:entailmentRegime` IRI to its enum. |
 | `rules(regime)` / `implemented(regime)` | — | The rule table a regime is *defined by*, and the subset this crate fires. Their difference is the measurable gap. |
 | `calculus_program(regime)` | — | The regime's calculus as DL-clause data — the very program `materialize` evaluates, so its `purrdf-datalog` contract hash is recomputable by a consumer. |
+
+## Positive assertion worlds
+
+`reasoner::PositiveWorld` retains a `FallibleDatasetView`, including an `Arc` or
+packed view, and its native OWL preparation. `advance` accepts the next complete
+append-only snapshot. Ordinary default-graph class, object/data property,
+`sameAs` and `differentFrom` assertions enter the existing assertion decoder.
+Schema changes and disappearing source terms, statements or named declarations
+refuse the update. Named-graph statements, reifiers and annotations retain their
+original source roles and identities; their semantic treatment remains the
+native reasoner's default-graph treatment.
+
+Every advance consumes the world. Source, storage, cancellation or preparation
+failure returns no partially advanced owner. Query preparation and mutating
+services also consume it. The retained source is available through `source()`;
+callers can independently retain their own snapshot handles.
+
+Old assertion payloads and expression preparation stay in their original native
+owners. Provider-local IDs are rebound through borrowed exact term lookup;
+newly reached source identities alone require owned frontier reads. Physical
+duplicate source statements receive one semantic lowering and retain their
+original triple-based provenance. `work()` reports actual cold source reads,
+borrowed rebinding, retained-row probes, scanned rows and new semantic lowering.
+An unchanged snapshot performs no semantic lowering or identity recomputation.
+Source scanning and retained-alias validation still read the complete frontier;
+recording additionally computes complete-state and legacy canonical identities.
+
+Recording proofs uses `with_proofs` or `with_proofs_and_stop`. Each proof binds
+the full `DatasetStateDigest`, which includes empty named declarations and all
+three statement families. Immutable shared preparation steps retain the actual
+initial source order, new source bindings and rows, and successful prior
+syntactic question preparations. Later proofs copy step handles. They do not
+copy the old ABox or its term payloads.
+
+A consumer calls `ServiceProof::prepare_positive_context` with its own latest
+source, its independently supplied current question, retention limits, schema
+budget, stop signal and canonicalization control. It validates the complete
+state and exact source coverage before replaying source and syntactic
+preparation through the native owners. The current question is prepared once,
+after the prior history. A preparation step supplies no clauses, assumptions,
+decisions or native budgets. Ambiguous functional OWL operands are refused by
+the shared parser. Native slots and the final clause contract must agree.
+Completed-read checkpoints and cancellation must succeed before a verified
+context stamp is published.
+
+Use that context with `verify_prepared` or `verify_prepared_causal`. A positive
+proof and its checking context require the same complete-state preparation
+stamp in both directions, including when a native proof is extracted from an
+envelope. Generic source verification lacks the complete-state capability and
+refuses these supplemented proofs. Ordinary unsupplemented proof and context
+behavior stays unchanged.
+
+`PositiveWorldLimits` has no implicit defaults. Its aggregate ceilings cover
+history steps, source bindings, source rows/declarations, prior question bytes,
+live metadata bytes and `metadata_work`. Metadata work counts encoded program
+bytes, source validation rows/bindings and native preparation dispatches. Native
+canonicalization, schema preparation, query decisions and keys retain their
+original budget and stop owners; metadata work is not a total native reasoning
+work ceiling. The consumer's limits govern replay. Producer metadata cannot
+raise them. Source failures retain their typed checkpoint evidence through
+`PositiveWorldError`, whose causes support borrowed structured inspection.
+
+Supplemented wire bytes use `purrdf-dl-positive-service-proof-v1`, containing
+the unchanged native service encoding and the complete preparation program.
+`decode_positive` requires explicit consumer limits. `decode` refuses a positive
+envelope rather than discarding it. Capture checks the native codec's syntax
+and nesting ceiling before publishing a proof, including source terms in
+semantically ignored families. No new shipping dependency or semantic feature
+is involved.
 
 ## Prepared explanations
 

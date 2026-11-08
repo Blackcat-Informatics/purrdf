@@ -556,6 +556,7 @@ pub(crate) fn resolved_imports_error<E>(error: EntailError<E>) -> EntailError<E>
         | EntailError::RifVariable(_)
         | EntailError::Decision(_)
         | EntailError::KeyMembership(_)
+        | EntailError::PositiveUpdate(_)
         | EntailError::Evaluate(_)
         | EntailError::Maintenance(_)
         | EntailError::Chase(_)

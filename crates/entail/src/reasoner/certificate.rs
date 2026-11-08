@@ -617,6 +617,16 @@ impl purrdf_hash::error::StructuredError for OwnedDirectnessRefusal {
 }
 
 impl<T> Certified<T> {
+    pub(crate) fn attach_positive_layout(
+        &mut self,
+        layout: crate::owl_dl::proof::layout::PreparationLayout,
+    ) -> Result<(), crate::EntailError> {
+        self.proof
+            .as_mut()
+            .ok_or(crate::EntailError::ProofsNotRecorded)?
+            .attach_positive_layout(layout);
+        Ok(())
+    }
     /// Pair an answer with its certificate and, when one was recorded, its proof term.
     pub(crate) const fn new(
         answer: T,
