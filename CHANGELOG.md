@@ -27,7 +27,7 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 - **Bounded dictionary accounting:** Segmented construction charges limits for
   stored terms and text rather than repeated insertion attempts, preserving
-  deduplication and transactional refusal. Zero-cost RDF literal normalization
+  deduplication and transactional refusal. RDF literal normalization
   and reopened-store behavior retain their existing identities.
 
 - **Finite SPARQL ordering:** Generic `ORDER BY` with a finite result window
