@@ -1678,8 +1678,7 @@ mod tests {
                         if at == fail_at { Err(at) } else { Ok(()) }
                     },
                 )
-                .err()
-                .expect("the selected original callback refuses");
+                .expect_err("the selected original callback refuses");
                 assert!(matches!(failure.cause(), ControlledError::Control(at) if *at == fail_at));
                 assert_eq!(failure.input(), text.as_bytes());
                 drop(failure);

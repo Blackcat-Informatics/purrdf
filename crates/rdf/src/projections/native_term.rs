@@ -460,7 +460,6 @@ mod tests {
                 .expect_err("cached suffix still exceeds caller depth");
             assert_eq!(refusal.kind(), ProjectionErrorKind::ResourceLimit);
             drop(bounded);
-            drop(memory);
 
             let mut memory = Memory::new(&mut resident);
             let mut deep = NativeCapture::new(source.as_ref(), 2047);
