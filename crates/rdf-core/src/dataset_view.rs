@@ -2049,7 +2049,7 @@ impl DatasetView for RdfDataset {
 
     frozen_term_nesting_bound_method! {
         /// Every frozen dataset passed [`RdfDatasetBuilder::freeze`](crate::RdfDatasetBuilder::freeze),
-        /// which refuses a triple term nested past 16.
+        /// which proves acyclicity without a structural depth ceiling, so no bound is claimed.
     }
 
     #[inline]
