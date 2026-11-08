@@ -153,10 +153,7 @@ pub(crate) fn order_permutation(
     workspace: &WorkspaceCapability,
     mut compare: impl FnMut(usize, usize) -> Result<Ordering, EvalError>,
 ) -> Result<AdmittedVec<usize>, EvalError> {
-    let mut order = AdmittedVec::with_capacity(length, workspace)?;
-    for ordinal in 0..length {
-        order.push(ordinal)?;
-    }
+    let mut order = ordinal_array(length, workspace)?;
     if length < 2 {
         return Ok(order);
     }
@@ -206,4 +203,168 @@ pub(crate) fn order_permutation(
         run = step;
     }
     Ok(order)
+}
+
+fn ordinal_array(
+    length: usize,
+    workspace: &WorkspaceCapability,
+) -> Result<AdmittedVec<usize>, EvalError> {
+    let mut order = AdmittedVec::with_capacity(length, workspace)?;
+    for ordinal in 0..length {
+        order.push(ordinal)?;
+    }
+    Ok(order)
+}
+
+pub(crate) enum WindowOrder {
+    Prefix(AdmittedVec<usize>),
+    Permutation(AdmittedVec<usize>),
+}
+
+pub(crate) fn window_order(
+    length: usize,
+    keep: usize,
+    workspace: &WorkspaceCapability,
+    compare: impl FnMut(usize, usize) -> Result<Ordering, EvalError>,
+) -> Result<WindowOrder, EvalError> {
+    if keep.checked_mul(keep).is_some_and(|work| work <= length) {
+        window_permutation(length, keep, workspace, compare).map(WindowOrder::Prefix)
+    } else {
+        window_partition(length, keep, workspace, compare).map(WindowOrder::Permutation)
+    }
+}
+
+/// Partition an admitted ordinal owner, then use the original stable merge
+/// only for its retained prefix. The suffix is a permutation, not ordered.
+/// An introspective depth bound releases the partition owner before invoking
+/// the original full sort, keeping hostile pivot sequences bounded.
+pub(crate) fn window_partition(
+    length: usize,
+    keep: usize,
+    workspace: &WorkspaceCapability,
+    mut compare: impl FnMut(usize, usize) -> Result<Ordering, EvalError>,
+) -> Result<AdmittedVec<usize>, EvalError> {
+    let mut compare = |left: usize, right: usize| {
+        compare(left, right).map(|order| order.then_with(|| left.cmp(&right)))
+    };
+    let mut order = ordinal_array(length, workspace)?;
+    if keep == 0 {
+        return Ok(order);
+    }
+    let (mut start, mut end) = (0, length);
+    let mut depth = 2 * purrdf_xsd::exact::cost::sort_rounds(length);
+    while end - start > 1 && keep < length {
+        if depth == 0 {
+            drop(order);
+            return order_permutation(length, workspace, compare);
+        }
+        depth -= 1;
+        // Median-of-three avoids repeatedly choosing an extreme class on
+        // already ordered or periodic inputs. The depth guard still handles
+        // hostile arrangements independently of this pivot heuristic.
+        let mut first = start;
+        let mut middle = start + (end - start) / 2;
+        let mut last = end - 1;
+        if compare(order[first], order[middle])?.is_gt() {
+            std::mem::swap(&mut first, &mut middle);
+        }
+        if compare(order[middle], order[last])?.is_gt() {
+            std::mem::swap(&mut middle, &mut last);
+        }
+        if compare(order[first], order[middle])?.is_gt() {
+            std::mem::swap(&mut first, &mut middle);
+        }
+        let pivot_index = middle;
+        let pivot = order[pivot_index];
+        order.as_mut_slice().swap(pivot_index, end - 1);
+        let mut split = start;
+        for index in start..end - 1 {
+            if compare(order[index], pivot)?.is_lt() {
+                order.as_mut_slice().swap(index, split);
+                split += 1;
+            }
+        }
+        order.as_mut_slice().swap(split, end - 1);
+        match split.cmp(&(keep - 1)) {
+            Ordering::Equal => break,
+            Ordering::Less => start = split + 1,
+            Ordering::Greater => end = split,
+        }
+    }
+    let keep = keep.min(length);
+    let prefix = order_permutation(keep, workspace, |left, right| {
+        compare(order[left], order[right])
+    })?;
+    let mut sorted = AdmittedVec::with_capacity(keep, workspace)?;
+    for &index in &prefix {
+        sorted.push(order[index])?;
+    }
+    order.as_mut_slice()[..keep].copy_from_slice(&sorted);
+    Ok(order)
+}
+
+/// Keep only the best input ordinals in a max heap. Original ordinals decide
+/// otherwise equal keys, retaining the full stable sort's tie order. The same
+/// admitted array becomes the sorted result; heap sorting needs no scratch.
+pub(crate) fn window_permutation(
+    length: usize,
+    keep: usize,
+    workspace: &WorkspaceCapability,
+    mut compare: impl FnMut(usize, usize) -> Result<Ordering, EvalError>,
+) -> Result<AdmittedVec<usize>, EvalError> {
+    let mut compare = |left: usize, right: usize| {
+        compare(left, right).map(|order| order.then_with(|| left.cmp(&right)))
+    };
+    let mut heap = AdmittedVec::with_capacity(keep.min(length), workspace)?;
+    for ordinal in 0..length {
+        if heap.len() < keep {
+            heap.push(ordinal)?;
+            let mut child = heap.len() - 1;
+            while child > 0 {
+                let parent = (child - 1) / 2;
+                if !compare(heap[parent], heap[child])?.is_lt() {
+                    break;
+                }
+                heap.as_mut_slice().swap(parent, child);
+                child = parent;
+            }
+        } else if keep != 0 && compare(ordinal, heap[0])?.is_lt() {
+            heap.as_mut_slice()[0] = ordinal;
+            window_sift_down(heap.as_mut_slice(), &mut compare)?;
+        }
+    }
+    for end in (1..heap.len()).rev() {
+        heap.as_mut_slice().swap(0, end);
+        window_sift_down(&mut heap.as_mut_slice()[..end], &mut compare)?;
+    }
+    Ok(heap)
+}
+
+fn window_sift_down(
+    heap: &mut [usize],
+    compare: &mut impl FnMut(usize, usize) -> Result<Ordering, EvalError>,
+) -> Result<(), EvalError> {
+    let mut parent = 0usize;
+    loop {
+        let left = parent
+            .checked_mul(2)
+            .and_then(|index| index.checked_add(1))
+            .ok_or(EvalError::WorkspaceBoundOverflow)?;
+        if left >= heap.len() {
+            return Ok(());
+        }
+        let right = left
+            .checked_add(1)
+            .ok_or(EvalError::WorkspaceBoundOverflow)?;
+        let child = if right < heap.len() && compare(heap[left], heap[right])?.is_lt() {
+            right
+        } else {
+            left
+        };
+        if !compare(heap[parent], heap[child])?.is_lt() {
+            return Ok(());
+        }
+        heap.swap(parent, child);
+        parent = child;
+    }
 }

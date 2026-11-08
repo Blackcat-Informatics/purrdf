@@ -1027,6 +1027,61 @@ impl<I: ViewTermId> RowBag<I> {
             }
         }
     }
+
+    /// Sparse prefix movement is useful only while its at-most quadratic
+    /// integer bookkeeping stays within the already retained input length.
+    pub(crate) fn can_order_prefix(
+        &self,
+        length: usize,
+        workspace: &crate::WorkspaceCapability,
+    ) -> bool {
+        self.can_order_window(workspace)
+            && length
+                .checked_mul(length)
+                .is_some_and(|work| work <= self.len())
+    }
+
+    pub(crate) fn can_order_window(&self, workspace: &crate::WorkspaceCapability) -> bool {
+        !workspace.is_bounded()
+            && !self.may_have_row_attachments
+            && matches!(self.storage, BagStorage::Resident(_))
+    }
+
+    /// Place distinct selected original ordinals at the front without a full
+    /// permutation or another row owner. The unselected suffix is unspecified;
+    /// callers must prove that only the selected prefix can be observed.
+    pub(crate) fn prefix_ordered_admitted(
+        mut self,
+        mut order: crate::workspace::AdmittedVec<usize>,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Self, crate::EvalError> {
+        if !self.can_order_prefix(order.len(), workspace) {
+            return Err(crate::EvalError::internal(
+                "prefix ordering requires an unbounded resident bag and a bounded sparse window",
+            ));
+        }
+        let BagStorage::Resident(rows) = &mut self.storage else {
+            return Err(crate::EvalError::internal(
+                "prefix ordering lost its resident owner",
+            ));
+        };
+        for destination in 0..order.len() {
+            let source = order[destination];
+            if source == destination {
+                continue;
+            }
+            rows.swap(destination, source);
+            // Remaining selected positions are distinct. Only the one naming
+            // the displaced destination can have moved; its new slot is source.
+            if let Some(position) = order.as_mut_slice()[destination + 1..]
+                .iter_mut()
+                .find(|position| **position == destination)
+            {
+                *position = source;
+            }
+        }
+        Ok(self)
+    }
 }
 
 impl<I: ViewTermId> From<Vec<Solution<I>>> for RowBag<I> {
