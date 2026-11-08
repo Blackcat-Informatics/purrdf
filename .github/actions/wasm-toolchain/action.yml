@@ -40,9 +40,9 @@ runs:
         set -euo pipefail
         ver="${{ steps.pins.outputs.wasm_bindgen }}"
         base="wasm-bindgen-${ver}-x86_64-unknown-linux-musl"
-        url="https://github.com/rustwasm/wasm-bindgen/releases/download/${ver}/${base}.tar.gz"
-        curl -fsSL "$url" -o /tmp/wb.tar.gz
-        curl -fsSL "${url}.sha256sum" -o /tmp/wb.sha256
+        url="https://github.com/wasm-bindgen/wasm-bindgen/releases/download/${ver}/${base}.tar.gz"
+        curl -fsSL --retry 3 --retry-delay 2 --retry-max-time 120 --connect-timeout 15 --max-time 180 "$url" -o /tmp/wb.tar.gz
+        curl -fsSL --retry 3 --retry-delay 2 --retry-max-time 120 --connect-timeout 15 --max-time 180 "${url}.sha256sum" -o /tmp/wb.sha256
         echo "$(awk '{print $1}' /tmp/wb.sha256)  /tmp/wb.tar.gz" | sha256sum -c -
         mkdir -p /tmp/wb && tar -xzf /tmp/wb.tar.gz -C /tmp/wb --strip-components=1
         install -Dm0755 /tmp/wb/wasm-bindgen "$HOME/.cargo/bin/wasm-bindgen"
