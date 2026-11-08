@@ -32,7 +32,7 @@ use purrdf_sparql_eval::{PlanCache, PreparedQuery};
 /// re-parse).
 #[test]
 fn compiles_generated_query_set_once() {
-    let query_dir = purrdf_testkit::paths::workspace_root().join("generated/queries");
+    let query_dir = purrdf_testkit::paths::workspace_root!().join("generated/queries");
 
     // --- enumerate and sort ---
     let mut entries: Vec<std::path::PathBuf> = fs::read_dir(&query_dir)

@@ -26,7 +26,7 @@ use purrdf_lex::json::{self, ErrorKind, Limits, Reader, Value};
 use purrdf_testkit::paths::workspace_root;
 
 fn corpus() -> PathBuf {
-    workspace_root().join("vectors/JSONTestSuite/test_parsing")
+    workspace_root!().join("vectors/JSONTestSuite/test_parsing")
 }
 
 /// Every vendored document as `(file name, bytes)`, sorted by name.

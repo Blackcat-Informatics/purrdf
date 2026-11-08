@@ -12,7 +12,6 @@ homepage.workspace = true
 rust-version.workspace = true
 keywords = ["rdf", "allocator", "memory", "benchmark"]
 categories = ["development-tools::profiling"]
-publish = false
 
 [lints]
 workspace = true

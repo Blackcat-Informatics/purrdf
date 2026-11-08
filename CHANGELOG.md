@@ -6,6 +6,47 @@ breaking change bumps the major version, a minor bump is additive, and a patch
 bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 0.x.
 
+## [4.0.1] - 2026-11-08
+
+- **Current SHACL reports:** Refresh the W3C SHACL 1.2 suite and vocabularies
+  to the November 6 snapshot, retaining the independently pinned SPARQL Rules
+  suite. The additive `ShaclProfile::ED_20261106` selects eager list-function
+  arguments and run-once rule execution per distinct focus node; earlier dated
+  profiles keep their laws. Native and CLI evaluation share typed expression
+  failure grading, with corrected declaring-focus validation, conservative
+  change footprints and recursive empty-shape handling. Release EARLs are
+  regenerated from the tagged source.
+
+- **Published development libraries:** `purrdf-testkit`, `purrdf-alloc-probe`
+  and `purrdf-conformance-kit` are available at the suite version. Published
+  consumers retain their versioned development dependencies, and the release
+  order covers both runtime and development edges. Testkit packages its JSON
+  Schema meta-schemas with their BSD notices and resolves workspace paths from
+  the calling crate, including standalone downstream packages. Repository
+  inventory checks remain with checkout-bound tooling and conformance runners.
+
+- **Bounded dictionary accounting:** Segmented construction charges limits for
+  stored terms and text rather than repeated insertion attempts, preserving
+  deduplication and transactional refusal. Zero-cost RDF literal normalization
+  and reopened-store behavior retain their existing identities.
+
+- **Finite SPARQL ordering:** Generic `ORDER BY` with a finite result window
+  selects exact bounded candidates while retaining native total ordering,
+  stable ties, offset behavior and operational refusals.
+
+- **Native query conformance:** The community corpus includes fifteen query
+  and SERVICE cases covering multiplicity, unbound rows, property paths and
+  blank-node identity across independent sources and service responses. Native
+  runners preserve document origins and compare full result bags.
+
+- **Shared columnar terms:** Columnar projection and decoding preserve shared
+  term graphs through flat dependency records and native reconstruction,
+  avoiding recursive expansion. Invalid triple-valued datatype diagnostics
+  retain only the rejected operand's reachable graph after the source is
+  dropped. Canonical Parquet bytes and scalar diagnostic behavior are preserved.
+
+The v4 compatibility baseline and C ABI 0.20.0 remain unchanged.
+
 ## [4.0.0] - 2026-11-07
 
 - **Native execution and transfer efficiency:** Bounded HNSW searches admit lazy

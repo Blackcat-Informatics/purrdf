@@ -559,7 +559,7 @@ mod tests {
     #[test]
     fn every_entry_names_a_declared_static() {
         for ThreadLocal { file, name, .. } in LEDGER {
-            let source = std::fs::read_to_string(workspace_root().join(file))
+            let source = std::fs::read_to_string(workspace_root!().join(file))
                 .unwrap_or_else(|error| panic!("{file} is listed but cannot be read: {error}"));
             let declared = source.lines().any(|line| {
                 let trimmed = line.trim_start();

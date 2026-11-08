@@ -81,7 +81,9 @@ one in [`scripts/release-crates.sh`](../scripts/release-crates.sh), which the
 workflow, the bootstrap script and the crates.io preflight all source, and which
 `scripts/check-doc-claims.py` checks this list against:
 
+- `purrdf-alloc-probe`
 - `purrdf-hash`
+- `purrdf-testkit`
 - `purrdf-stack`
 - `purrdf-lex`
 - `purrdf-events`
@@ -105,6 +107,7 @@ workflow, the bootstrap script and the crates.io preflight all source, and which
 - `purrdf-text`
 - `purrdf-retrieval`
 - `purrdf-rdf`
+- `purrdf-conformance-kit`
 - `purrdf-markdown`
 - `purrdf-mime`
 - `purrdf-json`
@@ -197,7 +200,7 @@ first tagged run can publish the complete workspace in dependency order.
 
 ### Bootstrap: complete (ledger empty)
 
-All 37 release crates have crates.io records. On 2026-11-07, `purrdf-zstd`,
+All 40 release crates have crates.io records. On 2026-11-07, `purrdf-zstd`,
 `purrdf-geo-kernel`, `purrdf-mime`, `purrdf-toml`, `purrdf-yaml` and
 `purrdf-glob` received isolated, empty, dependency-free **0.0.0** versions.
 Native and WASM compilation, normal package verification and exact
@@ -205,13 +208,18 @@ empty-source/license archive audits ran with the installed compiler before
 upload. The public registry confirmed each version. These packages expose no
 runtime API and contain no functional implementation.
 
-Record creation and Trusted Publisher setup are complete. On 2026-11-07 the
-maintainer confirmed the matching publisher entries, and the strict public
-preflight verified **Require trusted publishing** on all 37 release records
-(`trustpub_only=true`). Publisher entries have no public read API; the
-maintainer's confirmation and the independently checked registry locks are
-separate evidence. The release lane repeats the strict preflight before any
-functional publication.
+On 2026-11-08, `purrdf-alloc-probe`, `purrdf-testkit` and
+`purrdf-conformance-kit` received the same empty **0.0.0** bootstrap records.
+Rust 1.98.1 verified native tests, WASM compilation and package archives before
+upload; exact source and license audits passed. The public registry confirmed
+all three versions. Their functional release is **4.0.1**.
+
+Record creation and Trusted Publisher setup are complete. The maintainer
+confirmed the new publisher configuration on 2026-11-08, and the strict public
+preflight independently verified **Require trusted publishing** on all 40
+release records (`trustpub_only=true`). Publisher entries have no public read
+API; maintainer confirmation and registry locks are separate evidence. The
+release lane repeats the strict preflight before functional publication.
 
 ### Established records
 

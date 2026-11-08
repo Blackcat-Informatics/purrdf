@@ -324,7 +324,7 @@ mod native {
     }
 
     pub(super) fn run() -> Result<()> {
-        let root: PathBuf = purrdf_testkit::paths::workspace_root();
+        let root: PathBuf = purrdf_testkit::paths::workspace_root!();
         preflight(&root)?;
         for corpus in CORPORA {
             compare(&root, &corpus)?;

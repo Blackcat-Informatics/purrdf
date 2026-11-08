@@ -867,7 +867,7 @@ const MAX_UNPARSEABLE_RU: usize = 22;
 
 #[test]
 fn corpus_round_trips_through_the_serializer() {
-    let root = workspace_root();
+    let root = workspace_root!();
 
     let mut rq_files = Vec::new();
     let mut ru_files = Vec::new();

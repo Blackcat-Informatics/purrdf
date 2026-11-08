@@ -1013,7 +1013,7 @@ mod tests {
 
     #[test]
     fn the_shape_numbers_every_suite_query_in_walk_spine_order() {
-        let suites = purrdf_testkit::paths::workspace_root().join("crates/sparql-conformance");
+        let suites = purrdf_testkit::paths::workspace_root!().join("crates/sparql-conformance");
         let mut files = Vec::new();
         let mut dirs = vec![suites.join("suite"), suites.join("corpus")];
         while let Some(dir) = dirs.pop() {

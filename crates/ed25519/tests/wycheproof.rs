@@ -38,7 +38,7 @@ fn accepts(key: &[u8], message: &[u8], signature: &[u8]) -> bool {
 
 #[test]
 fn every_wycheproof_ed25519_case() {
-    let path = workspace_root().join("vectors/wycheproof/ed25519_test.json");
+    let path = workspace_root!().join("vectors/wycheproof/ed25519_test.json");
     let text = std::fs::read_to_string(&path).expect("vendored Wycheproof file");
     let document = json::read(&text).expect("well-formed JSON");
 

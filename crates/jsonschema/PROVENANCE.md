@@ -45,40 +45,13 @@ The full input tree is pinned in
   cases, with the file, group, case and registered-remote counts pinned by
   each target's `suite-inventory` case. No case is ignored.
 
-## `tests/metaschemas/` — the draft-07, 2019-09 and 2020-12 meta-schemas
+## Shared meta-schemas
 
-- Upstream: <https://github.com/json-schema-org/json-schema-spec>.
-  - `draft2020-12/`: branch `2020-12`, commit
-    **`601a66c8b0f25246bf0e1fb488c5b5f030a79b72`**: `schema.json` and
-    `meta/{core,applicator,unevaluated,validation,meta-data,
-    format-annotation,format-assertion,content}.json`, verbatim.
-  - `draft2019-09/` (`schema.json` and
-    `meta/{core,applicator,validation,meta-data,format,content}.json`) and
-    `draft-07/schema.json`: the `2019-09` and `draft-07` branches, verbatim.
-    Their upstream commits were not recorded when they were vendored and are
-    not recorded here. What is pinned is their content: the digests in
-    `scripts/conformance-frozen/jsonschema-metaschemas.sha256`.
-  - These are the documents published at
-    `https://json-schema.org/draft/2020-12/…`,
-    `https://json-schema.org/draft/2019-09/…` and
-    `http://json-schema.org/draft-07/schema`.
-- License: at the vendored commits the upstream repository carried no
-  `LICENSE` file; its README declared only that "the source material in this
-  repository is licensed under the AFL or BSD license". The project later
-  specified those licences in a root `LICENSE` file, added in commit
-  `51326f809003` (2022-07-12): BSD-3-Clause, `Copyright (c) 2022 JSON Schema
-  Specification Authors`, followed by the Academic Free License 3.0. PurRDF
-  takes the meta-schemas under BSD-3-Clause:
-  `tests/metaschemas/LICENSES/BSD-3-Clause.txt` is that file's BSD section
-  verbatim, copyright line included, and `tests/metaschemas/REUSE.toml`
-  declares it with the holder "JSON Schema Specification Authors".
-- Test data only. The crate compiles no meta-schema in: callers register
-  the ones they need (`Metaschemas`, `Registry::with_metaschemas`). The
-  workspace's tests and examples take these copies through
-  `purrdf_testkit::jsonschema_metaschemas`; the directory is excluded from
-  the published package.
-- Frozen: `scripts/check-corpus-frozen.py`, manifest
-  `scripts/conformance-frozen/jsonschema-metaschemas.sha256`.
+The draft-07, 2019-09 and 2020-12 meta-schema bytes, upstream identities and
+BSD-3-Clause notices live in the published shared test support:
+[`purrdf-testkit` provenance](https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/testkit/PROVENANCE.md). Tests and examples
+register those documents through `purrdf_testkit::jsonschema_metaschemas`.
+This engine compiles no meta-schema in; callers select and register their own.
 
 ## `tests/boon_differential_vectors.txt` — the replaced validator's verdicts
 

@@ -18,7 +18,7 @@ fn framed(source: &[u8], frame: &[u8], config: &Value) -> Value {
 #[test]
 fn framing_preserves_native_documents_context_roles_and_phase_limits() {
     // The unchanged native framing witness owns the algorithm's expected document.
-    let root = purrdf_testkit::paths::workspace_root().join("vectors/yaml-ld/tests/cases/frame");
+    let root = purrdf_testkit::paths::workspace_root!().join("vectors/yaml-ld/tests/cases/frame");
     let source = std::fs::read(root.join("0001-in.yamlld")).unwrap();
     let frame = std::fs::read(root.join("0001-frame.yamlld")).unwrap();
     let expected =

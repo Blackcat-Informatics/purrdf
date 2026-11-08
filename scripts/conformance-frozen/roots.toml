@@ -29,7 +29,7 @@
 "crates/sparql-conformance/suite/w3c-sparql12" = "scripts/conformance-frozen/sparql-conformance-suite-w3c-sparql12.sha256"
 "crates/rdf/tests/corpus/w3c" = "scripts/conformance-frozen/rdf-tests-corpus-w3c.sha256"
 "crates/jsonschema/tests/suite" = "scripts/conformance-frozen/jsonschema-suite.sha256"
-"crates/jsonschema/tests/metaschemas" = "scripts/conformance-frozen/jsonschema-metaschemas.sha256"
+"crates/testkit/metaschemas" = "scripts/conformance-frozen/jsonschema-metaschemas.sha256"
 "crates/iri/unicode" = "scripts/conformance-frozen/iri-unicode.sha256"
 "crates/lex/data/html" = "scripts/conformance-frozen/lex-html.sha256"
 "crates/text/lexicons/icu-78.3" = "scripts/conformance-frozen/text-icu-78.3.sha256"

@@ -12,7 +12,7 @@ use purrdf_shapes::profile::AdmissionReason;
 use purrdf_sparql_conformance::community::{self, Corpus, Selection, Totals};
 
 fn corpus_root() -> PathBuf {
-    purrdf_testkit::paths::workspace_root().join("corpora/community")
+    purrdf_testkit::paths::workspace_root!().join("corpora/community")
 }
 
 /// Copy the corpus so one artifact can be altered without touching the source.

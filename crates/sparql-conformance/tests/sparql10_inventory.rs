@@ -23,7 +23,7 @@ fn loaded_receipt(script: &Path, root: &str) -> Output {
 fn the_sparql10_payload_is_registered_with_its_exact_freeze_receipt() {
     const ROOT: &str = "crates/sparql-conformance/suite/w3c-sparql10";
     const RECEIPT: &str = "scripts/conformance-frozen/sparql-conformance-suite-w3c-sparql10.sha256";
-    let workspace = purrdf_testkit::paths::workspace_root();
+    let workspace = purrdf_testkit::paths::workspace_root!();
     // Observe the production guard's loaded registry. All expectations belong
     // to this native Rust test; this bridge only returns its configured value.
     let loaded = loaded_receipt(&workspace.join("scripts/check-corpus-frozen.py"), ROOT);
@@ -54,7 +54,7 @@ fn the_sparql10_payload_is_registered_with_its_exact_freeze_receipt() {
 
 #[test]
 fn a_missing_or_malformed_freeze_registry_is_refused() {
-    let workspace = purrdf_testkit::paths::workspace_root();
+    let workspace = purrdf_testkit::paths::workspace_root!();
     let fixture = purrdf_testkit::temp_dir!("sparql10-freeze-registry-").expect("fixture");
     let script = fixture.path().join("check-corpus-frozen.py");
     fs::copy(workspace.join("scripts/check-corpus-frozen.py"), &script).expect("copy guard");

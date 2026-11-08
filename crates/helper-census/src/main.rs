@@ -114,7 +114,7 @@ struct Arguments {
 }
 
 fn parse_arguments(mut args: impl Iterator<Item = String>) -> Result<Arguments, String> {
-    let mut root = purrdf_testkit::paths::workspace_root();
+    let mut root = purrdf_testkit::paths::workspace_root!();
     let mut ledger = None;
     let mut mode = None;
     let mut base = None;

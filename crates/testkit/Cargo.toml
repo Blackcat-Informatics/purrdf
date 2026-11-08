@@ -6,13 +6,12 @@ name = "purrdf-testkit"
 description = "The workspace's shared test support: byte-exact golden files, temporary files and directories under the cargo target directory, self-hashing frozen differential vectors, a libtest-compatible runner for harness = false targets, and property-based testing on a recorded choice sequence, and a statistically sound micro-benchmark harness"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
+license = "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND BSD-3-Clause"
 repository.workspace = true
 homepage.workspace = true
 rust-version.workspace = true
 keywords = ["rdf", "testing", "golden", "harness", "property"]
 categories = ["development-tools::testing"]
-publish = false
 
 [lints]
 workspace = true

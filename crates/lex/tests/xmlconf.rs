@@ -405,7 +405,7 @@ fn grade(case: &Case) -> Verdict {
 
 #[test]
 fn the_reader_is_graded_against_the_w3c_xml_conformance_suite() {
-    let workspace = workspace_root();
+    let workspace = workspace_root!();
     let acquired = std::process::Command::new("python3")
         .arg(workspace.join("scripts/vendor-xmlconf.py"))
         .status()

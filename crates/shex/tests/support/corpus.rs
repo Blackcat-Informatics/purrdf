@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 /// The vendored shexTest v2.1.0 suite, `vectors/shexTest`.
 pub fn shex_test() -> PathBuf {
-    purrdf_testkit::paths::workspace_root().join("vectors/shexTest")
+    purrdf_testkit::paths::workspace_root!().join("vectors/shexTest")
 }
 
 /// The suite's schema directory, `vectors/shexTest/schemas`.

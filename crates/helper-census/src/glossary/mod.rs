@@ -434,7 +434,7 @@ struct Options {
 }
 
 fn options(args: Vec<String>) -> Result<Options, String> {
-    let mut root = purrdf_testkit::paths::workspace_root();
+    let mut root = purrdf_testkit::paths::workspace_root!();
     let mut po = None;
     let mut glossary = None;
     let mut self_test = false;
@@ -1462,7 +1462,7 @@ mod tests {
 
     #[test]
     fn selected_glossary_runs_all_default_controls() {
-        let root = purrdf_testkit::paths::workspace_root();
+        let root = purrdf_testkit::paths::workspace_root!();
         let rows =
             parse_glossary(&read(&root.join(GLOSSARY)).unwrap(), &root.join(GLOSSARY)).unwrap();
         consistency(&rows).unwrap();
@@ -1473,7 +1473,7 @@ mod tests {
 
     #[test]
     fn whole_document_global_diagnostics_have_real_lines() {
-        let root = purrdf_testkit::paths::workspace_root();
+        let root = purrdf_testkit::paths::workspace_root!();
         let rows =
             parse_glossary(&read(&root.join(GLOSSARY)).unwrap(), &root.join(GLOSSARY)).unwrap();
         let found = offences(

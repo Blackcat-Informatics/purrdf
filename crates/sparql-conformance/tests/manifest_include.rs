@@ -266,7 +266,7 @@ fn an_index_with_entries_or_an_undiscoverable_member_is_refused() {
 #[test]
 fn the_vendored_cdt_aggregator_loads_every_group() {
     let aggregator =
-        purrdf_testkit::paths::workspace_root().join("vectors/sparql-cdt/manifest-all.ttl");
+        purrdf_testkit::paths::workspace_root!().join("vectors/sparql-cdt/manifest-all.ttl");
     let cases =
         manifest::load(&aggregator).expect("the vendored CDT aggregator manifest must load");
 

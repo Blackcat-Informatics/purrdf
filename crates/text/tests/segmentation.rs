@@ -404,7 +404,7 @@ fn generated_analysis_properties_match_the_ucd_for_every_scalar() {
         ("Khmer", "Khmr", SegmentationScript::Khmer),
         ("Myanmar", "Mymr", SegmentationScript::Myanmar),
     ];
-    let root = purrdf_testkit::paths::workspace_root().join("crates/iri/unicode/17.0.0");
+    let root = purrdf_testkit::paths::workspace_root!().join("crates/iri/unicode/17.0.0");
     let read = |name| std::fs::read_to_string(root.join(name)).expect("vendored UCD file");
     let mut expected = vec![0u32; 0x11_0000];
     for (point, fields) in unicode_data(&read("UnicodeData.txt")) {

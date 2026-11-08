@@ -65,7 +65,7 @@ use purrdf_shapes::{apply_rules, engine, text_ingest};
 
 /// The rules corpus, under the workspace root.
 fn rules_dir() -> PathBuf {
-    purrdf_testkit::paths::workspace_root().join("vectors/shacl/af/rules")
+    purrdf_testkit::paths::workspace_root!().join("vectors/shacl/af/rules")
 }
 
 /// The EXACT number of case directories the corpus must hold, so a removed or

@@ -40,7 +40,7 @@ use purrdf_sparql_conformance::run;
 
 /// `vectors/sparql-cdt/bnodes/` — the vendored SEP-0009 blank-node group.
 fn bnodes(file: &str) -> PathBuf {
-    purrdf_testkit::paths::workspace_root()
+    purrdf_testkit::paths::workspace_root!()
         .join("vectors/sparql-cdt/bnodes")
         .join(file)
 }

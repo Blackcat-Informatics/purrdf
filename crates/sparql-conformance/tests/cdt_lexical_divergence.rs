@@ -210,7 +210,7 @@ struct Scan {
 
 /// Recover every composite literal across every corpus root.
 fn scan_corpora() -> Scan {
-    let root = workspace_root();
+    let root = workspace_root!();
     let mut files = Vec::new();
     for corpus in CORPUS_ROOTS {
         walk(&root.join(corpus), &mut files);
@@ -282,7 +282,7 @@ fn corpus_cdt_literals_are_all_inside_sep0009() {
     // is checked directly, on the raw bytes, rather than assumed — and the count
     // is pinned so a lexer regression that starts refusing hundreds of files
     // cannot quietly shrink what is graded while every other pin still matches.
-    let root = workspace_root();
+    let root = workspace_root!();
     for file in &lex_refused {
         let source = std::fs::read_to_string(root.join(file))
             .unwrap_or_else(|e| panic!("{}: re-read for the text check: {e}", file.display()));
@@ -374,7 +374,7 @@ fn corpus_cdt_literals_are_all_inside_sep0009() {
 /// results reader rather than silently keeping a hole.
 #[test]
 fn no_expected_results_file_carries_a_composite_literal() {
-    let root = workspace_root();
+    let root = workspace_root!();
     let mut files = Vec::new();
     for corpus in CORPUS_ROOTS {
         walk(&root.join(corpus), &mut files);

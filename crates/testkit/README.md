@@ -3,16 +3,18 @@
 
 # purrdf-testkit
 
-The workspace's shared test support, written once instead of once per crate.
+Shared Rust test and benchmark support, used throughout PurRDF and available
+to downstream projects. Add it to your test dependencies:
 
-Never published, never a runtime dependency: it appears only in
-`[dev-dependencies]`, so no release crate and no release wasm build ever sees
-it. It builds and runs on `wasm32-unknown-unknown` too, where the workspace's
-focused target-specific cases run on its harness. Its
-one first-party dependency is `purrdf-hash`, the zero-dependency root, whose
-own tests and benches do not use this crate — every member's tests may use it,
-and any further first-party edge from here would close a cycle through that
-member.
+```toml
+[dev-dependencies]
+purrdf-testkit = "4.0.1"
+```
+
+Its one first-party dependency is `purrdf-hash`, the zero-dependency root.
+The library builds for `wasm32-unknown-unknown`; executing its harness on that
+target requires the external host described below. File-system helpers are
+native facilities.
 
 ## What it provides
 
@@ -20,6 +22,12 @@ member.
   compares `text` with the calling crate's `tests/golden/dir/name.txt` byte for
   byte, CRLF and trailing whitespace included. `PURRDF_REGENERATE_GOLDEN=1`
   rewrites the file from the produced text instead; the diff is the review.
+* **Caller workspace paths** — `purrdf_testkit::workspace_root!()` captures
+  the calling crate's manifest directory. It selects an explicit ancestor
+  `[workspace]`, or the nearest `[package]` when no workspace is declared.
+  `paths::workspace_root_from` accepts an explicit starting path. These helpers
+  recognize table-header lines; they do not resolve Cargo's
+  `package.workspace` override. Downstream corpus paths belong to the caller.
 * **Temporary paths under `target/`** — `temp_dir!()` and `temp_file!()` in
   integration tests and benches (they read `CARGO_TARGET_TMPDIR` at the call
   site), `TempDir::for_unit_test()` and `NamedTempFile::for_unit_test()` in a
@@ -41,7 +49,7 @@ member.
   plain functions as cases named after them. The same target runs on
   `wasm32-unknown-unknown` in Node under `scripts/wasm-test-runner.sh`, the
   cargo runner `make wasm-test` sets: the command line, environment, console
-  and clock are Node's, cases run serially, and since a panic aborts a wasm32
+  and clock are Node's, cases run serially, and since a panic aborts a WASM
   module, a panicking case is reported `FAILED` with its message and tally
   before the module traps and the runner exits non-zero.
   `PURRDF_TEST_REQUIRE_EXACT=1` requires nonempty exact filters and refuses the
@@ -50,7 +58,7 @@ member.
   absent, partial, ignored, skipped and duplicate selections. Unset or `0`
   preserves normal libtest behavior.
   `harness::without_host_clock_or_entropy` runs a computation with every host
-  clock and entropy source throwing on wasm32, for answers that must be a
+  clock and entropy source throwing on WASM, for answers that must be a
   function of their inputs alone; `harness::print_line` prints a line that
   reaches the console on both targets.
 * **Property-based testing** — `purrdf_testkit::prop` and `prop_test!`.
@@ -86,3 +94,39 @@ member.
   harness also supports `wasm32-unknown-unknown`, where the store options are
   refused because there is no file system. `make wasm-test` runs only its
   host-clock and store-refusal tests; general benchmark routines stay native.
+
+## WASM harness host
+
+The published crate includes the Rust host imports. PurRDF's Node runner,
+`scripts/wasm-test-runner.sh`, lives in the repository and is not included in
+the crate archive. A downstream host must generate matching wasm-bindgen
+glue and install `globalThis.__purrdf_testkit_host` before starting the module.
+Its methods are:
+
+| Method | Contract |
+| --- | --- |
+| `argCount()`, `arg(index)` | Argument count and indexed string after the module path. |
+| `envVar(name)` | Environment string, or `undefined` when absent. |
+| `writeStdout(text)`, `writeStderr(text)` | Write exact text without adding a newline. |
+| `stdoutIsTerminal()` | Boolean terminal status. |
+| `nowMillis()` | Monotonic milliseconds for harness timing, available during a seal. |
+| `seal()`, `unseal()` | Nestable withdrawal and restoration of host clocks and entropy visible to the computation under test. |
+| `exit(status)` | Record the module's exit status; returning without one is a runner error. |
+| `arm(name, report, startedMillis)`, `disarm()` | Retain and clear the active case's failure report. |
+| `fail(message)` | Print the armed report once, replacing the message and elapsed-time slots before the module traps. |
+
+The report slots are `\u0000purrdf-testkit-message\u0000` and
+`\u0000purrdf-testkit-elapsed\u0000`; elapsed time is seconds with two decimal
+places. A runner must report a trap or uncaught host exception as failure,
+including exceptions outside an armed case. The repository runner is the
+reference for the host seal and failure handling. General Rust semantics and
+conformance tests run natively; PurRDF selects WASM execution only for actual
+target and host obligations.
+
+## License
+
+First-party code is available under MIT OR Apache-2.0 OR MulanPSL-2.0.
+The bundled JSON Schema meta-schemas retain BSD-3-Clause terms, so the package
+expression is `(MIT OR Apache-2.0 OR MulanPSL-2.0) AND BSD-3-Clause`.
+See `PROVENANCE.md`, `metaschemas/REUSE.toml` and `licenses/NOTICE.txt` for
+origins and complete recipient notices.

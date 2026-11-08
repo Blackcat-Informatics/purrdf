@@ -95,7 +95,7 @@ MIT, Apache-2.0, or MulanPSL-2.0.
 | `vectors/w3c-recs/` | W3C XML 1.0 Second Edition and XML Schema Part 2 Second Edition Recommendations, inputs of the dated XPath regex table generator | W3C Document License (each document's linked notice; see its `PROVENANCE.md`) |
 | `vectors/yaml-test-suite/` | official YAML test suite (`yaml/yaml-test-suite`, release `data-2022-01-17`) | MIT (`vectors/yaml-test-suite/LICENSE`) |
 | `crates/jsonschema/tests/suite/` | official JSON-Schema-Test-Suite (`json-schema-org/JSON-Schema-Test-Suite`) | MIT (`tests/suite/LICENSES/MIT.txt`) |
-| `crates/jsonschema/tests/metaschemas/` | JSON Schema draft-07, 2019-09 and 2020-12 meta-schemas (`json-schema-org/json-schema-spec`) | BSD-3-Clause, one of the two licences upstream offers (`tests/metaschemas/REUSE.toml`) |
+| `crates/testkit/metaschemas/` | JSON Schema draft-07, 2019-09 and 2020-12 meta-schemas (`json-schema-org/json-schema-spec`) | BSD-3-Clause, one of the two licences upstream offers (`crates/testkit/metaschemas/REUSE.toml`) |
 
 The first-party selectors, harnesses, and reconstructed expected-result files
 that sit *inside* those trees carry the repository's own
@@ -151,7 +151,7 @@ every listed component occurs in the resulting binary; source-only Cargo
 packages and Python sdists do not bundle the standard library itself.
 
 `make metadata` regenerates these projections. CI verifies the committed
-projections; release workflows audit the actual 31 Cargo archives, both Python
+projections; release workflows audit the actual 40 Cargo archives, both Python
 wheel/sdist pairs, the npm tarball and the C distribution. They reject absent
 or modified texts, incomplete Cargo archive sets, private working material and
 acquired XML payloads, and retain per-artifact digest receipts. The C install

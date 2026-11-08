@@ -1390,9 +1390,9 @@ names = ['^(on_thread|run_on_big_stack|with_big_stack)$']
 [[job]]
 id = "test-workspace-paths"
 summary = "The workspace root and the Rust sources under it, for tests and generators"
-home = "purrdf_testkit::paths::workspace_root"
-entry_points = ["purrdf_testkit::paths::collect_rs", "purrdf_testkit::paths::workspace_root_from"]
-spec = "the Cargo workspace layout (the manifest that declares [workspace])"
+home = "purrdf_testkit::paths::workspace_root_from"
+entry_points = ["purrdf_testkit::paths::collect_rs"]
+spec = "caller manifest ancestors: the nearest explicit [workspace], otherwise the nearest standalone [package]"
 vectors = []
 bench = []
 sites = []
