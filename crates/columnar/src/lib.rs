@@ -22,6 +22,7 @@
 
 mod column;
 mod compact;
+mod dictionary;
 pub mod error;
 mod files;
 mod manifest;
