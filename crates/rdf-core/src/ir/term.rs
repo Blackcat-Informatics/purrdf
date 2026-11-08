@@ -121,7 +121,7 @@ impl TermId {
     }
 }
 
-// The NonZeroU32 niche is the load-bearing P3a invariant: it is *why*
+// The `NonZeroU32` niche is the load-bearing P3a invariant: it is *why*
 // `Option<TermId>` — and the `g` graph slot of every quad row — costs no extra
 // word. These compile-time assertions fail the build if the niche ever regresses.
 const _: () = assert!(size_of::<TermId>() == 4);
@@ -603,13 +603,6 @@ impl TermValue {
             Self::Literal { .. } => "a literal",
             Self::Triple { .. } => "a triple term",
         }
-    }
-
-    /// The canonical kind tag used to order terms of DIFFERENT kinds (see
-    /// [`canonical_kind_tag!`]).
-    #[inline]
-    pub(super) fn canonical_tag(&self) -> u8 {
-        canonical_kind_tag!(self)
     }
 }
 
@@ -1159,7 +1152,7 @@ mod tests {
 
     #[test]
     fn term_id_option_uses_the_nonzero_niche() {
-        // The whole point of P3a: `Option<TermId>` rides the NonZeroU32 niche.
+        // The whole point of P3a: `Option<TermId>` rides the `NonZeroU32` niche.
         assert_eq!(size_of::<Option<TermId>>(), 4);
         assert_eq!(size_of::<TermId>(), 4);
     }

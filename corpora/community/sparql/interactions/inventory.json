@@ -1,0 +1,279 @@
+{
+  "copyright": "2026 Blackcat Informatics Inc.",
+  "license": "MIT OR Apache-2.0 OR MulanPSL-2.0",
+  "profiles": {
+    "sparql11-query-over-rdf12": "SPARQL 1.1 algebra over its applicable RDF 1.2 term subset; no SHACL admission claim."
+  },
+  "cases": [
+    {
+      "id": "mixed-predicate-inverse-sequence",
+      "profile": "sparql11-query-over-rdf12",
+      "kind": "query-evaluation",
+      "query": "mixed-predicate-inverse-sequence.rq",
+      "expected": "mixed-predicate-inverse-sequence.srj",
+      "data": [
+        {
+          "path": "data.ttl"
+        }
+      ],
+      "categories": [
+        "predicate",
+        "inverse",
+        "sequence",
+        "alternative",
+        "equivalence",
+        "hidden-witness",
+        "bag"
+      ],
+      "rationale": "There is one direct t edge, one inverse q edge, and two p/r derivations through a and b. Each yields o, for exactly four copies. The wrong/r/other edge has no predecessor from s and cannot contribute. UNION and reordering basic patterns preserve this multiset; the middle witnesses are not projected.",
+      "specifications": [
+        "https://www.w3.org/TR/sparql11-query/#sparqlTranslatePathPatterns",
+        "https://www.w3.org/TR/sparql11-query/#sparqlAlgebra"
+      ],
+      "family": "mixed-alternatives",
+      "iri": "http://example.org/community/sparql/interactions/manifest.ttl#mixed-predicate-inverse-sequence",
+      "manifest": "manifest.ttl"
+    },
+    {
+      "id": "mixed-equivalent-union",
+      "profile": "sparql11-query-over-rdf12",
+      "kind": "query-evaluation",
+      "query": "mixed-equivalent-union.rq",
+      "expected": "mixed-equivalent-union.srj",
+      "data": [
+        {
+          "path": "data.ttl"
+        }
+      ],
+      "categories": [
+        "predicate",
+        "inverse",
+        "sequence",
+        "alternative",
+        "equivalence",
+        "hidden-witness",
+        "bag"
+      ],
+      "rationale": "There is one direct t edge, one inverse q edge, and two p/r derivations through a and b. Each yields o, for exactly four copies. The wrong/r/other edge has no predecessor from s and cannot contribute. UNION and reordering basic patterns preserve this multiset; the middle witnesses are not projected.",
+      "specifications": [
+        "https://www.w3.org/TR/sparql11-query/#sparqlTranslatePathPatterns",
+        "https://www.w3.org/TR/sparql11-query/#sparqlAlgebra"
+      ],
+      "family": "mixed-alternatives",
+      "iri": "http://example.org/community/sparql/interactions/manifest.ttl#mixed-equivalent-union",
+      "manifest": "manifest.ttl"
+    },
+    {
+      "id": "mixed-permuted-union",
+      "profile": "sparql11-query-over-rdf12",
+      "kind": "query-evaluation",
+      "query": "mixed-permuted-union.rq",
+      "expected": "mixed-permuted-union.srj",
+      "data": [
+        {
+          "path": "data.ttl"
+        }
+      ],
+      "categories": [
+        "predicate",
+        "inverse",
+        "sequence",
+        "alternative",
+        "equivalence",
+        "hidden-witness",
+        "bag"
+      ],
+      "rationale": "There is one direct t edge, one inverse q edge, and two p/r derivations through a and b. Each yields o, for exactly four copies. The wrong/r/other edge has no predecessor from s and cannot contribute. UNION and reordering basic patterns preserve this multiset; the middle witnesses are not projected.",
+      "specifications": [
+        "https://www.w3.org/TR/sparql11-query/#sparqlTranslatePathPatterns",
+        "https://www.w3.org/TR/sparql11-query/#sparqlAlgebra"
+      ],
+      "family": "mixed-alternatives",
+      "iri": "http://example.org/community/sparql/interactions/manifest.ttl#mixed-permuted-union",
+      "manifest": "manifest.ttl"
+    },
+    {
+      "id": "mixed-overlapping-arm",
+      "profile": "sparql11-query-over-rdf12",
+      "kind": "query-evaluation",
+      "query": "mixed-overlapping-arm.rq",
+      "expected": "mixed-overlapping-arm.srj",
+      "data": [
+        {
+          "path": "data.ttl"
+        }
+      ],
+      "categories": [
+        "overlap",
+        "repeated-arm",
+        "inverse",
+        "sequence",
+        "bag"
+      ],
+      "rationale": "The direct t and inverse q arms each yield one o. Both identical p/r arms yield two o. Alternative translation is UNION, so all six derivations remain; duplicate arms are not deduplicated.",
+      "specifications": [
+        "https://www.w3.org/TR/sparql11-query/#sparqlTranslatePathPatterns",
+        "https://www.w3.org/TR/sparql11-query/#sparqlAlgebra"
+      ],
+      "family": "mixed-alternatives",
+      "iri": "http://example.org/community/sparql/interactions/manifest.ttl#mixed-overlapping-arm",
+      "manifest": "manifest.ttl"
+    },
+    {
+      "id": "all-unbound-visible-rows",
+      "profile": "sparql11-query-over-rdf12",
+      "kind": "query-evaluation",
+      "query": "all-unbound-visible-rows.rq",
+      "expected": "all-unbound-visible-rows.srj",
+      "data": [
+        {
+          "path": "data.ttl"
+        }
+      ],
+      "categories": [
+        "unbound",
+        "schema",
+        "multiplicity"
+      ],
+      "rationale": "VALUES supplies two distinct local mappings. Projection names never, which is unbound in both; both empty visible bindings remain, and the declared never column remains even though no cell binds.",
+      "specifications": [
+        "https://www.w3.org/TR/sparql11-query/#inline-data",
+        "https://www.w3.org/TR/sparql11-query/#sparqlAlgebra"
+      ],
+      "family": "empty-bindings",
+      "iri": "http://example.org/community/sparql/interactions/manifest.ttl#all-unbound-visible-rows",
+      "manifest": "manifest.ttl"
+    },
+    {
+      "id": "duplicate-unbound-rows",
+      "profile": "sparql11-query-over-rdf12",
+      "kind": "query-evaluation",
+      "query": "duplicate-unbound-rows.rq",
+      "expected": "duplicate-unbound-rows.srj",
+      "data": [
+        {
+          "path": "data.ttl"
+        }
+      ],
+      "categories": [
+        "unbound",
+        "VALUES",
+        "duplicate",
+        "multiplicity"
+      ],
+      "rationale": "The VALUES table contains two empty mappings. Bag cardinality is two and both declared columns are unbound. A grader that creates only edges for bound values would erase both rows and is invalid.",
+      "specifications": [
+        "https://www.w3.org/TR/sparql11-query/#inline-data",
+        "https://www.w3.org/TR/sparql11-query/#sparqlAlgebra"
+      ],
+      "family": "empty-bindings",
+      "iri": "http://example.org/community/sparql/interactions/manifest.ttl#duplicate-unbound-rows",
+      "manifest": "manifest.ttl"
+    },
+    {
+      "id": "bnode-fresh-per-call",
+      "profile": "sparql11-query-over-rdf12",
+      "kind": "query-evaluation",
+      "query": "bnode-fresh-per-call.rq",
+      "expected": "bnode-fresh-per-call.srj",
+      "data": [
+        {
+          "path": "data.ttl"
+        }
+      ],
+      "categories": [
+        "BNODE",
+        "freshness",
+        "global-blank-bijection"
+      ],
+      "rationale": "Every argument-free BNODE invocation creates a fresh node. Two calls for each of two mappings produce four pairwise distinct blanks. The visible a/b keys identify each mapping, so independent per-row blank renaming cannot excuse cross-row aliasing.",
+      "specifications": [
+        "https://www.w3.org/TR/sparql11-query/#func-bnode"
+      ],
+      "family": "bnode-identity",
+      "iri": "http://example.org/community/sparql/interactions/manifest.ttl#bnode-fresh-per-call",
+      "manifest": "manifest.ttl"
+    },
+    {
+      "id": "bnode-string-memo",
+      "profile": "sparql11-query-over-rdf12",
+      "kind": "query-evaluation",
+      "query": "bnode-string-memo.rq",
+      "expected": "bnode-string-memo.srj",
+      "data": [
+        {
+          "path": "data.ttl"
+        }
+      ],
+      "categories": [
+        "BNODE",
+        "memo",
+        "freshness",
+        "global-blank-bijection"
+      ],
+      "rationale": "In one solution mapping equal simple-literal BNODE arguments yield the same blank, so first equals again. Different literal a/b arguments and fresh argument-free calls produce four distinct identities across the two mappings. Equality must hold globally across the entire result bag, including repeated occurrences.",
+      "specifications": [
+        "https://www.w3.org/TR/sparql11-query/#func-bnode"
+      ],
+      "family": "bnode-identity",
+      "iri": "http://example.org/community/sparql/interactions/manifest.ttl#bnode-string-memo",
+      "manifest": "manifest.ttl"
+    },
+    {
+      "id": "global-blank-cycle",
+      "profile": "sparql11-query-over-rdf12",
+      "kind": "query-evaluation",
+      "query": "global-blank-cycle.rq",
+      "expected": "global-blank-cycle.srj",
+      "data": [
+        {
+          "path": "blank-cycle.ttl"
+        }
+      ],
+      "categories": [
+        "blank",
+        "co-reference",
+        "global-blank-bijection"
+      ],
+      "rationale": "The source graph has two distinct blanks linked in both directions. There are exactly two rows and one global bijection: the from of one row is the to of the other. Four independently renamed nodes across the two rows are not equivalent.",
+      "specifications": [
+        "https://www.w3.org/TR/sparql11-query/#queryDataset",
+        "https://www.w3.org/TR/sparql11-query/#sparqlAlgebra"
+      ],
+      "family": "global-blank-cycle",
+      "iri": "http://example.org/community/sparql/interactions/manifest.ttl#global-blank-cycle",
+      "manifest": "manifest.ttl"
+    },
+    {
+      "id": "separate-source-blank-scopes",
+      "profile": "sparql11-query-over-rdf12",
+      "kind": "query-evaluation",
+      "query": "separate-source-blank-scopes.rq",
+      "expected": "separate-source-blank-scopes.srj",
+      "data": [
+        {
+          "path": "scope1.ttl",
+          "graph": "http://example.org/g1"
+        },
+        {
+          "path": "scope2.ttl",
+          "graph": "http://example.org/g2"
+        }
+      ],
+      "categories": [
+        "source-scope",
+        "GRAPH",
+        "blank",
+        "identity"
+      ],
+      "rationale": "Each graph file is a distinct RDF source, so its explicit same label identifies a different blank. Graph and literal values identify the rows, and a global result bijection must keep the two blanks distinct.",
+      "specifications": [
+        "https://www.w3.org/TR/sparql11-query/#queryDataset",
+        "https://www.w3.org/TR/sparql11-query/#sparqlAlgebra"
+      ],
+      "family": "separate-source-blank-scopes",
+      "iri": "http://example.org/community/sparql/interactions/manifest.ttl#separate-source-blank-scopes",
+      "manifest": "manifest.ttl"
+    }
+  ]
+}

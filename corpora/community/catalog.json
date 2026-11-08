@@ -13,9 +13,27 @@
       "manifests": [
         "shacl/manifest.ttl"
       ]
+    },
+    {
+      "inventory": "sparql/interactions/inventory.json",
+      "directory": "sparql/interactions",
+      "kind": "sparql",
+      "caseCount": 10,
+      "manifests": [
+        "sparql/interactions/manifest.ttl"
+      ]
+    },
+    {
+      "inventory": "sparql/service/inventory.json",
+      "directory": "sparql/service",
+      "kind": "sparql",
+      "caseCount": 5,
+      "manifests": [
+        "sparql/service/manifest.ttl"
+      ]
     }
   ],
-  "caseCount": 64,
+  "caseCount": 79,
   "requiredCoverage": [
     "empty-left-optional",
     "nested-optional",
@@ -33,7 +51,14 @@
     "complex-report-path",
     "RDF1.2",
     "inverse",
-    "sequence"
+    "sequence",
+    "global-blank-bijection",
+    "overlap",
+    "hidden-witness",
+    "unbound",
+    "SERVICE",
+    "response-identity",
+    "bag"
   ],
   "profiles": {
     "shacl-20170720": {
@@ -45,6 +70,10 @@
       "specification": "https://www.w3.org/TR/2026/WD-shacl12-sparql-20260918/",
       "sparql": "https://www.w3.org/TR/sparql12-query/",
       "service": "PurRDF refusal policy; external implementations may allow local operations"
+    },
+    "sparql11-query-over-rdf12": {
+      "specification": "https://www.w3.org/TR/sparql11-query/",
+      "scope": "SPARQL 1.1 query semantics over the applicable RDF 1.2 term subset"
     }
   },
   "reviewIndex": "reviews/index.json"

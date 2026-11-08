@@ -390,10 +390,12 @@ fn all_catalogued_inventory_schemas_preserve_every_case() {
     let catalog =
         inventory::decode_catalog(include_bytes!("../../../corpora/community/catalog.json"))
             .unwrap();
-    let inventories = [inventory::decode_inventory(include_bytes!(
-        "../../../corpora/community/shacl/inventory.json"
-    ))
-    .unwrap()];
+    let inventories = [
+        include_bytes!("../../../corpora/community/shacl/inventory.json").as_slice(),
+        include_bytes!("../../../corpora/community/sparql/interactions/inventory.json").as_slice(),
+        include_bytes!("../../../corpora/community/sparql/service/inventory.json").as_slice(),
+    ]
+    .map(|bytes| inventory::decode_inventory(bytes).unwrap());
     assert_eq!(
         inventories
             .iter()
@@ -427,7 +429,12 @@ fn all_catalogued_inventory_schemas_preserve_every_case() {
     }
     assert_eq!(
         executions,
-        [("shacl-20170720", 57), ("shacl12-20260918", 58)].into()
+        [
+            ("shacl-20170720", 57),
+            ("shacl12-20260918", 58),
+            ("sparql11-query-over-rdf12", 15),
+        ]
+        .into()
     );
 }
 

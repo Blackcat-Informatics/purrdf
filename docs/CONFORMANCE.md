@@ -127,7 +127,7 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
 | SHACL 1.2 | W3C `shacl12-test-suite`, `vectors/shacl12/tests/` | **800 / 800** pass as approved · 0 ledgered expected failures, 0 spec-contradicted, of the 800 an upstream manifest lists; 801 discovered: 274 `sht:Validate`, 276 `sht:EvalNodeExpr`, 42 `sht:Infer`, 209 SPARQL 1.2 RL |
 | SHACL 1.2 unlisted vendored files | the 1 file of `vectors/shacl12/tests/` no upstream manifest includes | **1 / 1** graded apart from the approved suite: 1 exactly as written · 0 with a proven delta |
 | SHACL (first-party corpus) | `crates/shapes/corpus/` | **73 / 73** frozen expected reports |
-| Community SHACL dated profiles | `corpora/community/` (64 cases) | **115 / 115** applicable dated executions (REC 2017: 57, WD 2026: 58) over 535 route observations · 0 unsupported · 0 ledgered |
+| Community SHACL dated profiles | `corpora/community/shacl/` (64 cases) | **115 / 115** applicable dated executions (REC 2017: 57, WD 2026: 58) over 535 route observations · 0 unsupported · 0 ledgered |
 | SHACL prepared-product equivalence | `vectors/shacl/` (129), the `sht:Validate` entries of `vectors/shacl12/tests/` (274), and `crates/shapes/corpus/` (73) | **468 / 468** cases agree across source, admitted-product and rebuilt-product lanes: 457 byte-identical N-Triples reports, including 408 with validation results, and 11 identical validation errors. The 8 declared load failures have no product to compare, giving 476 discovered cases. Each case uses its own dated law. Every failure must be declared by its fixture; the SHACL 1.2 load-refusal ledger is empty. This row checks product preservation; the SHACL rows grade correctness |
 | XSD/XPath regExp (first-party corpus) | `crates/rdf-core/corpus/xsd-regex/` | **292 / 292** cases · 0 ledgered. The shared compatibility translation (`purrdf_core::xsd_regex::compile`) used by unselected `sh:pattern`, SPARQL `REGEX`/`REPLACE` and ShEx `PATTERN` is graded once. Explicit dated native programs have separate native Rust vectors; see [Dated native XPath programs](#dated-native-xpath-programs). Hand-derived from XML Schema Part 2 Appendix G and XPath F&O 3.1 §5.6 — there is **no** redistributable W3C suite for this language in isolation, so none is claimed. Seven construct groups: flags (including F&O §5.6.2's own four worked `x` examples verbatim), anchors and the wildcard, quantifiers (including F&O §5.6.1's reluctant forms), the multi-character escapes, the `Is`-prefixed block escapes, class subtraction, and the refused constructs. See "Known gaps" for the shared compiler's back-reference refusal, trailing-newline differences for both multiline anchors, and case-variant differences under `i`, and [the recognizer boundary and the liberal edges](#xsdxpath-regex-the-recognizer-boundary-and-the-liberal-edges) for what the compiler now rejects outright and what it deliberately accepts more liberally |
 | Schema → SHACL | first-party exact/lossy/corruption/resource suites + locked language oracles | **5 / 5** production directions; exact emitted-schema recompilation or located closed-profile losses; no deferred reader |
@@ -390,7 +390,7 @@ distinguishes standard Basic processing from the RDF 1.2 carrier additions.
   byte-frozen expected reports, covering purrdf-specific behavior (reifier
   shapes, path forms, property pairs, qualified shapes, SHACL-AF
   `sh:expression`).
-- `corpora/community/` — the community-proposed SHACL corpus: 64 cases with
+- `corpora/community/shacl/` — the community-proposed SHACL corpus: 64 cases with
   inline expected reports, run under each case's applicable dated profile,
   the SHACL Recommendation of 20 July 2017 (57 executions) and the SHACL 1.2
   SPARQL Working Draft of 18 September 2026 (58 executions). Each validation
@@ -399,8 +399,17 @@ distinguishes standard Basic processing from the RDF 1.2 carrier additions.
   report with its expectation by graph isomorphism in source context, keeping
   `sh:sourceConstraint`, messages, details and path topology. Refusals are
   compared by their typed reason. A profile with no built-in dated law is
-  counted as unsupported, apart from failures. The expectations carry an
-  automated agent review (`corpora/community/reviews/`), not a W3C approval.
+  counted as unsupported, apart from failures. The source-derived expectations
+  and review records live in `corpora/community/reviews/`; no independent human
+  review, external-engine certification or W3C approval is claimed.
+- `corpora/community/sparql/` — fifteen community-proposed interaction and
+  SERVICE cases. Every query runs through native execution and two reuses each
+  of text-prepared and algebra-prepared plans: 75 route observations. The shared
+  bag grader preserves exact headers, empty rows, multiplicity and one global
+  scoped-blank bijection. SERVICE uses independently parsed local endpoint
+  fixtures and the native offline resolver. The complete community catalog has
+  79 cases, 130 case/profile executions and 610 route observations, reported
+  separately by language and by actual profile/surface in EARL.
 - `crates/rdf-core/corpus/xsd-regex/` — PurRDF's own XSD/XPath `regExp` corpus:
   292 cases across seven `.cases` files, grading
   `purrdf_core::xsd_regex::compile` — the shared compatibility translation
@@ -521,7 +530,7 @@ cargo test -p purrdf-shex                              # all four ShEx suites
 cargo test -p purrdf-shapes --test w3c_conformance -- --nocapture   # W3C SHACL scoreboard
 cargo test -p purrdf-shapes --test w3c12_conformance -- --nocapture # W3C SHACL 1.2 scoreboard
 cargo test -p purrdf-shapes --test conformance         # the 73-case frozen corpus
-cargo test -p purrdf-sparql-conformance --test community_conformance -- --nocapture # community SHACL, dated profiles
+cargo test -p purrdf-sparql-conformance --test community_conformance -- --nocapture # native community SHACL and queries
 cargo run -p purrdf-shapes --example schema_reverse --locked        # all five schema readers
 make pydantic-oracle linkml-oracle typescript-oracle graphql-oracle # independent schema runtimes
 cargo test -p purrdf-sparql-conformance                # W3C SPARQL
