@@ -52,17 +52,20 @@ fn every_applicable_dated_execution_passes_exactly() {
             );
         }
     }
-    assert_eq!(totals.cases, 64);
-    assert_eq!(totals.executions, 115);
+    assert_eq!(totals.cases, 79);
+    assert_eq!(totals.executions, 130);
     assert_eq!(totals.unsupported, 0, "both corpus profiles are built in");
     assert_eq!(totals.failed, 0);
-    assert_eq!(totals.passed, 115);
+    assert_eq!(totals.passed, 130);
+    assert_eq!((totals.query_executions, totals.passed_queries), (15, 15));
+    assert_eq!(totals.observations, 610);
     assert_eq!(totals.passed_observations, totals.observations);
     assert_eq!(
         totals.profiles,
         [
             ("shacl-20170720".to_owned(), [57, 57, 0, 0]),
             ("shacl12-20260918".to_owned(), [58, 58, 0, 0]),
+            ("sparql11-query-over-rdf12".to_owned(), [15, 15, 0, 0]),
         ]
         .into()
     );
@@ -74,7 +77,15 @@ fn every_applicable_dated_execution_passes_exactly() {
             .map(|record| record.surface.as_str())
             .collect();
         assert!(
-            routes == ["native/rules"]
+            routes
+                == [
+                    "native/query",
+                    "native/prepared/0",
+                    "native/algebra/0",
+                    "native/prepared/1",
+                    "native/algebra/1"
+                ]
+                || routes == ["native/rules"]
                 || routes
                     == [
                         "native/fresh",
@@ -109,6 +120,7 @@ fn nested_suite_executes_the_same_reviewed_inputs() {
             "\"nested/shacl/inventory.json\"",
         )
         .replace("\"shacl/manifest.ttl\"", "\"nested/shacl/manifest.ttl\"")
+        .replace("\"sparql/", "\"nested/sparql/")
         .replace("\"reviews/index.json\"", "\"nested/reviews/index.json\"");
     std::fs::write(copy.join("catalog.json"), catalog).unwrap();
     let index_path = nested.join("reviews/index.json");
@@ -117,14 +129,22 @@ fn nested_suite_executes_the_same_reviewed_inputs() {
         .replace("\"path\": \"", "\"path\": \"nested/")
         .replace("\"derivation\": \"", "\"derivation\": \"nested/");
     std::fs::write(index_path, index).unwrap();
+    for suite in ["interactions", "service"] {
+        let path = nested.join(format!("sparql/{suite}/inventory.json"));
+        let inventory = std::fs::read_to_string(&path).unwrap().replace(
+            "http://example.org/community/sparql/",
+            "http://example.org/community/nested/sparql/",
+        );
+        std::fs::write(path, inventory).unwrap();
+    }
 
     let corpus = Corpus::acquire(&copy).expect("relocated reviewed bytes are admitted");
     let (totals, executions) = corpus.run(&mut control).unwrap();
-    assert_eq!(totals.cases, 64);
-    assert_eq!(totals.executions, 115);
+    assert_eq!(totals.cases, 79);
+    assert_eq!(totals.executions, 130);
     assert_eq!(totals.unsupported, 0);
     assert_eq!(totals.failed, 0, "{executions:#?}");
-    assert_eq!(totals.passed_observations, 535);
+    assert_eq!(totals.passed_observations, 610);
 }
 
 #[test]
@@ -167,10 +187,29 @@ fn an_unimplemented_profile_is_reported_apart_from_failures() {
         .execute(case, "shacl12-20260918", &mut control)
         .unwrap();
     assert!(neighbour.passed());
-    let totals = Totals::of(1, &[probe, neighbour]);
+    let query = cases
+        .iter()
+        .find(|case| case.case.id == "mixed-predicate-inverse-sequence")
+        .unwrap();
+    let query_probe = corpus
+        .execute_selected(query, "shacl12-20991231", &unsupported, &mut control)
+        .unwrap();
+    assert!(query_probe.unsupported());
+    let totals = Totals::of(2, &[probe, neighbour, query_probe]);
     assert_eq!(
         (totals.passed, totals.failed, totals.unsupported),
-        (1, 0, 1)
+        (1, 0, 2)
+    );
+    assert_eq!((totals.query_executions, totals.passed_queries), (1, 0));
+    assert!(
+        totals
+            .scoreboard()
+            .contains("COMMUNITY-SHACL: passed 1 total 2")
+    );
+    assert!(
+        totals
+            .scoreboard()
+            .contains("COMMUNITY-QUERY: passed 0 total 1")
     );
 }
 
@@ -235,7 +274,7 @@ fn changed_reviewed_bytes_are_refused_and_the_unchanged_copy_is_admitted() {
     copy_tree(&corpus_root(), &copy);
     // The untouched copy is admitted, at a different location, with every case.
     let admitted = Corpus::acquire(&copy).unwrap();
-    assert_eq!(admitted.cases().unwrap().len(), 64);
+    assert_eq!(admitted.cases().unwrap().len(), 79);
 
     let shapes = copy.join("shacl/anchored-optional-iri-violating/shapes.ttl");
     let mut bytes = std::fs::read(&shapes).unwrap();
@@ -372,7 +411,60 @@ fn a_suite_kind_without_a_runner_is_refused() {
     )
     .unwrap();
     let error = Corpus::acquire(&copy).unwrap_err();
-    assert!(error.contains("no community SHACL runner"), "{error}");
+    assert!(error.contains("no community native runner"), "{error}");
+}
+
+#[test]
+fn a_query_inventory_cannot_substitute_a_byte_identical_result_artifact() {
+    let scratch = purrdf_testkit::TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let copy = scratch.path().join("community");
+    copy_tree(&corpus_root(), &copy);
+    assert!(Corpus::acquire(&copy).unwrap().cases().is_ok());
+    let original = "sparql/interactions/mixed-predicate-inverse-sequence.srj";
+    let replacement = "sparql/interactions/mixed-equivalent-union.srj";
+    assert_eq!(
+        std::fs::read(copy.join(original)).unwrap(),
+        std::fs::read(copy.join(replacement)).unwrap()
+    );
+    let path = copy.join("sparql/interactions/inventory.json");
+    let mut inventory = purrdf_lex::json::read_slice(
+        &std::fs::read(&path).unwrap(),
+        purrdf_lex::json::Limits::DEFAULT,
+    )
+    .unwrap();
+    assert_eq!(
+        inventory["cases"][0]["id"].as_str(),
+        Some("mixed-predicate-inverse-sequence")
+    );
+    inventory["cases"][0]["expected"] = Value::String("mixed-equivalent-union.srj".to_owned());
+    std::fs::write(path, purrdf_lex::json::write_pretty(&inventory)).unwrap();
+    let path = copy.join("reviews/index.json");
+    let mut index = purrdf_lex::json::read_slice(
+        &std::fs::read(&path).unwrap(),
+        purrdf_lex::json::Limits::DEFAULT,
+    )
+    .unwrap();
+    let Value::Array(reviews) = &mut index["cases"] else {
+        panic!("review registry cases")
+    };
+    let review = reviews
+        .iter_mut()
+        .find(|review| review["id"].as_str() == Some("mixed-predicate-inverse-sequence"))
+        .unwrap();
+    let Value::Array(payloads) = &mut review["payloads"] else {
+        panic!("reviewed artifacts")
+    };
+    let payload = payloads
+        .iter_mut()
+        .find(|payload| payload["path"].as_str() == Some(original))
+        .unwrap();
+    payload["path"] = Value::String(replacement.to_owned());
+    std::fs::write(path, purrdf_lex::json::write_pretty(&index)).unwrap();
+    // The complete bytes and review hashes remain valid. Manifest association
+    // independently refuses the substituted artifact before any query runs.
+    let corpus = Corpus::acquire(&copy).unwrap();
+    let error = corpus.cases().unwrap_err();
+    assert!(error.contains("result artifact disagree"), "{error}");
 }
 
 /// The community EARL names one subject per (profile, surface) route, each

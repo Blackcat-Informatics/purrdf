@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The community SHACL corpus, run through the public dated-profile doors.
+//! The community query and SHACL corpus, run through the public native doors.
 //!
 //! Acquisition admits the catalog, the inventory, the RDF manifest closure and
 //! the review registry before anything executes. Every applicable (case,
@@ -37,6 +37,8 @@ use purrdf_shapes::engine::{PreparedShapes, ValidationOptions};
 use purrdf_shapes::profile::AdmissionReason;
 use purrdf_shapes::report::{CompleteValidationError, CompleteValidationReport};
 use purrdf_validate::CompleteValidationStatus;
+
+mod query;
 
 /// The stable base every corpus artifact IRI is minted under: the corpus root's
 /// relative path appended to it. Copying the corpus keeps every identity.
@@ -96,6 +98,8 @@ impl Case<'_> {
 pub enum Selection {
     /// The catalog profile names this built-in dated law.
     Supported(ShaclProfile),
+    /// SPARQL 1.1 query semantics over the applicable RDF 1.2 term subset.
+    Query,
     /// No built-in dated law implements this catalog profile.
     Unsupported(String),
 }
@@ -107,6 +111,8 @@ pub struct Execution {
     pub case: String,
     /// Catalog profile identity.
     pub profile: String,
+    /// Original inventory operation kind, retained even for unsupported profiles.
+    pub kind: String,
     /// One record per executed public route.
     pub records: Vec<Record>,
 }
@@ -144,6 +150,10 @@ pub struct Totals {
     pub observations: usize,
     /// Passing route observations.
     pub passed_observations: usize,
+    /// Query case/profile executions, included in the complete totals.
+    pub query_executions: usize,
+    /// Passing query case/profile executions, included in `passed`.
+    pub passed_queries: usize,
     /// Per catalog profile: (executions, passed, failed, unsupported).
     pub profiles: BTreeMap<String, [usize; 4]>,
 }
@@ -158,6 +168,10 @@ impl Totals {
             ..Self::default()
         };
         for execution in executions {
+            if execution.kind == "query-evaluation" {
+                totals.query_executions += 1;
+                totals.passed_queries += usize::from(execution.passed());
+            }
             let row = totals
                 .profiles
                 .entry(execution.profile.clone())
@@ -193,13 +207,13 @@ impl Totals {
         for (profile, [executions, passed, failed, unsupported]) in &self.profiles {
             let _ = writeln!(
                 lines,
-                "COMMUNITY SHACL PROFILE {profile}: executions {executions} passed {passed} \
+                "COMMUNITY NATIVE PROFILE {profile}: executions {executions} passed {passed} \
                  failed {failed} unsupported {unsupported}"
             );
         }
         let _ = writeln!(
             lines,
-            "COMMUNITY SHACL TOTAL: cases {} executions {} passed {} failed {} unsupported {} \
+            "COMMUNITY NATIVE TOTAL: cases {} executions {} passed {} failed {} unsupported {} \
              observations {} passedObservations {}",
             self.cases,
             self.executions,
@@ -212,7 +226,13 @@ impl Totals {
         let _ = writeln!(
             lines,
             "COMMUNITY-SHACL: passed {} total {}",
-            self.passed, self.executions
+            self.passed - self.passed_queries,
+            self.executions - self.query_executions
+        );
+        let _ = writeln!(
+            lines,
+            "COMMUNITY-QUERY: passed {} total {}",
+            self.passed_queries, self.query_executions
         );
         lines
     }
@@ -294,9 +314,9 @@ impl Corpus {
             .map_err(|error| error.to_string())?;
         let mut inventories = Vec::new();
         for suite in &catalog.suites {
-            if suite.kind != "shacl" {
+            if !matches!(suite.kind.as_str(), "shacl" | "sparql") {
                 return Err(format!(
-                    "{}: suite kind {} has no community SHACL runner",
+                    "{}: suite kind {} has no community native runner",
                     suite.inventory, suite.kind
                 ));
             }
@@ -306,6 +326,20 @@ impl Corpus {
             if inventory.cases.len() != suite.case_count {
                 return Err(format!(
                     "{}: inventory count disagrees with the catalog",
+                    suite.inventory
+                ));
+            }
+            if inventory
+                .cases
+                .iter()
+                .any(|case| match suite.kind.as_str() {
+                    "shacl" => !matches!(case.kind.as_str(), "validation" | "rules"),
+                    "sparql" => case.kind != "query-evaluation",
+                    _ => unreachable!("suite kind validated above"),
+                })
+            {
+                return Err(format!(
+                    "{}: inventory operation disagrees with suite kind",
                     suite.inventory
                 ));
             }
@@ -451,7 +485,7 @@ impl Corpus {
                 let iri = case
                     .iri
                     .as_deref()
-                    .ok_or_else(|| format!("{}: a SHACL case must declare its IRI", case.id))?;
+                    .ok_or_else(|| format!("{}: a community case must declare its IRI", case.id))?;
                 let mut matches = Vec::new();
                 for (path, document) in &self.documents {
                     let reader = Reader {
@@ -501,6 +535,9 @@ impl Corpus {
 
     /// Check one manifest entry against its inventory record before execution.
     fn admit_entry(&self, directory: &str, case: &Case<'_>) -> Result<(), String> {
+        if case.case.kind == "query-evaluation" {
+            return self.admit_query_entry(case);
+        }
         let reader = Reader {
             dataset: &case.document.dataset,
             graph: GraphMatch::Default,
@@ -666,9 +703,11 @@ impl Corpus {
             }
         };
         let law = match selection {
+            Selection::Query => return self.execute_query(case, profile, control),
             Selection::Supported(law) => *law,
             Selection::Unsupported(reason) => {
                 return Ok(Execution {
+                    kind: case.case.kind.clone(),
                     case: case.iri().to_owned(),
                     profile: profile.to_owned(),
                     records: vec![record(
@@ -699,6 +738,7 @@ impl Corpus {
             Err(error) => {
                 records.push(record("native/parse", refusal(law, &error)));
                 return Ok(Execution {
+                    kind: case.case.kind.clone(),
                     case: case.iri().to_owned(),
                     profile: profile.to_owned(),
                     records,
@@ -783,6 +823,7 @@ impl Corpus {
             }
         }
         Ok(Execution {
+            kind: case.case.kind.clone(),
             case: case.iri().to_owned(),
             profile: profile.to_owned(),
             records,
@@ -959,6 +1000,9 @@ pub fn select(profiles: &Value, profile: &str) -> Result<Selection, String> {
         .get("specification")
         .and_then(Value::as_str)
         .ok_or_else(|| format!("profile {profile} names no specification"))?;
+    if specification == "https://www.w3.org/TR/sparql11-query/" {
+        return Ok(Selection::Query);
+    }
     Ok(DATED
         .into_iter()
         .find(|law| {
