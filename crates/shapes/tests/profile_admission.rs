@@ -6,10 +6,11 @@
 use purrdf_shapes::{AdmissionReason, QueryPurpose, ShaclProfile};
 use purrdf_sparql_algebra::{Query, SparqlParser};
 
-const DATED: [ShaclProfile; 3] = [
+const DATED: [ShaclProfile; 4] = [
     ShaclProfile::REC_20170720,
     ShaclProfile::WD_20260918,
     ShaclProfile::ED_20261016,
+    ShaclProfile::ED_20261106,
 ];
 
 #[test]
@@ -23,6 +24,7 @@ fn actual_function_admission_cause_survives_erasure_with_its_private_fields() {
         (ShaclProfile::REC_20170720, "shacl-profile-rec-2017-07-20"),
         (ShaclProfile::WD_20260918, "shacl-profile-wd-2026-09-18"),
         (ShaclProfile::ED_20261016, "shacl-profile-ed-2026-10-16"),
+        (ShaclProfile::ED_20261106, "shacl-profile-ed-2026-11-06"),
     ] {
         let original = profile
             .admit_query(QueryPurpose::Function, &query, &[])
@@ -67,7 +69,7 @@ fn role_query(purpose: QueryPurpose, body: &str) -> Query {
 #[test]
 fn identities_are_exact_and_name_each_required_edition() {
     assert_eq!(ShaclProfile::default(), ShaclProfile::LEGACY);
-    for profile in [ShaclProfile::LEGACY, DATED[0], DATED[1], DATED[2]] {
+    for profile in std::iter::once(ShaclProfile::LEGACY).chain(DATED) {
         assert_eq!(ShaclProfile::from_id(profile.id()).unwrap(), profile);
         assert_eq!(profile.to_string(), profile.id());
     }
@@ -131,6 +133,15 @@ fn identities_are_exact_and_name_each_required_edition() {
     assert_ne!(
         DATED[2], DATED[1],
         "the editor's draft is not the working draft"
+    );
+    assert_eq!(DATED[3].id(), "shacl-ed-2026-11-06");
+    assert_eq!(DATED[3].xpath_profile(), DATED[2].xpath_profile());
+    assert!(DATED[3].core_specification().unwrap().contains("40231dfb"));
+    assert!(
+        DATED[3]
+            .sparql_specification()
+            .unwrap()
+            .contains("40231dfb")
     );
 }
 

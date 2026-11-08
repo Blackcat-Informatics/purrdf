@@ -553,7 +553,7 @@ fn scan<'a>(relative: &'a str, source: &str) -> Census<'a> {
 #[test]
 fn the_writer_constructor_set_is_exactly_the_pinned_minting_and_continuing_sets() {
     let relative = "crates/gts/src/writer.rs";
-    let source = std::fs::read_to_string(workspace_root().join(relative)).expect("writer.rs");
+    let source = std::fs::read_to_string(workspace_root!().join(relative)).expect("writer.rs");
     let mut found = scan(relative, &source).constructors;
     found.sort();
     found.dedup();
@@ -572,7 +572,7 @@ fn the_writer_constructor_set_is_exactly_the_pinned_minting_and_continuing_sets(
 /// RULE 2 — the census of production header-minting call sites is closed.
 #[test]
 fn every_production_gts_authorship_site_is_in_the_census() {
-    let root = workspace_root();
+    let root = workspace_root!();
     let mut observed = Vec::new();
     for path in production_sources(&root) {
         let relative = path
@@ -609,7 +609,7 @@ fn every_production_gts_authorship_site_is_in_the_census() {
 fn the_public_authoring_facades_are_present_and_named() {
     assert!(AUTHORSHIP_SITES.contains(&("crates/rdf/src/gts_write.rs", "to_writer")));
     assert!(AUTHORSHIP_SITES.contains(&("crates/gts/src/compact.rs", "compact_streamable")));
-    let source = std::fs::read_to_string(workspace_root().join("crates/rdf/src/gts_write.rs"))
+    let source = std::fs::read_to_string(workspace_root!().join("crates/rdf/src/gts_write.rs"))
         .expect("gts_write.rs");
     let parsed = syn::parse_file(&source).expect("valid Rust");
     let function = parsed

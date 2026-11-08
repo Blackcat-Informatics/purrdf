@@ -7,7 +7,7 @@ use purrdf_gts::wire::{canonical, iter_items};
 
 #[test]
 fn every_decodable_frozen_item_is_canonical_byte_exact() {
-    let vectors = purrdf_testkit::paths::workspace_root().join("vectors");
+    let vectors = purrdf_testkit::paths::workspace_root!().join("vectors");
     let mut paths: Vec<_> = std::fs::read_dir(&vectors)
         .expect("vectors directory")
         .map(|entry| entry.expect("vector entry").path())

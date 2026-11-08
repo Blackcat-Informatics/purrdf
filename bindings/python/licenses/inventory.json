@@ -394,12 +394,12 @@
         "third-party/jsonschema-metaschemas/0-BSD-3-Clause.txt"
       ],
       "paths": [
-        "crates/jsonschema/tests/metaschemas/**"
+        "crates/testkit/metaschemas/**"
       ],
       "provenance": [
-        "crates/jsonschema/PROVENANCE.md"
+        "crates/testkit/PROVENANCE.md"
       ],
-      "scope": "source-only conformance data; original notices remain authoritative",
+      "scope": "embedded meta-schema data; original notices remain authoritative",
       "source": "https://github.com/json-schema-org/json-schema-spec"
     },
     {
@@ -1240,7 +1240,7 @@
     "LICENSE-APACHE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
     "LICENSE-MIT": "958c0e61f0ccde102a636644133533b4c76c939765acdbb790791f68546000f3",
     "LICENSE-MULAN": "eb7a1d713eb919b146787629e22e4c975cb701f529a65d4d7e0fcd417558bf1c",
-    "NOTICE.txt": "2398638500ae5e9d43559fb49df9e0306efcf1dd60fd001af91f54ff97614a3f",
+    "NOTICE.txt": "7650c0583d78e196252e850ce8bbb9a3a670a2ad2eaf6836b40504d50168504b",
     "dependencies/aead-0.6.1/LICENSE-APACHE": "b1cf9a3333ca78152b859012cd4a804156e5243e9ca20ad1df7327ba5ea7405c",
     "dependencies/aead-0.6.1/LICENSE-MIT": "33b32a251d445c5c03a634e64c53314c55540fc367fabdd45d9b6c8f260c028c",
     "dependencies/aes-0.9.4/LICENSE-APACHE": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5",

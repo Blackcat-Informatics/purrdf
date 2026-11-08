@@ -285,6 +285,7 @@ static EXPLICIT: &[CensusRow] = &[
     // of a graph that typically acts in the role of a rules graph."
     vocabulary(sh::RULES_GRAPH),
     structural(sh_iri!("shapesGraph"), Role::Graph),
+    structural(sh_iri!("dataGraph"), Role::Graph),
     structural(sh_iri!("suggestedShapesGraph"), Role::Graph),
     // Data-graph markers of incomplete nodes. They are written in the data graph, never
     // on a shape, so a shape or node expression carrying one is a load error; this

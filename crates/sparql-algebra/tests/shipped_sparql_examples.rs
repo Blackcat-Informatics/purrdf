@@ -733,7 +733,7 @@ fn typescript_doc_lines(text: &str) -> Vec<(usize, String)> {
 /// Every candidate this gate found across the shipped surfaces named in its
 /// module docs.
 fn collect_candidates() -> Vec<Candidate> {
-    let root = workspace_root();
+    let root = workspace_root!();
     let mut out = Vec::new();
 
     // Every Markdown page under `docs/**` — not just `docs/book/src/`, so the

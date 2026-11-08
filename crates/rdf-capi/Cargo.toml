@@ -91,4 +91,4 @@ description = "PurRDF purrdf semantic RDF-1.2 C-ABI"
 
 [package.metadata.capi.library]
 name = "purrdf"
-version = "4.0.0"
+version = "4.0.1"

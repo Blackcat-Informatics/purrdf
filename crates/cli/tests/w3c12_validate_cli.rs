@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Every approved W3C SHACL 1.2 `sht:Validate` entry, run through the BUILT `purrdf validate
-//! --shacl-profile shacl-ed-2026-10-16` binary — the production entry point, not the library
+//! --shacl-profile shacl-ed-2026-11-06` binary — the production entry point, not the library
 //! harness — and graded against its approved expectation.
 //!
 //! Discovery is the library harness's own corpus reader (`purrdf_shacl_conformance`)
@@ -26,10 +26,10 @@ use purrdf_shacl_conformance::shacl12::{Body, shacl12_cases};
 use purrdf_shacl_conformance::{Expected, Multiset, W3cCase, file_iri, report_graph_outcome};
 
 /// The law the 1.2 suite is graded under.
-const ED: &str = "shacl-ed-2026-10-16";
+const ED: &str = "shacl-ed-2026-11-06";
 
 /// The discovered `sht:Validate` entries, restated so this lane cannot pass by running fewer.
-const VALIDATE_CASES: usize = 213;
+const VALIDATE_CASES: usize = 274;
 
 /// Run one entry through the binary and reduce the report it wrote to what the grader compares.
 fn produce(tc: &W3cCase) -> Result<(bool, Multiset), String> {

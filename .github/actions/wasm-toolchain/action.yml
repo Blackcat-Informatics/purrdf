@@ -36,13 +36,16 @@ runs:
 
     - name: Install wasm-bindgen-cli (prebuilt, matched to the workspace pin)
       shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
         ver="${{ steps.pins.outputs.wasm_bindgen }}"
         base="wasm-bindgen-${ver}-x86_64-unknown-linux-musl"
-        url="https://github.com/rustwasm/wasm-bindgen/releases/download/${ver}/${base}.tar.gz"
-        curl -fsSL "$url" -o /tmp/wb.tar.gz
-        curl -fsSL "${url}.sha256sum" -o /tmp/wb.sha256
+        timeout 180 gh release download "$ver" --repo wasm-bindgen/wasm-bindgen \
+          --pattern "${base}.tar.gz" --output /tmp/wb.tar.gz --clobber
+        timeout 180 gh release download "$ver" --repo wasm-bindgen/wasm-bindgen \
+          --pattern "${base}.tar.gz.sha256sum" --output /tmp/wb.sha256 --clobber
         echo "$(awk '{print $1}' /tmp/wb.sha256)  /tmp/wb.tar.gz" | sha256sum -c -
         mkdir -p /tmp/wb && tar -xzf /tmp/wb.tar.gz -C /tmp/wb --strip-components=1
         install -Dm0755 /tmp/wb/wasm-bindgen "$HOME/.cargo/bin/wasm-bindgen"

@@ -99,11 +99,11 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
 | `purrdf-wasm`, `purrdf-capi`, `bindings/python` | WASM, C-ABI, and PyO3 bindings |
 | `purrdf-cli` (`crates/cli`) | The `purrdf` command-line surface (`publish = false`) |
 | `purrdf-envelope-probe` (`crates/envelope-probe`) | The micro-hardware envelope capture tool (`publish = false`) |
-| `purrdf-alloc-probe` (`crates/alloc-probe`) | The shared counting allocator + per-thread/whole-process measurement windows every allocation test and bench measures with (`publish = false`, `[dev-dependencies]` only, path-only with no `version`) |
+| `purrdf-alloc-probe` (`crates/alloc-probe`) | The shared counting allocator + per-thread/whole-process measurement windows every allocation test and bench measures with (published development library, used as `[dev-dependencies]` by runtime crates) |
 | `purrdf-bench` (`crates/bench`) | Benchmark tooling: the scale-corpus generator (`publish = false`) |
-| `purrdf-testkit` (`crates/testkit`) | Shared test support: byte-exact goldens (`assert_golden!`, `golden`), the workspace root and Rust-source walks for tests and generators (`paths`), seeded test draws over `purrdf_hash::mix` (`rng`), an exact rational oracle that rounds an integer, a decimal or a float's binary value to `f64`, `f32` or a fixed decimal scale with integer arithmetic only (`exact`), temporary paths under the target directory (`temp_dir!`, `temp_file!`, `for_unit_test`), self-hashing frozen differential vectors, the libtest-compatible `harness = false` runner, the property harness (`prop_test!`: choice-sequence shrinking, regex string generators, stateful model testing, a deterministic seed per property), and the micro-benchmark harness every bench target runs on (`purrdf_testkit::bench`, `bench_group!`/`bench_main!`: warm-up, flat sampling, median with MAD and a seeded bootstrap interval, throughput, saved baselines compared with a bootstrapped change, a fixed-schema `estimates.json` per benchmark, natively and on `wasm32`); its one first-party dependency is `purrdf-hash`, the root, whose own tests do not use testkit, so no member's tests close a cycle through it (`publish = false`, `[dev-dependencies]` only, path-only with no `version`) |
+| `purrdf-testkit` (`crates/testkit`) | Shared test support: byte-exact goldens (`assert_golden!`, `golden`), the workspace root and Rust-source walks for tests and generators (`paths`), seeded test draws over `purrdf_hash::mix` (`rng`), an exact rational oracle that rounds an integer, a decimal or a float's binary value to `f64`, `f32` or a fixed decimal scale with integer arithmetic only (`exact`), temporary paths under the target directory (`temp_dir!`, `temp_file!`, `for_unit_test`), self-hashing frozen differential vectors, the libtest-compatible `harness = false` runner, the property harness (`prop_test!`: choice-sequence shrinking, regex string generators, stateful model testing, a deterministic seed per property), and the micro-benchmark harness every bench target runs on (`purrdf_testkit::bench`, `bench_group!`/`bench_main!`: warm-up, flat sampling, median with MAD and a seeded bootstrap interval, throughput, saved baselines compared with a bootstrapped change, a fixed-schema `estimates.json` per benchmark, natively and on `wasm32`); its one first-party dependency is `purrdf-hash`, the root, whose own tests do not use testkit, so no member's tests close a cycle through it (published development library, used as `[dev-dependencies]` by runtime crates) |
 | `wasm-link` (`crates/wasm-link`) | The wasm package's post-link step: links the suspend, run and poison guarantees into the optimized module (`publish = false`, host tool) |
-| `purrdf-conformance-kit` (`crates/conformance-kit`) | Portable conformance grading over parsed inputs: inventory, catalog and review-registry admission, structural `mf:` manifest decoding, complete SHACL report comparison by contextual graph isomorphism, solution-bag comparison, and the one EARL report structure (`outcome::Report`: described subject and assertor, sorted records, EARL graph and EARL-scope scoreboard line); the community SHACL runner in `purrdf-sparql-conformance` and both W3C SHACL harnesses in `purrdf-shapes` (dev-dependency, path-only) report through it (`publish = false`) |
+| `purrdf-conformance-kit` (`crates/conformance-kit`) | Portable conformance grading over parsed inputs: inventory, catalog and review-registry admission, structural `mf:` manifest decoding, complete SHACL report comparison by contextual graph isomorphism, solution-bag comparison, and the one EARL report structure (`outcome::Report`: described subject and assertor, sorted records, EARL graph and EARL-scope scoreboard line); the community runner in `purrdf-sparql-conformance` and both W3C SHACL harnesses in `purrdf-shapes` report through this published development library |
 | `purrdf-shacl-conformance` (`crates/shacl-conformance`) | Shared SHACL corpus discovery, fixture vocabulary readers and engine-specific grading for Shapes and CLI integration tests (`publish = false`, path-only dev dependency of shipping crates) |
 | `purrdf-hash-conformance` (`crates/hash-conformance`) | The frozen-vector suites of `purrdf-hash` (digest differentials, BLAKE3 streaming boundaries, base16 rendering, the table hasher's self-vectors and quality), the digest, base16 and BLAKE3 throughput bench and the table hasher's latency bench, on testkit's runner and bench harness, natively and on `wasm32`; separate from `purrdf-hash` because testkit depends on it (`publish = false`) |
 | `helper-census` (`crates/helper-census`) | The structural helper census: normalises every function body in shipping code and in every test, bench and example target (local names renamed, literals abstracted, borrow, deref and value-adapter forms such as `&x`, `x.as_str()` and `x.clone()` dropped, bodies from 20 tokens up with small ones keeping their literals) and reports isomorphic bodies, repeated thin forwarders, constants by value and hex-digit tables against `helpers-ledger.toml`; also hosts the non-Rust ratchet (`--non-rust-ratchet`, see [Hard constraints](#2-hard-constraints-violating-these-fails-ci-or-review)) (`publish = false`, host tool) |
@@ -169,7 +169,7 @@ order, with the home each names. Call the home; never write a second body.
 | `crockford-base32` | `purrdf_lex::crockford::write_u128` |
 | `rdf-collection` | `purrdf_core::DatasetView` |
 | `thread-stack` | `purrdf_stack::on_stack` |
-| `test-workspace-paths` | `purrdf_testkit::paths::workspace_root` |
+| `test-workspace-paths` | `purrdf_testkit::paths::workspace_root_from` |
 | `query-host-plumbing` | `purrdf_validate::governors::from_parts` |
 | `ed25519` | `purrdf_ed25519::SigningKey` |
 | `mldsa65` | `purrdf_gts::mldsa65::SigningKey` |
@@ -525,18 +525,17 @@ black-cat family system — `#cat-head-core` is shared verbatim; only the
 
 ## 6. Releases
 
-Tag-driven trusted publishing: `rust-v*` → crates.io (37 crates, ordered),
+Tag-driven trusted publishing: `rust-v*` → crates.io (40 crates, ordered),
 `py-v*` → PyPI (`purrdf`). See [`docs/RELEASE.md`](./docs/RELEASE.md). Version
-is single-sourced in `[workspace.package]`. Thirteen members never reach
+is single-sourced in `[workspace.package]`. Ten members never reach
 crates.io: `purrdf-capi`, `purrdf-sparql-conformance`,
-`purrdf-conformance-kit`, `purrdf-shacl-conformance`, `purrdf-hash-conformance`, `purrdf-cli`, `purrdf-envelope-probe`,
-`purrdf-bench`, `purrdf-alloc-probe`, `purrdf-testkit`, `wasm-link`,
-`helper-census`, and `purrdf-python` (PyPI via maturin instead).
-`purrdf-alloc-probe`, `purrdf-conformance-kit`, `purrdf-shacl-conformance` and `purrdf-testkit` are
-dev-dependencies of published crates, so their root `[workspace.dependencies]` entries are path-only with
-**no `version`** — cargo then strips them from the packaged manifest, which is
-the only way `cargo publish`'s dev-dependency-resolving verification step can
-succeed.
+`purrdf-shacl-conformance`, `purrdf-hash-conformance`, `purrdf-cli`,
+`purrdf-envelope-probe`, `purrdf-bench`, `wasm-link`, `helper-census`, and
+`purrdf-python` (PyPI via maturin instead). The published development libraries
+`purrdf-alloc-probe`, `purrdf-testkit` and `purrdf-conformance-kit` retain explicit
+versions and precede their consumers in publication order. Only the
+checkout-bound `purrdf-shacl-conformance` remains a path-only, versionless
+dev-dependency that Cargo strips from published manifests.
 
 ## 7. Provenance
 

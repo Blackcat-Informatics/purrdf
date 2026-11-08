@@ -482,9 +482,9 @@ The [conformance scoreboard](./docs/CONFORMANCE.md) distinguishes official
 suites, first-party corpora, approved divergences and untested boundaries.
 SPARQL evaluation has **1393 passing**, 0 ledgered.
 SHACL has **129/129 passing** on the vendored W3C SHACL 1.0 test suite, zero ledgered,
-and **590/591 passing** on the vendored W3C SHACL 1.2 test suite.
-The 591st entry, `hasLang-example`, is reported failed: it calls `sparql:hasLang` with two
-arguments where the SPARQL 1.2 grammar takes one.
+and **800/800 passing** on the vendored W3C SHACL 1.2 test suite.
+The SHACL EARL covers 591 approved tests; the separate SPARQL Rules root
+contributes 209 tests under its independently pinned Working Draft.
 
 The following measurements cover the named corpora. They do not assert that
 every possible input or every language surface has been exercised:
@@ -494,7 +494,7 @@ every possible input or every language surface has been exercised:
 | ShEx 2.1 validation | shexTest v2.1.0 (`vectors/shexTest/`) | **1,105 / 1,105** attempted, 0 xfail |
 | ShEx schemas / negative syntax / structure | shexTest v2.1.0 | **425/425 · 99/99 · 14/14** |
 | SHACL | W3C data-shapes (`vectors/shacl/`) | **129 / 129** pass · 0 ledgered |
-| SHACL 1.2 | W3C `shacl12-test-suite` (`vectors/shacl12/`) | **590 / 591** pass · 0 ledgered expected failures, 1 spec-contradicted (`hasLang-example`); 1 unlisted vendored files graded apart |
+| SHACL 1.2 | W3C `shacl12-test-suite` (`vectors/shacl12/`) | **800 / 800** pass · 0 ledgered expected failures, 0 spec-contradicted; 1 unlisted vendored file graded apart |
 | SHACL (first-party frozen corpus) | `crates/shapes/corpus/` | **73 / 73** |
 | SHACL Rules | DASH + first-party (`vectors/shacl/af/rules/`) | **20 / 20** |
 | Syntax codecs | W3C rdf-tests round-trip | **264 / 264** |

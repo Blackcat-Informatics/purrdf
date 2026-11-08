@@ -362,7 +362,7 @@ fn native_config_results_and_cargo_readers_fail_actionably() {
 fn external_output_admission_uses_source_rules_and_rejects_personal_exclusions() {
     let owned = purrdf_testkit::temp_dir!("native-output-admission").unwrap();
     success(&command(&["output", owned.path().to_str().unwrap()], b""));
-    let root = purrdf_testkit::paths::workspace_root();
+    let root = purrdf_testkit::paths::workspace_root!();
     assert!(
         !command(&["output", root.to_str().unwrap()], b"")
             .status

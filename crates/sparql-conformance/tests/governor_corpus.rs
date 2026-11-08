@@ -208,7 +208,7 @@ const PARALLEL_FORK_MIN_ROWS: usize = 1024;
 const UPDATE_ENV: &str = "PURRDF_UPDATE_GOVERNOR_CORPUS";
 
 fn corpus_root() -> PathBuf {
-    workspace_root().join("vectors/sparql-governors")
+    workspace_root!().join("vectors/sparql-governors")
 }
 
 // ---------------------------------------------------------------------------

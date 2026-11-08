@@ -3,7 +3,7 @@
 
 //! Strict five-table columnar-to-RDF reconstruction.
 
-use purrdf_core::{QuadIds, TermBox};
+use purrdf_core::QuadIds;
 use std::collections::BTreeMap;
 use std::str;
 use std::sync::Arc;
@@ -11,10 +11,11 @@ use std::sync::Arc;
 use purrdf_core::langtag::is_identity_folded;
 use purrdf_core::{
     BlankScope, ContentDigest, ContentStore, LossLedger, RdfDataset, RdfDatasetBuilder, RdfLiteral,
-    RdfTextDirection, TermFactory as _, TermValue,
+    RdfTextDirection, TermId,
 };
 
 use crate::column::Int64Column;
+use crate::dictionary::{TermDictionary, TermRecord};
 use crate::error::{ColumnarError, ReaderReason};
 use crate::files::ParquetFiles;
 use crate::ordinal::{ColumnarOrdinal, ColumnarOrdinalRead, ColumnarOrdinalValue, OrdinalCapture};
@@ -69,18 +70,14 @@ pub fn read_with_ordinals(
     let mut capture = OrdinalCapture::new(requested);
     let dictionary = Dictionary::decode(TableReader::open(files.get(Table::Terms), Table::Terms)?)?;
     let mut builder = RdfDatasetBuilder::new();
-    let ids = dictionary
-        .values
-        .iter()
-        .map(|value| builder.intern_value(value))
-        .collect::<Result<Vec<_>, _>>()?;
+    let ids = dictionary.intern_into(&mut builder)?;
     for (index, &id) in ids.iter().enumerate() {
         capture.capture(
             ColumnarOrdinal::Term(index as u64),
             ColumnarOrdinalValue::Term(id),
         );
     }
-    let mut row_counts = [dictionary.values.len(), 0, 0, 0];
+    let mut row_counts = [dictionary.records.len(), 0, 0, 0];
     for (index, named) in dictionary.named_graphs.iter().enumerate() {
         if *named {
             builder.declare_named_graph(ids[index])?;
@@ -102,12 +99,7 @@ pub fn read_with_ordinals(
                 {
                     advance_order(&mut previous_reifier, row, "reifier row order")?;
                     let (reifier, s, p, o, g) = row;
-                    let triple_value = TermValue::Triple {
-                        s: TermBox::new(dictionary.values[s].clone()),
-                        p: TermBox::new(dictionary.values[p].clone()),
-                        o: TermBox::new(dictionary.values[o].clone()),
-                    };
-                    let triple = dictionary.value_ids.get(&triple_value).ok_or_else(|| {
+                    let triple = dictionary.triple_ids.get(&(s, p, o)).ok_or_else(|| {
                         ColumnarError::reader_malformed(
                             "reifier binding",
                             ReaderReason::MissingTriple,
@@ -234,30 +226,11 @@ fn at_offset(mut error: ColumnarError, offset: usize) -> ColumnarError {
     error
 }
 
-#[derive(Debug, Clone)]
-enum TermRecord {
-    Iri(String),
-    Literal {
-        lexical: String,
-        datatype: usize,
-        language: Option<String>,
-        direction: Option<RdfTextDirection>,
-    },
-    Blank {
-        label: String,
-        scope: BlankScope,
-    },
-    Triple {
-        s: usize,
-        p: usize,
-        o: usize,
-    },
-}
-
 struct Dictionary {
-    values: Vec<TermValue>,
+    records: Vec<TermRecord>,
+    postorder: Vec<usize>,
     named_graphs: Vec<bool>,
-    value_ids: BTreeMap<TermValue, usize>,
+    triple_ids: BTreeMap<(usize, usize, usize), usize>,
 }
 
 impl Dictionary {
@@ -293,19 +266,66 @@ impl Dictionary {
             }
             records.extend(group);
         }
-        let values = resolve_term_records(&records)?;
-        ensure_strict_order(&values, "term dictionary order")?;
-        let value_ids = values
+        let resolved = resolve_term_records(&records)?;
+        for pair in resolved.identities.windows(2) {
+            if !resolved.dictionary.compare(pair[0], pair[1]).is_lt() {
+                return Err(ColumnarError::reader_malformed(
+                    "term dictionary order",
+                    ReaderReason::RowOrder,
+                ));
+            }
+        }
+        let triple_ids = records
             .iter()
-            .cloned()
             .enumerate()
-            .map(|(id, value)| (value, id))
+            .filter_map(|(id, record)| match *record {
+                TermRecord::Triple { s, p, o } => Some(((s, p, o), id)),
+                _ => None,
+            })
             .collect();
         Ok(Self {
-            values,
+            records,
+            postorder: resolved.postorder,
             named_graphs,
-            value_ids,
+            triple_ids,
         })
+    }
+
+    /// The DFS completion order matches the original dependency-first native
+    /// interning sequence, including forward references in wire order.
+    fn intern_into(&self, builder: &mut RdfDatasetBuilder) -> Result<Vec<TermId>, ColumnarError> {
+        let mut ids = vec![None; self.records.len()];
+        for &index in &self.postorder {
+            let child = |index: usize| ids[index].expect("dependency already interned");
+            let id = match &self.records[index] {
+                TermRecord::Iri(iri) => builder.intern_iri(iri)?,
+                TermRecord::Blank { label, scope } => builder.intern_blank(label, *scope)?,
+                TermRecord::Literal {
+                    lexical,
+                    datatype,
+                    language,
+                    direction,
+                } => {
+                    let TermRecord::Iri(datatype) = &self.records[*datatype] else {
+                        unreachable!("literal datatype already validated")
+                    };
+                    builder.intern_literal(RdfLiteral {
+                        lexical_form: lexical.clone(),
+                        datatype: Some(datatype.clone()),
+                        language: language.clone(),
+                        direction: *direction,
+                    })?
+                }
+                TermRecord::Triple { s, p, o } => {
+                    builder.intern_triple(child(*s), child(*p), child(*o))?
+                }
+            };
+            ids[index] = Some(id);
+        }
+        Ok(ids
+            .into_iter()
+            .map(|id| id.expect("every record resolved"))
+            .collect())
     }
 }
 
@@ -459,18 +479,39 @@ fn parse_triple_record(
     })
 }
 
-fn resolve_term_records(records: &[TermRecord]) -> Result<Vec<TermValue>, ColumnarError> {
+#[derive(Debug)]
+struct ResolvedTerms {
+    dictionary: TermDictionary,
+    identities: Vec<usize>,
+    postorder: Vec<usize>,
+}
+
+fn resolve_term_records(records: &[TermRecord]) -> Result<ResolvedTerms, ColumnarError> {
     let mut states = vec![0u8; records.len()];
     let mut values = vec![None; records.len()];
+    let mut dictionary = TermDictionary::default();
+    let mut postorder = Vec::with_capacity(records.len());
     for index in 0..records.len() {
-        resolve_term_record(index, records, &mut states, &mut values)?;
+        resolve_term_record(
+            index,
+            records,
+            &mut states,
+            &mut values,
+            &mut dictionary,
+            &mut postorder,
+        )?;
     }
-    values
+    let identities = values
         .into_iter()
         .collect::<Option<Vec<_>>>()
         .ok_or_else(|| {
             ColumnarError::reader_malformed("term dictionary", ReaderReason::UnresolvedTerm)
-        })
+        })?;
+    Ok(ResolvedTerms {
+        dictionary,
+        identities,
+        postorder,
+    })
 }
 
 /// Resolve term record `index`, memoised in `values` with `states` marking the records
@@ -486,31 +527,25 @@ fn resolve_term_record(
     index: usize,
     records: &[TermRecord],
     states: &mut [u8],
-    values: &mut [Option<TermValue>],
-) -> Result<TermValue, ColumnarError> {
+    values: &mut [Option<usize>],
+    dictionary: &mut TermDictionary,
+    postorder: &mut Vec<usize>,
+) -> Result<usize, ColumnarError> {
     /// A record being resolved, and the values its dependencies resolved to so far.
     struct Frame {
         index: usize,
         record: TermRecord,
-        resolved: Vec<TermValue>,
-    }
-    /// The records `record` depends on, in resolution order.
-    fn dependencies(record: &TermRecord) -> ([usize; 3], usize) {
-        match *record {
-            TermRecord::Literal { datatype, .. } => ([datatype, 0, 0], 1),
-            TermRecord::Triple { s, p, o } => ([s, p, o], 3),
-            TermRecord::Iri(_) | TermRecord::Blank { .. } => ([0; 3], 0),
-        }
+        resolved: Vec<usize>,
     }
     /// Enter record `index`: its memoised value, or a new frame for it.
     fn enter(
         index: usize,
         records: &[TermRecord],
         states: &mut [u8],
-        values: &[Option<TermValue>],
-    ) -> Result<Result<TermValue, Frame>, ColumnarError> {
+        values: &[Option<usize>],
+    ) -> Result<Result<usize, Frame>, ColumnarError> {
         if let Some(value) = &values[index] {
-            return Ok(Ok(value.clone()));
+            return Ok(Ok(*value));
         }
         if states[index] == 1 {
             return Err(ColumnarError::reader_malformed(
@@ -531,7 +566,7 @@ fn resolve_term_record(
     };
     loop {
         let frame = frames.last_mut().expect("a record is being resolved");
-        let (dependencies, count) = dependencies(&frame.record);
+        let (dependencies, count) = frame.record.dependencies();
         if frame.resolved.len() < count {
             match enter(dependencies[frame.resolved.len()], records, states, values)? {
                 Ok(value) => frame.resolved.push(value),
@@ -546,15 +581,15 @@ fn resolve_term_record(
         } = frames.pop().expect("a record is being resolved");
         let mut resolved = resolved.into_iter();
         let value = match record {
-            TermRecord::Iri(iri) => TermValue::Iri(iri),
+            TermRecord::Iri(iri) => TermRecord::Iri(iri),
             TermRecord::Literal {
                 lexical,
                 datatype: _,
                 language,
                 direction,
             } => {
-                let datatype = resolved.next().expect("a literal's datatype is resolved");
-                let TermValue::Iri(datatype) = datatype else {
+                let datatype_id = resolved.next().expect("a literal's datatype is resolved");
+                let TermRecord::Iri(datatype) = &dictionary.records[datatype_id] else {
                     return Err(ColumnarError::reader_malformed(
                         "terms.datatype",
                         ReaderReason::LiteralDatatype { row: index },
@@ -578,7 +613,7 @@ fn resolve_term_record(
                             "terms.datatype",
                             ReaderReason::LanguageDatatype {
                                 row: index,
-                                actual: datatype,
+                                actual: datatype.clone(),
                                 expected,
                             },
                         ));
@@ -589,22 +624,24 @@ fn resolve_term_record(
                         ReaderReason::DirectionWithoutLanguage { row: index },
                     ));
                 }
-                TermValue::Literal {
-                    lexical_form: lexical,
-                    datatype,
+                TermRecord::Literal {
+                    lexical,
+                    datatype: datatype_id,
                     language,
                     direction,
                 }
             }
-            TermRecord::Blank { label, scope } => TermValue::Blank { label, scope },
-            TermRecord::Triple { .. } => TermValue::Triple {
-                s: TermBox::new(resolved.next().expect("a triple's subject is resolved")),
-                p: TermBox::new(resolved.next().expect("a triple's predicate is resolved")),
-                o: TermBox::new(resolved.next().expect("a triple's object is resolved")),
+            TermRecord::Blank { label, scope } => TermRecord::Blank { label, scope },
+            TermRecord::Triple { .. } => TermRecord::Triple {
+                s: resolved.next().expect("a triple's subject is resolved"),
+                p: resolved.next().expect("a triple's predicate is resolved"),
+                o: resolved.next().expect("a triple's object is resolved"),
             },
         };
         states[index] = 2;
-        values[index] = Some(value.clone());
+        let value = dictionary.intern(value);
+        values[index] = Some(value);
+        postorder.push(index);
         match frames.last_mut() {
             Some(parent) => parent.resolved.push(value),
             None => return Ok(value),
@@ -1024,7 +1061,7 @@ mod tests {
         // Compare the original model directly: blank labels/scopes, lexical
         // forms and all three RDF streams are values, never remapped local IDs.
         let state = |dataset: &RdfDataset| {
-            let row = |quad: QuadIds<purrdf_core::TermId>| {
+            let row = |quad: QuadIds<TermId>| {
                 (
                     dataset.term_value(quad.s),
                     dataset.term_value(quad.p),
@@ -1287,6 +1324,7 @@ mod term_walk_tests {
     use super::{
         ColumnarError, ReaderReason, TermRecord, resolve_term_record, resolve_term_records,
     };
+    use crate::dictionary::TermDictionary;
 
     fn reference_record(
         index: usize,
@@ -1455,7 +1493,7 @@ mod term_walk_tests {
         let values = resolve_term_records(&language_literal_table("en-gb"))
             .expect("a folded tag is canonical");
         assert_eq!(
-            values[1],
+            values.dictionary.diagnostic_value(values.identities[1]),
             TermValue::Literal {
                 lexical_form: "chat".to_owned(),
                 datatype: purrdf_core::vocab::rdf::LANG_STRING.to_owned(),
@@ -1472,10 +1510,20 @@ mod term_walk_tests {
             let records = generated(seed);
             let n = records.len();
             let (mut states, mut values) = (vec![0u8; n], vec![None; n]);
+            let mut dictionary = TermDictionary::default();
+            let mut postorder = Vec::new();
             let (mut expected_states, mut expected_values) = (vec![0u8; n], vec![None; n]);
             let mut table_refused = false;
             for index in 0..n {
-                let found = resolve_term_record(index, &records, &mut states, &mut values);
+                let found = resolve_term_record(
+                    index,
+                    &records,
+                    &mut states,
+                    &mut values,
+                    &mut dictionary,
+                    &mut postorder,
+                )
+                .map(|id| dictionary.diagnostic_value(id));
                 let expected: Result<TermValue, ColumnarError> =
                     reference_record(index, &records, &mut expected_states, &mut expected_values);
                 assert_eq!(
@@ -1489,7 +1537,14 @@ mod term_walk_tests {
                     break;
                 }
                 resolved += 1;
-                assert_eq!(values, expected_values, "seed {seed}, record {index}");
+                let actual_values: Vec<_> = values
+                    .iter()
+                    .map(|id| id.map(|id| dictionary.diagnostic_value(id)))
+                    .collect();
+                assert_eq!(
+                    actual_values, expected_values,
+                    "seed {seed}, record {index}"
+                );
             }
             // The whole table resolves exactly when every record does, to every value.
             match resolve_term_records(&records) {
@@ -1499,7 +1554,12 @@ mod term_walk_tests {
                         .into_iter()
                         .map(|value| value.expect("resolved"))
                         .collect();
-                    assert_eq!(whole, expected, "seed {seed}");
+                    let actual: Vec<_> = whole
+                        .identities
+                        .iter()
+                        .map(|&id| whole.dictionary.diagnostic_value(id))
+                        .collect();
+                    assert_eq!(actual, expected, "seed {seed}");
                 }
                 Err(_) => assert!(table_refused, "seed {seed}"),
             }
@@ -1509,9 +1569,8 @@ mod term_walk_tests {
     }
 
     /// A record chain a thousand triple terms deep resolves on a thread whose whole
-    /// stack is 128 KiB — more levels than a recursion could take there. Every record is
-    /// memoised as its whole value, so a chain costs memory with the square of its depth
-    /// and is kept to a thousand levels.
+    /// stack is 128 KiB — more levels than a recursion could take there. Flat
+    /// identity memoization retains one record and its edges per distinct term.
     #[test]
     fn a_deep_record_chain_resolves_on_a_128_kib_thread() {
         const LEVELS: usize = 1_000;
@@ -1530,8 +1589,19 @@ mod term_walk_tests {
             }
             let root = records.len() - 1;
             let (mut states, mut values) = (vec![0u8; records.len()], vec![None; records.len()]);
-            let value = resolve_term_record(root, &records, &mut states, &mut values)
-                .expect("the chain resolves");
+            let mut dictionary = TermDictionary::default();
+            let mut postorder = Vec::new();
+            let identity = resolve_term_record(
+                root,
+                &records,
+                &mut states,
+                &mut values,
+                &mut dictionary,
+                &mut postorder,
+            )
+            .expect("the chain resolves");
+            assert_eq!(dictionary.records.len(), records.len());
+            let value = dictionary.diagnostic_value(identity);
             assert_eq!(value, purrdf_core::term_fixture::triple_chain(LEVELS));
         })
         .expect("the thread starts");

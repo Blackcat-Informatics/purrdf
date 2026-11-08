@@ -61,11 +61,11 @@ change with `python3 scripts/conformance-matrix.py --write-doc`:
 | Entailment (OWL 2 DL consistency) | W3C OWL 2 test suite | 262 | 0 | 0 | 0 | GREEN |
 | Entailment (OWL 2 RL, W3C entailment tests) | W3C OWL 2 entailment tests | 50 | 0 | 0 | 0 | GREEN |
 | SHACL Core + SHACL-SPARQL | W3C data-shapes | 129 | 0 | 0 | 0 | GREEN |
-| SHACL 1.2 (Core, SPARQL, node expressions, rules, SPARQL RL) | W3C `shacl12-test-suite` | 590 | 1 | 1 | 0 | GREEN |
+| SHACL 1.2 (Core, SPARQL, node expressions, rules, SPARQL RL) | W3C `shacl12-test-suite` | 800 | 0 | 0 | 0 | GREEN |
 | SHACL 1.2 unlisted vendored files | W3C `shacl12-test-suite` files no manifest includes | 1 | 0 | 0 | 0 | GREEN |
 | SHACL (first-party corpus) | first-party frozen reports | 73 | 0 | 0 | 0 | GREEN |
 | Community SHACL dated profiles (REC 2017 / WD 2026) | community-proposed corpus, agent-reviewed | 115 | 0 | 0 | 0 | GREEN |
-| SHACL prepared-product equivalence | W3C data-shapes + `shacl12-test-suite` + first-party corpus | 407 | 0 | 0 | 0 | GREEN |
+| SHACL prepared-product equivalence | W3C data-shapes + `shacl12-test-suite` + first-party corpus | 468 | 0 | 0 | 0 | GREEN |
 | XSD/XPath regExp (first-party corpus) | first-party, XSD G + F&O 5.6 | 292 | 0 | 0 | 0 | GREEN |
 | SHACL Rules | DASH + first-party | 20 | 0 | 0 | 0 | GREEN |
 | ShEx 2.1 validation | shexTest v2.1.0 | 1105 | 0 | 0 | 0 | GREEN |
@@ -124,11 +124,11 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
 | ShEx negative syntax | shexTest v2.1.0, `negativeSyntax/` | **99 / 99** rejected |
 | ShEx negative structure | shexTest v2.1.0, `negativeStructure/` | **14 / 14** rejected |
 | SHACL | W3C data-shapes `core/` + `sparql/` (120), `af/` (6 vendored DASH + 3 first-party) | **129 / 129** pass as approved · 0 ledgered |
-| SHACL 1.2 | W3C `shacl12-test-suite`, `vectors/shacl12/tests/` | **590 / 591** pass as approved · 0 ledgered expected failures, 1 spec-contradicted (`node-expr/shnex-sparql/hasLang-example`), of the 591 an upstream manifest lists; 592 discovered: 213 `sht:Validate`, 143 `sht:EvalNodeExpr`, 27 `sht:Infer`, 209 SPARQL 1.2 RL |
-| SHACL 1.2 unlisted vendored files | the 1 files of `vectors/shacl12/tests/` no upstream manifest includes | **1 / 1** graded apart from the approved suite: 1 exactly as written · 0 with a proven delta |
+| SHACL 1.2 | W3C `shacl12-test-suite`, `vectors/shacl12/tests/` | **800 / 800** pass as approved · 0 ledgered expected failures, 0 spec-contradicted, of the 800 an upstream manifest lists; 801 discovered: 274 `sht:Validate`, 276 `sht:EvalNodeExpr`, 42 `sht:Infer`, 209 SPARQL 1.2 RL |
+| SHACL 1.2 unlisted vendored files | the 1 file of `vectors/shacl12/tests/` no upstream manifest includes | **1 / 1** graded apart from the approved suite: 1 exactly as written · 0 with a proven delta |
 | SHACL (first-party corpus) | `crates/shapes/corpus/` | **73 / 73** frozen expected reports |
-| Community SHACL dated profiles | `corpora/community/` (64 cases) | **115 / 115** applicable dated executions (REC 2017: 57, WD 2026: 58) over 535 route observations · 0 unsupported · 0 ledgered |
-| SHACL prepared-product equivalence | the three SHACL corpora, `vectors/shacl/` (129) + the `sht:Validate` entries of `vectors/shacl12/tests/` (213) + `crates/shapes/corpus/` (73) | **401 / 401** shapes graphs whose validation report is byte-identical when the shapes graph is parsed from source, packed and admitted, and packed and rebuilt from the dataset the product carries · 0 ledgered refusals. Not a second SHACL grading: the two rows above already decide whether the engine's answer is right, and a case whose answer is wrong is wrong identically in all three lanes. This row decides whether the prepared-product codec CHANGES the answer, which neither of those rows can see because each runs exactly one lane. The comparison surface is the report graph's N-Triples compared as bytes, so `sh:sourceShape` and `sh:resultMessage` are both in it and a restore that attributed a violation to the wrong shape fails here even when every focus node, path and component still matched. The ledger column is the **over-refusal** guard, and an empty ledger is the measurement: every shapes graph any of the three corpora contains that parses at all can be packed and restored, so the product format is not a subset of what the validator accepts. Each case is loaded, packed, restored and validated under its own graded law (the 2017 entries under the Recommendation, the SHACL 1.2 entries under the editor's draft). The 14 entries the two vendored suites mark `sht:Failure` are inputs a validator is required to reject: 8 of them (7 SHACL 1.0, 1 SHACL 1.2) are refused at load, so there is nothing to pack, and the other 6 (SHACL 1.2) load and are refused by the editor's draft at validation, where the three lanes agree on the identical error; that makes 401 agreed reports and 6 agreed errors among the 407 packed cases. No other entry's shapes graph is refused at load or ends in an error, and that correspondence is enforced case by case rather than counted. `sparql/component/validator-001` is compared in both suites, loaded with an empty import table: its `owl:imports` sits on a node that is not an import anchor, so the triple is data |
+| Community SHACL dated profiles | `corpora/community/shacl/` (64 cases) | **115 / 115** applicable dated executions (REC 2017: 57, WD 2026: 58) over 535 route observations · 0 unsupported · 0 ledgered |
+| SHACL prepared-product equivalence | `vectors/shacl/` (129), the `sht:Validate` entries of `vectors/shacl12/tests/` (274), and `crates/shapes/corpus/` (73) | **468 / 468** cases agree across source, admitted-product and rebuilt-product lanes: 457 byte-identical N-Triples reports, including 408 with validation results, and 11 identical validation errors. The 8 declared load failures have no product to compare, giving 476 discovered cases. Each case uses its own dated law. Every failure must be declared by its fixture; the SHACL 1.2 load-refusal ledger is empty. This row checks product preservation; the SHACL rows grade correctness |
 | XSD/XPath regExp (first-party corpus) | `crates/rdf-core/corpus/xsd-regex/` | **292 / 292** cases · 0 ledgered. The shared compatibility translation (`purrdf_core::xsd_regex::compile`) used by unselected `sh:pattern`, SPARQL `REGEX`/`REPLACE` and ShEx `PATTERN` is graded once. Explicit dated native programs have separate native Rust vectors; see [Dated native XPath programs](#dated-native-xpath-programs). Hand-derived from XML Schema Part 2 Appendix G and XPath F&O 3.1 §5.6 — there is **no** redistributable W3C suite for this language in isolation, so none is claimed. Seven construct groups: flags (including F&O §5.6.2's own four worked `x` examples verbatim), anchors and the wildcard, quantifiers (including F&O §5.6.1's reluctant forms), the multi-character escapes, the `Is`-prefixed block escapes, class subtraction, and the refused constructs. See "Known gaps" for the shared compiler's back-reference refusal, trailing-newline differences for both multiline anchors, and case-variant differences under `i`, and [the recognizer boundary and the liberal edges](#xsdxpath-regex-the-recognizer-boundary-and-the-liberal-edges) for what the compiler now rejects outright and what it deliberately accepts more liberally |
 | Schema → SHACL | first-party exact/lossy/corruption/resource suites + locked language oracles | **5 / 5** production directions; exact emitted-schema recompilation or located closed-profile losses; no deferred reader |
 | Syntax codecs | W3C rdf-tests `crates/rdf/tests/corpus/w3c/` | **264 / 264** round-trip (nquads 27, ntriples 29, rdfxml 31, trig 67, turtle 110) · 0 gaps. The RDF 1.2 `syntax/` + `eval/` sub-suites, plus the `iri/` sub-suite: the `IRI-resolution-01/02/07/08`, `IRIREF_datatype` and `IRI_with_*_numeric_escape` cases, which exist only in the RDF 1.1 Turtle/TriG suites upstream because RDF 1.2 publishes no base-resolution eval tests — this is the end-to-end half of the base-IRI contract `crates/iri/tests/` pins unit-by-unit against RFC 3986 §5.4 |
@@ -390,7 +390,7 @@ distinguishes standard Basic processing from the RDF 1.2 carrier additions.
   byte-frozen expected reports, covering purrdf-specific behavior (reifier
   shapes, path forms, property pairs, qualified shapes, SHACL-AF
   `sh:expression`).
-- `corpora/community/` — the community-proposed SHACL corpus: 64 cases with
+- `corpora/community/shacl/` — the community-proposed SHACL corpus: 64 cases with
   inline expected reports, run under each case's applicable dated profile,
   the SHACL Recommendation of 20 July 2017 (57 executions) and the SHACL 1.2
   SPARQL Working Draft of 18 September 2026 (58 executions). Each validation
@@ -399,8 +399,17 @@ distinguishes standard Basic processing from the RDF 1.2 carrier additions.
   report with its expectation by graph isomorphism in source context, keeping
   `sh:sourceConstraint`, messages, details and path topology. Refusals are
   compared by their typed reason. A profile with no built-in dated law is
-  counted as unsupported, apart from failures. The expectations carry an
-  automated agent review (`corpora/community/reviews/`), not a W3C approval.
+  counted as unsupported, apart from failures. The source-derived expectations
+  and review records live in `corpora/community/reviews/`; no independent human
+  review, external-engine certification or W3C approval is claimed.
+- `corpora/community/sparql/` — fifteen community-proposed interaction and
+  SERVICE cases. Every query runs through native execution and two reuses each
+  of text-prepared and algebra-prepared plans: 75 route observations. The shared
+  bag grader preserves exact headers, empty rows, multiplicity and one global
+  scoped-blank bijection. SERVICE uses independently parsed local endpoint
+  fixtures and the native offline resolver. The complete community catalog has
+  79 cases, 130 case/profile executions and 610 route observations, reported
+  separately by language and by actual profile/surface in EARL.
 - `crates/rdf-core/corpus/xsd-regex/` — PurRDF's own XSD/XPath `regExp` corpus:
   292 cases across seven `.cases` files, grading
   `purrdf_core::xsd_regex::compile` — the shared compatibility translation
@@ -521,7 +530,7 @@ cargo test -p purrdf-shex                              # all four ShEx suites
 cargo test -p purrdf-shapes --test w3c_conformance -- --nocapture   # W3C SHACL scoreboard
 cargo test -p purrdf-shapes --test w3c12_conformance -- --nocapture # W3C SHACL 1.2 scoreboard
 cargo test -p purrdf-shapes --test conformance         # the 73-case frozen corpus
-cargo test -p purrdf-sparql-conformance --test community_conformance -- --nocapture # community SHACL, dated profiles
+cargo test -p purrdf-sparql-conformance --test community_conformance -- --nocapture # native community SHACL and queries
 cargo run -p purrdf-shapes --example schema_reverse --locked        # all five schema readers
 make pydantic-oracle linkml-oracle typescript-oracle graphql-oracle # independent schema runtimes
 cargo test -p purrdf-sparql-conformance                # W3C SPARQL
@@ -880,29 +889,24 @@ way the matrix stays honest:
   (`sh:ExpressionConstraintComponent`), and SHACL Rules (`sh:TripleRule` /
   `sh:SPARQLRule`, AND rule sets).
 
-- **SHACL 1.2** — the harness discovers all **592** entries of the vendored W3C
-  `shacl12-test-suite`. Of the **591** an upstream manifest lists, it passes
-  **590 / 591** as approved, with an empty expected-failure ledger. The 592 are 213
-  `sht:Validate` (graded like the SHACL 1.0 suite), 143
-  `sht:EvalNodeExpr` (output compared term for term, in order unless the entry
-  sets `sht:ignoreOrder`), 27 `sht:Infer` (inferred graph compared by RDFC-1.0
-  isomorphism) and 209 SPARQL 1.2 RL tests across seven test types, each
-  negative test required to fail at the stage its type names. The one approved entry that
-  does not pass, `node-expr/shnex-sparql/hasLang-example`, is reported failed with its
-  rationale: the SPARQL 1.2 Query grammar's production `'hasLANG' '(' Expression ')'`
-  takes exactly one argument, and the test evaluates `[ sparql:hasLang ( "hello"@en "en" ) ]`
-  with two and expects `true`, which a processor applying the grammar's arity cannot
-  produce; PurRDF refuses the two-argument call like every other wrong-arity call.
-  Discovery
-  refuses to lose a test: an unknown test type, an unreached manifest, an
-  unlisted test node or a duplicate id stops the run. The `sht:Validate` entries and the
-  rule cases run under the dated `shacl-ed-2026-10-16` profile, the editor's drafts of the
-  suite's own commit (`4cd469867a1cc6d2fff80e8a40723b26c695d67a`). That law is the
-  `shacl-wd-2026-09-18` working draft plus four rules first published after it: a node
-  expression as `sh:deactivated` on a SPARQL-based or `sh:expression` constraint, the
-  `owl:versionIRI` steps of the `sh:prefixes` path, the refusal of a blank node as a
-  custom SPARQL function argument, and rule sets as `sh:entailment` values. The working
-  draft law refuses or ignores those four, each with a tested neighbour. A rule set is a
+- **SHACL 1.2** — the harness discovers all **801** entries of the vendored W3C
+  `shacl12-test-suite`. Of the **800** an upstream manifest lists, it passes **800 / 800** as
+  approved, with an empty expected-failure ledger. The 801 are 274
+  `sht:Validate`, 276 `sht:EvalNodeExpr` (output compared term for term, or a typed evaluation
+  failure as declared), 42 `sht:Infer` (inferred graph compared by RDFC-1.0
+  isomorphism) and 209 SPARQL 1.2 RL tests.
+  The SHACL EARL covers the 591 approved entries reached from the SHACL root.
+  Its snapshot is `40231dfb97c5b606d22ae733947c0d14b4f45c07`, graded under the
+  explicit `shacl-ed-2026-11-06` law. That law evaluates list-function arguments
+  in the caller's scope before application, and shared run-once rules execute
+  once per focus node. The October law and compatibility defaults keep their
+  earlier behavior. Node-expression evaluation failures are graded as declared;
+  setup, processor and declaration failures cannot satisfy those expectations.
+  The independent SPARQL Rules root remains at `4cd46986`, matching the supported
+  2026-09-19 Working Draft; it is outside the SHACL EARL. Every negative Rules
+  test must fail at the stage its type names. Discovery refuses unknown test
+  types, unreached manifests, unlisted test nodes and duplicate identifiers.
+  A rule set is a
   SHACL instance of `sh:RuleSet` and nothing else: an IRI typed `sh:RuleSet`, whether it is
   declared by `sh:entailment`, by `RuleOptions::with_rule_set` or by `sh:includesRuleSet`.
   An untyped subject of `sh:hasRule` or `sh:includesRuleSet` is not a rule set (SHACL does
@@ -1132,7 +1136,7 @@ argument in this repository changes it.
 
 **The mitigation, and exactly what it proves.**
 `crates/sparql-conformance/tests/cdt_lexical_divergence.rs` tokenizes every
-corpus file this workspace ships (2,892 of them, across `vectors/`,
+corpus file this workspace ships (4,310 of them, across `vectors/`,
 `crates/sparql-conformance/suite/`, `.../corpus/` and `.../entailment-suite/`)
 with the production lexers, resolves each file's own prefix bindings, recovers
 every `cdt:List`/`cdt:Map` literal (959 of them), and grades each one with

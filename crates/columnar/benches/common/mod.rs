@@ -11,6 +11,7 @@ pub(super) enum Workload {
     Mixed,
     Reifiers,
     LargeBlobs,
+    SharedTerms,
 }
 
 pub(super) const ROWS: u32 = 500;
@@ -21,6 +22,17 @@ pub(super) fn fixture(workload: Workload) -> (Arc<RdfDataset>, ContentStore) {
     let graph = builder.intern_iri("https://example.org/g").unwrap();
     let empty = builder.intern_iri("https://example.org/empty").unwrap();
     builder.declare_named_graph(empty).unwrap();
+    let shared = if matches!(workload, Workload::SharedTerms) {
+        let mut child = predicate;
+        // Each row adds one distinct outer term around this shared suffix,
+        // reaching the native nesting limit without expanding an owned tree.
+        for _ in 0..15 {
+            child = builder.intern_triple(predicate, predicate, child).unwrap();
+        }
+        Some(child)
+    } else {
+        None
+    };
     let mut state = 0x0050_4152_5155_4554;
     for row in 0..ROWS {
         let subject = builder
@@ -36,9 +48,13 @@ pub(super) fn fixture(workload: Workload) -> (Arc<RdfDataset>, ContentStore) {
                 "http://www.w3.org/2001/XMLSchema#integer",
             ))
             .unwrap();
-        let repeated = builder
-            .intern_literal(RdfLiteral::simple(format!("repeated {}", row % 7)))
-            .unwrap();
+        let repeated = if let Some(child) = shared {
+            builder.intern_triple(subject, predicate, child).unwrap()
+        } else {
+            builder
+                .intern_literal(RdfLiteral::simple(format!("repeated {}", row % 7)))
+                .unwrap()
+        };
         builder.push_quad(subject, predicate, blank, None).unwrap();
         builder
             .push_quad(blank, predicate, literal, Some(graph))

@@ -69,7 +69,7 @@ struct Case {
 }
 
 fn corpus_root() -> PathBuf {
-    workspace_root().join("vectors/rdf12-canon")
+    workspace_root!().join("vectors/rdf12-canon")
 }
 
 /// Parse the manifest. Blank lines and `#` comments are skipped; every other line is
@@ -558,7 +558,7 @@ fn a_spelled_annotation_co_canonicalizes_with_the_flat_row_it_spells() {
 /// single `sha256sum` and without running this suite.
 #[test]
 fn the_corpus_digest_matches_the_constant_a_consumer_pins() {
-    let manifest = workspace_root().join("scripts/conformance-frozen/vectors-rdf12-canon.sha256");
+    let manifest = workspace_root!().join("scripts/conformance-frozen/vectors-rdf12-canon.sha256");
     let bytes = std::fs::read(&manifest).expect("the corpus freeze manifest must exist");
     let computed = format!("{}", purrdf_hash::hex::Lower(&Sha256::digest(&bytes)));
     assert_eq!(

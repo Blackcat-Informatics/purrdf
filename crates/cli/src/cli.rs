@@ -2046,6 +2046,9 @@ pub(crate) enum Command {
         /// searched), are refused, since neither binding could ever be read.
         #[arg(long, value_name = "NAME=TERM")]
         scope: Vec<String>,
+        /// Exact dated SHACL law; omitted, preserves compatibility behavior.
+        #[arg(long = "shacl-profile", value_name = "ID")]
+        shacl_profile: Option<String>,
         /// Evaluate every pattern the expression decides — `sh:pattern` in a filter shape,
         /// and `REGEX`/`REPLACE` in a function call or a SPARQL-based expression — under a
         /// dated native XPath pattern law: `xpath-2.0-2010-12-14` or

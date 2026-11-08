@@ -86,12 +86,42 @@ pub fn evaluate(request: &FreeExpression<'_>) -> Result<NodeExprEvaluation, Shap
     evaluate_parsed(request, &shapes, &expr)
 }
 
+/// Evaluate under an explicitly selected SHACL law, including its required
+/// XPath law. The existing [`evaluate`] entry point retains compatibility behavior.
+///
+/// # Errors
+/// Preserves the original shapes, query, pattern or selected-law refusal.
+pub fn evaluate_with_profile(
+    request: &FreeExpression<'_>,
+    profile: crate::profile::ShaclProfile,
+) -> Result<NodeExprEvaluation, crate::xpath::XPathValidationError> {
+    let (shapes, expr) = parse_with_profile(request, profile)?;
+    let prepared = crate::engine::PreparedShapes::new(Arc::new(shapes));
+    let execute = || {
+        evaluate_parsed(request, prepared.shapes(), &expr)
+            .map_err(crate::report::CompleteValidationError::from)
+    };
+    let outcome = match crate::profile::Request::admit(&prepared) {
+        Ok(Some(selected)) => selected.run(execute),
+        Ok(None) => execute(),
+        Err(error) => Err(error),
+    };
+    outcome.map_err(crate::report::CompleteValidationError::into_xpath)
+}
+
 /// The shapes graph and the one expression [`evaluate`] evaluates, parsed and checked:
 /// everything it refuses before evaluation begins. Shared with the selected-law twin,
 /// [`crate::xpath::evaluate_free_expression`], which evaluates the same parse under a
 /// dated pattern law.
 pub(crate) fn parse(
     request: &FreeExpression<'_>,
+) -> Result<(crate::shapes::Shapes, crate::expression::NodeExpr), ShapesError> {
+    parse_with_profile(request, crate::profile::ShaclProfile::LEGACY)
+}
+
+fn parse_with_profile(
+    request: &FreeExpression<'_>,
+    profile: crate::profile::ShaclProfile,
 ) -> Result<(crate::shapes::Shapes, crate::expression::NodeExpr), ShapesError> {
     let mut names: Vec<&str> = Vec::with_capacity(request.scope.len());
     for (name, _) in request.scope {
@@ -143,6 +173,7 @@ pub(crate) fn parse(
         std::slice::from_ref(request.root),
         &names,
         request.imports,
+        profile,
     )?;
     let expr = exprs
         .pop()

@@ -1,0 +1,41 @@
+{
+  "head": {
+    "vars": [
+      "graph",
+      "node",
+      "value"
+    ]
+  },
+  "results": {
+    "bindings": [
+      {
+        "graph": {
+          "type": "uri",
+          "value": "http://example.org/g1"
+        },
+        "node": {
+          "type": "bnode",
+          "value": "first-source"
+        },
+        "value": {
+          "type": "literal",
+          "value": "one"
+        }
+      },
+      {
+        "graph": {
+          "type": "uri",
+          "value": "http://example.org/g2"
+        },
+        "node": {
+          "type": "bnode",
+          "value": "second-source"
+        },
+        "value": {
+          "type": "literal",
+          "value": "two"
+        }
+      }
+    ]
+  }
+}

@@ -40,12 +40,12 @@ use purrdf_testkit::paths::workspace_root;
 fn in_lane_common(body: &str) -> (i32, String) {
     let script = format!(
         "set -euo pipefail\nLANE=probe\nLANE_BINARY='probe binary'\nsource '{}'\n{body}\n",
-        workspace_root().join("scripts/lane-common.sh").display()
+        workspace_root!().join("scripts/lane-common.sh").display()
     );
     let output = Command::new("bash")
         .arg("-c")
         .arg(script)
-        .current_dir(workspace_root())
+        .current_dir(workspace_root!())
         .output()
         .expect("run bash with lane-common.sh sourced");
     (
@@ -66,13 +66,13 @@ fn in_lane_common(body: &str) -> (i32, String) {
 fn in_lane_common_with_tmpdir(body: &str, tmpdir: &Path) -> (i32, String) {
     let script = format!(
         "set -euo pipefail\nLANE=probe\nLANE_BINARY='probe binary'\nsource '{}'\n{body}\n",
-        workspace_root().join("scripts/lane-common.sh").display()
+        workspace_root!().join("scripts/lane-common.sh").display()
     );
     let output = Command::new("bash")
         .arg("-c")
         .arg(script)
         .env("TMPDIR", tmpdir)
-        .current_dir(workspace_root())
+        .current_dir(workspace_root!())
         .output()
         .expect("run bash with lane-common.sh sourced");
     (
@@ -531,13 +531,13 @@ fn a_multi_line_diagnostic_survives_flattening_instead_of_being_truncated() {
 fn sourcing_the_shared_laws_pins_collation_whatever_the_caller_had() {
     let script = format!(
         "set -euo pipefail\nLANE=probe\nLANE_BINARY=b\nsource '{}'\necho \"LC_ALL=${{LC_ALL}}\"",
-        workspace_root().join("scripts/lane-common.sh").display()
+        workspace_root!().join("scripts/lane-common.sh").display()
     );
     let output = Command::new("bash")
         .arg("-c")
         .arg(&script)
         .env("LC_ALL", "en_US.UTF-8")
-        .current_dir(workspace_root())
+        .current_dir(workspace_root!())
         .output()
         .expect("run bash with a UTF-8 collation in the environment");
     let combined = String::from_utf8_lossy(&output.stdout).to_string();
@@ -1427,7 +1427,7 @@ fn every_stderr_capture_into_the_scratch_directory_is_reset_first() {
         "scripts/scale-corpus.sh",
     ] {
         let text =
-            std::fs::read_to_string(workspace_root().join(script)).expect("read the lane script");
+            std::fs::read_to_string(workspace_root!().join(script)).expect("read the lane script");
         let lines: Vec<&str> = text.lines().collect();
         for (index, line) in lines.iter().enumerate() {
             if line.trim_start().starts_with('#') {
@@ -1577,10 +1577,10 @@ fn capture_target(line: &str, at: usize) -> Option<String> {
 // one place and not its sibling — the law this whole file opens by stating.
 #[test]
 fn every_shared_lane_helper_appears_in_the_design_doc_inventory() {
-    let shared = std::fs::read_to_string(workspace_root().join("scripts/lane-common.sh"))
+    let shared = std::fs::read_to_string(workspace_root!().join("scripts/lane-common.sh"))
         .expect("read the shared lane laws");
     let doc =
-        std::fs::read_to_string(workspace_root().join("docs/design/purrdf-bench-lane-laws.md"))
+        std::fs::read_to_string(workspace_root!().join("docs/design/purrdf-bench-lane-laws.md"))
             .expect("read the lane-laws design document");
 
     // A function definition at column zero: `lane_name() {`. The digits matter — a pattern of
@@ -1659,7 +1659,7 @@ fn every_shared_lane_helper_appears_in_the_design_doc_inventory() {
 // indistinguishable from a pass.
 #[test]
 fn a_required_pin_is_returned_and_a_missing_one_is_refused_by_name() {
-    let root = workspace_root();
+    let root = workspace_root!();
 
     // A pin that IS recorded comes back as its value, so a caller comparing a digest has
     // something to compare against.
@@ -1693,7 +1693,7 @@ fn a_required_pin_is_returned_and_a_missing_one_is_refused_by_name() {
 
 #[test]
 fn an_optional_pin_reports_absence_and_dies_on_a_broken_lookup() {
-    let root = workspace_root();
+    let root = workspace_root!();
 
     // Found: sets LANE_PIN_VALUE and returns 0.
     let (code, out) = in_lane_common(&format!(

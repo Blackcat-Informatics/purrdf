@@ -3142,7 +3142,7 @@ mod tests {
                 .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
         );
 
-        let manifest = purrdf_testkit::paths::workspace_root()
+        let manifest = purrdf_testkit::paths::workspace_root!()
             .join("scripts/conformance-frozen/vectors-sparql-governors.sha256");
         let bytes = std::fs::read(&manifest).expect("the corpus freeze manifest must exist");
         let hex = purrdf_hash::hex::encode(&sha2::Sha256::digest(&bytes));

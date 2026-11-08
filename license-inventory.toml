@@ -257,10 +257,10 @@ provenance = ["crates/jsonschema/PROVENANCE.md"]
 id = "jsonschema-metaschemas"
 license = "BSD-3-Clause"
 source = "https://github.com/json-schema-org/json-schema-spec"
-scope = "source-only conformance data; original notices remain authoritative"
-paths = ["crates/jsonschema/tests/metaschemas/**"]
-notices = ["crates/jsonschema/tests/metaschemas/LICENSES/BSD-3-Clause.txt"]
-provenance = ["crates/jsonschema/PROVENANCE.md"]
+scope = "embedded meta-schema data; original notices remain authoritative"
+paths = ["crates/testkit/metaschemas/**"]
+notices = ["crates/testkit/metaschemas/LICENSES/BSD-3-Clause.txt"]
+provenance = ["crates/testkit/PROVENANCE.md"]
 
 [[material]]
 id = "shacl"

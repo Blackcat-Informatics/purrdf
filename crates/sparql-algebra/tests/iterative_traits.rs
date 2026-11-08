@@ -575,7 +575,7 @@ fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
 
 /// The root pattern of every corpus query that parses, in sorted path order.
 fn corpus_patterns() -> Vec<GraphPattern> {
-    let root = purrdf_testkit::paths::workspace_root();
+    let root = purrdf_testkit::paths::workspace_root!();
     let mut files = Vec::new();
     for corpus in CORPORA {
         collect(&root.join(corpus), &mut files);

@@ -171,7 +171,7 @@ mod tests {
     #[test]
     fn authored_corpus_has_no_registry_prefix_shadows() {
         let diagnostics =
-            lint_prefix_consistency(&workspace_root(), &committed_vocab()).expect("scan corpus");
+            lint_prefix_consistency(&workspace_root!(), &committed_vocab()).expect("scan corpus");
         assert!(
             diagnostics.is_empty(),
             "registry-prefix shadows found:\n{}",
@@ -200,7 +200,7 @@ mod tests {
         // agree with the Rust authority exactly — same prefix→namespace pairs, same
         // insertion order. Parsing failure or any divergence is a hard test failure
         // (the registry comment pins them as mirrors; this is the missing guard).
-        let config = workspace_root()
+        let config = workspace_root!()
             .join("src")
             .join("purrdf_tools")
             .join("config.py");

@@ -12,7 +12,7 @@ use purrdf_gts::mmr::{MmrPeaks, Proof, prove, root, verify_proof};
 use purrdf_gts::replication::{heads_json, inventory};
 
 fn vector(relative: &str) -> PathBuf {
-    purrdf_testkit::paths::workspace_root()
+    purrdf_testkit::paths::workspace_root!()
         .join("vectors")
         .join(relative)
 }

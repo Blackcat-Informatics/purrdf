@@ -74,7 +74,7 @@ mod tests {
     #[test]
     fn claim_view_matches_committed() {
         let text = emit_claim_view(&committed_vocab());
-        let committed_path = workspace_root()
+        let committed_path = workspace_root!()
             .join("generated")
             .join("queries")
             .join(CLAIM_VIEW_FILE);

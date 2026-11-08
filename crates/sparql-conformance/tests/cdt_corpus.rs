@@ -36,7 +36,7 @@ use std::path::PathBuf;
 
 /// The vendored corpus's `mf:include` aggregator manifest.
 fn manifest() -> PathBuf {
-    purrdf_testkit::paths::workspace_root().join("vectors/sparql-cdt/manifest-all.ttl")
+    purrdf_testkit::paths::workspace_root!().join("vectors/sparql-cdt/manifest-all.ttl")
 }
 
 /// Run all 658 vendored SEP-0009 cases, honoring the shared xfail ledger.

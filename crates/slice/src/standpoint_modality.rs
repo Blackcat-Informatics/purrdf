@@ -311,7 +311,7 @@ mod tests {
         // (local names are globally unique per axis, so set equality ⟺ field-wise).
         use crate::rdf_query::{Dataset, Object};
 
-        let module = workspace_root().join("slices/core/standpoint/module.ttl");
+        let module = workspace_root!().join("slices/core/standpoint/module.ttl");
         if !module.exists() {
             eprintln!(
                 "skipping committed standpoint-modality comparison; {} is absent",
