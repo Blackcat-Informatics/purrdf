@@ -7,7 +7,7 @@ use super::{Index, Reads};
 use crate::EntailError;
 use purrdf_alloc_probe::CurrentThreadWindow;
 use purrdf_lex::allocation::{Admission, Memory, Resident, StorageError};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 fn rows() -> Vec<(u32, u32, u32)> {
     let mut rows = Vec::new();
@@ -40,9 +40,10 @@ fn previous(rows: &[(u32, u32, u32)], left: u32, right: u32, property: u32) -> O
 #[test]
 fn indexed_common_values_match_set_semantics_and_retain_original_rows_without_lookup_allocations() {
     let rows = rows();
+    let classes = BTreeMap::new();
     let mut storage = Resident;
     let mut memory = Memory::new(&mut storage);
-    let index = Index::new(&rows, [12, 10, 11, 10], None, &mut memory).unwrap();
+    let index = Index::new(&rows, &classes, [12, 10, 11, 10], None, &mut memory).unwrap();
     for left in 0..5 {
         for right in 0..5 {
             for property in 10..14 {
@@ -106,11 +107,12 @@ impl Admission for Account {
 #[test]
 fn key_value_index_refusals_and_stopping_preserve_the_original_account() {
     let rows = rows();
+    let classes = BTreeMap::new();
     let mut healthy = Account::default();
     {
         let mut memory = Memory::new(&mut healthy);
         let window = CurrentThreadWindow::open();
-        let index = Index::new(&rows, [10, 11, 12], None, &mut memory).unwrap();
+        let index = Index::new(&rows, &classes, [10, 11, 12], None, &mut memory).unwrap();
         assert_eq!(
             window.close().retained_bytes,
             i64::try_from(memory.admitted_bytes()).unwrap()
@@ -125,7 +127,7 @@ fn key_value_index_refusals_and_stopping_preserve_the_original_account() {
         };
         let mut memory = Memory::new(&mut account);
         assert!(matches!(
-            Index::new(&rows, [10, 11, 12], None, &mut memory),
+            Index::new(&rows, &classes, [10, 11, 12], None, &mut memory),
             Err(EntailError::Storage(StorageError::AdmissionFailed))
         ));
         assert_eq!(memory.admitted_bytes(), 0);
@@ -141,10 +143,10 @@ fn key_value_index_refusals_and_stopping_preserve_the_original_account() {
     let mut storage = Resident;
     let mut memory = Memory::new(&mut storage);
     assert!(matches!(
-        Index::new(&[], [], Some(&Stop), &mut memory),
+        Index::new(&[], &classes, [], Some(&Stop), &mut memory),
         Err(EntailError::Stopped)
     ));
-    let index = Index::new(&rows, [10], None, &mut memory).unwrap();
+    let index = Index::new(&rows, &classes, [10], None, &mut memory).unwrap();
     assert!(matches!(
         index.common(100, 101, 10, Some(&Stop)),
         Err(EntailError::Stopped)

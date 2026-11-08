@@ -459,6 +459,7 @@ impl Kb {
         let mut memory = purrdf_lex::allocation::Memory::new(&mut storage);
         let values = key_values::Index::new(
             &self.abox_roles,
+            &self.literal_class,
             self.keys
                 .iter()
                 .flat_map(|(_, properties)| properties.iter().copied()),

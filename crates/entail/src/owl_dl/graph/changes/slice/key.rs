@@ -100,7 +100,8 @@ pub(super) fn select(kb: &Kb, equality: usize) -> Result<Derivation<'_>, Error> 
             || value.left >= evidence.phase.roles
             || value.right >= evidence.phase.roles
             || kb.abox_roles.get(value.left) != Some(&(left, *property, value.value))
-            || kb.abox_roles.get(value.right) != Some(&(right, *property, value.value))
+            || kb.abox_roles.get(value.right) != Some(&(right, *property, value.right_value))
+            || !checked_value(kb, value)
         {
             return Err(Error::MissingKey(equality));
         }
@@ -136,4 +137,29 @@ pub(super) fn select(kb: &Kb, equality: usize) -> Result<Derivation<'_>, Error> 
         values,
         members: [member(left)?, member(right)?],
     })
+}
+
+/// Check the original literal denotations, not only the recorded partition ordinal.
+fn checked_value(kb: &Kb, value: &Common) -> bool {
+    let Some(class) = value.class else {
+        return value.value == value.right_value;
+    };
+    if kb.literal_class.get(&value.value) != Some(&class)
+        || kb.literal_class.get(&value.right_value) != Some(&class)
+    {
+        return false;
+    }
+    if value.value == value.right_value {
+        return true;
+    }
+    use crate::owl_dl::data::{LiteralValue, literal_value};
+    match (
+        literal_value(kb.interner.value(value.value)),
+        literal_value(kb.interner.value(value.right_value)),
+    ) {
+        (Some(LiteralValue::Value(left)), Some(LiteralValue::Value(right))) => {
+            purrdf_xsd::range::same_value(&left, &right)
+        }
+        _ => false,
+    }
 }

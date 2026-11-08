@@ -4,6 +4,7 @@
 //! Original asserted key-value rows, indexed once for the native preparation pass.
 
 use purrdf_lex::allocation::{Admission, Memory, Resident, StorageError};
+use std::collections::BTreeMap;
 #[cfg(test)]
 mod tests;
 
@@ -11,6 +12,8 @@ mod tests;
 pub(crate) struct Common {
     pub(crate) property: u32,
     pub(crate) value: u32,
+    pub(crate) right_value: u32,
+    pub(crate) class: Option<u32>,
     pub(crate) left: usize,
     pub(crate) right: usize,
 }
@@ -20,6 +23,8 @@ impl std::fmt::Debug for Common {
         f.debug_struct("Common")
             .field("property", &self.property)
             .field("value", &self.value)
+            .field("right_value", &self.right_value)
+            .field("class", &self.class)
             .field("left", &self.left)
             .field("right", &self.right)
             .finish()
@@ -29,7 +34,21 @@ impl std::fmt::Debug for Common {
 /// Borrow actual assertions; sorting stores only their ordinals, never copies RDF rows.
 pub(crate) struct Index<'a> {
     rows: &'a [(u32, u32, u32)],
+    classes: &'a BTreeMap<u32, u32>,
     order: Vec<usize>,
+}
+
+/// A class ordinal never aliases an original object-domain term ordinal.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Identity {
+    Term(u32),
+    LiteralClass(u32),
+}
+
+fn identity(classes: &BTreeMap<u32, u32>, value: u32) -> Identity {
+    classes.get(&value).map_or(Identity::Term(value), |&class| {
+        Identity::LiteralClass(class)
+    })
 }
 
 impl std::fmt::Debug for Index<'_> {
@@ -44,6 +63,7 @@ impl std::fmt::Debug for Index<'_> {
 impl<'a> Index<'a> {
     pub(crate) fn new<S: Admission + ?Sized>(
         rows: &'a [(u32, u32, u32)],
+        classes: &'a BTreeMap<u32, u32>,
         properties: impl IntoIterator<Item = u32>,
         stop: Option<&dyn purrdf_datalog::StopSignal>,
         memory: &mut Memory<'_, S>,
@@ -60,10 +80,17 @@ impl<'a> Index<'a> {
                     memory.push(&mut order, index)?;
                 }
             }
-            order.sort_unstable_by_key(|&index| (rows[index], index));
+            order.sort_unstable_by_key(|&index| {
+                let (subject, property, value) = rows[index];
+                (subject, property, identity(classes, value), value, index)
+            });
             memory.release_vec(properties)?;
             poll(stop)?;
-            Ok(Self { rows, order })
+            Ok(Self {
+                rows,
+                classes,
+                order,
+            })
         })
     }
 
@@ -93,13 +120,19 @@ impl<'a> Index<'a> {
         let mut b = right.next();
         while let (Some(l), Some(r)) = (a, b) {
             poll(stop)?;
-            match self.rows[l].2.cmp(&self.rows[r].2) {
+            let value = identity(self.classes, self.rows[l].2);
+            match value.cmp(&identity(self.classes, self.rows[r].2)) {
                 std::cmp::Ordering::Less => a = left.next(),
                 std::cmp::Ordering::Greater => b = right.next(),
                 std::cmp::Ordering::Equal => {
                     return Ok(Some(Common {
                         property,
                         value: self.rows[l].2,
+                        right_value: self.rows[r].2,
+                        class: match value {
+                            Identity::Term(_) => None,
+                            Identity::LiteralClass(class) => Some(class),
+                        },
                         left: l,
                         right: r,
                     }));
