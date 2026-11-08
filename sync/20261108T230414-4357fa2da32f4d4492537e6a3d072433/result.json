@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1220-segmentedbuilder-constructionlimit",
+  "branch": "paudley/1220-segmentedbuilder-constructionlimit",
+  "base_ref": "251cd85e959792a2c30140556e3b2e5fc04355d4",
+  "head": "84fc0d0b09cde78580897a19bbe5c85744faa1bb",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/1220-segmentedbuilder-constructionlimit/.stage/segmentedbuilder-constructionlimit/sync/20261108T230414-4357fa2da32f4d4492537e6a3d072433",
+  "conflicts": [],
+  "status": "noop",
+  "base": "251cd85e959792a2c30140556e3b2e5fc04355d4",
+  "merge_bases": [
+    "251cd85e959792a2c30140556e3b2e5fc04355d4"
+  ],
+  "commit": "84fc0d0b09cde78580897a19bbe5c85744faa1bb"
+}
