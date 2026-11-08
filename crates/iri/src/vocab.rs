@@ -1515,6 +1515,25 @@ pub mod cred {
     pub const NS: &str = "https://www.w3.org/2018/credentials#";
 }
 
+/// DAWG query-test action vocabulary.
+pub mod qt {
+    /// The vocabulary namespace.
+    pub const NS: &str = "http://www.w3.org/2001/sw/DataAccess/tests/test-query#";
+    /// `qt:query`.
+    pub const QUERY: &str = "http://www.w3.org/2001/sw/DataAccess/tests/test-query#query";
+    /// `qt:data`.
+    pub const DATA: &str = "http://www.w3.org/2001/sw/DataAccess/tests/test-query#data";
+    /// `qt:graphData`.
+    pub const GRAPH_DATA: &str = "http://www.w3.org/2001/sw/DataAccess/tests/test-query#graphData";
+    /// `qt:graph`.
+    pub const GRAPH: &str = "http://www.w3.org/2001/sw/DataAccess/tests/test-query#graph";
+    /// `qt:serviceData`.
+    pub const SERVICE_DATA: &str =
+        "http://www.w3.org/2001/sw/DataAccess/tests/test-query#serviceData";
+    /// `qt:endpoint`.
+    pub const ENDPOINT: &str = "http://www.w3.org/2001/sw/DataAccess/tests/test-query#endpoint";
+}
+
 /// DAWG test manifest vocabulary.
 pub mod mf {
     /// The vocabulary namespace.
