@@ -71,6 +71,7 @@ pub mod pack;
 // `canon::canonical_relabel` shares. Never a serializer mode.
 pub mod skolem;
 pub mod term;
+mod term_order;
 mod term_walk;
 pub mod triple;
 pub mod union;
@@ -140,6 +141,7 @@ pub use segmented::{
 };
 pub use skolem::{GENID_WELL_KNOWN_PATH, SkolemError, deskolemize, skolemize};
 pub use term::{BlankScope, NonIriPredicate, TermId, TermValue};
+pub use term_order::ShallowTermKey;
 pub use term_walk::{
     Nested, OwnedTermFoldError, TermBox, TermVisit, fold_term, fold_workspace_bound,
     try_fold_nested, try_fold_nested_with_memory, try_fold_term, try_fold_term_with_memory,
