@@ -1532,16 +1532,20 @@ fn eval_sparql_arguments(
 }
 
 /// Let SPARQL decide masking and EBV; retain the node-expression failure cause.
-/// IF selects the argument outcome itself. A selected unbound argument is an
-/// evaluation failure. Processor failures have
-/// already escaped before this boundary and are never stored as operands.
+/// IF selects the argument outcome itself. November treats an unbound selected
+/// result as an evaluation failure; earlier laws retain the unbound projection.
+/// Processor failures already escaped before this boundary and are never stored
+/// as operands.
 fn finish_sparql_arguments(
     store: &ShaclData,
     form: SparqlCallForm,
     query: &str,
     args: Vec<Result<Option<Term>, crate::error::ShapesError>>,
+    profile: crate::profile::ShaclProfile,
 ) -> Result<Option<Term>, crate::error::ShapesError> {
-    if args.iter().any(|arg| matches!(arg, Ok(None)))
+    let strict = profile.reads_november_draft_semantics();
+    if strict
+        && args.iter().any(|arg| matches!(arg, Ok(None)))
         && !form.handles_unbound_arguments()
         && args.iter().all(Result::is_ok)
     {
@@ -1558,14 +1562,21 @@ fn finish_sparql_arguments(
         }
         let condition =
             eval_sparql_arguments(store, "SELECT ((!(! ?a0)) AS ?result) WHERE {}", &args[..1])?;
-        let condition = condition.ok_or("SPARQL IF condition produced an evaluation error")?;
+        let Some(condition) = condition else {
+            return if strict {
+                Err("SPARQL IF condition produced an evaluation error".into())
+            } else {
+                Ok(None)
+            };
+        };
         let selected = if is_true_term(&condition) { 1 } else { 2 };
         let selected = args.into_iter().nth(selected).ok_or_else(|| {
             crate::error::ShapesError::internal("an admitted SPARQL IF lost its selected argument")
         })??;
-        return selected
-            .map(Some)
-            .ok_or_else(|| "SPARQL IF selected an unbound argument".into());
+        return match selected {
+            None if strict => Err("SPARQL IF selected an unbound argument".into()),
+            value => Ok(value),
+        };
     }
     if let Some(value) = eval_sparql_arguments(store, query, &args)? {
         return Ok(Some(value));
@@ -1573,7 +1584,11 @@ fn finish_sparql_arguments(
     if let Some(error) = args.into_iter().find_map(Result::err) {
         return Err(error);
     }
-    Err("SPARQL node-expression function produced an evaluation error".into())
+    if strict {
+        Err("SPARQL node-expression function produced an evaluation error".into())
+    } else {
+        Ok(None)
+    }
 }
 
 // ── Evaluator ───────────────────────────────────────────────────────────────────
@@ -2221,7 +2236,13 @@ fn eval_node_expr_at_depth(
             // `SELECT (EXPR AS ?result) WHERE {}`, which is SPARQL's own unbound.
             // The prepared-handle cache is keyed by the parameter list, so each
             // bound/unbound shape of a call gets, and reuses, its own handle.
-            let result = finish_sparql_arguments(store, form, query, arguments)?;
+            let result = finish_sparql_arguments(
+                store,
+                form,
+                query,
+                arguments,
+                plan.binding().validation_request().shacl_profile,
+            )?;
             Ok(result.into_iter().collect())
         }
         // §4.2.1 Distinct expression: first occurrences, in input order, by term
