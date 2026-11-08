@@ -3,10 +3,11 @@
 
 # Portable community conformance corpus
 
-These are **community-proposed SHACL tests**. Their expectations were derived
-from the dated specifications and reviewed by automated agent reviewers before
-any engine output was observed; they have no W3C approval status and no
-independent human review. `catalog.json` identifies the versioned contract,
+These are **community-proposed SHACL and SPARQL tests**. Their expectations are
+derived from the named specifications and independently reviewed source inputs,
+separately from engine observations. They have no W3C approval status,
+independent human review or external-engine certification.
+`catalog.json` identifies the versioned contract,
 profile applicability, the authoritative inventory and the RDF manifest root.
 The standard manifests, shapes and inline expected reports follow the
 [W3C Data Shapes test format](https://w3c.github.io/data-shapes/data-shapes-test-suite/)
@@ -15,7 +16,7 @@ and review provenance; they do not replace the RDF manifests.
 
 Read [the corpus contract](SPEC.md) before interpreting a score. The review
 records are in [the review registry](reviews/index.json) and
-[the SHACL review](reviews/shacl.md). Fixture payloads use
+[the SHACL review](reviews/shacl.md) and [the query review](reviews/queries.md). Fixture payloads use
 `MIT OR Apache-2.0 OR MulanPSL-2.0`; documentation carries its own CC-BY-4.0
 header, and [the licensing guidance](LICENSING.md) lists the full texts. All
 application IRIs are examples. The W3C test and language vocabularies keep their
@@ -36,3 +37,15 @@ the SHACL Recommendation of 20 July 2017 (`shacl-20170720`) and the SHACL 1.2
 SPARQL Extensions Working Draft of 18 September 2026 (`shacl12-20260918`). A
 catalog profile that no built-in dated law implements is counted as
 unsupported; it is never a pass and never folded into the failures.
+
+The fifteen SPARQL query cases cover path and UNION multiplicities, empty
+bindings, global blank identity and offline SERVICE responses. Each runs through
+the ordinary query door and two reuses each of text-prepared and algebra-prepared
+plans. Exact result headers and bags are graded through one global scoped-blank
+bijection. SERVICE endpoints are independently parsed local documents answered
+through the native in-process resolver, without network access.
+
+The complete catalog has 79 cases and 130 case/profile executions. The 64 SHACL
+cases retain their 115 executions and 535 route observations. The fifteen query
+executions add 75 route observations. EARL records describe each actual profile
+and surface separately; the scoreboard keeps SHACL and query counts distinct.

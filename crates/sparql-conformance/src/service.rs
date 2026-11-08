@@ -11,6 +11,7 @@
 //! in-memory dataset answered by the same native engine (dog-fooding).
 
 use purrdf_sparql_eval::InProcessServiceResolver;
+use std::sync::Arc;
 
 use crate::manifest::SparqlTestCase;
 
@@ -34,13 +35,24 @@ use crate::manifest::SparqlTestCase;
 ///
 /// Returns a message if an endpoint's data file cannot be read or parsed.
 pub fn build(case: &SparqlTestCase) -> Result<InProcessServiceResolver, String> {
-    let mut source = InProcessServiceResolver::new();
+    let mut sources = Vec::with_capacity(case.service_data.len());
     for (endpoint, path) in &case.service_data {
         let bytes = std::fs::read(path)
             .map_err(|e| format!("read service data {}: {e}", path.display()))?;
         let dataset = purrdf::parse_dataset(&bytes, "text/turtle", Some(&case.base))
             .map_err(|e| format!("parse service data {}: {e}", path.display()))?;
-        source = source.with_endpoint(endpoint.clone(), dataset);
+        sources.push((endpoint.clone(), dataset));
     }
-    Ok(source)
+    Ok(build_acquired(&sources))
+}
+
+/// Assemble the same offline resolver from separately acquired source documents.
+/// Each caller retains the original document base and its distinct blank scope.
+pub(crate) fn build_acquired(
+    sources: &[(String, Arc<purrdf_core::RdfDataset>)],
+) -> InProcessServiceResolver {
+    sources.iter().fold(
+        InProcessServiceResolver::new(),
+        |source, (endpoint, dataset)| source.with_endpoint(endpoint.clone(), Arc::clone(dataset)),
+    )
 }

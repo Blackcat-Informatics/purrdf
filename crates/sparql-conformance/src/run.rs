@@ -361,7 +361,7 @@ fn parse_sources(
 /// Merge every parsed source under its OWN [`BlankScope`](purrdf_core::BlankScope)
 /// and freeze — the standardize-apart half of the merge documented on
 /// [`build_dataset`].
-fn freeze_sources(
+pub(crate) fn freeze_sources(
     sources: &[Source],
     graph_data: &[(String, std::path::PathBuf)],
 ) -> Result<Arc<RdfDataset>, String> {

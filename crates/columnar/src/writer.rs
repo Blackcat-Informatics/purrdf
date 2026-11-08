@@ -3,15 +3,14 @@
 
 //! Generic RDF-to-columnar projection.
 
-use purrdf_core::{TermBox, TermGuard as _};
+use purrdf_core::TermGuard as _;
 use std::collections::{BTreeMap, BTreeSet};
 
-use purrdf_core::{
-    ContentStore, DatasetView, LossLedger, QuadIds, RdfTextDirection, TermRef, TermValue,
-};
+use purrdf_core::{ContentStore, DatasetView, LossLedger, QuadIds, RdfTextDirection, TermRef};
 
 use crate::ProjectionCell;
 use crate::column::Int64Column;
+use crate::dictionary::{TermDictionary, TermRecord};
 use crate::error::{ColumnarError, ColumnarWriteError, ProjectionReason};
 use crate::files::ParquetFiles;
 use crate::parquet::{ColumnValues, Compression, TableData, write_rows_to};
@@ -37,7 +36,7 @@ pub struct ColumnarWrite {
 
 /// Project any RDF 1.2 [`DatasetView`] and [`ContentStore`] into five Parquet files.
 ///
-/// Term ids are reassigned from the canonical [`TermValue`] order, so output is
+/// Term ids are reassigned from the canonical [`purrdf_core::TermValue`] order, so output is
 /// independent of backend-local ids and ingest order. `compression` is a runtime
 /// encoding choice; both modes carry identical RDF semantics.
 ///
@@ -303,7 +302,8 @@ fn resolve_graph<D: DatasetView>(
 
 struct Resolver<'a, D: DatasetView> {
     view: &'a D,
-    values: BTreeMap<D::Id, TermValue>,
+    values: BTreeMap<D::Id, usize>,
+    dictionary: TermDictionary,
     active: BTreeSet<D::Id>,
 }
 
@@ -312,6 +312,7 @@ impl<'a, D: DatasetView> Resolver<'a, D> {
         Self {
             view,
             values: BTreeMap::new(),
+            dictionary: TermDictionary::default(),
             active: BTreeSet::new(),
         }
     }
@@ -325,21 +326,21 @@ impl<'a, D: DatasetView> Resolver<'a, D> {
     /// and a triple term's subject, predicate and object each fully, in that order,
     /// before the triple is assembled. Every term is memoised as soon as its value
     /// exists, and the first refusal ends the walk.
-    fn resolve(&mut self, id: D::Id) -> Result<TermValue, ColumnarWriteError<D::ReadError>> {
+    fn resolve(&mut self, id: D::Id) -> Result<usize, ColumnarWriteError<D::ReadError>> {
         /// A term being resolved, the terms it depends on in resolution order, and
         /// the values they resolved to so far.
         struct Frame<I, G> {
             id: I,
             guard: G,
             dependencies: ([I; 3], usize),
-            resolved: Vec<TermValue>,
+            resolved: Vec<usize>,
         }
-        type EnterResult<I, G, E> = Result<Result<TermValue, Frame<I, G>>, ColumnarWriteError<E>>;
+        type EnterResult<I, G, E> = Result<Result<usize, Frame<I, G>>, ColumnarWriteError<E>>;
         let view = self.view;
         let enter =
             |this: &mut Self, id: D::Id| -> EnterResult<D::Id, D::TermGuard<'a>, D::ReadError> {
                 if let Some(value) = this.values.get(&id) {
-                    return Ok(Ok(value.clone()));
+                    return Ok(Ok(*value));
                 }
                 if !this.active.insert(id) {
                     return Err(ColumnarError::projection(
@@ -383,8 +384,8 @@ impl<'a, D: DatasetView> Resolver<'a, D> {
             } = frames.pop().expect("a term is being resolved");
             let mut resolved = resolved.into_iter();
             let value = match guard.term() {
-                TermRef::Iri(iri) => TermValue::Iri(iri.to_owned()),
-                TermRef::Blank { label, scope } => TermValue::Blank {
+                TermRef::Iri(iri) => TermRecord::Iri(iri.to_owned()),
+                TermRef::Blank { label, scope } => TermRecord::Blank {
                     label: label.to_owned(),
                     scope,
                 },
@@ -395,29 +396,27 @@ impl<'a, D: DatasetView> Resolver<'a, D> {
                     ..
                 } => {
                     // A completed literal frame has resolved its one datatype dependency.
-                    let actual = resolved.next().expect("a literal's datatype is resolved");
-                    let TermValue::Iri(datatype) = actual else {
-                        return Err(ColumnarError::projection(
-                            "literal datatype",
-                            ProjectionReason::DatatypeNotIri { actual },
-                        )
-                        .into());
-                    };
-                    TermValue::Literal {
-                        lexical_form: lexical.to_owned(),
+                    let datatype = resolved.next().expect("a literal's datatype is resolved");
+                    if !matches!(self.dictionary.records[datatype], TermRecord::Iri(_)) {
+                        let reason = self.dictionary.datatype_refusal(datatype);
+                        return Err(ColumnarError::projection("literal datatype", reason).into());
+                    }
+                    TermRecord::Literal {
+                        lexical: lexical.to_owned(),
                         datatype,
                         language: language.map(str::to_owned),
                         direction,
                     }
                 }
-                TermRef::Triple { .. } => TermValue::Triple {
-                    s: TermBox::new(resolved.next().expect("a triple's subject is resolved")),
-                    p: TermBox::new(resolved.next().expect("a triple's predicate is resolved")),
-                    o: TermBox::new(resolved.next().expect("a triple's object is resolved")),
+                TermRef::Triple { .. } => TermRecord::Triple {
+                    s: resolved.next().expect("a triple's subject is resolved"),
+                    p: resolved.next().expect("a triple's predicate is resolved"),
+                    o: resolved.next().expect("a triple's object is resolved"),
                 },
             };
             self.active.remove(&id);
-            self.values.insert(id, value.clone());
+            let value = self.dictionary.intern(value);
+            self.values.insert(id, value);
             match frames.last_mut() {
                 Some(parent) => parent.resolved.push(value),
                 None => return Ok(value),
@@ -425,17 +424,19 @@ impl<'a, D: DatasetView> Resolver<'a, D> {
         }
     }
 
-    fn get(&self, id: D::Id) -> Result<&TermValue, ColumnarError> {
-        self.values.get(&id).ok_or_else(|| {
+    fn get(&self, id: D::Id) -> Result<usize, ColumnarError> {
+        self.values.get(&id).copied().ok_or_else(|| {
             ColumnarError::projection("term closure", ProjectionReason::UnresolvedSource)
         })
     }
 }
 
 struct Dictionary {
-    terms: Vec<TermValue>,
-    ids: BTreeMap<TermValue, i64>,
-    named_graphs: BTreeSet<TermValue>,
+    terms: Vec<TermRecord>,
+    ids: Vec<i64>,
+    named_graphs: BTreeSet<i64>,
+    #[cfg(test)]
+    comparison_steps: usize,
 }
 
 impl Dictionary {
@@ -443,32 +444,32 @@ impl Dictionary {
         resolver: &Resolver<'_, D>,
         named_graph_ids: &[D::Id],
     ) -> Result<Self, ColumnarError> {
-        let terms: Vec<_> = resolver
-            .values
-            .values()
-            .cloned()
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
-        let mut ids = BTreeMap::new();
-        for (index, term) in terms.iter().enumerate() {
+        let order = resolver.dictionary.ordered();
+        let mut ids = vec![0; order.len()];
+        for (index, &identity) in order.iter().enumerate() {
             let id = i64::try_from(index)
                 .map_err(|_| ColumnarError::limit("term id", index, i64::MAX as usize))?;
-            ids.insert(term.clone(), id);
+            ids[identity] = id;
         }
+        let terms = order
+            .into_iter()
+            .map(|id| resolver.dictionary.records[id].remap(|child| ids[child] as usize))
+            .collect();
         let named_graphs = named_graph_ids
             .iter()
-            .map(|&id| resolver.get(id).cloned())
+            .map(|&id| resolver.get(id).map(|identity| ids[identity]))
             .collect::<Result<_, _>>()?;
         Ok(Self {
             terms,
             ids,
             named_graphs,
+            #[cfg(test)]
+            comparison_steps: resolver.dictionary.comparison_steps.get(),
         })
     }
 
-    fn id(&self, value: &TermValue) -> Result<i64, ColumnarError> {
-        self.ids.get(value).copied().ok_or_else(|| {
+    fn id(&self, identity: usize) -> Result<i64, ColumnarError> {
+        self.ids.get(identity).copied().ok_or_else(|| {
             ColumnarError::projection("term reference", ProjectionReason::MissingTerm)
         })
     }
@@ -556,7 +557,7 @@ fn optional(value: Option<i64>) -> ProjectionCell<'static> {
 fn term_row<'a>(
     dictionary: &Dictionary,
     index: usize,
-    term: &'a TermValue,
+    term: &'a TermRecord,
 ) -> Result<purrdf_core::SmallVec<[ProjectionCell<'a>; 11]>, ColumnarError> {
     use ProjectionCell::{Bytes, Int64, Null};
     let mut row: purrdf_core::SmallVec<[_; 11]> = purrdf_core::smallvec![Null; 11];
@@ -564,36 +565,36 @@ fn term_row<'a>(
         i64::try_from(index)
             .map_err(|_| ColumnarError::limit("term id", index, i64::MAX as usize))?,
     );
-    row[10] = Int64(i64::from(dictionary.named_graphs.contains(term)));
+    row[10] = Int64(i64::from(dictionary.named_graphs.contains(&(index as i64))));
     match term {
-        TermValue::Iri(iri) => {
+        TermRecord::Iri(iri) => {
             row[1] = Int64(0);
             row[2] = Bytes(iri.as_bytes());
         }
-        TermValue::Literal {
-            lexical_form,
+        TermRecord::Literal {
+            lexical,
             datatype,
             language,
             direction,
         } => {
             row[1] = Int64(1);
-            row[2] = Bytes(lexical_form.as_bytes());
-            row[3] = Int64(dictionary.id(&TermValue::Iri(datatype.clone()))?);
+            row[2] = Bytes(lexical.as_bytes());
+            row[3] = Int64(*datatype as i64);
             row[4] = language
                 .as_ref()
                 .map_or(Null, |value| Bytes(value.as_bytes()));
             row[5] = optional(direction.map(direction_id));
         }
-        TermValue::Blank { label, scope } => {
+        TermRecord::Blank { label, scope } => {
             row[1] = Int64(2);
             row[2] = Bytes(label.as_bytes());
             row[6] = Int64(i64::from(scope.ordinal()));
         }
-        TermValue::Triple { s, p, o } => {
+        TermRecord::Triple { s, p, o } => {
             row[1] = Int64(3);
-            row[7] = Int64(dictionary.id(s)?);
-            row[8] = Int64(dictionary.id(p)?);
-            row[9] = Int64(dictionary.id(o)?);
+            row[7] = Int64(*s as i64);
+            row[8] = Int64(*p as i64);
+            row[9] = Int64(*o as i64);
         }
     }
     Ok(row)
@@ -613,7 +614,8 @@ fn reifier_rows<D: DatasetView>(
 ) -> Result<BTreeSet<ReifierRow>, ColumnarError> {
     let mut reifiers = BTreeSet::new();
     for quad in &source.reifiers {
-        let TermValue::Triple { s, p, o } = resolver.get(quad.o)? else {
+        let identity = resolver.get(quad.o)?;
+        let TermRecord::Triple { s, p, o } = &resolver.dictionary.records[identity] else {
             return Err(ColumnarError::projection(
                 "reifier binding",
                 ProjectionReason::ReifierObject,
@@ -621,9 +623,9 @@ fn reifier_rows<D: DatasetView>(
         };
         reifiers.insert((
             dictionary.source_id(resolver, quad.s)?,
-            dictionary.id(s)?,
-            dictionary.id(p)?,
-            dictionary.id(o)?,
+            dictionary.id(*s)?,
+            dictionary.id(*p)?,
+            dictionary.id(*o)?,
             dictionary.graph_id(resolver, quad.g)?,
         ));
     }
@@ -689,6 +691,289 @@ mod tests {
 
     use super::*;
     use crate::parquet::read_table;
+
+    /// A provider with explicit flat edges, including graphs a native freeze
+    /// must refuse. Scalar backing rows let the writer exercise its real view
+    /// interface without constructing an expanded owned term tree.
+    struct GraphView {
+        inner: std::sync::Arc<RdfDataset>,
+        triples: BTreeMap<purrdf_core::TermId, [purrdf_core::TermId; 3]>,
+        literal: Option<(purrdf_core::TermId, purrdf_core::TermId)>,
+        prefix: Vec<QuadIds>,
+    }
+
+    impl DatasetView for GraphView {
+        type Id = purrdf_core::TermId;
+        type ReadError = core::convert::Infallible;
+        type TermGuard<'a> = TermRef<'a>;
+        type ProbePlan = <RdfDataset as DatasetView>::ProbePlan;
+
+        fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
+            self.prefix
+                .iter()
+                .copied()
+                .chain(self.inner.quads().map(|mut quad| {
+                    if let Some((literal, _)) = self.literal {
+                        quad.o = literal;
+                    }
+                    quad
+                }))
+        }
+
+        fn resolve(&self, id: Self::Id) -> Result<TermRef<'_>, Self::ReadError> {
+            if let Some((literal, datatype)) = self.literal
+                && id == literal
+            {
+                return Ok(TermRef::Literal {
+                    lexical: "original invalid datatype",
+                    datatype,
+                    language: None,
+                    direction: None,
+                });
+            }
+            if let Some(&[s, p, o]) = self.triples.get(&id) {
+                Ok(TermRef::Triple { s, p, o })
+            } else {
+                self.inner.resolve(id)
+            }
+        }
+
+        fn term_id_by_value(
+            &self,
+            _: &purrdf_core::TermValue,
+        ) -> Result<Option<Self::Id>, Self::ReadError> {
+            panic!("columnar projection must not reverse-lookup source values")
+        }
+
+        fn capabilities(&self) -> purrdf_core::RdfStoreCapabilities {
+            self.inner.capabilities()
+        }
+
+        fn probe_plan(
+            &self,
+            s: bool,
+            p: bool,
+            o: bool,
+            g: purrdf_core::GraphMatch,
+        ) -> Self::ProbePlan {
+            self.inner.probe_plan(s, p, o, g)
+        }
+
+        fn quads_for_pattern_with_plan(
+            &self,
+            plan: &Self::ProbePlan,
+            s: Option<Self::Id>,
+            p: Option<Self::Id>,
+            o: Option<Self::Id>,
+            g: purrdf_core::GraphMatch,
+        ) -> impl Iterator<Item = QuadIds> + '_ {
+            self.inner.quads_for_pattern_with_plan(plan, s, p, o, g)
+        }
+
+        fn term_count(&self) -> u64 {
+            self.inner.term_count()
+        }
+    }
+
+    fn shared_graph(depth: usize, roots: usize, diamond: bool, reverse: bool) -> GraphView {
+        let mut builder = RdfDatasetBuilder::new();
+        let subject = builder.intern_iri("urn:subject").unwrap();
+        let predicate = builder.intern_iri("urn:predicate").unwrap();
+        let leaf = builder.intern_iri("urn:leaf").unwrap();
+        let mut names: Vec<_> = (0..depth).collect();
+        if reverse {
+            names.reverse();
+        }
+        let mut ids = vec![leaf; depth];
+        for index in names {
+            ids[index] = builder
+                .intern_iri(&format!("urn:placeholder:{index}"))
+                .unwrap();
+        }
+        let mut triples = BTreeMap::new();
+        let mut child = leaf;
+        let mut shared_child = leaf;
+        for id in ids {
+            shared_child = child;
+            triples.insert(
+                id,
+                [if diamond { child } else { subject }, predicate, child],
+            );
+            child = id;
+        }
+        builder.push_quad(subject, predicate, child, None).unwrap();
+        let mut branches: Vec<_> = (1..roots).collect();
+        if reverse {
+            branches.reverse();
+        }
+        for branch in branches {
+            let subject = builder.intern_iri(&format!("urn:branch:{branch}")).unwrap();
+            let root = builder.intern_iri(&format!("urn:root:{branch}")).unwrap();
+            triples.insert(root, [subject, predicate, shared_child]);
+            builder.push_quad(subject, predicate, root, None).unwrap();
+        }
+        GraphView {
+            inner: builder.freeze().unwrap(),
+            triples,
+            literal: None,
+            prefix: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn shared_graphs_keep_flat_storage_canonical_bytes_and_original_reader_refusals() {
+        use crate::{ColumnarOrdinal, ColumnarOrdinalValue, read_with_ordinals};
+
+        let blobs = ContentStore::new();
+        for diamond in [false, true] {
+            for (depth, roots) in [
+                (4, 1),
+                (8, 1),
+                (16, 1),
+                (16, 64),
+                (16, 256),
+                (64, 1),
+                (256, 1),
+            ] {
+                let view = shared_graph(depth, roots, diamond, false);
+                let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+                let prepared = prepare(&view, &blobs).unwrap();
+                let preparation = window.close();
+                let terms = prepared.dictionary.terms.len();
+                assert!(terms <= depth + 3 + 2 * (roots - 1));
+                assert!(
+                    preparation.retained_bytes <= (terms * 512 + 4096) as i64,
+                    "{preparation:?}"
+                );
+                assert!(
+                    preparation.peak_working_bytes <= (terms * 2048 + 8192) as i64,
+                    "{preparation:?}"
+                );
+                eprintln!(
+                    "diamond={diamond}, depth={depth}, roots={roots}, records={terms}, comparison_steps={}, preparation={preparation:?}",
+                    prepared.dictionary.comparison_steps
+                );
+                drop(prepared);
+
+                let written = write(&view, &blobs, Compression::Uncompressed).unwrap();
+                let reordered = write(
+                    &shared_graph(depth, roots, diamond, true),
+                    &blobs,
+                    Compression::Uncompressed,
+                )
+                .unwrap();
+                assert_eq!(written.files, reordered.files);
+                let mut streamed: [Vec<u8>; 5] = std::array::from_fn(|_| Vec::new());
+                write_to(&view, &blobs, &WriteOptions::default(), |table, chunk| {
+                    streamed[crate::files::table_index(table)].extend_from_slice(chunk);
+                    Ok::<_, core::convert::Infallible>(())
+                })
+                .unwrap();
+                assert_eq!(written.files, ParquetFiles::from_array(streamed));
+                let projection = project(&view, &blobs).unwrap();
+                assert_eq!(projection.row_count(Table::Terms), terms);
+                assert_eq!(
+                    written.files,
+                    projection
+                        .to_parquet(Compression::Uncompressed)
+                        .unwrap()
+                        .files
+                );
+
+                let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+                let read = read_with_ordinals(&written.files, &[ColumnarOrdinal::Quad(0)]);
+                let decoding = window.close();
+                eprintln!("diamond={diamond}, depth={depth}, roots={roots}, decoding={decoding:?}");
+                assert!(
+                    decoding.peak_working_bytes <= (terms * 4096 + 262_144) as i64,
+                    "{decoding:?}"
+                );
+                if !diamond && depth <= 16 {
+                    let read = read.unwrap();
+                    assert!(matches!(
+                        read.get(ColumnarOrdinal::Quad(0)),
+                        Some(ColumnarOrdinalValue::Quad(_))
+                    ));
+                    let roundtrip =
+                        write(&*read.read().dataset, &blobs, Compression::Uncompressed).unwrap();
+                    assert_eq!(written.files, roundtrip.files);
+                } else {
+                    assert!(matches!(read, Err(ColumnarError::Reconstruction(_))));
+                }
+            }
+        }
+
+        // Even a rejected datatype must retain shared structure. Expanding this
+        // operand's 256 shared levels would allocate exponentially before refusal.
+        let mut reference = None;
+        for (prefix_rows, reverse) in [(0, false), (128, false), (128, true)] {
+            let mut invalid = shared_graph(256, prefix_rows + 1, true, reverse);
+            // Resolve unrelated scalar rows before the same invalid datatype.
+            invalid.prefix = invalid
+                .inner
+                .quads()
+                .skip(1)
+                .map(|mut quad| {
+                    quad.o = quad.s;
+                    quad
+                })
+                .collect();
+            let datatype = invalid.inner.quads().next().unwrap().o;
+            let literal =
+                purrdf_core::TermId::from_index(u32::try_from(invalid.inner.term_count()).unwrap())
+                    .unwrap();
+            invalid.literal = Some((literal, datatype));
+            let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+            let error = write(&invalid, &blobs, Compression::Uncompressed).unwrap_err();
+            let refusal = window.close();
+            assert!(
+                refusal.peak_working_bytes < 512 * 1024 + prefix_rows as i64 * 2048,
+                "{refusal:?}"
+            );
+            let mut output = false;
+            assert!(
+                write_to(&invalid, &blobs, &WriteOptions::default(), |_, _| {
+                    output = true;
+                    Ok::<_, core::convert::Infallible>(())
+                })
+                .is_err()
+            );
+            assert!(!output);
+            assert!(project(&invalid, &blobs).is_err());
+            drop(invalid);
+            let ColumnarWriteError::Codec(ColumnarError::Projection {
+                context: "literal datatype",
+                reason: ProjectionReason::DatatypeGraphNotIri { actual },
+            }) = error
+            else {
+                panic!("original datatype refusal must retain its flat operand")
+            };
+            assert_eq!(actual.term_count(), 258);
+            if let Some(reference) = &reference {
+                assert_eq!(&actual, reference);
+            } else {
+                reference = Some(actual.clone());
+            }
+            let mut id = actual.root();
+            for _ in 0..256 {
+                let Some(TermRef::Triple { s, p, o }) = actual.resolve(id) else {
+                    panic!("each original shared triple must remain inspectable")
+                };
+                assert_eq!(s, o);
+                assert_eq!(actual.resolve(p), Some(TermRef::Iri("urn:predicate")));
+                id = s;
+            }
+            assert_eq!(actual.resolve(id), Some(TermRef::Iri("urn:leaf")));
+            assert_eq!(actual.resolve(usize::MAX), None);
+            let capture = purrdf_testkit::error_capture::Capture::read(&actual);
+            assert_eq!(capture.code, "rdf-term-graph");
+            assert!(matches!(capture.field("root"),
+                purrdf_hash::error::ErrorValue::Unsigned(root) if root == actual.root() as u128));
+            let records = capture.records("records");
+            assert_eq!(records.len(), actual.term_count());
+            assert_eq!(records[actual.root()].code, "rdf-term-triple-reference");
+        }
+    }
 
     #[test]
     fn sink_preparation_borrows_blob_bytes_and_output_does_not_accumulate() {
@@ -815,12 +1100,15 @@ mod tests {
         let empty = Resolver::new(&*dataset);
         let dictionary = Dictionary {
             terms: Vec::new(),
-            ids: BTreeMap::new(),
+            ids: Vec::new(),
             named_graphs: BTreeSet::new(),
+            comparison_steps: 0,
         };
-        let missing = TermValue::Iri("https://example.org/missing".to_owned());
         let mut nontriple = Resolver::new(&*dataset);
-        nontriple.values.insert(id, missing.clone());
+        let missing = nontriple
+            .dictionary
+            .intern(TermRecord::Iri("https://example.org/missing".to_owned()));
+        nontriple.values.insert(id, missing);
         let reifier = SourceRows {
             quads: Vec::new(),
             reifiers: vec![QuadIds {
@@ -845,7 +1133,7 @@ mod tests {
             let error: ColumnarWriteError<core::convert::Infallible> = match case {
                 0 => cyclic.resolve(id).unwrap_err(),
                 1 => empty.get(id).unwrap_err().into(),
-                2 => dictionary.id(&missing).unwrap_err().into(),
+                2 => dictionary.id(missing).unwrap_err().into(),
                 3 => reifier_rows(&reifier, &nontriple, &dictionary)
                     .unwrap_err()
                     .into(),
@@ -967,9 +1255,15 @@ mod term_walk_tests {
 
     use super::{ColumnarError, ColumnarWriteError, ProjectionReason, Resolver};
 
+    struct ReferenceResolver<'a, D: DatasetView> {
+        view: &'a D,
+        values: std::collections::BTreeMap<D::Id, TermValue>,
+        active: std::collections::BTreeSet<D::Id>,
+    }
+
     /// The recursive oracle for original term order and source refusals.
     fn reference<D: DatasetView>(
-        resolver: &mut Resolver<'_, D>,
+        resolver: &mut ReferenceResolver<'_, D>,
         id: D::Id,
     ) -> Result<TermValue, ColumnarWriteError<D::ReadError>> {
         if let Some(value) = resolver.values.get(&id) {
@@ -1040,17 +1334,40 @@ mod term_walk_tests {
             builder.push_quad(holder, holder, object, None).unwrap();
             let dataset: std::sync::Arc<RdfDataset> =
                 builder.freeze().expect("a generated term freezes");
-            let (mut found, mut expected) = (Resolver::new(&*dataset), Resolver::new(&*dataset));
+            let mut found = Resolver::new(&*dataset);
+            let mut expected = ReferenceResolver {
+                view: &*dataset,
+                values: std::collections::BTreeMap::new(),
+                active: std::collections::BTreeSet::new(),
+            };
             for quad in dataset.quads() {
                 for id in [quad.s, quad.p, quad.o, quad.o] {
                     assert_eq!(
-                        format!("{:?}", found.resolve(id)),
+                        format!(
+                            "{:?}",
+                            found
+                                .resolve(id)
+                                .map(|id| found.dictionary.diagnostic_value(id))
+                        ),
                         format!("{:?}", reference(&mut expected, id)),
                         "seed {seed}"
                     );
                 }
             }
-            assert_eq!(found.values, expected.values, "seed {seed}");
+            for (&id, &identity) in &found.values {
+                assert_eq!(
+                    found.dictionary.diagnostic_value(identity),
+                    expected.values[&id],
+                    "seed {seed}"
+                );
+                for (&other, &other_identity) in &found.values {
+                    assert_eq!(
+                        found.dictionary.compare(identity, other_identity),
+                        expected.values[&id].cmp(&expected.values[&other]),
+                        "canonical order, seed {seed}"
+                    );
+                }
+            }
         }
     }
 }

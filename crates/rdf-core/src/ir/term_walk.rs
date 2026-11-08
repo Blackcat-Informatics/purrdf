@@ -1482,7 +1482,7 @@ impl Eq for TermValue {}
 // `PagedDataset::compact` re-interns the live terms, so the renumbered
 // `GlobalTermId` assignment is a pure function of the live term-VALUE set (never of
 // ingest order, page order, or the old numbering). Cross-kind order follows
-// [`canonical_tag`](TermValue::canonical_tag) (the serializer's IRI < Literal < Blank
+// [`ShallowTermKey`](crate::ShallowTermKey) (the serializer's IRI < Literal < Blank
 // < Triple); within a kind the components compare in the same (datatype, language,
 // lexical) precedence the renderer's `ObjKey` uses, with `direction` as a final
 // tiebreak so two literals differing ONLY in base direction (distinct values) still
@@ -1596,66 +1596,9 @@ fn compare_shallow(a: &TermValue, b: &TermValue) -> Ordering {
 fn compare_shallow_with<E>(
     a: &TermValue,
     b: &TermValue,
-    mut text: impl FnMut(&str, &str) -> Result<Ordering, E>,
+    text: impl FnMut(&str, &str) -> Result<Ordering, E>,
 ) -> Result<Ordering, E> {
-    use TermValue as Value;
-    let tag = a.canonical_tag().cmp(&b.canonical_tag());
-    if !tag.is_eq() {
-        return Ok(tag);
-    }
-    match (a, b) {
-        (Value::Iri(a), Value::Iri(b)) => text(a, b),
-        (
-            Value::Literal {
-                lexical_form: la,
-                datatype: da,
-                language: ga,
-                direction: dira,
-            },
-            Value::Literal {
-                lexical_form: lb,
-                datatype: db,
-                language: gb,
-                direction: dirb,
-            },
-        ) => {
-            let order = text(da, db)?;
-            if !order.is_eq() {
-                return Ok(order);
-            }
-            let order = match (ga, gb) {
-                (None, None) => Ordering::Equal,
-                (None, Some(_)) => Ordering::Less,
-                (Some(_), None) => Ordering::Greater,
-                (Some(a), Some(b)) => text(a, b)?,
-            };
-            if !order.is_eq() {
-                return Ok(order);
-            }
-            let order = text(la, lb)?;
-            if !order.is_eq() {
-                return Ok(order);
-            }
-            Ok(dira.cmp(dirb))
-        }
-        (
-            Value::Blank {
-                label: la,
-                scope: sa,
-            },
-            Value::Blank {
-                label: lb,
-                scope: sb,
-            },
-        ) => {
-            let order = text(la, lb)?;
-            if !order.is_eq() {
-                return Ok(order);
-            }
-            Ok(sa.cmp(sb))
-        }
-        _ => Ok(Ordering::Equal),
-    }
+    crate::ShallowTermKey::from(a).try_cmp_with(&crate::ShallowTermKey::from(b), text)
 }
 
 impl PartialOrd for TermValue {
@@ -1680,7 +1623,7 @@ impl PartialOrd for TermValue {
 // `canonical_bytes` additionally share ONE discriminant numbering (`Iri` = 0, `Blank` =
 // 1, `Literal` = 2, `Triple` = 3) so there is never a second, conflicting tag space to
 // reconcile. (Note this numbering is deliberately NOT
-// [`canonical_tag`](TermValue::canonical_tag), which encodes the serializer's
+// [`ShallowTermKey`](crate::ShallowTermKey), which encodes the serializer's
 // cross-kind SORT order and is a different question.)
 //
 // A triple term feeds its tag and then its subject, predicate and object in turn —

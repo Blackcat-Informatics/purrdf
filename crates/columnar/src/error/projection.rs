@@ -17,6 +17,11 @@ pub enum ProjectionReason {
         /// Original resolved value, transferred without copying its term tree.
         actual: TermValue,
     },
+    /// A literal's datatype is a triple graph with shared dependency records.
+    DatatypeGraphNotIri {
+        /// The complete original operand, retained as flat records and edges.
+        actual: crate::ProjectionTermGraph,
+    },
     /// A source term has no entry in the completed resolution closure.
     UnresolvedSource,
     /// A resolved value has no entry in the canonical dictionary.
@@ -31,6 +36,9 @@ impl purrdf_hash::error::StructuredError for ProjectionReason {
         DatatypeNotIri { actual } => "columnar-projection-datatype-not-iri" {
             "actual" => Term(actual),
         },
+        DatatypeGraphNotIri { actual } => "columnar-projection-datatype-not-iri" {
+            "actual" => Term(actual),
+        },
         UnresolvedSource => "columnar-projection-unresolved-source" {},
         MissingTerm => "columnar-projection-missing-term" {},
         ReifierObject => "columnar-projection-reifier-object" {},
@@ -41,7 +49,7 @@ impl fmt::Display for ProjectionReason {
     fn fmt(&self, output: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::CyclicTriple => output.write_str("cyclic triple-term reference"),
-            Self::DatatypeNotIri { .. } => {
+            Self::DatatypeNotIri { .. } | Self::DatatypeGraphNotIri { .. } => {
                 output.write_str("datatype id does not resolve to an IRI")
             }
             Self::UnresolvedSource => output.write_str("source id was not resolved"),

@@ -2,4 +2,4 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 @prefix mf: <http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#> .
-<> a mf:Manifest ; mf:include ( <shacl/manifest.ttl> ) .
+<> a mf:Manifest ; mf:include ( <shacl/manifest.ttl> <sparql/interactions/manifest.ttl> <sparql/service/manifest.ttl> ) .
