@@ -699,6 +699,7 @@ mod tests {
         inner: std::sync::Arc<RdfDataset>,
         triples: BTreeMap<purrdf_core::TermId, [purrdf_core::TermId; 3]>,
         literal: Option<(purrdf_core::TermId, purrdf_core::TermId)>,
+        prefix: Vec<QuadIds>,
     }
 
     impl DatasetView for GraphView {
@@ -708,12 +709,15 @@ mod tests {
         type ProbePlan = <RdfDataset as DatasetView>::ProbePlan;
 
         fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
-            self.inner.quads().map(|mut quad| {
-                if let Some((literal, _)) = self.literal {
-                    quad.o = literal;
-                }
-                quad
-            })
+            self.prefix
+                .iter()
+                .copied()
+                .chain(self.inner.quads().map(|mut quad| {
+                    if let Some((literal, _)) = self.literal {
+                        quad.o = literal;
+                    }
+                    quad
+                }))
         }
 
         fn resolve(&self, id: Self::Id) -> Result<TermRef<'_>, Self::ReadError> {
@@ -812,6 +816,7 @@ mod tests {
             inner: builder.freeze().unwrap(),
             triples,
             literal: None,
+            prefix: Vec::new(),
         }
     }
 
@@ -900,53 +905,74 @@ mod tests {
 
         // Even a rejected datatype must retain shared structure. Expanding this
         // operand's 256 shared levels would allocate exponentially before refusal.
-        let mut invalid = shared_graph(256, 1, true, false);
-        let datatype = invalid.inner.quads().next().unwrap().o;
-        let literal =
-            purrdf_core::TermId::from_index(u32::try_from(invalid.inner.term_count()).unwrap())
-                .unwrap();
-        invalid.literal = Some((literal, datatype));
-        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
-        let error = write(&invalid, &blobs, Compression::Uncompressed).unwrap_err();
-        let refusal = window.close();
-        assert!(refusal.peak_working_bytes < 512 * 1024, "{refusal:?}");
-        let mut output = false;
-        assert!(
-            write_to(&invalid, &blobs, &WriteOptions::default(), |_, _| {
-                output = true;
-                Ok::<_, core::convert::Infallible>(())
-            })
-            .is_err()
-        );
-        assert!(!output);
-        assert!(project(&invalid, &blobs).is_err());
-        drop(invalid);
-        let ColumnarWriteError::Codec(ColumnarError::Projection {
-            context: "literal datatype",
-            reason: ProjectionReason::DatatypeGraphNotIri { actual },
-        }) = error
-        else {
-            panic!("original datatype refusal must retain its flat operand")
-        };
-        assert_eq!(actual.term_count(), 259);
-        let mut id = actual.root();
-        for _ in 0..256 {
-            let Some(TermRef::Triple { s, p, o }) = actual.resolve(id) else {
-                panic!("each original shared triple must remain inspectable")
+        let mut reference = None;
+        for (prefix_rows, reverse) in [(0, false), (128, false), (128, true)] {
+            let mut invalid = shared_graph(256, prefix_rows + 1, true, reverse);
+            // Resolve unrelated scalar rows before the same invalid datatype.
+            invalid.prefix = invalid
+                .inner
+                .quads()
+                .skip(1)
+                .map(|mut quad| {
+                    quad.o = quad.s;
+                    quad
+                })
+                .collect();
+            let datatype = invalid.inner.quads().next().unwrap().o;
+            let literal =
+                purrdf_core::TermId::from_index(u32::try_from(invalid.inner.term_count()).unwrap())
+                    .unwrap();
+            invalid.literal = Some((literal, datatype));
+            let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+            let error = write(&invalid, &blobs, Compression::Uncompressed).unwrap_err();
+            let refusal = window.close();
+            assert!(
+                refusal.peak_working_bytes < 512 * 1024 + prefix_rows as i64 * 2048,
+                "{refusal:?}"
+            );
+            let mut output = false;
+            assert!(
+                write_to(&invalid, &blobs, &WriteOptions::default(), |_, _| {
+                    output = true;
+                    Ok::<_, core::convert::Infallible>(())
+                })
+                .is_err()
+            );
+            assert!(!output);
+            assert!(project(&invalid, &blobs).is_err());
+            drop(invalid);
+            let ColumnarWriteError::Codec(ColumnarError::Projection {
+                context: "literal datatype",
+                reason: ProjectionReason::DatatypeGraphNotIri { actual },
+            }) = error
+            else {
+                panic!("original datatype refusal must retain its flat operand")
             };
-            assert_eq!(s, o);
-            assert_eq!(actual.resolve(p), Some(TermRef::Iri("urn:predicate")));
-            id = s;
+            assert_eq!(actual.term_count(), 258);
+            if let Some(reference) = &reference {
+                assert_eq!(&actual, reference);
+            } else {
+                reference = Some(actual.clone());
+            }
+            let mut id = actual.root();
+            for _ in 0..256 {
+                let Some(TermRef::Triple { s, p, o }) = actual.resolve(id) else {
+                    panic!("each original shared triple must remain inspectable")
+                };
+                assert_eq!(s, o);
+                assert_eq!(actual.resolve(p), Some(TermRef::Iri("urn:predicate")));
+                id = s;
+            }
+            assert_eq!(actual.resolve(id), Some(TermRef::Iri("urn:leaf")));
+            assert_eq!(actual.resolve(usize::MAX), None);
+            let capture = purrdf_testkit::error_capture::Capture::read(&actual);
+            assert_eq!(capture.code, "rdf-term-graph");
+            assert!(matches!(capture.field("root"),
+                purrdf_hash::error::ErrorValue::Unsigned(root) if root == actual.root() as u128));
+            let records = capture.records("records");
+            assert_eq!(records.len(), actual.term_count());
+            assert_eq!(records[actual.root()].code, "rdf-term-triple-reference");
         }
-        assert_eq!(actual.resolve(id), Some(TermRef::Iri("urn:leaf")));
-        assert_eq!(actual.resolve(usize::MAX), None);
-        let capture = purrdf_testkit::error_capture::Capture::read(&actual);
-        assert_eq!(capture.code, "rdf-term-graph");
-        assert!(matches!(capture.field("root"),
-            purrdf_hash::error::ErrorValue::Unsigned(root) if root == actual.root() as u128));
-        let records = capture.records("records");
-        assert_eq!(records.len(), actual.term_count());
-        assert_eq!(records[actual.root()].code, "rdf-term-triple-reference");
     }
 
     #[test]

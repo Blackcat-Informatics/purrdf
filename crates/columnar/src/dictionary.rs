@@ -253,13 +253,31 @@ impl TermDictionary {
     }
 
     /// Retain the rejected operand without ever unfolding triple dependencies.
-    pub(crate) fn datatype_refusal(&mut self, root: usize) -> ProjectionReason {
+    pub(crate) fn datatype_refusal(&self, root: usize) -> ProjectionReason {
         let actual = match &self.records[root] {
             TermRecord::Triple { .. } => {
+                let mut local = BTreeMap::new();
+                let mut records = Vec::new();
+                let mut pending = vec![(root, false)];
+                while let Some((id, expanded)) = pending.pop() {
+                    if local.contains_key(&id) {
+                        continue;
+                    }
+                    if !expanded {
+                        pending.push((id, true));
+                        let (children, count) = self.records[id].dependencies();
+                        pending.extend(children[..count].iter().rev().map(|&id| (id, false)));
+                        continue;
+                    }
+                    // Dictionary dependencies are acyclic and visited child-first.
+                    let record = self.records[id].remap(|child| local[&child]);
+                    local.insert(id, records.len());
+                    records.push(record);
+                }
                 return ProjectionReason::DatatypeGraphNotIri {
                     actual: ProjectionTermGraph {
-                        records: core::mem::take(&mut self.records),
-                        root,
+                        records,
+                        root: local[&root],
                     },
                 };
             }
