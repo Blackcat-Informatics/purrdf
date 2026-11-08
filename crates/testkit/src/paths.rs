@@ -154,11 +154,10 @@ mod tests {
     fn a_standalone_package_is_its_own_workspace() {
         let package = Path::new("standalone/package");
         assert_eq!(
-            manifest_root(
-                [(package, "[package] # standalone\nname = \"p\"\n".to_owned())]
-                    .into_iter()
-                    .map(Ok)
-            )
+            manifest_root(std::iter::once(Ok((
+                package,
+                "[package] # standalone\nname = \"p\"\n".to_owned(),
+            ))))
             .expect("read manifest records"),
             Some(package.to_path_buf())
         );
