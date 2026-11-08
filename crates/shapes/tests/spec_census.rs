@@ -207,7 +207,7 @@ const EXPECTED_COUNTS: [(&str, usize); 12] = [
     ("structural/declaration", 39),
     ("structural/node-expression", 48),
     ("structural/report", 22),
-    ("structural/shape-path-prefix-graph", 19),
+    ("structural/shape-path-prefix-graph", 20),
     ("structural/vocabulary", 25),
     ("target", 9),
     ("refused", 13),

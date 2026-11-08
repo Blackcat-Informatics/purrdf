@@ -122,7 +122,7 @@ use shacl_corpora::{
 
 /// The `sht:Validate` entries of the vendored W3C SHACL 1.2 suite — the third
 /// corpus whose shapes graphs the product must carry.
-const W3C12_VALIDATE_CASES: usize = 213;
+const W3C12_VALIDATE_CASES: usize = 274;
 
 /// Every case the three corpora contribute. Asserted exactly, so a corpus that grew
 /// or shrank without this harness noticing fails rather than quietly measuring less.
@@ -159,10 +159,10 @@ const W3C12_DECLARED_FAILURES: usize = 1;
 /// The W3C SHACL 1.2 `sht:Validate` entries that declare `mf:result sht:Failure` and whose
 /// shapes graph LOADS under the editor's-draft law: the draft's own pre-binding and
 /// SPARQL-failure rules refuse them at validation, typed, so the three lanes agree on an
-/// identical error (`sparql-failure-001`, `unsupported-sparql-001`, `-002`, `-003`,
-/// `-005`, `-006`). Under the compatibility law the five pre-binding ones were refused at
-/// load; they sit in the agreed bucket now that the case's own law loads them.
-const W3C12_DECLARED_VALIDATION_FAILURES: usize = 6;
+/// identical error. These include pre-binding restrictions, a declared SPARQL
+/// failure and the corresponding scope-interaction boundary cases. They remain
+/// distinct from cases compared on actual validation reports.
+const W3C12_DECLARED_VALIDATION_FAILURES: usize = 11;
 
 // ── Bucket 2: the refusal ledger ──────────────────────────────────────────────
 
@@ -201,9 +201,9 @@ const AGREED_CASES: usize = TOTAL_CASES - UNLOADABLE_CASES - REFUSAL_LEDGER.len(
 ///
 /// # What it counts
 ///
-/// Of the 213 SHACL 1.2 `sht:Validate` entries, 212 load: all but
-/// [`W3C12_DECLARED_FAILURES`]. Six of the 212 are declared failures the three lanes agree
-/// on as an identical error ([`W3C12_DECLARED_VALIDATION_FAILURES`]), so 206 agree on a
+/// Of the 274 SHACL 1.2 `sht:Validate` entries, 273 load: all but
+/// [`W3C12_DECLARED_FAILURES`]. Eleven are declared failures the three lanes agree
+/// on as an identical error ([`W3C12_DECLARED_VALIDATION_FAILURES`]), so 262 agree on a
 /// report. `validator-001` is among
 /// them in both suites: its `owl:imports <http://datashapes.org/dash>` sits on a node
 /// that is not an import anchor, so it is data, and the shapes graph loads with an
@@ -212,7 +212,7 @@ const AGREED_CASES: usize = TOTAL_CASES - UNLOADABLE_CASES - REFUSAL_LEDGER.len(
 /// carries the W3C vocabulary's own declarations of three built-ins, and the two
 /// SHACL 1.2 cases whose custom list function is called only from SPARQL text,
 /// which the product round trip carries without refusing the function.
-const AGREED_ON_REPORT_CASES: usize = 401;
+const AGREED_ON_REPORT_CASES: usize = 457;
 
 /// The exact number of agreed cases whose shared report carries at least one
 /// validation result.
@@ -253,7 +253,7 @@ const AGREED_ON_REPORT_CASES: usize = 401;
 /// `uniqueValuesFor-004`, `deactivated-003` (whose only constraints a reifier
 /// deactivates) and `property-select-001` (whose computed full name satisfies
 /// `sh:hasValue "John Muir"`).
-const AGREED_WITH_RESULTS_CASES: usize = 375;
+const AGREED_WITH_RESULTS_CASES: usize = 408;
 
 // ── One case ──────────────────────────────────────────────────────────────────
 

@@ -86,8 +86,8 @@ fn normalize_offsets(message: &str) -> String {
     out
 }
 
-/// Every case the three corpora contribute (129 + 73 + 213).
-const TOTAL_CASES: usize = 415;
+/// Every case the three corpora contribute (129 + 73 + 274).
+const TOTAL_CASES: usize = 476;
 
 /// The cases whose shapes graph loads and whose two reports — and restored
 /// product — were compared, rather than two identical load errors: every case of
@@ -114,13 +114,13 @@ const TOTAL_CASES: usize = 415;
 /// `owl:imports <http://datashapes.org/dash>` on a node that is not an import anchor,
 /// so the triple is data; both runs load it with an empty import table, and it is
 /// compared on a report like every other case.
-const COMPARED_ON_REPORT: usize = 401;
+const COMPARED_ON_REPORT: usize = 457;
 
 /// The inputs among [`TOTAL_CASES`] that must end in an error under their own law and are
-/// compared on an identical error: the declared `sht:Failure` inputs (14; some are
+/// compared on an identical error: the declared `sht:Failure` inputs (19; some are
 /// refused at load, the SHACL 1.2 pre-binding ones at validation). With
 /// [`COMPARED_ON_REPORT`] they account for every case.
-const DECLARED_REFUSAL_CASES: usize = 14;
+const DECLARED_REFUSAL_CASES: usize = 19;
 
 /// One case, reduced to what both parses need.
 struct Input {

@@ -1603,8 +1603,9 @@ pub(crate) fn execute_rule(
             FastSet::default()
         }
     };
+    let mut shared_focus = FastSet::default();
     for (index, shape) in shapes.iter().enumerate() {
-        let (focus_nodes, run, eligible) = match &mut selection {
+        let (focus_nodes, mut run, eligible) = match &mut selection {
             FocusSelection::Every => {
                 let focus_nodes = eligible_focus_nodes(data, rule, shape, request)?;
                 let run = vec![true; focus_nodes.len()];
@@ -1654,6 +1655,13 @@ pub(crate) fn execute_rule(
                 }
             }
         };
+        if rule.run_once && request.shacl_profile.reads_november_draft_semantics() {
+            for (focus, execute) in focus_nodes.iter().zip(&mut run) {
+                if *execute {
+                    *execute = shared_focus.insert(focus.clone());
+                }
+            }
+        }
         match &rule.body {
             RuleBody::Triple {
                 subject,

@@ -66,7 +66,7 @@ const STRICTER_THAN_SHACL_SHACL: &[Stricter] = &[
     (
         "unknown-term",
         "which is not a term of SHACL 1.2, SHACL Advanced Features",
-        259,
+        267,
         "shacl-shacl.ttl checks the terms it knows and ignores the rest, so a misspelled \
          parameter (sh:minCont) passes it; PurRDF refuses a sh:/shnex: predicate the census \
          does not classify, because an unread parameter checks nothing",
@@ -101,7 +101,7 @@ const STRICTER_THAN_SHACL_SHACL: &[Stricter] = &[
     (
         "sparql-pre-binding",
         "Pre-binding of Variables in SPARQL Queries",
-        13,
+        18,
         "the pre-binding restrictions of SHACL 1.2 SPARQL Extensions, Appendix A (no MINUS, \
          VALUES or SERVICE, no assignment to a pre-bound variable, subqueries project it) are \
          rules about SPARQL text, which shacl-shacl.ttl does not parse",
@@ -503,13 +503,13 @@ fn judge(id: &str, refusal: Option<&str>, violations: &[Violation]) -> Outcome {
 }
 
 /// The exact number of shapes graphs the three corpora contribute: 73 first-party
-/// cases, 129 W3C SHACL 1.0 cases and 213 W3C SHACL 1.2 `sht:Validate` entries, each
+/// cases, 129 W3C SHACL 1.0 cases and 274 W3C SHACL 1.2 `sht:Validate` entries, each
 /// with its own shapes file.
-const BASE_INPUTS: usize = 415;
+const BASE_INPUTS: usize = 476;
 
 /// The exact number of mutants generated from the bases both sides accept (one per
-/// mutation kind that finds a statement to rewrite): 207 literal-for-IRI, 116
-/// non-integer counts, 176 lists-for-single-values, 41 non-boolean flags and 259
+/// mutation kind that finds a statement to rewrite): 255 literal-for-IRI, 119
+/// non-integer counts, 179 lists-for-single-values, 41 non-boolean flags and 267
 /// misspelled predicates.
 ///
 /// # What some bases contribute
@@ -567,7 +567,7 @@ const BASE_INPUTS: usize = 415;
 /// `equals-002`, `disjoint-002`, `lessThan-003` and `lessThanOrEquals-002` (see
 /// `path-valued-property-pair`) and `targetNode-select-001` (see
 /// `node-expression-target-node`), which PurRDF loads and `shacl-shacl.ttl` flags.
-const MUTANT_INPUTS: usize = 799;
+const MUTANT_INPUTS: usize = 861;
 
 #[test]
 fn purrdf_refuses_exactly_what_shacl_shacl_flags() {
@@ -664,11 +664,11 @@ fn purrdf_refuses_exactly_what_shacl_shacl_flags() {
     assert_eq!(bases.len(), BASE_INPUTS, "base shapes-graph count");
     assert_eq!(mutant_count, MUTANT_INPUTS, "mutant count");
     let expected_by_kind: BTreeMap<&str, usize> = [
-        ("literal-where-an-IRI-is-required", 207),
-        ("non-integer-count", 116),
-        ("list-where-a-single-value-is-required", 176),
+        ("literal-where-an-IRI-is-required", 255),
+        ("non-integer-count", 119),
+        ("list-where-a-single-value-is-required", 179),
         ("non-boolean-flag", 41),
-        (UNKNOWN_TERM, 259),
+        (UNKNOWN_TERM, 267),
     ]
     .into_iter()
     .collect();

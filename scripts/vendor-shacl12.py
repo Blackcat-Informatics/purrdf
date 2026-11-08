@@ -38,29 +38,14 @@ import urllib.request
 from pathlib import Path
 
 REPO = "w3c/data-shapes"
-COMMIT = "4cd469867a1cc6d2fff80e8a40723b26c695d67a"
+COMMIT = "40231dfb97c5b606d22ae733947c0d14b4f45c07"
+SPARQL_RL_COMMIT = "4cd469867a1cc6d2fff80e8a40723b26c695d67a"
 LICENSE_NAME = "W3C Software and Document License"
 LICENSE_URL = "http://www.w3.org/Consortium/Legal/copyright-software"
 
-TARBALL_URL = f"https://api.github.com/repos/{REPO}/tarball/{COMMIT}"
 
-# The vocabularies the declared-vs-implemented ratchet and the census parse.
-# Upstream `shacl12-vocabularies/` holds two further files, and neither declares
-# anything the validation engine evaluates:
-#
-# * `shacl-ui.ttl` is the SHACL UI vocabulary, "terms used in SHACL UI, the W3C
-#   specification for rendering SHACL shapes as user interfaces": 27 `shui:`
-#   terms (widgets, editors, viewers, widget matchers and scores, form
-#   configuration) plus one axiom making `sh:Graph` a subclass of
-#   `shui:Configuration`. It declares no constraint component, function, target
-#   or rule, and a `shui:` term on a shape is outside the `sh:`/`shnex:` census
-#   universe, so it passes the loader untouched like any application vocabulary.
-# * `profiles/cd1.ttl` is `shpt:cd1`, a `prof:Profile` of SHACL 1.2 ("excludes
-#   shapes found to be computationally intensive") whose `rdfs:member` list
-#   names the SHACL 1.2 terms an implementation claiming that profile may use.
-#   It declares no term of its own, and every member is already a term of
-#   `shacl.ttl`; this engine implements all of SHACL 1.2, of which the profile is
-#   a subset.
+# Runtime vocabularies used by validation and the declaration census. The UI
+# vocabulary and cd1 profile declare no engine behavior and are not shipped.
 VOCAB_FILES = ("shacl.ttl", "shnex.ttl", "shnex-sparql.ttl", "shacl-shacl.ttl")
 VOCAB_PREFIX = "shacl12-vocabularies/"
 TESTS_PREFIX = "shacl12-test-suite/tests/"
@@ -72,8 +57,7 @@ SPDX-License-Identifier: CC-BY-4.0
 
 # Vendored W3C SHACL 1.2 vocabularies and `shacl12-test-suite`
 
-Frozen copy of the upstream `{REPO}` SHACL 1.2 vocabularies and the whole
-`shacl12-test-suite/tests/` tree, vendored for the `purrdf-shapes`
+Frozen copy of the upstream `{REPO}` SHACL 1.2 vocabularies and the SHACL manifest tree, vendored for the `purrdf-shapes`
 declared-vs-implemented ratchet and its SHACL 1.2 conformance harness.
 **Do not hand-edit** — treat exactly like the GTS vectors and the
 `vectors/shexTest` corpus: byte-frozen third-party conformance data,
@@ -89,22 +73,24 @@ fails the build. A deliberate re-vendor regenerates that manifest with
 - Upstream: <https://github.com/{REPO}> — the W3C Data Shapes Working Group's
   repository for SHACL 1.2 (Core, the node-expression extension `shnex`, the
   SPARQL bindings, and the conformance test suite).
-- Pinned commit: `{COMMIT}` — pinned for reproducible builds and to track
-  upstream errata explicitly, the same hygiene every vendored suite in this
-  repo follows.
+- Pinned commit: `{COMMIT}` for the vocabularies and SHACL manifest tree.
+- Separate SPARQL 1.2 RL pin: `{SPARQL_RL_COMMIT}` for `tests/sparql-rl/`.
+  That independent root tests the supported 2026-09-19 Working Draft. Later
+  editor's-draft GROUP syntax is outside both that law and the SHACL EARL.
+  Both revisions are fixed for reproducible builds and explicit upstream updates.
 - License: **{LICENSE_NAME}** (<{LICENSE_URL}>), per the upstream
   repository's own `LICENSE.md`; that file is vendored verbatim alongside
   this tree as `LICENSE.md`.
 - Retrieval: `scripts/vendor-shacl12.py` fetches the pinned commit's full
-  source tree as a tarball from the GitHub REST API
+  source trees as tarballs from the GitHub REST API
   (`GET https://api.github.com/repos/{REPO}/tarball/{COMMIT}`, which redirects
   to a `codeload.github.com` archive of that exact commit) and extracts the
   `shacl12-vocabularies/` and `shacl12-test-suite/tests/` subtrees verbatim —
-  no per-file API calls, no upstream `git` clone.
+  SPARQL RL is extracted separately at its recorded pin; no source clone is needed.
 - Vendored subset:
   - `vocabularies/`: `shacl.ttl`, `shnex.ttl`, `shnex-sparql.ttl` and
     `shacl-shacl.ttl` from upstream `shacl12-vocabularies/`.
-  - `tests/`: the entire upstream `shacl12-test-suite/tests/` tree —
+  - `tests/`: the upstream `shacl12-test-suite/tests/` tree at the two pins above —
     `core/`, `node-expr/`, `sparql/`, `inference-rules/` and `sparql-rl/`,
     every manifest, every `.srl` file, and the upstream `tests/README.md`,
     `tests/node-expr/README.md` and `tests/sparql-rl/README.md` (kept
@@ -131,10 +117,11 @@ Harness: `crates/shapes/tests/w3c12_conformance.rs` runs every case under
 """
 
 
-def fetch_tarball() -> bytes:
+def fetch_tarball(commit: str = COMMIT) -> bytes:
     """Download the pinned commit's tarball from the GitHub REST API."""
     request = urllib.request.Request(  # noqa: S310 - pinned https GitHub API host
-        TARBALL_URL, headers={"User-Agent": "purrdf-vendor-shacl12"}
+        f"https://api.github.com/repos/{REPO}/tarball/{commit}",
+        headers={"User-Agent": "purrdf-vendor-shacl12"},
     )
     with urllib.request.urlopen(request, timeout=60) as response:  # noqa: S310
         return response.read()
@@ -201,6 +188,13 @@ def main() -> None:
         raise SystemExit(
             f"no files found under {TESTS_PREFIX} in the {REPO}@{COMMIT} tarball"
         )
+
+    srl_prefix = "sparql-rl/"
+    srl = extract_prefix(fetch_tarball(SPARQL_RL_COMMIT), TESTS_PREFIX + srl_prefix)
+    if not srl:
+        raise SystemExit(f"missing SPARQL RL suite at {REPO}@{SPARQL_RL_COMMIT}")
+    tests = {name: data for name, data in tests.items() if not name.startswith(srl_prefix)}
+    tests.update((srl_prefix + name, data) for name, data in srl.items())
 
     root_files = extract_prefix(archive, "")
     license_text = root_files.get("LICENSE.md")

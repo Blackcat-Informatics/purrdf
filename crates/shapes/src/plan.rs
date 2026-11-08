@@ -3452,7 +3452,10 @@ fn lower_constraint(
             siblings: lower_shape_list(siblings, walk)?,
         },
         Constraint::Expression { expr, .. } => {
-            LoweredConstraint::Expression(Box::new(lower_expression(expr, walk)?))
+            let scope = walk.footprint.enter_expression_focus();
+            let lowered = lower_expression(expr, walk);
+            walk.footprint.leave(scope);
+            LoweredConstraint::Expression(Box::new(lowered?))
         }
         // `sh:nodeByExpression` (Node Expressions §7.2) judges each value node
         // against shapes the expression NAMES BY IRI, resolved per value node

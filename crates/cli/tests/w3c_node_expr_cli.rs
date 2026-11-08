@@ -24,14 +24,14 @@ use purrdf_shacl_conformance as shacl_corpora;
 
 use std::process::Command;
 
-use purrdf_shapes::data::{GraphFilter, native_quads};
+use purrdf_shapes::FailureClass;
 use purrdf_shapes::free_expression::parse_term;
-use purrdf_shapes::term::Term;
 
 use shacl_corpora::file_iri;
-use shacl_corpora::node_expr_grading::{ABSENT_FOCUS, compare_outputs};
+use shacl_corpora::node_expr_grading::{compare_outputs, evaluate_case, focus};
 use shacl_corpora::shacl12::{
-    Body, NodeExprCase, SPEC_CONTRADICTED, SPEC_CONTRADICTED_COUNT, shacl12_cases, shacl12_root,
+    Body, NodeExprCase, NodeExprExpected, SPEC_CONTRADICTED, SPEC_CONTRADICTED_COUNT,
+    shacl12_cases, shacl12_root,
 };
 
 const MF_ACTION: &str = "http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#action";
@@ -39,24 +39,7 @@ const SHT_NODE_EXPR: &str = "http://www.w3.org/ns/shacl-test#nodeExpr";
 
 /// The discovered `sht:EvalNodeExpr` entries — pinned by the corpus reader's own
 /// per-type table, restated here so this harness cannot pass by running fewer.
-const NODE_EXPR_CASES: usize = 143;
-
-/// The focus node an entry is evaluated from: its `sht:focusNode`, or the absent focus
-/// node, which the test graph must not mention.
-fn focus(tc: &NodeExprCase) -> Result<Term, String> {
-    if let Some(focus) = &tc.focus {
-        return Ok(focus.clone());
-    }
-    let absent = Term::blank(ABSENT_FOCUS);
-    let dataset = tc.dataset.as_ref();
-    let mentioned = !native_quads(dataset, Some(&absent), None, None, GraphFilter::AnyGraph)
-        .is_empty()
-        || !native_quads(dataset, None, None, Some(&absent), GraphFilter::AnyGraph).is_empty();
-    if mentioned {
-        return Err(format!("the test graph mentions the harness's {absent}"));
-    }
-    Ok(absent)
-}
+const NODE_EXPR_CASES: usize = 276;
 
 /// Run one entry through the binary and grade its output.
 fn run_case(entry_iri: &str, tc: &NodeExprCase) -> Result<(), String> {
@@ -66,6 +49,8 @@ fn run_case(entry_iri: &str, tc: &NodeExprCase) -> Result<(), String> {
     let mut command = Command::new(env!("CARGO_BIN_EXE_purrdf"));
     command.args([
         "node-expr",
+        "--shacl-profile",
+        "shacl-ed-2026-11-06",
         "--shapes",
         file,
         "--shapes-base",
@@ -87,6 +72,26 @@ fn run_case(entry_iri: &str, tc: &NodeExprCase) -> Result<(), String> {
     command.arg(file);
     let out = command.output().map_err(|e| format!("spawn purrdf: {e}"))?;
     let stderr = String::from_utf8_lossy(&out.stderr);
+    if matches!(tc.expected, NodeExprExpected::Failure) {
+        // Exit 1 alone also covers I/O, setup and processor failures. Require
+        // the same typed evaluation failure from the shared engine and its
+        // diagnostic from the production binary, with no successful output.
+        let Err(error) = evaluate_case(tc, purrdf_shapes::ShaclProfile::ED_20261106)? else {
+            return Err("the engine did not produce the declared evaluation failure".to_owned());
+        };
+        return if error.failure_class() == FailureClass::Evaluation
+            && out.status.code() == Some(1)
+            && out.stdout.is_empty()
+            && stderr.contains(&error.to_string())
+        {
+            Ok(())
+        } else {
+            Err(format!(
+                "expected evaluation failure {error}, got exit {:?}: {stderr}",
+                out.status.code()
+            ))
+        };
+    }
     if !out.status.success() {
         return Err(format!("exit {:?}: {stderr}", out.status.code()));
     }
@@ -99,7 +104,10 @@ fn run_case(entry_iri: &str, tc: &NodeExprCase) -> Result<(), String> {
     if !stderr.contains(&reported) {
         return Err(format!("stderr does not report {reported:?}: {stderr}"));
     }
-    compare_outputs(&produced, &tc.expected, tc.ignore_order)
+    let NodeExprExpected::Terms(expected) = &tc.expected else {
+        unreachable!("declared failures are graded before output is read")
+    };
+    compare_outputs(&produced, expected, tc.ignore_order)
 }
 
 #[test]
@@ -164,7 +172,7 @@ fn every_w3c_node_expression_runs_through_the_cli() {
             .count(),
         "every spec-contradicted node-expression entry fails unamended"
     );
-    assert!(contradicted <= SPEC_CONTRADICTED_COUNT);
+    assert_eq!(contradicted, SPEC_CONTRADICTED_COUNT);
     assert_eq!(
         passed + contradicted,
         NODE_EXPR_CASES,
@@ -229,16 +237,15 @@ fn an_entry_walk_that_reaches_nothing_is_refused() {
     );
 }
 
-/// The spec-contradicted `hasLang-example` calls `sparql:hasLang` with two arguments and
-/// the binary refuses it (exit 1, naming the count); the neighbouring one-argument call
-/// evaluates to `true`.
+/// The approved unary `hasLang-example` evaluates to `true`; adding a second
+/// argument is refused by the binary with exit 1 and the expected arity.
 #[test]
 fn a_two_argument_has_lang_is_refused_and_the_one_argument_neighbour_evaluates() {
     let root = shacl12_root();
     let source = root.join("node-expr/shnex-sparql/hasLang.ttl");
     let text = std::fs::read_to_string(&source).expect("the vendored file reads");
-    let one = text.replace("( \"hello\"@en \"en\" )", "( \"hello\"@en )");
-    assert_ne!(one, text, "the fixture carries the two-argument call");
+    let two = text.replace("( \"hello\"@en )", "( \"hello\"@en \"en\" )");
+    assert_ne!(two, text, "the fixture carries the one-argument call");
     let dir = std::env::temp_dir().join(format!("purrdf-has-lang-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("temp dir");
     let run = |file: &std::path::Path| {
@@ -268,7 +275,7 @@ fn a_two_argument_has_lang_is_refused_and_the_one_argument_neighbour_evaluates()
             .expect("spawn purrdf")
     };
     let two_file = dir.join("two.ttl");
-    std::fs::write(&two_file, &text).expect("write");
+    std::fs::write(&two_file, &two).expect("write");
     let two = run(&two_file);
     assert_eq!(
         two.status.code(),
@@ -282,7 +289,7 @@ fn a_two_argument_has_lang_is_refused_and_the_one_argument_neighbour_evaluates()
         String::from_utf8_lossy(&two.stderr)
     );
     let one_file = dir.join("one.ttl");
-    std::fs::write(&one_file, &one).expect("write");
+    std::fs::write(&one_file, &text).expect("write");
     let one = run(&one_file);
     assert_eq!(
         one.status.code(),

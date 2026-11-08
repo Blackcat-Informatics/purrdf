@@ -270,7 +270,7 @@ Every IRI the engine implements is defined by a W3C document; PurRDF mints
 none.
 
 The W3C SHACL 1.0 `data-shapes` suite passes as approved (129/129, zero ledgered
-gaps at the time of writing), and the approved W3C SHACL 1.2 suite passes as approved (590/591, the one exception being `hasLang-example`, which contradicts the SPARQL 1.2 grammar's arity); the live
+gaps at the time of writing), and the approved W3C SHACL 1.2 suite passes as approved (800/800); the live
 numbers are in
 [`docs/CONFORMANCE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/CONFORMANCE.md),
 and [SHACL 1.2 conformance](#shacl-12-conformance) below says how to
@@ -728,26 +728,24 @@ candidate by looking it up in its SELECT's results.
 
 ## SHACL 1.2 conformance
 
-The complete W3C `shacl12-test-suite` is vendored byte-exact under
-`vectors/shacl12/` and run through the library API: 592 tests, covering 213
-`sht:Validate`, 143 `sht:EvalNodeExpr` and 27 `sht:Infer` tests, and 209
+The pinned W3C `shacl12-test-suite` is vendored byte-exact under
+`vectors/shacl12/` and run through the library API: 801 tests, covering 274
+`sht:Validate`, 276 `sht:EvalNodeExpr` and 42 `sht:Infer` tests, and 209
 SPARQL 1.2 RL syntax, well-formedness, stratification and evaluation tests. An
-upstream manifest lists 591 of them. Of those, 590 pass as approved and the
-expected-failure ledger is empty. The remaining 1 entry belongs to a
-vendored file that no manifest includes and is reported separately. The one approved
-entry that does not pass, `node-expr/shnex-sparql/hasLang-example`, is reported failed with
-its rationale: it calls `sparql:hasLang` with two arguments, and the SPARQL 1.2
-grammar's `hasLANG` takes exactly one. A
-negative SPARQL 1.2 RL test must fail at the stage its test type names, not at
-an earlier one.
+upstream manifest lists 800 of them. Of those, 800 pass as approved and the
+expected-failure ledger is empty. The remaining 1 entry belongs to a vendored file
+that no manifest includes and is reported separately. The SHACL root is pinned
+to `40231dfb` and runs under `shacl-ed-2026-11-06`; SPARQL Rules stays at its
+independent `4cd46986` pin for the supported 2026-09-19 Working Draft. A negative
+SPARQL Rules test must fail at the stage its test type names, not at an earlier one.
 Reproduce it with:
 
 ```bash
 cargo test -p purrdf-shapes --test w3c12_conformance -- --nocapture
 ```
 
-The 213 `sht:Validate` tests also run through the built `purrdf validate
---shacl-profile shacl-ed-2026-10-16` binary, graded against the approved results by
+The 274 `sht:Validate` tests also run through the built `purrdf validate
+--shacl-profile shacl-ed-2026-11-06` binary, graded against the approved results by
 the same grader, so the result holds on a shipped surface:
 
 ```bash
@@ -755,7 +753,7 @@ cargo test -p purrdf-cli --test w3c12_validate_cli -- --nocapture
 ```
 
 The last line of the approved suite's scoreboard is
-`W3C12 TOTAL: passed 590, spec-contradicted 1, xfailed 0, ledger 0`,
+`W3C12 TOTAL: passed 800, spec-contradicted 0, xfailed 0, ledger 0`,
 and the unlisted files' own line is
 `W3C12 UNLISTED: passed 1, exact 1, with-delta 0, total 1`.
 

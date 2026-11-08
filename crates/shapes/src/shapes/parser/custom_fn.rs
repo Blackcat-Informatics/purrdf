@@ -481,7 +481,10 @@ fn check_body_args(
     let mut used: Vec<ArgKey> = Vec::new();
     collect_arg_keys(body, &mut used);
     for key in used {
-        if !func.params.contains(&key) {
+        let undocumented_index = func.kind == CustomFnKind::ListParameter
+            && func.params.is_empty()
+            && matches!(key, ArgKey::Index(_));
+        if !undocumented_index && !func.params.contains(&key) {
             return Err(format!(
                 "custom node-expression function <{}> reads shnex:arg {key}, which is not one of \
                  its declared parameters ({})",
