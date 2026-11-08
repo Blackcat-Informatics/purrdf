@@ -288,6 +288,35 @@ fn digest(bytes: &[u8]) -> String {
     purrdf_hash::hex::Digest32::new(*purrdf_hash::blake3::hash(bytes).as_bytes()).to_hex()
 }
 
+/// Rebind one deliberately changed boundary-test artifact by exact path, so
+/// byte-identical files under other paths retain their original admission.
+fn replace_reviewed_bytes(root: &Path, relative: &str, bytes: &[u8]) {
+    std::fs::write(root.join(relative), bytes).unwrap();
+    let path = root.join("reviews/index.json");
+    let mut index = purrdf_lex::json::read_slice(
+        &std::fs::read(&path).unwrap(),
+        purrdf_lex::json::Limits::DEFAULT,
+    )
+    .unwrap();
+    let Value::Array(cases) = &mut index["cases"] else {
+        panic!("registry cases")
+    };
+    let mut changed = 0;
+    for case in cases {
+        let Value::Array(payloads) = &mut case["payloads"] else {
+            panic!("review payloads")
+        };
+        for payload in payloads {
+            if payload["path"].as_str() == Some(relative) {
+                payload["blake3"] = Value::String(digest(bytes));
+                changed += 1;
+            }
+        }
+    }
+    assert!(changed > 0, "the test artifact must already be reviewed");
+    std::fs::write(path, purrdf_lex::json::write_pretty(&index)).unwrap();
+}
+
 /// Corrupt one reviewed expected report in a copy, re-bind its registry digest
 /// so acquisition admits the corrupted bytes, and require that no route passes.
 fn corrupted_expectation_fails(
@@ -415,8 +444,50 @@ fn a_suite_kind_without_a_runner_is_refused() {
 }
 
 #[test]
-fn a_query_inventory_cannot_substitute_a_byte_identical_result_artifact() {
+fn query_ingress_preserves_artifact_bases_and_admitted_sources() {
     let scratch = purrdf_testkit::TempDir::new_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let relative = scratch.path().join("relative-community");
+    copy_tree(&corpus_root(), &relative);
+    let query_path = "sparql/service/service-bnode-distinct.rq";
+    let text = "SELECT ?localSelf ?remoteSelf WHERE { ?localSelf <urn:p> <relative> . SERVICE <http://example.org/service/a> { ?remoteSelf <urn:p> <relative> } }";
+    replace_reviewed_bytes(&relative, query_path, text.as_bytes());
+    for path in ["sparql/service/local.ttl", "sparql/service/endpoint-a.ttl"] {
+        replace_reviewed_bytes(&relative, path, b"<> <urn:p> <relative> .");
+    }
+    replace_reviewed_bytes(&relative, "sparql/service/service-bnode-distinct.srj", br#"{"head":{"vars":["localSelf","remoteSelf"]},"results":{"bindings":[{"localSelf":{"type":"uri","value":"http://example.org/community/sparql/service/local.ttl"},"remoteSelf":{"type":"uri","value":"http://example.org/community/sparql/service/endpoint-a.ttl"}}]}}"#);
+    let mut control =
+        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+    let corpus = Corpus::acquire(&relative).unwrap();
+    let cases = corpus.cases().unwrap();
+    let case = cases
+        .iter()
+        .find(|case| case.case.id == "service-bnode-distinct")
+        .unwrap();
+    let execution = corpus
+        .execute(case, "sparql11-query-over-rdf12", &mut control)
+        .unwrap();
+    assert!(execution.passed(), "{execution:#?}");
+    // The same valid query with an implicit external source is refused before
+    // the legacy workspace file loader can inspect that unreviewed path.
+    let from = text.replace(
+        " WHERE",
+        " FROM <http://purrdf.test/suite/unreviewed.ttl> WHERE",
+    );
+    replace_reviewed_bytes(&relative, query_path, from.as_bytes());
+    let corpus = Corpus::acquire(&relative).unwrap();
+    let cases = corpus.cases().unwrap();
+    let case = cases
+        .iter()
+        .find(|case| case.case.id == "service-bnode-distinct")
+        .unwrap();
+    let error = corpus
+        .execute(case, "sparql11-query-over-rdf12", &mut control)
+        .unwrap_err();
+    assert!(
+        error.contains("dataset clauses are not admitted"),
+        "{error}"
+    );
+
     let copy = scratch.path().join("community");
     copy_tree(&corpus_root(), &copy);
     assert!(Corpus::acquire(&copy).unwrap().cases().is_ok());

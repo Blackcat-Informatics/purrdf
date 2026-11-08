@@ -48,6 +48,12 @@ bytes are excluded from their own payload digest sets to avoid circular
 identities. Their schema, identity associations and applicability are admitted
 independently.
 
+Query cases use only their reviewed manifest sources. Each default, named and
+endpoint document is parsed against its own corpus artifact IRI before the
+shared source merge standardizes blank identities apart. The query retains its
+own artifact IRI as its base. This runner refuses explicit FROM/FROM NAMED
+clauses rather than acquiring additional files outside that admitted source set.
+
 ## SHACL reports
 
 Comparison observes the dedicated complete report graph under the selected dated

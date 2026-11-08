@@ -7,6 +7,7 @@ use purrdf_conformance_kit::outcome::{self, Observation, OutcomeKind, Record};
 use purrdf_conformance_kit::{GradeError, bag, graph::Reader, inventory};
 use purrdf_core::{GraphMatch, SparqlRequest, SparqlResult, TermValue};
 use purrdf_iri::vocab::{mf, qt, rdf, rdfs};
+use std::{path::Path, sync::Arc};
 
 use super::{Case, Corpus, Execution, expected_observation, read};
 use crate::{
@@ -17,6 +18,11 @@ use crate::{
 impl Corpus {
     fn query_case(&self, case: &Case<'_>) -> Result<SparqlTestCase, String> {
         let query = case.case.query.as_deref().ok_or("query path is absent")?;
+        let query_iri = Self::artifact_iri(&self.relative(&self.path(case, query)?)?);
+        let scope = purrdf_iri::BaseScope::rooted(
+            purrdf_iri::BaseIri::parse(&query_iri).map_err(|error| error.to_string())?,
+            purrdf_iri::BaseOrigin::Caller,
+        );
         let inventory::Expected::File(expected) = &case.case.expected else {
             return Err("a query case requires an expected result artifact".to_owned());
         };
@@ -56,7 +62,11 @@ impl Corpus {
             .collect::<Result<Vec<_>, String>>()?;
         Ok(SparqlTestCase {
             iri: case.iri().to_owned(),
-            base: Self::artifact_iri(&self.relative(&self.path(case, query)?)?),
+            base: scope
+                .resolve(".")
+                .map_err(|error| error.to_string())?
+                .as_str()
+                .to_owned(),
             name: case.case.id.clone(),
             kind: TestKind::QueryEval,
             query: self.path(case, query)?,
@@ -70,6 +80,13 @@ impl Corpus {
             lax_cardinality: false,
             requires: Vec::new(),
         })
+    }
+
+    /// Parse only an already admitted artifact, against that artifact's own IRI.
+    fn query_document(&self, path: &Path) -> Result<Arc<purrdf_core::RdfDataset>, String> {
+        let base = Self::artifact_iri(&self.relative(path)?);
+        purrdf::parse_dataset(&read(path)?, "text/turtle", Some(&base))
+            .map_err(|error| format!("{}: {error}", path.display()))
     }
 
     pub(super) fn admit_query_entry(&self, case: &Case<'_>) -> Result<(), String> {
@@ -178,15 +195,39 @@ impl Corpus {
         }
         let spec = self.query_case(case)?;
         let text = std::fs::read_to_string(&spec.query).map_err(|error| error.to_string())?;
+        let query_base = Self::artifact_iri(&self.relative(&spec.query)?);
+        let env = run::query_eval_env(&spec)?;
+        let parsed = purrdf_sparql_algebra::SparqlParser::new()
+            .with_base_iri(query_base.clone())
+            .parse_query_with(&text, env.parser_options())
+            .map_err(|error| error.to_string())?;
+        if !parsed.dataset().default.is_empty() || !parsed.dataset().named.is_empty() {
+            return Err("community query dataset clauses are not admitted; declare sources in the reviewed manifest".to_owned());
+        }
         let ExpectedResult::Srj(expected_path) = &spec.expected else {
             unreachable!("query_case selects the native SRJ reader")
         };
         let expected = purrdf_sparql_results::from_json(&read(expected_path)?)
             .map_err(|error| error.to_string())?;
         let ordered = run::query_eval_is_ordered(&text);
-        let data = run::query_eval_dataset(&spec, &text)?;
-        let remote = service::build(&spec)?;
-        let env = run::query_eval_env(&spec)?;
+        let mut sources = spec
+            .data
+            .iter()
+            .map(|path| Ok((self.query_document(path)?, None)))
+            .collect::<Result<Vec<_>, String>>()?;
+        for (graph, path) in &spec.graph_data {
+            sources.push((
+                self.query_document(path)?,
+                Some(purrdf_core::RdfTerm::Iri(graph.clone())),
+            ));
+        }
+        let data = run::freeze_sources(&sources, &spec.graph_data)?;
+        let endpoints = spec
+            .service_data
+            .iter()
+            .map(|(endpoint, path)| Ok((endpoint.clone(), self.query_document(path)?)))
+            .collect::<Result<Vec<_>, String>>()?;
+        let remote = service::build_acquired(&endpoints);
         let options = run::query_eval_options(&spec, &env).with_remote(Some(&remote));
         let engine = run::query_eval_engine();
         let declared = expected_observation(case.case);
@@ -260,7 +301,7 @@ impl Corpus {
                 &data,
                 SparqlRequest {
                     query: &text,
-                    base_iri: Some(&spec.base),
+                    base_iri: Some(&query_base),
                     substitutions: &[],
                 },
                 &remote,
@@ -268,11 +309,7 @@ impl Corpus {
             ),
         );
         let prepared = engine
-            .prepare_query_with_options(&text, Some(&spec.base), &options)
-            .map_err(|error| error.to_string())?;
-        let parsed = purrdf_sparql_algebra::SparqlParser::new()
-            .with_base_iri(spec.base.clone())
-            .parse_query(&text)
+            .prepare_query_with_options(&text, Some(&query_base), &options)
             .map_err(|error| error.to_string())?;
         let algebra = engine
             .prepare_algebra(parsed, &options)
