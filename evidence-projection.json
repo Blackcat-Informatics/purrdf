@@ -1,0 +1,23 @@
+{
+  "transform": "Omit only automatic provider HTML comments rejected by the attribution guard; substantive review text and original revision fingerprints are retained.",
+  "files": [
+    {
+      "file": "pr-comments.md",
+      "original_sha256": "5af73bcedaba033743376b54c753b672199969066b0a71579eb6f7ae2b0e3e64",
+      "projection_sha256": "ac4dd05edd6fc95b152e67925d46a06bb168569789cd8806f95e72c1ac2137d7",
+      "omitted_html_comments": 4
+    },
+    {
+      "file": "review-evidence.json",
+      "original_sha256": "023b17ec07f51944b1a07ac90c711f13d20bf98357b684085b83adf1dac90e12",
+      "projection_sha256": "4ca6492e34d62ce2ed0a12a50b2769921b3be384d1b97814cf843f6bcc230a1b",
+      "omitted_html_comments": 4
+    },
+    {
+      "file": "review-dispositions.json",
+      "original_sha256": "b49d1206d91e30b226415ce6c61f9e11c3a48c03164b62e8b3ef2a61c133b333",
+      "projection_sha256": "537b5edbd87e0c7fe84719fae43852beed54cb2aabc16a87775fb0c2ad333254",
+      "omitted_html_comments": 4
+    }
+  ]
+}

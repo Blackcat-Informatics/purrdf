@@ -1,0 +1,35 @@
+{
+  "completed": [
+    "completed"
+  ],
+  "blocked": [],
+  "unavailable": [],
+  "sync": {
+    "schema": 1,
+    "worktree": "/home/paudley/Active/purrdf/.worktrees/1181-preserve-shared-term-dags-through",
+    "branch": "paudley/1181-preserve-shared-term-dags-through",
+    "base_ref": "refs/remotes/origin/main",
+    "head": "c8dab3e48d12450c465a07f1260699e056949d2b",
+    "attempt": "/home/paudley/Active/purrdf/.worktrees/1181-preserve-shared-term-dags-through/.stage/preserve-shared-term-dags-through/sync/20261108T060405-4fa56599d6154d3cace19344fbb587c8",
+    "conflicts": [
+      "helpers-ledger.toml"
+    ],
+    "status": "completed",
+    "base": "c666b918b97406cc2584f14faeecd92634664b33",
+    "merge_bases": [
+      "70d258cdeaa26f1ed761a50b7e3d80caa83385ff"
+    ],
+    "merge_index": "0967147e6dc980f813bc1743554e824796957d9144845f4a88e1682433f8aae3",
+    "reused_paths": [],
+    "rerere_output": "Recorded preimage for 'helpers-ledger.toml'\n",
+    "candidate_tree": "0d87fe7aa4ded87974ed52fee27ce4e8ac38a309",
+    "candidate_patch": "candidate-46a41e60a9fa4a10a03066edd570ea85.patch",
+    "validation_records": [],
+    "commit": "3299640e42e02f58dfcad4bad76ebf615bb5d557",
+    "tree": "0d87fe7aa4ded87974ed52fee27ce4e8ac38a309"
+  },
+  "next_actions": [],
+  "artifacts": {
+    "sync": "/home/paudley/Active/purrdf/.worktrees/1181-preserve-shared-term-dags-through/.stage/preserve-shared-term-dags-through/sync/20261108T060405-4fa56599d6154d3cace19344fbb587c8"
+  }
+}

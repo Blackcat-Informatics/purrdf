@@ -1,0 +1,55 @@
+$ stagectl pr-checks 1230
+SUCCESS test https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455188875/job/128665343692
+SUCCESS simd-asm https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455188875/job/128664773454
+SUCCESS conformance https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455188875/job/128660686264
+SUCCESS test (integration-2) https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455188875/job/128652717564
+SUCCESS geo-determinism https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455188875/job/128652717556
+SUCCESS test (integration-1) https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455188875/job/128652717673
+SUCCESS conformance (sparql) https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455188875/job/128652717590
+SUCCESS simd-asm-config (aarch64) https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455188875/job/128652717689
+SUCCESS doc https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455188875/job/128652717583
+SUCCESS wasm https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455188875/job/128652717495
+SUCCESS workspace https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455188875/job/128652717521
+SUCCESS capi https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455188875/job/128652717486
+SUCCESS projection-oracles https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455188875/job/128652717487
+SUCCESS conformance (core) https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455188875/job/128652717572
+SUCCESS wasm-exec https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455188875/job/128652717593
+SUCCESS simd-asm-config (wasm32) https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455188875/job/128652717687
+SUCCESS simd-asm-config (x86_64) https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455188875/job/128652717703
+SUCCESS simd-asm-config (aarch64-neoverse-v1) https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455188875/job/128652717518
+SUCCESS simd-asm-config (x86_64-v4) https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455188875/job/128652717652
+SUCCESS wasm-schema-oracles https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455188875/job/128652717489
+SUCCESS cross-arch https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455188875/job/128652717503
+SUCCESS test (integration-5) https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455188875/job/128652717510
+SUCCESS miri https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455188875/job/128652717449
+SUCCESS cross-arch-riscv64 (determinism-serial) https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455188875/job/128652717700
+SUCCESS cross-arch-riscv64 (determinism-more-workers) https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455188875/job/128652717553
+SUCCESS cross-arch-riscv64 (determinism-one-worker) https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455188875/job/128652717578
+SUCCESS pytest https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455188875/job/128652717508
+SUCCESS msrv https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455188875/job/128652717422
+SUCCESS simd-asm-config (wasm32-simd128) https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455188875/job/128652717651
+SUCCESS simd-asm-config (x86_64-v3) https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455188875/job/128652717692
+SUCCESS python-publisher https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455188875/job/128652717470
+SUCCESS test (integration-3) https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455188875/job/128652717498
+SUCCESS test (lib) https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455188875/job/128652717297
+SUCCESS aarch64 https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455188875/job/128652717401
+SUCCESS avx512-sde https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455188875/job/128652717431
+SUCCESS cross-arch-riscv64 (suites) https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455188875/job/128652717639
+SUCCESS conformance (python) https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455188875/job/128652717464
+SUCCESS conformance (shapes) https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455188875/job/128652717475
+SUCCESS wasm-package https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455188875/job/128652717427
+SUCCESS test (integration-4) https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455188875/job/128652717416
+SUCCESS windows-mtime https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455188875/job/128652717568
+SUCCESS CodeQL https://github.com/Blackcat-Informatics/purrdf/runs/128652771229
+SKIPPED simd-asm-projection https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455188875/job/128652743295
+SUCCESS test (doc) https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455188875/job/128652717397
+SKIPPED native-profile https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455188875/job/128652718758
+SKIPPED native-profile-admission https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455188875/job/128652718124
+SKIPPED native-profile-comparison https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455188875/job/128652719117
+SUCCESS Analyze (rust) https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455186009/job/128652565149
+SUCCESS Analyze (actions) https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455186009/job/128652564989
+SUCCESS Analyze (python) https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455186009/job/128652565127
+SUCCESS Analyze (c-cpp) https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455186009/job/128652565097
+NEUTRAL CodeRabbit https://coderabbit.ai?utm_source=cr_app&utm_medium=github
+SUCCESS Analyze (javascript-typescript) https://github.com/Blackcat-Informatics/purrdf/actions/runs/42455186009/job/128652565059
+state: pass
