@@ -1,0 +1,8 @@
+[
+  {
+    "path": "crates/conformance-kit/tests/grading.rs",
+    "kind": "file",
+    "executable": false,
+    "content": "accepted-c82077fdeb07444896ddf4ebe0c3617a/0.bin"
+  }
+]

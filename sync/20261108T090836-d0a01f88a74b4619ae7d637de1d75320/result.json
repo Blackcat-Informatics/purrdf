@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1235-release-4-0-1-and-publish-shared-test",
+  "branch": "paudley/1235-release-4-0-1-and-publish-shared-test",
+  "base_ref": "refs/remotes/origin/main",
+  "head": "0f8c01f9c2e97acb0c7f30ffee90219b3babf5ae",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/1235-release-4-0-1-and-publish-shared-test/.stage/release-4-0-1-and-publish-shared-test/sync/20261108T090836-d0a01f88a74b4619ae7d637de1d75320",
+  "conflicts": [],
+  "status": "completed",
+  "base": "b88b83aeb5723a2f54c11bdd0f331ae6c0153e5b",
+  "merge_bases": [
+    "5616fb65382500b70724d7a9bd67b8302b3ff86d"
+  ],
+  "merge_index": "fe48f51b96d809435ba900f45d8e7259e1efb3c2d1bb4c53e97c6dba1a2504fb",
+  "candidate_tree": "17e857843e0ba9d4dc04ace7b2d9f3bd12748007",
+  "candidate_patch": "candidate-0ee9f6799f434e9596863dc72ff287e1.patch",
+  "validation_records": [],
+  "commit": "7c2fe280b4e585e023ae4ac00915885271fcee07",
+  "tree": "17e857843e0ba9d4dc04ace7b2d9f3bd12748007"
+}

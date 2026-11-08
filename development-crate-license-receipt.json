@@ -1,0 +1,29 @@
+{
+  "artifacts": [
+    {
+      "artifact": "purrdf-testkit-4.0.1.crate",
+      "notice_files": 7,
+      "profile": "purrdf-testkit",
+      "runtime_notice_files": 0,
+      "sha256": "2a0c1d39c3d31bd8dfe06d6811bed0a5238702ed23044cf11c491a4531e2fc77",
+      "status": "passed"
+    },
+    {
+      "artifact": "purrdf-alloc-probe-4.0.1.crate",
+      "notice_files": 6,
+      "profile": "purrdf-alloc-probe",
+      "runtime_notice_files": 0,
+      "sha256": "49826024577e1cd418bdec8348c0b4b3df70f851d0765da6f01f846c112b2573",
+      "status": "passed"
+    },
+    {
+      "artifact": "purrdf-conformance-kit-4.0.1.crate",
+      "notice_files": 6,
+      "profile": "purrdf-conformance-kit",
+      "runtime_notice_files": 0,
+      "sha256": "d7ccd584f5231a4df20ed58dcb5e0ebe2c6e44b9ef4f8356f54a508f405ac1a2",
+      "status": "passed"
+    }
+  ],
+  "schema": 1
+}

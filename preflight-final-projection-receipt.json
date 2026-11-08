@@ -1,0 +1,31 @@
+{
+  "scope": "Automatic HTML attribution comments rejected by the installed guard only. Substantive feedback and metadata retained. Hashes describe normalized originals and projections. Stage full-body revision comparisons can report projection-only debt; original API bodies remain at the forge.",
+  "files": [
+    {
+      "file": "review-evidence.json",
+      "original_sha256": "4e7620427d22b820378bbee9b35dc546b0d98fa068bf22b7166dd8f1ce2baebe",
+      "projection_sha256": "03395b196f19c1eb71cebeb6ce7c1ae7c68a2f8807a2f928db05cafb56a455a8",
+      "omitted_automatic_comments": [
+        "b933cb41fc4870569122642ce2fdb8a34b141220cfb72d47af20d249430664df",
+        "b933cb41fc4870569122642ce2fdb8a34b141220cfb72d47af20d249430664df",
+        "b933cb41fc4870569122642ce2fdb8a34b141220cfb72d47af20d249430664df",
+        "b933cb41fc4870569122642ce2fdb8a34b141220cfb72d47af20d249430664df",
+        "b933cb41fc4870569122642ce2fdb8a34b141220cfb72d47af20d249430664df",
+        "b933cb41fc4870569122642ce2fdb8a34b141220cfb72d47af20d249430664df"
+      ]
+    },
+    {
+      "file": "pr-comments.md",
+      "original_sha256": "7c3dd6197e07c702877447f8753c4feaf7a18f4e47725c8dc0cc35739412665c",
+      "projection_sha256": "53d4f9aa9eca6b39651a90833ab6dd743894b124f017d10dc79aadb451a51f74",
+      "omitted_automatic_comments": [
+        "b933cb41fc4870569122642ce2fdb8a34b141220cfb72d47af20d249430664df",
+        "b933cb41fc4870569122642ce2fdb8a34b141220cfb72d47af20d249430664df",
+        "b933cb41fc4870569122642ce2fdb8a34b141220cfb72d47af20d249430664df",
+        "b933cb41fc4870569122642ce2fdb8a34b141220cfb72d47af20d249430664df",
+        "b933cb41fc4870569122642ce2fdb8a34b141220cfb72d47af20d249430664df",
+        "b933cb41fc4870569122642ce2fdb8a34b141220cfb72d47af20d249430664df"
+      ]
+    }
+  ]
+}

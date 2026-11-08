@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "compiler": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "packages": [
+    {
+      "crate": "purrdf-alloc-probe",
+      "version": "0.0.0",
+      "archive": "/tmp/purrdf-1235-bootstrap-publish-20261108/purrdf-alloc-probe/target/package/purrdf-alloc-probe-0.0.0.crate",
+      "sha256": "cb886c55c59df108f168e0d0bcdec8ed7d24cd40d50c0a4f5d4ef766dda5908a",
+      "status": "published; registry version confirmed"
+    },
+    {
+      "crate": "purrdf-testkit",
+      "version": "0.0.0",
+      "archive": "/tmp/purrdf-1235-bootstrap-publish-20261108/purrdf-testkit/target/package/purrdf-testkit-0.0.0.crate",
+      "sha256": "07de5e8acb96713ef0b630ffefc1f1c8592abb4455ab3c69d14067857290eece",
+      "status": "published; registry version confirmed"
+    },
+    {
+      "crate": "purrdf-conformance-kit",
+      "version": "0.0.0",
+      "archive": "/tmp/purrdf-1235-bootstrap-publish-20261108/purrdf-conformance-kit/target/package/purrdf-conformance-kit-0.0.0.crate",
+      "sha256": "821cfdf60e5d884a3763eb85cb31c863fb8d556bbc65a84133987f54a1c08b65",
+      "status": "published; registry version confirmed"
+    }
+  ],
+  "existing_records_skipped": []
+}

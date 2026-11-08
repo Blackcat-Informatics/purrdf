@@ -1,0 +1,13 @@
+{
+  "baseRefName": "main",
+  "baseRefOid": "5616fb65382500b70724d7a9bd67b8302b3ff86d",
+  "headRefName": "delivery/earl-current-suite",
+  "headRefOid": "8e1099645ecc930d25121596f3bbb53bec30b1a7",
+  "isDraft": false,
+  "mergeCommit": null,
+  "mergedAt": null,
+  "number": 1238,
+  "state": "OPEN",
+  "title": "Refresh W3C SHACL suite and EARL conformance",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/pull/1238"
+}

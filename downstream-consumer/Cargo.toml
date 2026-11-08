@@ -1,0 +1,43 @@
+[package]
+name = "purrdf-release-consumer"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dev-dependencies]
+purrdf-testkit = "=4.0.1"
+purrdf-alloc-probe = "=4.0.1"
+purrdf-conformance-kit = "=4.0.1"
+
+[[test]]
+name = "support"
+harness = false
+
+[profile.release]
+debug-assertions = true
+overflow-checks = true
+
+[patch.crates-io]
+purrdf-alloc-probe = { path = "/opt/.cargo/5b/96c52b178be547/package/purrdf-alloc-probe-4.0.1" }
+purrdf-cdt = { path = "/opt/.cargo/5b/96c52b178be547/package/purrdf-cdt-4.0.1" }
+purrdf-conformance-kit = { path = "/opt/.cargo/5b/96c52b178be547/package/purrdf-conformance-kit-4.0.1" }
+purrdf-core = { path = "/opt/.cargo/5b/96c52b178be547/package/purrdf-core-4.0.1" }
+purrdf-deflate = { path = "/opt/.cargo/5b/96c52b178be547/package/purrdf-deflate-4.0.1" }
+purrdf-ed25519 = { path = "/opt/.cargo/5b/96c52b178be547/package/purrdf-ed25519-4.0.1" }
+purrdf-events = { path = "/opt/.cargo/5b/96c52b178be547/package/purrdf-events-4.0.1" }
+purrdf-geo-kernel = { path = "/opt/.cargo/5b/96c52b178be547/package/purrdf-geo-kernel-4.0.1" }
+purrdf-gts = { path = "/opt/.cargo/5b/96c52b178be547/package/purrdf-gts-4.0.1" }
+purrdf-hash = { path = "/opt/.cargo/5b/96c52b178be547/package/purrdf-hash-4.0.1" }
+purrdf-iri = { path = "/opt/.cargo/5b/96c52b178be547/package/purrdf-iri-4.0.1" }
+purrdf-jsonschema = { path = "/opt/.cargo/5b/96c52b178be547/package/purrdf-jsonschema-4.0.1" }
+purrdf-lex = { path = "/opt/.cargo/5b/96c52b178be547/package/purrdf-lex-4.0.1" }
+purrdf-rdf = { path = "/opt/.cargo/5b/96c52b178be547/package/purrdf-rdf-4.0.1" }
+purrdf-sparql-algebra = { path = "/opt/.cargo/5b/96c52b178be547/package/purrdf-sparql-algebra-4.0.1" }
+purrdf-sparql-eval = { path = "/opt/.cargo/5b/96c52b178be547/package/purrdf-sparql-eval-4.0.1" }
+purrdf-sparql-results = { path = "/opt/.cargo/5b/96c52b178be547/package/purrdf-sparql-results-4.0.1" }
+purrdf-stack = { path = "/opt/.cargo/5b/96c52b178be547/package/purrdf-stack-4.0.1" }
+purrdf-testkit = { path = "/opt/.cargo/5b/96c52b178be547/package/purrdf-testkit-4.0.1" }
+purrdf-xsd = { path = "/opt/.cargo/5b/96c52b178be547/package/purrdf-xsd-4.0.1" }
+purrdf-zstd = { path = "/opt/.cargo/5b/96c52b178be547/package/purrdf-zstd-4.0.1" }

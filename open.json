@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "issue": 1235,
+  "repo": "purrdf",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrdf",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrdf",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1235-release-4-0-1-and-publish-shared-test",
+  "branch": "paudley/1235-release-4-0-1-and-publish-shared-test",
+  "slug": "release-4-0-1-and-publish-shared-test",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/1235-release-4-0-1-and-publish-shared-test/.stage/release-4-0-1-and-publish-shared-test",
+  "stage_tracked": true,
+  "base": "origin/main",
+  "base_oid": "251cd85e959792a2c30140556e3b2e5fc04355d4",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrdf/.worktrees/1235-release-4-0-1-and-publish-shared-test",
+    "branch:paudley/1235-release-4-0-1-and-publish-shared-test",
+    "ignored:31241 files (31238 reflinked, 0 written)",
+    "rust-caches:reflinked /home/paudley/Active/purrdf/.worktrees/1231-run-recovered-query-and-service caches into /home/paudley/Active/purrdf/.worktrees/1235-release-4-0-1-and-publish-shared-test plus 0 dependency units from 0 other checkouts in 295.9s; 20510 unchanged files keep their built mtimes; 566 units naming another checkout rebuild",
+    "stage:/home/paudley/Active/purrdf/.worktrees/1235-release-4-0-1-and-publish-shared-test/.stage/release-4-0-1-and-publish-shared-test",
+    "issue:/home/paudley/Active/purrdf/.worktrees/1235-release-4-0-1-and-publish-shared-test/.stage/release-4-0-1-and-publish-shared-test/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-11-08T01:19:28-0600",
+  "seed_error": ""
+}

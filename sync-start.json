@@ -1,0 +1,35 @@
+{
+  "completed": [],
+  "blocked": [
+    {
+      "code": "review_required",
+      "message": "Review or resolution required"
+    }
+  ],
+  "unavailable": [],
+  "sync": {
+    "schema": 1,
+    "worktree": "/home/paudley/Active/purrdf/.worktrees/1235-release-4-0-1-and-publish-shared-test",
+    "branch": "paudley/1235-release-4-0-1-and-publish-shared-test",
+    "base_ref": "refs/remotes/origin/main",
+    "head": "8d01a57df0c331b5f30afa85dc3ca62ef442719b",
+    "attempt": "/home/paudley/Active/purrdf/.worktrees/1235-release-4-0-1-and-publish-shared-test/.stage/release-4-0-1-and-publish-shared-test/sync/20261108T083740-161a52c943294948baabd6bad30d0073",
+    "conflicts": [
+      "crates/conformance-kit/tests/grading.rs"
+    ],
+    "status": "review_required",
+    "base": "5616fb65382500b70724d7a9bd67b8302b3ff86d",
+    "merge_bases": [
+      "251cd85e959792a2c30140556e3b2e5fc04355d4"
+    ],
+    "merge_index": "71136e21e106a917349e1b87bbc74d59512b6f7579c918eb7a1234f5305de282",
+    "reused_paths": [],
+    "rerere_output": "Recorded preimage for 'crates/conformance-kit/tests/grading.rs'\n"
+  },
+  "next_actions": [
+    "Inspect the merge journal and Git state; resolve/review conflicts, then sync --continue, or sync --abort."
+  ],
+  "artifacts": {
+    "sync": "/home/paudley/Active/purrdf/.worktrees/1235-release-4-0-1-and-publish-shared-test/.stage/release-4-0-1-and-publish-shared-test/sync/20261108T083740-161a52c943294948baabd6bad30d0073"
+  }
+}
