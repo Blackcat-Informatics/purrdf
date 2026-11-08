@@ -581,7 +581,7 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// context construction from the caller's input or the host wall clock so
     /// all calls in a query return the same instant (SPARQL 1.1 §17.4.5.1).
     pub now: purrdf_xsd::XsdValue,
-    /// Splitmix64 PRNG state for RAND()/UUID()/STRUUID(), seeded once at context
+    /// `SplitMix64` PRNG state for RAND()/UUID()/STRUUID(), seeded once at context
     /// construction from the caller's input or real OS/platform entropy.
     pub rng_state: u64,
     /// Tunable evaluation behavior (see [`EvalOptions`]). Production default.
@@ -1526,7 +1526,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         self
     }
 
-    /// Set the SplitMix64 seed used by RAND()/UUID()/STRUUID(). Test-only:
+    /// Set the `SplitMix64` seed used by RAND()/UUID()/STRUUID(). Test-only:
     /// production callers get a correct entropy seed for free from [`Self::new`].
     #[cfg(test)]
     #[must_use]
@@ -1787,7 +1787,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     ///
     /// A leaf that can stop producing rows consults this; every other operator ignores it.
     /// Saturated into `usize` because it is compared against a materialized row count: on
-    /// a 32-bit or wasm32 target a ceiling above `usize::MAX` is one no execution can
+    /// a 32-bit or `wasm32` target a ceiling above `usize::MAX` is one no execution can
     /// reach, so clamping it is exactly "no cut".
     pub(crate) fn row_ceiling(&self) -> Option<usize> {
         let ceiling = self.cap_pushdown.as_ref()?.ceiling_at(self.cap_at?)?;
@@ -5296,6 +5296,57 @@ impl<'a, I: ViewTermId> OrdinaryState<'a, I> {
                 std::ptr::eq(right.as_ref(), node).then_some(policy.as_ref())
             })
     }
+
+    /// Only a nearest finite Slice, through plain projections, can hide an
+    /// unordered suffix. Inspect the actual retained continuations, including
+    /// delivered SELECT frames, without rewriting or skipping any operator.
+    fn order_window(&self, node: &GraphPattern) -> Option<(usize, usize)> {
+        let mut child = node;
+        for frame in self.pending.iter().rev().chain(self.first.iter()) {
+            let parent = frame.position.pattern();
+            match (&frame.after, parent) {
+                (
+                    OrdinaryAfter::Project { .. },
+                    GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. },
+                ) if std::ptr::eq(inner.as_ref(), child) => child = parent,
+                (
+                    OrdinaryAfter::Stream { state, .. },
+                    GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. },
+                ) if !state.stopped
+                    && matches!(state.kind, StreamKind::Project { .. })
+                    && std::ptr::eq(inner.as_ref(), child) =>
+                {
+                    child = parent;
+                }
+                (
+                    OrdinaryAfter::Slice {
+                        start,
+                        length: Some(length),
+                        ..
+                    },
+                    GraphPattern::Slice { inner, .. },
+                ) if *length != 0 && std::ptr::eq(inner.as_ref(), child) => {
+                    return Some((*start, *length));
+                }
+                (OrdinaryAfter::Stream { state, .. }, GraphPattern::Slice { inner, .. })
+                    if !state.stopped && std::ptr::eq(inner.as_ref(), child) =>
+                {
+                    return match state.kind {
+                        StreamKind::Slice {
+                            start,
+                            length: Some(length),
+                            index: 0,
+                            kept: 0,
+                            ..
+                        } if length != 0 => Some((start, length)),
+                        _ => None,
+                    };
+                }
+                _ => return None,
+            }
+        }
+        None
+    }
     fn reserve_child(
         &mut self,
         position: &OrdinaryPosition<'a>,
@@ -7544,7 +7595,13 @@ fn run_ordinary<'a, 'd, D: DatasetView + Sync>(
                         }
                     };
                     match crate::modifier::begin_order_child_with_owner(
-                        pattern, expression, &owner, lift, child, runner.ctx,
+                        pattern,
+                        expression,
+                        &owner,
+                        lift,
+                        child,
+                        runner.state.order_window(pattern),
+                        runner.ctx,
                     )? {
                         crate::modifier::OrderStart::Complete(done) => Ok(Some(done)),
                         crate::modifier::OrderStart::Sequence(sequence) => {
@@ -11474,7 +11531,7 @@ mod tests {
             rows_par, rows_seq,
             "parallel and sequential FILTER paths must produce byte-identical row order"
         );
-        // Only p1 (Name1002, age 45) satisfies both the regex and the numeric bound.
+        // Only p1 (`Name1002`, age 45) satisfies both the regex and the numeric bound.
         assert_eq!(rows_seq.len(), 1);
     }
 

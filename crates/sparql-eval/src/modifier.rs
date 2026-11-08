@@ -455,6 +455,14 @@ pub(crate) fn finish_slice<D: DatasetView + Sync>(
     }))
 }
 
+#[cfg(test)]
+std::thread_local! {
+    /// Successful ORDER windows, key comparisons and root projections on the
+    /// driving thread. This is observation only, with no shipping storage.
+    static ORDER_WINDOW_WORK: std::cell::Cell<(usize, usize, usize)> =
+        const { std::cell::Cell::new((0, 0, 0)) };
+}
+
 pub(crate) enum OrderLink<'e> {
     Borrowed(&'e [OrderExpression]),
     Copied(crate::expr::PreparedPattern),
@@ -473,6 +481,7 @@ pub(crate) struct OrderSequence<'e, I: ViewTermId> {
     search_evidence: crate::evidence_exec::RowEvidence,
     lift: crate::governor::lift::DetachedLift,
     key: usize,
+    window: Option<(usize, usize)>,
 }
 
 #[expect(
@@ -499,6 +508,7 @@ pub(crate) fn begin_order_child_with_owner<'e, D: DatasetView + Sync>(
     owner: &OrderLink<'e>,
     lift: crate::governor::lift::DetachedLift,
     child: Evaluated<D::Id>,
+    window: Option<(usize, usize)>,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<OrderStart<'e, D::Id>, EvalError> {
     let mut lift = lift.attach(node);
@@ -547,6 +557,7 @@ pub(crate) fn begin_order_child_with_owner<'e, D: DatasetView + Sync>(
         values: AdmittedVec::with_capacity(cells, &ctx.growth)?,
         lift: lift.detach(),
         key: 0,
+        window,
     }))
 }
 
@@ -625,6 +636,11 @@ impl<'e, I: ViewTermId> OrderSequence<'e, I> {
         for value in &self.values {
             keys.push(project_admitted(value.as_deref(), &ctx.growth)?)?;
         }
+        // Slice itself uses skip/take and remains valid when its conceptual
+        // prefix cannot fit usize. Such a query retains the full-sort path.
+        let window = self
+            .window
+            .and_then(|(start, length)| start.checked_add(length));
         let cost = sort_keys_numeric_cost_admitted(
             &keys.iter().map(|key| &key.key),
             keys.len(),
@@ -640,15 +656,59 @@ impl<'e, I: ViewTermId> OrderSequence<'e, I> {
                 Truncation::barred_at(node, tripped, self.schema),
             )));
         }
-        let order = order_permutation(rows.len(), &ctx.growth, |left, right| {
+        let window = window.filter(|&keep| {
+            keep < rows.len()
+                && rows.can_order_window(&ctx.growth)
+                && (rows.can_order_prefix(keep, &ctx.growth) || keep <= rows.len() / 4)
+                && rows.search_evidence().is_virtual()
+                && ctx.governors.is_none()
+                && ctx.ledger.is_none()
+                && ctx.exact_deferral.is_none()
+                && ctx.candidate_scope.is_none()
+                && ctx.evidence_input.is_none()
+                && ctx.evidence_answer.is_none()
+                && ctx.evidence_search.is_none()
+                && ctx.evidence_verdict.is_none()
+                && ctx.evidence_stop.is_none()
+                && !ctx.may_have_evidence()
+        });
+        #[cfg(test)]
+        let comparisons = std::cell::Cell::new(0usize);
+        let compare = |left, right| {
+            #[cfg(test)]
+            comparisons.set(comparisons.get() + 1);
             compare_keys_admitted(
                 &keys[left * width..],
                 &keys[right * width..],
                 expressions,
                 &ctx.growth,
             )
-        })?;
-        let rows = rows.ordered_admitted(order, &ctx.growth)?;
+        };
+        let rows = if let Some(keep) = window {
+            // Numeric and output observers retain the original full sort. The
+            // earlier numeric phase is unchanged here, but no governor, ledger
+            // or deferred account can mistake its merge bound for heap work.
+            match owners::window_order(rows.len(), keep, &ctx.growth, compare)? {
+                owners::WindowOrder::Prefix(order) => {
+                    rows.prefix_ordered_admitted(order, &ctx.growth)?
+                }
+                owners::WindowOrder::Permutation(order) => {
+                    rows.ordered_admitted(order, &ctx.growth)?
+                }
+            }
+        } else {
+            let order = order_permutation(rows.len(), &ctx.growth, compare)?;
+            rows.ordered_admitted(order, &ctx.growth)?
+        };
+        #[cfg(test)]
+        ORDER_WINDOW_WORK.with(|work| {
+            let (windows, previous_comparisons, projections) = work.get();
+            work.set((
+                windows + usize::from(window.is_some()),
+                previous_comparisons + comparisons.get(),
+                projections + keys.len(),
+            ));
+        });
         if let Some(tripped) = ctx.expression_barrier.observed() {
             return Ok(OrderStep::Complete(Evaluated::Truncated(
                 Truncation::barred_at(node, tripped, self.schema),
@@ -6924,6 +6984,336 @@ mod tests {
         // OFFSET 1 LIMIT 1 over [17,30,30] → [30].
         let seq = eval_slice(&ordered, 1, Some(1), &mut ctx).expect("slice");
         assert_eq!(ints(&ds, &seq, "n"), vec!["30"]);
+    }
+
+    fn order_window_bindings(count: usize) -> String {
+        use std::fmt::Write as _;
+
+        let mut bindings = String::new();
+        for ordinal in 0..count {
+            let key = match ordinal % 10 {
+                0 => "UNDEF".to_owned(),
+                1 => format!("\"invalid\"^^<{}>", purrdf_xsd::datatype::XSD_INTEGER),
+                2 => format!("\"NaN\"^^<{}>", purrdf_xsd::datatype::XSD_DOUBLE),
+                3 => format!("\"[1,2]\"^^<{}>", purrdf_cdt::CDT_LIST),
+                4 => "<<( <urn:subject> <urn:predicate> <urn:object> )>>".to_owned(),
+                5 => "\"text\"@en".to_owned(),
+                6 => "<urn:object>".to_owned(),
+                7 => format!(
+                    "\"{}\"^^<{}>",
+                    "9".repeat(50),
+                    purrdf_xsd::datatype::XSD_INTEGER
+                ),
+                _ => (ordinal % 23).to_string(),
+            };
+            write!(bindings, "({ordinal} {key}) ").unwrap();
+        }
+        bindings
+    }
+
+    #[test]
+    fn finite_order_windows_match_full_order_through_select_projections() {
+        let dataset = RdfDatasetBuilder::new().freeze().unwrap();
+        for count in [256, 4096] {
+            let bindings = order_window_bindings(count);
+            for (order, width) in [("?key", 1), ("DESC(?key) ?row", 2)] {
+                for projection in ["?row ?key", "*"] {
+                    let text = format!(
+                        "SELECT {projection} WHERE {{ VALUES (?row ?key) {{ {bindings} }} }} ORDER BY {order}"
+                    );
+                    let query = purrdf_sparql_algebra::SparqlParser::new()
+                        .parse_query(&text)
+                        .unwrap();
+                    let mut reference_context = EvalCtx::new(dataset.as_ref());
+                    ORDER_WINDOW_WORK.with(|work| work.set((0, 0, 0)));
+                    let reference = eval(query.pattern(), &mut reference_context).unwrap();
+                    let reference_work = ORDER_WINDOW_WORK.with(|work| work.replace((0, 0, 0)));
+                    assert_eq!(reference_work.0, 0);
+                    assert_eq!(reference_work.2, count * width);
+                    for (offset, limit) in [
+                        (0, 0),
+                        (0, 1),
+                        (3, 4),
+                        (7, 8),
+                        (0, count / 8),
+                        (0, count / 2),
+                        (0, count),
+                        (count + 1, 4),
+                    ] {
+                        let limited = purrdf_sparql_algebra::SparqlParser::new()
+                            .parse_query(&format!("{text} LIMIT {limit} OFFSET {offset}"))
+                            .unwrap();
+                        let mut context = EvalCtx::new(dataset.as_ref());
+                        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+                        let result = eval(limited.pattern(), &mut context).unwrap();
+                        let resources = window.close();
+                        let work = ORDER_WINDOW_WORK.with(|work| work.replace((0, 0, 0)));
+                        let start = offset.min(count);
+                        let end = offset.saturating_add(limit).min(count);
+                        assert_eq!(
+                            &result.rows[..],
+                            &reference.rows[start..end],
+                            "count={count}, order={order}, projection={projection}, offset={offset}, limit={limit}"
+                        );
+                        if limit != 0 {
+                            assert_eq!(work.2, count * width);
+                        }
+                        if limit > 0 && offset + limit <= 15 {
+                            assert_eq!(work.0, 1, "ordinary SELECT must use its finite window");
+                            assert!(
+                                work.1 < reference_work.1,
+                                "window={work:?}, full={reference_work:?}"
+                            );
+                        } else if limit == count / 8 {
+                            assert_eq!(work.0, 1, "middle windows must use partition selection");
+                        } else {
+                            assert_eq!(work.0, 0);
+                        }
+                        eprintln!(
+                            "rows={count}, keys={width}, projection={projection}, offset={offset}, limit={limit}, work={work:?}, resources={resources:?}"
+                        );
+                    }
+                }
+            }
+        }
+        // DISTINCT must consume the complete ordered input before slicing;
+        // a measuring governor must retain the original full-sort accounting.
+        for distinct in ["", "DISTINCT"] {
+            let text = format!(
+                "SELECT {distinct} ?key WHERE {{ VALUES ?key {{ 3 3 3 3 2 2 2 2 1 1 1 1 0 0 0 0 }} }} ORDER BY ?key"
+            );
+            let parser = purrdf_sparql_algebra::SparqlParser::new();
+            let full = parser.parse_query(&text).unwrap();
+            let limited = parser
+                .parse_query(&format!("{text} LIMIT 1 OFFSET 1"))
+                .unwrap();
+            let reference = eval(full.pattern(), &mut EvalCtx::new(dataset.as_ref())).unwrap();
+            for governed in [false, true] {
+                let mut context = EvalCtx::new(dataset.as_ref());
+                if governed {
+                    context = context.with_governors(Arc::new(
+                        crate::governor::GovernorState::new(&crate::QueryGovernors::METERED),
+                    ));
+                }
+                ORDER_WINDOW_WORK.with(|work| work.set((0, 0, 0)));
+                let result = eval(limited.pattern(), &mut context).unwrap();
+                assert_eq!(&result.rows[..], &reference.rows[1..2]);
+                assert_eq!(
+                    ORDER_WINDOW_WORK.with(std::cell::Cell::get).0,
+                    usize::from(!governed && distinct.is_empty())
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn order_window_keeps_volatile_key_effects_before_numeric_refusal_and_overflow() {
+        use crate::user_fn::{Arity, BoundFunctionRegistry, UserFunctionRegistry};
+        use std::sync::{
+            Mutex,
+            atomic::{AtomicUsize, Ordering as AtomicOrdering},
+        };
+
+        let dataset = RdfDatasetBuilder::new().freeze().unwrap();
+        let trace = Arc::new(Mutex::new(Vec::new()));
+        let refusal_row = Arc::new(AtomicUsize::new(usize::MAX));
+        let cancellation_row = Arc::new(AtomicUsize::new(usize::MAX));
+        let stop = crate::CancellationFlag::new();
+        let mut functions = UserFunctionRegistry::default();
+        for (key, iri) in ["urn:order:first", "urn:order:second"]
+            .into_iter()
+            .enumerate()
+        {
+            let trace = Arc::clone(&trace);
+            let refusal_row = Arc::clone(&refusal_row);
+            let cancellation_row = Arc::clone(&cancellation_row);
+            let stop = stop.clone();
+            let large = "9".repeat(10_000);
+            functions.register_native(
+                iri,
+                Arity::Exact(1),
+                Volatility::Volatile,
+                Arc::new(move |args| {
+                    let TermValue::Literal { lexical_form, .. } = args[0] else {
+                        panic!("the VALUES ordinal is an integer");
+                    };
+                    let row = lexical_form.parse::<usize>().unwrap();
+                    trace.lock().unwrap().push((row, key));
+                    if key == 1 && row == cancellation_row.load(AtomicOrdering::Relaxed) {
+                        stop.cancel();
+                    }
+                    if key == 1 && row == refusal_row.load(AtomicOrdering::Relaxed) {
+                        return Err(EvalError::config("original ORDER key refusal"));
+                    }
+                    Ok(Some(if key == 0 {
+                        TermValue::typed_literal(large.clone(), purrdf_xsd::datatype::XSD_INTEGER)
+                    } else {
+                        args[0].clone()
+                    }))
+                }),
+            );
+        }
+        let functions = BoundFunctionRegistry::bound_for_test(functions);
+        let values = (0..16)
+            .map(|row| row.to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let text = format!(
+            "SELECT ?row WHERE {{ VALUES ?row {{ {values} }} }} ORDER BY <urn:order:first>(?row) <urn:order:second>(?row)"
+        );
+        let parse = |suffix: &str| {
+            purrdf_sparql_algebra::SparqlParser::new()
+                .parse_query(&format!("{text} {suffix}"))
+                .unwrap()
+        };
+        let expected: Vec<_> = (0..16).flat_map(|row| [(row, 0), (row, 1)]).collect();
+        let query = parse("LIMIT 1");
+        let mut context = EvalCtx::new(dataset.as_ref()).with_user_functions(&functions);
+        ORDER_WINDOW_WORK.with(|work| work.set((0, 0, 0)));
+        assert_eq!(eval(query.pattern(), &mut context).unwrap().rows.len(), 1);
+        assert_eq!(*trace.lock().unwrap(), expected);
+        assert_eq!(ORDER_WINDOW_WORK.with(|work| work.replace((0, 0, 0))).0, 1);
+
+        trace.lock().unwrap().clear();
+        let governors = crate::QueryGovernors::UNBOUNDED.with_fuel(10_000);
+        let state = Arc::new(crate::governor::GovernorState::new(&governors));
+        let mut context = EvalCtx::new(dataset.as_ref())
+            .with_user_functions(&functions)
+            .with_governors(state);
+        let result = crate::eval::eval_evaluated(query.pattern(), &mut context).unwrap();
+        assert!(matches!(result, Evaluated::Truncated(_)));
+        assert_eq!(
+            *trace.lock().unwrap(),
+            expected,
+            "every later key effect precedes numeric admission"
+        );
+
+        trace.lock().unwrap().clear();
+        let full = parse("");
+        let mut reference_context = EvalCtx::new(dataset.as_ref()).with_user_functions(&functions);
+        let reference = eval(full.pattern(), &mut reference_context).unwrap();
+        trace.lock().unwrap().clear();
+        ORDER_WINDOW_WORK.with(|work| work.set((0, 0, 0)));
+        let overflow = parse(&format!("LIMIT {} OFFSET 1", usize::MAX));
+        let mut context = EvalCtx::new(dataset.as_ref()).with_user_functions(&functions);
+        let result = eval(overflow.pattern(), &mut context).unwrap();
+        assert_eq!(&result.rows[..], &reference.rows[1..]);
+        assert_eq!(ORDER_WINDOW_WORK.with(|work| work.replace((0, 0, 0))).0, 0);
+        assert_eq!(*trace.lock().unwrap(), expected);
+
+        refusal_row.store(8, AtomicOrdering::Relaxed);
+        let mut original = None;
+        for suffix in ["", "LIMIT 1"] {
+            trace.lock().unwrap().clear();
+            let query = parse(suffix);
+            let mut context = EvalCtx::new(dataset.as_ref()).with_user_functions(&functions);
+            let error = eval(query.pattern(), &mut context).unwrap_err().to_string();
+            assert!(error.contains("original ORDER key refusal"));
+            let observed = trace.lock().unwrap().clone();
+            assert_eq!(observed, expected[..18]);
+            if let Some(original) = &original {
+                assert_eq!(&error, original);
+            } else {
+                original = Some(error);
+            }
+        }
+        refusal_row.store(usize::MAX, AtomicOrdering::Relaxed);
+        cancellation_row.store(8, AtomicOrdering::Relaxed);
+        trace.lock().unwrap().clear();
+        let governors = crate::QueryGovernors::UNBOUNDED.with_stop_signal(Arc::new(stop));
+        let mut context = EvalCtx::new(dataset.as_ref())
+            .with_user_functions(&functions)
+            .with_governors(Arc::new(crate::governor::GovernorState::new(&governors)));
+        ORDER_WINDOW_WORK.with(|work| work.set((0, 0, 0)));
+        let Evaluated::Truncated(truncation) =
+            crate::eval::eval_evaluated(query.pattern(), &mut context).unwrap()
+        else {
+            panic!("cancellation during an ORDER key must retain its typed stop");
+        };
+        assert_eq!(
+            truncation.tripped(),
+            crate::TrippedGovernor::Stopped {
+                cause: purrdf_core::StopCause::Cancelled,
+            }
+        );
+        assert_eq!(*trace.lock().unwrap(), expected[..18]);
+        assert_eq!(ORDER_WINDOW_WORK.with(std::cell::Cell::get).0, 0);
+    }
+
+    #[test]
+    fn order_window_selection_compares_heap_partition_and_full_sort_storage() {
+        let workspace = crate::WorkspaceCapability::resident();
+        for count in [256, 4096, 16_384] {
+            let mut random = purrdf_testkit::rng::SplitMix64::new(0x5757_1200);
+            let keys: Vec<_> = (0..count).map(|_| random.below_usize(97)).collect();
+            let comparisons = std::cell::Cell::new(0usize);
+            let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+            let reference = order_permutation(count, &workspace, |left, right| {
+                comparisons.set(comparisons.get() + 1);
+                Ok(keys[left].cmp(&keys[right]))
+            })
+            .unwrap();
+            let resources = window.close();
+            eprintln!(
+                "selection=full, rows={count}, comparisons={}, resources={resources:?}",
+                comparisons.get()
+            );
+            for keep in [1, 8, count / 8, count / 2, count] {
+                comparisons.set(0);
+                let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+                let heap = owners::window_permutation(count, keep, &workspace, |left, right| {
+                    comparisons.set(comparisons.get() + 1);
+                    Ok(keys[left].cmp(&keys[right]))
+                })
+                .unwrap();
+                let resources = window.close();
+                assert_eq!(&heap[..], &reference[..keep]);
+                assert!(
+                    resources.peak_working_bytes <= (keep * 64 + 4096) as i64,
+                    "{resources:?}"
+                );
+                eprintln!(
+                    "selection=heap, rows={count}, keep={keep}, comparisons={}, resources={resources:?}",
+                    comparisons.get()
+                );
+                drop(heap);
+
+                comparisons.set(0);
+                let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+                let partition = owners::window_partition(count, keep, &workspace, |left, right| {
+                    comparisons.set(comparisons.get() + 1);
+                    Ok(keys[left].cmp(&keys[right]))
+                })
+                .unwrap();
+                let resources = window.close();
+                assert_eq!(&partition[..keep], &reference[..keep]);
+                eprintln!(
+                    "selection=partition, rows={count}, keep={keep}, comparisons={}, resources={resources:?}",
+                    comparisons.get()
+                );
+            }
+        }
+        // Comparator failure is returned directly, never interpreted as an
+        // introspective fallback or a comparison result.
+        for partition in [false, true] {
+            let calls = std::cell::Cell::new(0);
+            let compare = |_, _| {
+                calls.set(calls.get() + 1);
+                Err(EvalError::config("original comparison refusal"))
+            };
+            let result = if partition {
+                owners::window_partition(64, 4, &workspace, compare)
+            } else {
+                owners::window_permutation(64, 4, &workspace, compare)
+            };
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("original comparison refusal")
+            );
+            assert_eq!(calls.get(), 1);
+        }
     }
 
     #[test]
