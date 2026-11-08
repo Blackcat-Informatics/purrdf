@@ -31,8 +31,8 @@
 //!    event straight through to the target.
 //! 2. **Resolution phase** (per-segment flush, see below): resolve each gts term
 //!    to a target id — non-triple terms intern directly; triple terms resolve
-//!    their now-complete `(s, p, o)` recursively, inner-first, depth-bounded by
-//!    [`purrdf_events::MAX_TERM_NESTING_DEPTH`] — then push the raw quad / reifier /
+//!    their now-complete `(s, p, o)` iteratively, inner-first, with continuations
+//!    threaded through the buffered terms — then push the raw quad / reifier /
 //!    annotation rows through the per-segment remap.
 //!
 //! # Memory model — resolve per-segment at close
@@ -68,13 +68,15 @@ use crate::reader::{BlobPayload, BlobRefusal, FrameContext, StreamingSink};
 mod rows;
 use rows::Rows;
 
-/// The three resolved components `(subject, predicate, object)` a reifier binds,
-/// in the target's id space.
-type ResolvedComponents<S> = (
-    <S as ResolvedSink>::Id,
-    <S as ResolvedSink>::Id,
-    <S as ResolvedSink>::Id,
-);
+/// A buffered term also owns its DFS continuation. Serial resolution needs only
+/// one parent and dependency cursor per active node, so depth allocates no extra
+/// scratch and imposes no new storage-error contract on public emit targets.
+struct PendingTerm {
+    term: Option<Arc<Term>>,
+    parent: Option<usize>,
+    next: u8,
+    active: bool,
+}
 
 /// The emit target [`SegmentResolver`] drives once GTS segment-local ids have
 /// been resolved to the target's own id space.
@@ -174,8 +176,8 @@ pub trait ResolvedSink {
     /// a genuinely dangling reference. `role` names the referencing position.
     fn err_dangling_term(&self, segment_index: u64, gts_id: usize, role: &str) -> Self::Error;
 
-    /// Build the error for exceeding [`purrdf_events::MAX_TERM_NESTING_DEPTH`] while
-    /// resolving nested quoted triples.
+    /// Legacy structural-depth error factory, retained for source compatibility.
+    /// Iterative resolution no longer calls it.
     fn err_nesting_limit(&self, segment_index: u64, gts_id: usize) -> Self::Error;
 
     /// Build the error for a quoted-triple term that states neither its own
@@ -276,7 +278,7 @@ pub struct SegmentResolver<S: ResolvedSink> {
     sink: S,
     /// RAW per-segment terms buffered during the streaming phase, keyed by
     /// `(segment_index, gts_id)`, resolved and drained at segment close.
-    raw_terms: FastMap<(u64, usize), Arc<Term>>,
+    raw_terms: FastMap<(u64, usize), PendingTerm>,
     /// Per-segment memo from `(segment_index, gts_id)` to the target id,
     /// populated as the currently buffered segment's terms resolve (so a term
     /// referenced twice — e.g. as both a quad subject and a reifier subject —
@@ -414,17 +416,17 @@ impl<S: ResolvedSink> SegmentResolver<S> {
         let mut keys: Vec<(u64, usize)> = self.raw_terms.keys().copied().collect();
         keys.sort_unstable();
         for (segment_index, gts_id) in keys {
-            self.resolve_term(segment_index, gts_id, "term", 0)?;
+            self.resolve_term(segment_index, gts_id, "term")?;
         }
 
         // Quads.
         let raw_quads = std::mem::take(&mut self.raw_quads);
         for (segment_index, [s, p, o], g) in raw_quads {
-            let s = self.resolve_term(segment_index, s, "quad subject", 0)?;
-            let p = self.resolve_term(segment_index, p, "quad predicate", 0)?;
-            let o = self.resolve_term(segment_index, o, "quad object", 0)?;
+            let s = self.resolve_term(segment_index, s, "quad subject")?;
+            let p = self.resolve_term(segment_index, p, "quad predicate")?;
+            let o = self.resolve_term(segment_index, o, "quad object")?;
             let g = match g {
-                Some(g) => Some(self.resolve_term(segment_index, g, "quad graph name", 0)?),
+                Some(g) => Some(self.resolve_term(segment_index, g, "quad graph name")?),
                 None => None,
             };
             self.sink.push_quad(segment_index, s, p, o, g)?;
@@ -433,12 +435,12 @@ impl<S: ResolvedSink> SegmentResolver<S> {
         // Reifier bindings: bind the reifier resource to the triple.
         let raw_reifiers = std::mem::take(&mut self.raw_reifiers);
         for (segment_index, [reifier, s, p, o], graph) in raw_reifiers {
-            let reifier_id = self.resolve_term(segment_index, reifier, "reifier", 0)?;
-            let s = self.resolve_term(segment_index, s, "reified subject", 0)?;
-            let p = self.resolve_term(segment_index, p, "reified predicate", 0)?;
-            let o = self.resolve_term(segment_index, o, "reified object", 0)?;
+            let reifier_id = self.resolve_term(segment_index, reifier, "reifier")?;
+            let s = self.resolve_term(segment_index, s, "reified subject")?;
+            let p = self.resolve_term(segment_index, p, "reified predicate")?;
+            let o = self.resolve_term(segment_index, o, "reified object")?;
             let g = match graph {
-                Some(g) => Some(self.resolve_term(segment_index, g, "reifier graph name", 0)?),
+                Some(g) => Some(self.resolve_term(segment_index, g, "reifier graph name")?),
                 None => None,
             };
             self.sink
@@ -448,11 +450,11 @@ impl<S: ResolvedSink> SegmentResolver<S> {
         // Annotations `(reifier, predicate, object, graph?)`.
         let raw_annotations = std::mem::take(&mut self.raw_annotations);
         for (segment_index, [r, p, v], graph) in raw_annotations {
-            let r = self.resolve_term(segment_index, r, "annotation reifier", 0)?;
-            let p = self.resolve_term(segment_index, p, "annotation predicate", 0)?;
-            let v = self.resolve_term(segment_index, v, "annotation object", 0)?;
+            let r = self.resolve_term(segment_index, r, "annotation reifier")?;
+            let p = self.resolve_term(segment_index, p, "annotation predicate")?;
+            let v = self.resolve_term(segment_index, v, "annotation object")?;
             let g = match graph {
-                Some(g) => Some(self.resolve_term(segment_index, g, "annotation graph name", 0)?),
+                Some(g) => Some(self.resolve_term(segment_index, g, "annotation graph name")?),
                 None => None,
             };
             self.sink.push_annotation(segment_index, r, p, v, g)?;
@@ -471,51 +473,99 @@ impl<S: ResolvedSink> SegmentResolver<S> {
     }
 
     /// Resolve a GTS segment-local term id to its target id, interning it (and
-    /// any nested quoted triples) on demand. Memoized through `remaps` and
-    /// depth-bounded against cyclic quoted triples. A gts id no `term` event
-    /// introduced is a genuinely dangling reference and hence an [`Err`].
+    /// any nested quoted triples) on demand. The buffered records carry the DFS
+    /// continuation; completed dependencies are memoized through `remaps`.
+    /// An active-path revisit retains the original dangling-reference error and
+    /// incoming edge role. A failed continuation stays active, so retrying finish
+    /// cannot silently omit the term whose callback failed.
     fn resolve_term(
         &mut self,
         segment_index: u64,
         gts_id: usize,
         role: &str,
-        depth: usize,
     ) -> Result<S::Id, S::Error> {
         if let Some(&id) = self.remaps.get(&(segment_index, gts_id)) {
             return Ok(id);
         }
-        if depth > purrdf_events::MAX_TERM_NESTING_DEPTH {
-            return Err(self.sink.err_nesting_limit(segment_index, gts_id));
-        }
-        // MOVE the raw term out: it resolves at most once (every later reference
-        // hits the `remaps` cache above), so taking ownership lets interning
-        // borrow the target mutably without a conflict AND without cloning the
-        // term's owned strings when its validation owner has been released.
-        // A (pathological) cyclic reference now surfaces as
-        // a dangling-term ref — the term is already removed — rather than the
-        // nesting-limit; both are hard failures and a GTS Writer never emits
-        // cycles.
-        let Some(term) = self.raw_terms.remove(&(segment_index, gts_id)) else {
+        let Some(root) = self.raw_terms.get_mut(&(segment_index, gts_id)) else {
             return Err(self.sink.err_dangling_term(segment_index, gts_id, role));
         };
-        // Normal reader drives have released their validation table before
-        // resolution. Custom callers may retain handles, in which case only
-        // that shared term needs an owned copy for interning.
-        let term = Arc::unwrap_or_clone(term);
-        let our_id = self.intern_raw_term(segment_index, gts_id, term, depth)?;
-        self.remaps.insert((segment_index, gts_id), our_id);
-        Ok(our_id)
+        if root.active {
+            return Err(self.sink.err_dangling_term(segment_index, gts_id, role));
+        }
+        root.active = true;
+        let mut current = gts_id;
+        loop {
+            // Every current node was marked active immediately before descent.
+            let held = &self.raw_terms[&(segment_index, current)];
+            let Some(term) = held.term.as_deref() else {
+                return Err(self.sink.err_dangling_term(segment_index, current, role));
+            };
+            let dependency = match term.kind {
+                TermKind::Literal if held.next == 0 => {
+                    term.datatype.map(|id| (id, "literal datatype"))
+                }
+                TermKind::Triple if held.next < 3 => {
+                    let (s, p, o) = self.triple_components(segment_index, current, term)?;
+                    Some(match held.next {
+                        0 => (s, "reified subject"),
+                        1 => (p, "reified predicate"),
+                        _ => (o, "reified object"),
+                    })
+                }
+                _ => None,
+            };
+            if let Some((child, child_role)) = dependency {
+                self.raw_terms
+                    .get_mut(&(segment_index, current))
+                    .expect("active parent remains buffered")
+                    .next += 1;
+                if self.remaps.contains_key(&(segment_index, child)) {
+                    continue;
+                }
+                let Some(next) = self.raw_terms.get_mut(&(segment_index, child)) else {
+                    return Err(self
+                        .sink
+                        .err_dangling_term(segment_index, child, child_role));
+                };
+                if next.active {
+                    return Err(self
+                        .sink
+                        .err_dangling_term(segment_index, child, child_role));
+                }
+                next.active = true;
+                next.parent = Some(current);
+                current = child;
+                continue;
+            }
+            let held = self
+                .raw_terms
+                .get_mut(&(segment_index, current))
+                .expect("active term remains buffered");
+            let parent = held.parent;
+            // A vacant term marks a consumed callback that did not complete.
+            // Keep that record until success, so a later finish cannot omit it.
+            let term = held.term.take().expect("current term was inspected above");
+            // Shared validation owners retain their original Arc. Only that
+            // term needs a copy; ordinary reader drives move its owned strings.
+            let resolved =
+                self.intern_raw_term(segment_index, current, Arc::unwrap_or_clone(term))?;
+            self.raw_terms.remove(&(segment_index, current));
+            self.remaps.insert((segment_index, current), resolved);
+            if let Some(parent) = parent {
+                current = parent;
+            } else {
+                return Ok(resolved);
+            }
+        }
     }
 
-    /// Intern one already-located raw term, recursing (inner-first) for quoted
-    /// triples through their reifier binding. Takes the [`Term`] BY VALUE (it was
-    /// just removed from `raw_terms`) and MOVES its owned strings into the target.
+    /// Intern one completed term, moving owned strings into the target.
     fn intern_raw_term(
         &mut self,
         segment_index: u64,
         gts_id: usize,
         term: Term,
-        depth: usize,
     ) -> Result<S::Id, S::Error> {
         let our_id = match term.kind {
             TermKind::Iri => {
@@ -534,12 +584,7 @@ impl<S: ResolvedSink> SegmentResolver<S> {
             }
             TermKind::Literal => {
                 let datatype = match term.datatype {
-                    Some(dt_gts_id) => Some(self.resolve_term(
-                        segment_index,
-                        dt_gts_id,
-                        "literal datatype",
-                        depth + 1,
-                    )?),
+                    Some(dt_gts_id) => Some(self.remaps[&(segment_index, dt_gts_id)]),
                     None => None,
                 };
                 self.sink.intern_literal(
@@ -558,49 +603,35 @@ impl<S: ResolvedSink> SegmentResolver<S> {
             // binding is the one such a term can mean (the reader flags the
             // ambiguity as `ConflictingReifier`).
             TermKind::Triple => {
-                let components = match (term.triple, term.reifier) {
-                    (Some((s, p, o)), _) => {
-                        let s =
-                            self.resolve_term(segment_index, s, "reified subject", depth + 1)?;
-                        let p =
-                            self.resolve_term(segment_index, p, "reified predicate", depth + 1)?;
-                        let o = self.resolve_term(segment_index, o, "reified object", depth + 1)?;
-                        (s, p, o)
-                    }
-                    (None, Some(reifier_gts_id)) => {
-                        self.resolve_triple_components(segment_index, reifier_gts_id, depth + 1)?
-                    }
-                    (None, None) => {
-                        return Err(self.sink.err_unbound_triple(segment_index, gts_id));
-                    }
-                };
-                let (s, p, o) = components;
+                let (s, p, o) = self.triple_components(segment_index, gts_id, &term)?;
+                let (s, p, o) = (
+                    self.remaps[&(segment_index, s)],
+                    self.remaps[&(segment_index, p)],
+                    self.remaps[&(segment_index, o)],
+                );
                 self.sink.intern_triple(segment_index, gts_id, s, p, o)?
             }
         };
         Ok(our_id)
     }
 
-    /// Resolve the `(s, p, o)` of the triple a reifier binds, THROUGH this
-    /// segment's terms, depth-bounded against cyclic quoted triples. The reifier
-    /// binding MUST exist by phase 2; a missing one is a genuine dangling
-    /// reference and hence an [`Err`].
-    fn resolve_triple_components(
-        &mut self,
+    /// Locate components without resolving them. Explicit components take
+    /// precedence; the first legacy reifier binding is a lookup, not a term edge.
+    fn triple_components(
+        &self,
         segment_index: u64,
-        reifier: usize,
-        depth: usize,
-    ) -> Result<ResolvedComponents<S>, S::Error> {
-        if depth > purrdf_events::MAX_TERM_NESTING_DEPTH {
-            return Err(self.sink.err_nesting_limit(segment_index, reifier));
+        gts_id: usize,
+        term: &Term,
+    ) -> Result<Triple3, S::Error> {
+        match (term.triple, term.reifier) {
+            (Some(components), _) => Ok(components),
+            (None, Some(reifier)) => self
+                .reifier_bindings
+                .get(&(segment_index, reifier))
+                .copied()
+                .ok_or_else(|| self.sink.err_missing_reifier(segment_index, reifier)),
+            (None, None) => Err(self.sink.err_unbound_triple(segment_index, gts_id)),
         }
-        let Some(&(s, p, o)) = self.reifier_bindings.get(&(segment_index, reifier)) else {
-            return Err(self.sink.err_missing_reifier(segment_index, reifier));
-        };
-        let s = self.resolve_term(segment_index, s, "reified subject", depth)?;
-        let p = self.resolve_term(segment_index, p, "reified predicate", depth)?;
-        let o = self.resolve_term(segment_index, o, "reified object", depth)?;
-        Ok((s, p, o))
     }
 }
 
@@ -633,7 +664,15 @@ impl<S: ResolvedSink> StreamingSink for SegmentResolver<S> {
         // Streaming phase: stash the raw term verbatim. A quoted-triple term
         // cannot be resolved yet — its reifier binding may arrive in a later
         // frame — so we defer ALL resolution to segment close.
-        self.raw_terms.insert((segment_index, term_id), term);
+        self.raw_terms.insert(
+            (segment_index, term_id),
+            PendingTerm {
+                term: Some(term),
+                parent: None,
+                next: 0,
+                active: false,
+            },
+        );
     }
 
     fn quad(&mut self, segment_index: u64, quad: Quad) {

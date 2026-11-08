@@ -250,28 +250,29 @@ fn construction_storage_error(cause: StorageError) -> SegmentedError {
 }
 
 fn validate_constructor_value(value: &TermValue) -> Result<(), SegmentedError> {
-    let mut stack: crate::SmallVec<[(&TermValue, u32); 64]> = crate::SmallVec::default();
-    stack.push((value, 0_u32));
-    while let Some((value, depth)) = stack.pop() {
-        if depth > 16 {
-            return Err(SegmentedError::ConstructionLimit);
-        }
-        match value {
-            TermValue::Iri(iri) => {
-                super::super::absolute::check_absolute(iri)
-                    .map_err(|_| SegmentedError::Corrupt("constructor IRI is not absolute"))?;
-            }
-            TermValue::Blank { .. } => {}
-            TermValue::Literal { datatype, .. } => {
-                super::super::absolute::check_absolute(datatype)
-                    .map_err(|_| SegmentedError::Corrupt("constructor datatype is not absolute"))?;
-            }
-            TermValue::Triple { s, p, o } => {
-                stack.extend([(&**o, depth + 1), (&**p, depth + 1), (&**s, depth + 1)]);
-            }
-        }
+    use core::ops::ControlFlow;
+    use purrdf_lex::allocation::{Memory, Resident};
+    match value.visit_terms_with_memory(
+        |term, _| {
+            let check = match term {
+                TermValue::Iri(iri) => Some((iri.as_str(), "constructor IRI is not absolute")),
+                TermValue::Literal { datatype, .. } => {
+                    Some((datatype.as_str(), "constructor datatype is not absolute"))
+                }
+                TermValue::Blank { .. } | TermValue::Triple { .. } => None,
+            };
+            Ok(match check {
+                Some((iri, reason)) if super::super::absolute::check_absolute(iri).is_err() => {
+                    ControlFlow::Break(SegmentedError::Corrupt(reason))
+                }
+                _ => ControlFlow::Continue(()),
+            })
+        },
+        &mut Memory::new(&mut Resident),
+    )? {
+        ControlFlow::Continue(()) => Ok(()),
+        ControlFlow::Break(cause) => Err(cause),
     }
-    Ok(())
 }
 
 /// Complete persisted image plus the authority produced by full certification.
@@ -672,11 +673,7 @@ fn encode_dataset(
         block_bytes: limits.block_bytes,
         records_per_block: limits.records_per_block,
         first_term_index: limits.first_term_index,
-        max_owned_term_bytes: footprints
-            .iter()
-            .map(|(bytes, _)| *bytes)
-            .max()
-            .unwrap_or(0),
+        max_owned_term_bytes: footprints.iter().copied().max().unwrap_or(0),
         terms: u64::try_from(dataset.term_count()).map_err(|_| SegmentedError::AddressExhausted)?,
         dictionary,
         reverse,
@@ -1348,13 +1345,7 @@ fn validate_content(bytes: &[u8], header: &Header) -> Result<(), SegmentedError>
             "annotation value interval directory is incomplete",
         ));
     }
-    if header.max_owned_term_bytes
-        != footprints
-            .iter()
-            .map(|(bytes, _)| *bytes)
-            .max()
-            .unwrap_or(0)
-    {
+    if header.max_owned_term_bytes != footprints.iter().copied().max().unwrap_or(0) {
         return Err(SegmentedError::Corrupt(
             "expanded term footprint claim is false",
         ));
@@ -1502,10 +1493,10 @@ pub(super) fn fixed_records(bytes: &[u8], kind: u8, width: usize) -> Result<&[u8
 fn expanded_footprint(
     term: TermRef<'_, u64>,
     first: u64,
-    previous: &[(u64, u32)],
-) -> Result<(u64, u32), SegmentedError> {
+    previous: &[u64],
+) -> Result<u64, SegmentedError> {
     let base = OWNED_TERM_NODE_BYTES;
-    let reference = |id: u64| -> Result<(u64, u32), SegmentedError> {
+    let reference = |id: u64| -> Result<u64, SegmentedError> {
         id.checked_sub(first)
             .and_then(|v| usize::try_from(v).ok())
             .and_then(|v| previous.get(v).copied())
@@ -1513,51 +1504,38 @@ fn expanded_footprint(
                 "non-topological expanded-term reference",
             ))
     };
-    let (payload, depth) = match term {
-        TermRef::Iri(iri) => (
-            u64::try_from(iri.len()).map_err(|_| SegmentedError::AddressExhausted)?,
-            0,
-        ),
-        TermRef::Blank { label, .. } => (
-            u64::try_from(label.len()).map_err(|_| SegmentedError::AddressExhausted)?,
-            0,
-        ),
+    let payload = match term {
+        TermRef::Iri(iri) => {
+            u64::try_from(iri.len()).map_err(|_| SegmentedError::AddressExhausted)?
+        }
+        TermRef::Blank { label, .. } => {
+            u64::try_from(label.len()).map_err(|_| SegmentedError::AddressExhausted)?
+        }
         TermRef::Literal {
             lexical,
             datatype,
             language,
             ..
-        } => (
+        } => {
+            let datatype = reference(datatype)?;
             u64::try_from(lexical.len())
                 .map_err(|_| SegmentedError::AddressExhausted)?
                 .checked_add(
                     u64::try_from(language.map_or(0, str::len))
                         .map_err(|_| SegmentedError::AddressExhausted)?,
                 )
-                .and_then(|n| n.checked_add(reference(datatype).ok()?.0))
-                .ok_or(SegmentedError::AddressExhausted)?,
-            0,
-        ),
+                .and_then(|n| n.checked_add(datatype))
+                .ok_or(SegmentedError::AddressExhausted)?
+        }
         TermRef::Triple { s, p, o } => {
             let (s, p, o) = (reference(s)?, reference(p)?, reference(o)?);
-            (
-                s.0.checked_add(p.0)
-                    .and_then(|n| n.checked_add(o.0))
-                    .ok_or(SegmentedError::AddressExhausted)?,
-                s.1.max(p.1).max(o.1) + 1,
-            )
+            s.checked_add(p)
+                .and_then(|n| n.checked_add(o))
+                .ok_or(SegmentedError::AddressExhausted)?
         }
     };
-    if depth > 16 {
-        return Err(SegmentedError::Corrupt(
-            "expanded term nesting exceeds validated IR limit",
-        ));
-    }
-    Ok((
-        base.checked_add(payload)
-            .ok_or(SegmentedError::AddressExhausted)?,
-        depth,
-    ))
+    base.checked_add(payload)
+        .ok_or(SegmentedError::AddressExhausted)
 }
 
 /// Compute the same certified expansion law once when a resident carrier is
@@ -1576,7 +1554,7 @@ pub(super) fn resident_owned_term_bound(dataset: &RdfDataset) -> Result<u64, Seg
             0,
             &footprints,
         )?;
-        widest = widest.max(footprint.0);
+        widest = widest.max(footprint);
         footprints.push(footprint);
     }
     Ok(widest)
@@ -1777,6 +1755,47 @@ mod certification_tests {
         builder.push_reifier(ids[0], ids[3], None).unwrap();
         assert_eq!(builder.statement_count(), 3);
         builder.seal().unwrap();
+    }
+
+    /// A reifier's statement wraps its nested object in one more triple term.
+    /// Both that boundary and deeper stored claims retain their IDs on reopen.
+    #[test]
+    fn constructor_deep_reified_claims_reopen_and_lookup_on_a_small_stack() {
+        use crate::DatasetView;
+        purrdf_stack::on_stack(128 * 1024, || {
+            for levels in [16, 256] {
+                let mut object = TermValue::iri("urn:o");
+                for _ in 0..=levels {
+                    object = TermValue::Triple {
+                        s: crate::TermBox::new(TermValue::iri("urn:s")),
+                        p: crate::TermBox::new(TermValue::iri("urn:p")),
+                        o: crate::TermBox::new(object),
+                    };
+                }
+                let values = [TermValue::iri("urn:r"), object];
+                let limits = SegmentedBuildLimits::new(1000, 1000, 2, 4096, 32).unwrap();
+                let mut builder = SegmentedBuilder::new(limits).unwrap();
+                let mut ids = Vec::new();
+                builder.intern_batch(&values, |_, id| ids.push(id)).unwrap();
+                builder.push_reifier(ids[0], ids[1], None).unwrap();
+                let image = builder.seal().unwrap();
+                let session = image
+                    .open_session(SegmentedReadLimits::new(
+                        32_000_000,
+                        4,
+                        100_000,
+                        100_000_000,
+                        2,
+                    ))
+                    .unwrap();
+                assert_eq!(session.triple_term_nesting_bound(), None);
+                assert_eq!(session.term_id_by_value(&values[1]).unwrap(), Some(ids[1]));
+                assert_eq!(session.reifier_quads().next().unwrap().o, ids[1]);
+                assert_eq!(session.term_value(ids[1]).unwrap(), values[1]);
+                assert!(session.read_error().is_none());
+            }
+        })
+        .expect("the thread starts");
     }
 
     /// Refusing the implicit predicate publishes no row and consumes no term ID.

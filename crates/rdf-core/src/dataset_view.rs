@@ -33,10 +33,10 @@ pub fn lock_read_state<T>(state: &std::sync::Mutex<T>) -> std::sync::MutexGuard<
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// The certificate exposed only by carriers frozen through the native validator.
+/// Native validation proves termination without imposing a structural depth bound.
 #[inline]
 pub(crate) const fn frozen_term_nesting_bound() -> Option<usize> {
-    Some(purrdf_events::MAX_TERM_NESTING_DEPTH)
+    None
 }
 
 /// Declare a validated carrier's getter through the one certificate home.
@@ -1106,8 +1106,7 @@ pub trait DatasetView {
     /// A consumer may answer a pattern whose triple terms nest deeper as matching
     /// nothing, without resolving or walking it, so a bound must be a guarantee: a view
     /// that cannot vouch for every term it resolves answers `None`, the default, and is
-    /// matched the long way. Every [`RdfDataset`] is bounded at 16, the limit
-    /// [`RdfDatasetBuilder::freeze`](crate::RdfDatasetBuilder::freeze) refuses past.
+    /// matched the long way. Native datasets make no fixed depth claim.
     fn triple_term_nesting_bound(&self) -> Option<usize> {
         None
     }
@@ -2050,7 +2049,7 @@ impl DatasetView for RdfDataset {
 
     frozen_term_nesting_bound_method! {
         /// Every frozen dataset passed [`RdfDatasetBuilder::freeze`](crate::RdfDatasetBuilder::freeze),
-        /// which refuses a triple term nested past 16.
+        /// which proves acyclicity without a structural depth ceiling, so no bound is claimed.
     }
 
     #[inline]

@@ -55,10 +55,9 @@
 //!   [`ControlFlow::Break`] from any event to cancel
 //!   the drive; the source stops immediately and the sink's partial state MUST NOT be
 //!   frozen into a result.
-//! * **Triple-term nesting is depth-bounded.** Reified [`EventTriple`] terms may
-//!   nest, but a sink MUST bound resolution depth by [`MAX_TERM_NESTING_DEPTH`] (16),
-//!   hard-failing with [`EventError::NestingDepthExceeded`] rather than recursing
-//!   without bound.
+//! * **Triple-term resolution is iterative.** Reified [`EventTriple`] terms may
+//!   nest to any finite depth admitted by storage. Sinks detect cycles and use
+//!   heap continuations rather than recursive machine-stack traversal.
 //! * **Ill-typed literals are preserved, never auto-rejected.** A [`EventTerm::Literal`]
 //!   with a malformed lexical form for its datatype is carried through and MAY be
 //!   flagged downstream; the protocol never rejects it at ingestion.
@@ -165,10 +164,10 @@
 
 use core::ops::ControlFlow;
 
-/// Depth bound for resolving nested reified-triple terms, the one bound the GTS
-/// reader and writer, the IR validator and the projections all enforce. A cyclic or
-/// absurdly nested triple term hard-fails ([`EventError::NestingDepthExceeded`]) rather than recursing
-/// without bound.
+/// Legacy structural nesting limit, retained for source compatibility.
+///
+/// Native term storage and event resolution use iterative traversal and do not
+/// enforce this value. Separate document-format policies may still use it.
 pub const MAX_TERM_NESTING_DEPTH: usize = 16;
 
 /// What a sink answers to let the drive go on: the answer of every event a sink
@@ -263,7 +262,7 @@ impl TextDirection {
 ///
 /// This is the RDF 1.2 quoted-triple payload: it carries no graph slot. Its
 /// components are themselves [`EventTermId`]s, so a triple term MAY nest another
-/// triple term in any position (depth-bounded by [`MAX_TERM_NESTING_DEPTH`]).
+/// triple term in any position, with cycles refused during resolution.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct EventTriple {
     /// Subject term id.
@@ -460,7 +459,8 @@ pub enum EventError {
         /// The id that was never declared.
         id: EventTermId,
     },
-    /// Reified-triple-term nesting exceeded [`MAX_TERM_NESTING_DEPTH`].
+    /// Legacy structural-depth refusal, retained for source compatibility.
+    /// Native event resolution no longer emits this variant.
     NestingDepthExceeded {
         /// The id at which the depth bound was crossed.
         id: EventTermId,

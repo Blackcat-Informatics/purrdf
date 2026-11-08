@@ -1616,6 +1616,82 @@ mod tests {
         );
     }
 
+    /// Deep quoted operands also traverse inherited annotation origins. The
+    /// public controlled boundary retains those sources and the caller's stop.
+    #[test]
+    fn deep_annotated_terms_preserve_sources_and_original_stop_on_a_small_stack() {
+        purrdf_stack::on_stack(128 * 1024, || {
+            use purrdf_core::DatasetView;
+            const LEVELS: usize = 256;
+            let text = format!(
+                "<urn:s> <urn:p> {}<urn:o>{} {{| <urn:note> <urn:value> |}} .",
+                "<<( <urn:s> <urn:p> ".repeat(LEVELS),
+                " )>>".repeat(LEVELS),
+            );
+            let mut calls = 0;
+            let owner = parse_dataset_controlled(
+                text.as_bytes(),
+                NativeRdfFormat::Turtle,
+                None,
+                Resident,
+                |_| {
+                    calls += 1;
+                    Ok::<_, usize>(())
+                },
+            )
+            .unwrap_or_else(|_| panic!("finite annotated source parses"));
+            {
+                let view = owner.dataset().expect("complete dataset");
+                assert_eq!(view.quads().count(), 1);
+                assert_eq!(view.reifier_quads().count(), 1);
+                assert_eq!(view.annotation_quads().count(), 1);
+                assert_eq!(owner.source().bytes(), text.as_bytes());
+                let source = owner.source();
+                let deepest = source
+                    .occurrences()
+                    .map(|occurrence| {
+                        let mut origin = occurrence.origin();
+                        let mut depth = 0;
+                        while let Some([_, _, object]) = source.origin(origin).unwrap().components()
+                        {
+                            depth += 1;
+                            origin = object;
+                        }
+                        depth
+                    })
+                    .max()
+                    .unwrap();
+                assert_eq!(deepest, LEVELS + 1);
+            }
+            drop(owner);
+            let total = calls;
+            for fail_at in [total / 2, total - 1] {
+                let mut calls = 0;
+                let failure = parse_dataset_controlled(
+                    text.as_bytes(),
+                    NativeRdfFormat::Turtle,
+                    None,
+                    Resident,
+                    |_| {
+                        let at = calls;
+                        calls += 1;
+                        if at == fail_at { Err(at) } else { Ok(()) }
+                    },
+                )
+                .expect_err("the selected original callback refuses");
+                assert!(matches!(failure.cause(), ControlledError::Control(at) if *at == fail_at));
+                assert_eq!(failure.input(), text.as_bytes());
+                drop(failure);
+                assert_eq!(
+                    calls,
+                    fail_at + 1,
+                    "no callback follows the original refusal"
+                );
+            }
+        })
+        .expect("the thread starts");
+    }
+
     #[test]
     fn invalid_utf8_hard_fails() {
         use super::super::acquisition::NativeParseError;

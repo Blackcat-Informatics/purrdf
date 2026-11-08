@@ -279,16 +279,18 @@ mod tests {
                 sink.push_inner(&quad).expect("repeated deep term streams");
                 assert_eq!(sink.next_id, ids, "all component identities reused");
                 let mut raw = sink.inner.take().expect("not finished");
-                let error = raw.finish().expect_err("deep terms are refused at freeze");
-                assert!(matches!(error, purrdf_events::EventError::Native(_)));
-                let diagnostic = std::error::Error::source(&error)
-                    .and_then(std::error::Error::source)
-                    .and_then(|cause| cause.downcast_ref::<purrdf::RdfDiagnostic>())
-                    .expect("freezing retains its original native diagnostic");
-                assert_eq!(diagnostic.code, "rdf-ir-triple-nesting-limit");
-                assert!(
-                    error.to_string().contains("rdf-ir-triple-nesting-limit"),
-                    "{error}"
+                raw.finish().expect("finite deep terms freeze");
+                let dataset = raw.into_dataset().expect("frozen dataset");
+                let mut object = dataset.quads().next().expect("stored quad").o;
+                for _ in 0..depth {
+                    let purrdf_core::TermRef::Triple { o, .. } = dataset.resolve(object) else {
+                        panic!("the complete triple chain is retained");
+                    };
+                    object = o;
+                }
+                assert_eq!(
+                    dataset.resolve(object),
+                    purrdf_core::TermRef::Iri("https://e/end")
                 );
             })
             .expect("thread")

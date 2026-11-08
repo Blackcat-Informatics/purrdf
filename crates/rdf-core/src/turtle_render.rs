@@ -624,10 +624,8 @@ impl ContentKeys {
 
     /// Content keys for blank/triple objects that compete for ordering.
     fn new(dataset: &RdfDataset, raw: &RawProps, positions: impl Iterator<Item = TermId>) -> Self {
-        // Each descent stops at the permanent blank guard, plus at most the
-        // frozen dataset's MAX_TERM_NESTING_DEPTH consecutive quoted levels.
-        // Cached suffixes are not reused during descent: leaf-first traversal
-        // could otherwise cross the guard and grow a key with the entire chain.
+        // Only requested roots retain a key. A quoted chain streams into one
+        // buffer, while blank-graph expansion keeps its independent guard.
         let mut keys: FastMap<TermId, String> = FastMap::default();
         for term in positions {
             if matches!(
@@ -636,7 +634,10 @@ impl ContentKeys {
             ) && !keys.contains_key(&term)
             {
                 let mut seen = BTreeSet::new();
-                compute_content_key(dataset, raw, term, &mut seen, 0, &mut keys);
+                let (key, cacheable) = compute_content_key(dataset, raw, term, &mut seen, 0);
+                if cacheable {
+                    keys.insert(term, key);
+                }
             }
         }
         Self { keys }
@@ -649,23 +650,56 @@ impl ContentKeys {
     }
 }
 
-/// Recursively fold a term into a canonical content string. Grounded terms map to
-/// their lexical form; blank/triple terms descend into their subtree.
+/// Stream a quoted chain into one output buffer; only the independently bounded
+/// blank-graph expansion recurses. Grounded terms map to their lexical form.
 ///
 /// Returns `(key, cacheable)`. `cacheable` is `false` iff the subtree hit a back-edge
 /// or the depth budget — those `^` markers are entry-point-RELATIVE, so an enclosing
 /// key that embeds one must not be memoized (it would otherwise return an
 /// interning-order-dependent value when the same node is later reached from a different
 /// root, reintroducing the very non-determinism this fold exists to remove). Only fully
-/// resolved acyclic subtrees are written to `cache`; cyclic / over-budget blank graphs
+/// resolved acyclic roots are retained by the caller; cyclic / over-budget blank graphs
 /// fall through to the value-based identity tiebreak in [`ObjKey`].
 fn compute_content_key(
+    dataset: &RdfDataset,
+    raw: &RawProps,
+    mut id: TermId,
+    seen: &mut BTreeSet<TermId>,
+    mut depth: usize,
+) -> (String, bool) {
+    if !matches!(dataset.resolve(id), TermRef::Triple { .. }) {
+        return compute_content_leaf(dataset, raw, id, seen, depth);
+    }
+    // Native validation permits nesting only along an object's edge. Subjects
+    // and predicates contribute their same old leaf/blank keys at each level.
+    let mut key = String::new();
+    let mut closings = 0;
+    let mut cacheable = true;
+    while let TermRef::Triple { s, p, o } = dataset.resolve(id) {
+        depth += 1;
+        let (subject, cs) = compute_content_leaf(dataset, raw, s, seen, depth);
+        let (predicate, cp) = compute_content_leaf(dataset, raw, p, seen, depth);
+        cacheable &= cs && cp;
+        key.push_str("T<");
+        key.push_str(&subject);
+        key.push('\u{1}');
+        key.push_str(&predicate);
+        key.push('\u{1}');
+        closings += 1;
+        id = o;
+    }
+    let (object, co) = compute_content_leaf(dataset, raw, id, seen, depth);
+    key.push_str(&object);
+    key.extend(core::iter::repeat_n('>', closings));
+    (key, cacheable && co)
+}
+
+fn compute_content_leaf(
     dataset: &RdfDataset,
     raw: &RawProps,
     id: TermId,
     seen: &mut BTreeSet<TermId>,
     depth: usize,
-    cache: &mut FastMap<TermId, String>,
 ) -> (String, bool) {
     match dataset.resolve(id) {
         TermRef::Iri(iri) => (format!("I{iri}"), true),
@@ -702,8 +736,7 @@ fn compute_content_key(
                     let mut oks: Vec<String> = objs
                         .iter()
                         .map(|&o| {
-                            let (k, c) =
-                                compute_content_key(dataset, raw, o, seen, depth + 1, cache);
+                            let (k, c) = compute_content_key(dataset, raw, o, seen, depth + 1);
                             cacheable &= c;
                             k
                         })
@@ -715,22 +748,9 @@ fn compute_content_key(
             parts.sort();
             seen.remove(&id);
             let key = format!("B[{}]", parts.join("\u{4}"));
-            if cacheable {
-                cache.insert(id, key.clone());
-            }
             (key, cacheable)
         }
-        TermRef::Triple { s, p, o } => {
-            let (sk, cs) = compute_content_key(dataset, raw, s, seen, depth + 1, cache);
-            let (pk, cp) = compute_content_key(dataset, raw, p, seen, depth + 1, cache);
-            let (ok, co) = compute_content_key(dataset, raw, o, seen, depth + 1, cache);
-            let cacheable = cs && cp && co;
-            let key = format!("T<{sk}\u{1}{pk}\u{1}{ok}>");
-            if cacheable {
-                cache.insert(id, key.clone());
-            }
-            (key, cacheable)
-        }
+        TermRef::Triple { .. } => unreachable!("only quoted object edges may nest"),
     }
 }
 
@@ -1034,6 +1054,44 @@ fn is_turtle_double(v: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[global_allocator]
+    static ALLOCATOR: purrdf_alloc_probe::CountingAllocator = purrdf_alloc_probe::CountingAllocator;
+
+    /// Competing objects invoke content-key ordering before the iterative writer.
+    #[test]
+    fn deep_quoted_objects_render_on_a_small_stack() {
+        purrdf_stack::on_stack(128 * 1024, || {
+            let mut builder = crate::RdfDatasetBuilder::new();
+            let subject = builder.intern_iri("urn:s").unwrap();
+            let predicate = builder.intern_iri("urn:p").unwrap();
+            let leaf = builder.intern_iri("urn:o").unwrap();
+            let mut object = leaf;
+            for _ in 0..2048 {
+                object = builder.intern_triple(subject, predicate, object).unwrap();
+            }
+            builder.push_quad(subject, predicate, leaf, None).unwrap();
+            builder.push_quad(subject, predicate, object, None).unwrap();
+            let dataset = builder.freeze().unwrap();
+            let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+            let text = render(&dataset, &[]);
+            let allocation = window.close();
+            assert_eq!(text.matches("<<(").count(), 2048);
+            assert!(
+                allocation.requested_bytes > 0,
+                "the counting allocator is active"
+            );
+            assert!(
+                allocation.peak_working_bytes <= 2048 * 4096 + 262_144,
+                "{allocation:?}"
+            );
+            assert!(
+                allocation.requested_bytes <= 2048 * 8192 + 262_144,
+                "{allocation:?}"
+            );
+        })
+        .expect("the thread starts");
+    }
 
     #[test]
     fn object_key_equality_and_order_agree_for_singletons_and_competitors() {

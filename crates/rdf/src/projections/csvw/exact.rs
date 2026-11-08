@@ -9,13 +9,19 @@ use std::io;
 use std::sync::Arc;
 
 use purrdf_core::csv::{Dialect, Reader, StringRecord, Writer};
-use purrdf_core::{DatasetView, LossLedger, RdfDataset, RdfDatasetBuilder, RdfTextDirection};
+use purrdf_core::{
+    DatasetView, LossLedger, RdfDataset, RdfDatasetBuilder, RdfTextDirection, TermId, TermRef,
+};
+use purrdf_lex::allocation::{Memory, Resident};
 use purrdf_lex::json::{Object, Value};
 
-use super::super::util::canonical_json_bounded;
-use super::super::{
-    ProjectionError, ProjectionLimits, ProjectionPackage, ProjectionTerm, stable_identifier,
+use super::super::native_term::{
+    CapturedTerm, NativeCapture, canonical_row_json, canonical_term_json, check_depth,
 };
+use super::super::term::{validate_blank_label, validate_literal_identity};
+use super::super::util::canonical_json_bounded;
+use super::super::validate_absolute_iri;
+use super::super::{ProjectionError, ProjectionLimits, ProjectionPackage, stable_identifier};
 use super::CsvwConfig;
 use purrdf_lex::json::record::ToJson;
 
@@ -75,50 +81,63 @@ pub struct CsvwExactReadOutcome {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct ExactQuad {
-    subject: ProjectionTerm,
-    predicate: ProjectionTerm,
-    object: ProjectionTerm,
-    graph: Option<ProjectionTerm>,
+    subject: TermId,
+    predicate: TermId,
+    object: TermId,
+    graph: Option<TermId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct ExactReifier {
-    reifier: ProjectionTerm,
-    statement: ProjectionTerm,
-    graph: Option<ProjectionTerm>,
+    reifier: TermId,
+    statement: TermId,
+    graph: Option<TermId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct ExactAnnotation {
-    reifier: ProjectionTerm,
-    predicate: ProjectionTerm,
-    object: ProjectionTerm,
-    graph: Option<ProjectionTerm>,
+    reifier: TermId,
+    predicate: TermId,
+    object: TermId,
+    graph: Option<TermId>,
 }
 
-purrdf_lex::json_record!(impl ToJson for ExactQuad {
-    "subject" => subject,
-    "predicate" => predicate,
-    "object" => object,
-    "graph" => graph,
-});
+impl ExactQuad {
+    fn fields(&self) -> [(&'static str, Option<TermId>); 4] {
+        [
+            ("subject", Some(self.subject)),
+            ("predicate", Some(self.predicate)),
+            ("object", Some(self.object)),
+            ("graph", self.graph),
+        ]
+    }
+}
 
-purrdf_lex::json_record!(impl ToJson for ExactReifier {
-    "reifier" => reifier,
-    "statement" => statement,
-    "graph" => graph,
-});
+impl ExactReifier {
+    fn fields(&self) -> [(&'static str, Option<TermId>); 3] {
+        [
+            ("reifier", Some(self.reifier)),
+            ("statement", Some(self.statement)),
+            ("graph", self.graph),
+        ]
+    }
+}
 
-purrdf_lex::json_record!(impl ToJson for ExactAnnotation {
-    "reifier" => reifier,
-    "predicate" => predicate,
-    "object" => object,
-    "graph" => graph,
-});
+impl ExactAnnotation {
+    fn fields(&self) -> [(&'static str, Option<TermId>); 4] {
+        [
+            ("reifier", Some(self.reifier)),
+            ("predicate", Some(self.predicate)),
+            ("object", Some(self.object)),
+            ("graph", self.graph),
+        ]
+    }
+}
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 struct ExactDataset {
-    named_graphs: BTreeSet<ProjectionTerm>,
+    native: Arc<RdfDataset>,
+    named_graphs: BTreeSet<TermId>,
     quads: BTreeSet<ExactQuad>,
     reifiers: BTreeSet<ExactReifier>,
     annotations: BTreeSet<ExactAnnotation>,
@@ -177,7 +196,13 @@ pub fn read_csvw_exact(
         TERMS_PATH,
         &mut budget,
     )?;
-    let (terms, named_graphs) = decode_terms(&term_records, config)?;
+    let mut resident = Resident;
+    let mut memory = Memory::new(&mut resident);
+    let DecodedTerms {
+        builder,
+        by_id: terms,
+        named_graphs,
+    } = decode_terms(&term_records, config, &mut memory)?;
     let quads = decode_quads(
         &read_records(
             package.required(QUADS_PATH)?,
@@ -186,6 +211,7 @@ pub fn read_csvw_exact(
             &mut budget,
         )?,
         &terms,
+        &builder,
         config,
     )?;
     let reifiers = decode_reifiers(
@@ -196,6 +222,7 @@ pub fn read_csvw_exact(
             &mut budget,
         )?,
         &terms,
+        &builder,
         config,
     )?;
     let annotations = decode_annotations(
@@ -206,15 +233,10 @@ pub fn read_csvw_exact(
             &mut budget,
         )?,
         &terms,
+        &builder,
         config,
     )?;
-    let exact = ExactDataset {
-        named_graphs,
-        quads,
-        reifiers,
-        annotations,
-    };
-    let dataset = lift_exact(&exact)?;
+    let exact = finish_exact(builder, named_graphs, quads, reifiers, annotations)?;
     let canonical = write_exact(&exact, config)?;
     if !package.artifacts().eq(canonical.artifacts()) {
         return Err(ProjectionError::syntax(
@@ -222,7 +244,7 @@ pub fn read_csvw_exact(
         ));
     }
     Ok(CsvwExactReadOutcome {
-        dataset,
+        dataset: Arc::clone(&exact.native),
         loss_ledger: LossLedger::new(),
     })
 }
@@ -232,12 +254,16 @@ fn collect_dataset<D: DatasetView>(
     config: &CsvwConfig,
 ) -> Result<ExactDataset, ProjectionError> {
     let mut budget = RecordBudget::new(config.max_records(), "CSVW");
-    let mut cache = BTreeMap::new();
+    let mut resident = Resident;
+    let mut memory = Memory::new(&mut resident);
+    let mut terms = NativeCapture::new(view, config.limits().max_term_depth());
+    view.checked_read(|_| ())
+        .map_err(ProjectionError::source_read)?;
     let mut named_graphs = BTreeSet::new();
     for graph in view.named_graphs() {
         budget.consume(&[1], "named graph")?;
-        let graph = resolve_term(view, graph, config.limits(), &mut cache)?;
-        require_graph_name(&graph, "named graph declaration")?;
+        let graph = terms.term(graph, &mut memory)?;
+        require_resource(terms.builder.resolve(graph), "named graph declaration")?;
         if !named_graphs.insert(graph) {
             return Err(ProjectionError::integrity(
                 "dataset view exposed a duplicate named graph declaration",
@@ -249,17 +275,19 @@ fn collect_dataset<D: DatasetView>(
     for quad in view.quads() {
         budget.consume(&[1], "quad")?;
         let row = ExactQuad {
-            subject: resolve_term(view, quad.s, config.limits(), &mut cache)?,
-            predicate: resolve_term(view, quad.p, config.limits(), &mut cache)?,
-            object: resolve_term(view, quad.o, config.limits(), &mut cache)?,
-            graph: quad
-                .g
-                .map(|id| resolve_term(view, id, config.limits(), &mut cache))
-                .transpose()?,
+            subject: terms.term(quad.s, &mut memory)?,
+            predicate: terms.term(quad.p, &mut memory)?,
+            object: terms.term(quad.o, &mut memory)?,
+            graph: quad.g.map(|id| terms.term(id, &mut memory)).transpose()?,
         };
-        require_statement_positions(&row.subject, &row.predicate, row.graph.as_ref(), "quad")?;
+        require_statement_positions(
+            terms.builder.resolve(row.subject),
+            terms.builder.resolve(row.predicate),
+            row.graph.map(|id| terms.builder.resolve(id)),
+            "quad",
+        )?;
         if let Some(graph) = &row.graph {
-            named_graphs.insert(graph.clone());
+            named_graphs.insert(*graph);
         }
         if !quads.insert(row) {
             return Err(ProjectionError::integrity(
@@ -268,35 +296,29 @@ fn collect_dataset<D: DatasetView>(
         }
     }
 
-    let expected_reifies = ProjectionTerm::Iri {
-        value: RDF_REIFIES.to_owned(),
-    };
     let mut reifiers = BTreeSet::new();
     for quad in view.reifier_quads() {
         budget.consume(&[1], "reifier")?;
-        let predicate = resolve_term(view, quad.p, config.limits(), &mut cache)?;
-        if predicate != expected_reifies {
+        let predicate = terms.term(quad.p, &mut memory)?;
+        if !matches!(terms.builder.resolve(predicate), TermRef::Iri(RDF_REIFIES)) {
             return Err(ProjectionError::integrity(
                 "dataset view exposed a reifier row without rdf:reifies",
             ));
         }
         let row = ExactReifier {
-            reifier: resolve_term(view, quad.s, config.limits(), &mut cache)?,
-            statement: resolve_term(view, quad.o, config.limits(), &mut cache)?,
-            graph: quad
-                .g
-                .map(|id| resolve_term(view, id, config.limits(), &mut cache))
-                .transpose()?,
+            reifier: terms.term(quad.s, &mut memory)?,
+            statement: terms.term(quad.o, &mut memory)?,
+            graph: quad.g.map(|id| terms.term(id, &mut memory)).transpose()?,
         };
-        require_resource(&row.reifier, "reifier subject")?;
-        if !matches!(row.statement, ProjectionTerm::Triple { .. }) {
+        require_resource(terms.builder.resolve(row.reifier), "reifier subject")?;
+        if !matches!(terms.builder.resolve(row.statement), TermRef::Triple { .. }) {
             return Err(ProjectionError::integrity(
                 "rdf:reifies object is not a triple term",
             ));
         }
         if let Some(graph) = &row.graph {
-            require_graph_name(graph, "reifier graph")?;
-            named_graphs.insert(graph.clone());
+            require_resource(terms.builder.resolve(*graph), "reifier graph")?;
+            named_graphs.insert(*graph);
         }
         if !reifiers.insert(row) {
             return Err(ProjectionError::integrity(
@@ -309,22 +331,19 @@ fn collect_dataset<D: DatasetView>(
     for quad in view.annotation_quads() {
         budget.consume(&[1], "annotation")?;
         let row = ExactAnnotation {
-            reifier: resolve_term(view, quad.s, config.limits(), &mut cache)?,
-            predicate: resolve_term(view, quad.p, config.limits(), &mut cache)?,
-            object: resolve_term(view, quad.o, config.limits(), &mut cache)?,
-            graph: quad
-                .g
-                .map(|id| resolve_term(view, id, config.limits(), &mut cache))
-                .transpose()?,
+            reifier: terms.term(quad.s, &mut memory)?,
+            predicate: terms.term(quad.p, &mut memory)?,
+            object: terms.term(quad.o, &mut memory)?,
+            graph: quad.g.map(|id| terms.term(id, &mut memory)).transpose()?,
         };
         require_statement_positions(
-            &row.reifier,
-            &row.predicate,
-            row.graph.as_ref(),
+            terms.builder.resolve(row.reifier),
+            terms.builder.resolve(row.predicate),
+            row.graph.map(|id| terms.builder.resolve(id)),
             "annotation",
         )?;
         if let Some(graph) = &row.graph {
-            named_graphs.insert(graph.clone());
+            named_graphs.insert(*graph);
         }
         if !annotations.insert(row) {
             return Err(ProjectionError::integrity(
@@ -332,12 +351,9 @@ fn collect_dataset<D: DatasetView>(
             ));
         }
     }
-    Ok(ExactDataset {
-        named_graphs,
-        quads,
-        reifiers,
-        annotations,
-    })
+    view.checked_read(|_| ())
+        .map_err(ProjectionError::source_read)?;
+    finish_exact(terms.builder, named_graphs, quads, reifiers, annotations)
 }
 
 fn write_exact(
@@ -358,10 +374,7 @@ fn write_exact(
         )));
     }
     let mut package = ProjectionPackage::new(config.limits());
-    package.insert(
-        TERMS_PATH,
-        write_terms(&catalog, &dataset.named_graphs, config)?,
-    )?;
+    package.insert(TERMS_PATH, write_terms(&catalog, dataset, config)?)?;
     package.insert(QUADS_PATH, write_quads(dataset, &catalog, config)?)?;
     package.insert(REIFIERS_PATH, write_reifiers(dataset, &catalog, config)?)?;
     package.insert(
@@ -373,37 +386,39 @@ fn write_exact(
 }
 
 struct TermCatalog {
-    by_term: BTreeMap<ProjectionTerm, String>,
-    by_id: BTreeMap<String, ProjectionTerm>,
+    by_term: BTreeMap<TermId, String>,
+    by_id: BTreeMap<String, TermId>,
 }
 
 impl TermCatalog {
     fn build(dataset: &ExactDataset, config: &CsvwConfig) -> Result<Self, ProjectionError> {
         let mut terms = BTreeSet::new();
+        let mut resident = Resident;
+        let mut memory = Memory::new(&mut resident);
         for graph in &dataset.named_graphs {
-            collect_term(graph, &mut terms);
+            collect_term(&dataset.native, *graph, &mut terms, &mut memory)?;
         }
         for quad in &dataset.quads {
-            collect_term(&quad.subject, &mut terms);
-            collect_term(&quad.predicate, &mut terms);
-            collect_term(&quad.object, &mut terms);
+            collect_term(&dataset.native, quad.subject, &mut terms, &mut memory)?;
+            collect_term(&dataset.native, quad.predicate, &mut terms, &mut memory)?;
+            collect_term(&dataset.native, quad.object, &mut terms, &mut memory)?;
             if let Some(graph) = &quad.graph {
-                collect_term(graph, &mut terms);
+                collect_term(&dataset.native, *graph, &mut terms, &mut memory)?;
             }
         }
         for row in &dataset.reifiers {
-            collect_term(&row.reifier, &mut terms);
-            collect_term(&row.statement, &mut terms);
+            collect_term(&dataset.native, row.reifier, &mut terms, &mut memory)?;
+            collect_term(&dataset.native, row.statement, &mut terms, &mut memory)?;
             if let Some(graph) = &row.graph {
-                collect_term(graph, &mut terms);
+                collect_term(&dataset.native, *graph, &mut terms, &mut memory)?;
             }
         }
         for row in &dataset.annotations {
-            collect_term(&row.reifier, &mut terms);
-            collect_term(&row.predicate, &mut terms);
-            collect_term(&row.object, &mut terms);
+            collect_term(&dataset.native, row.reifier, &mut terms, &mut memory)?;
+            collect_term(&dataset.native, row.predicate, &mut terms, &mut memory)?;
+            collect_term(&dataset.native, row.object, &mut terms, &mut memory)?;
             if let Some(graph) = &row.graph {
-                collect_term(graph, &mut terms);
+                collect_term(&dataset.native, *graph, &mut terms, &mut memory)?;
             }
         }
         if terms.len() > config.max_records() {
@@ -415,9 +430,12 @@ impl TermCatalog {
         let mut by_term = BTreeMap::new();
         let mut by_id = BTreeMap::new();
         for term in terms {
-            term.validate(config.limits())?;
-            let id = term_identifier(&term, config.limits())?;
-            if let Some(existing) = by_id.insert(id.clone(), term.clone())
+            let id = term_identifier(
+                |id| dataset.native.as_ref().resolve(id),
+                term,
+                config.limits(),
+            )?;
+            if let Some(existing) = by_id.insert(id.clone(), term)
                 && existing != term
             {
                 return Err(ProjectionError::integrity(
@@ -429,8 +447,8 @@ impl TermCatalog {
         Ok(Self { by_term, by_id })
     }
 
-    fn id(&self, term: &ProjectionTerm) -> Result<&str, ProjectionError> {
-        self.by_term.get(term).map(String::as_str).ok_or_else(|| {
+    fn id(&self, term: TermId) -> Result<&str, ProjectionError> {
+        self.by_term.get(&term).map(String::as_str).ok_or_else(|| {
             ProjectionError::integrity("exact CSVW row references an uncatalogued RDF term")
         })
     }
@@ -440,42 +458,48 @@ impl TermCatalog {
     }
 }
 
-fn collect_term(term: &ProjectionTerm, terms: &mut BTreeSet<ProjectionTerm>) {
-    if !terms.insert(term.clone()) {
-        return;
-    }
-    match term {
-        ProjectionTerm::Literal { datatype, .. } => {
-            terms.insert(ProjectionTerm::Iri {
-                value: datatype.clone(),
-            });
+fn collect_term(
+    dataset: &RdfDataset,
+    term: TermId,
+    terms: &mut BTreeSet<TermId>,
+    memory: &mut Memory<'_, Resident>,
+) -> Result<(), ProjectionError> {
+    let mut work = Vec::new();
+    let result = (|| {
+        memory.push(&mut work, term)?;
+        while let Some(term) = work.pop() {
+            if !terms.insert(term) {
+                continue;
+            }
+            match dataset.resolve(term) {
+                TermRef::Literal { datatype, .. } => memory.push(&mut work, datatype)?,
+                TermRef::Triple { s, p, o } => {
+                    for id in [o, p, s] {
+                        memory.push(&mut work, id)?;
+                    }
+                }
+                TermRef::Iri(_) | TermRef::Blank { .. } => {}
+            }
         }
-        ProjectionTerm::Triple {
-            subject,
-            predicate,
-            object,
-        } => {
-            collect_term(subject, terms);
-            collect_term(predicate, terms);
-            collect_term(object, terms);
-        }
-        ProjectionTerm::Iri { .. } | ProjectionTerm::Blank { .. } => {}
-    }
+        Ok(())
+    })();
+    let refund = memory.release_vec(work).map_err(ProjectionError::from);
+    result.and(refund)
 }
 
 fn write_terms(
     catalog: &TermCatalog,
-    named_graphs: &BTreeSet<ProjectionTerm>,
+    dataset: &ExactDataset,
     config: &CsvwConfig,
 ) -> Result<Vec<u8>, ProjectionError> {
     let mut rows = Vec::with_capacity(catalog.by_id.len());
     for (id, term) in &catalog.by_id {
-        let named = named_graphs.contains(term).to_string();
-        let row = match term {
-            ProjectionTerm::Iri { value } => vec![
+        let named = dataset.named_graphs.contains(term).to_string();
+        let row = match dataset.native.as_ref().resolve(*term) {
+            TermRef::Iri(value) => vec![
                 id.clone(),
                 "iri".to_owned(),
-                value.clone(),
+                value.to_owned(),
                 String::new(),
                 String::new(),
                 String::new(),
@@ -485,20 +509,20 @@ fn write_terms(
                 String::new(),
                 named,
             ],
-            ProjectionTerm::Blank { label, scope } => vec![
+            TermRef::Blank { label, scope } => vec![
                 id.clone(),
                 "blank".to_owned(),
-                label.clone(),
+                label.to_owned(),
                 String::new(),
                 String::new(),
                 String::new(),
-                scope.to_string(),
+                scope.ordinal().to_string(),
                 String::new(),
                 String::new(),
                 String::new(),
                 named,
             ],
-            ProjectionTerm::Literal {
+            TermRef::Literal {
                 lexical,
                 datatype,
                 language,
@@ -506,13 +530,9 @@ fn write_terms(
             } => vec![
                 id.clone(),
                 "literal".to_owned(),
-                lexical.clone(),
-                catalog
-                    .id(&ProjectionTerm::Iri {
-                        value: datatype.clone(),
-                    })?
-                    .to_owned(),
-                language.clone().unwrap_or_default(),
+                lexical.to_owned(),
+                catalog.id(datatype)?.to_owned(),
+                language.unwrap_or_default().to_owned(),
                 direction.map_or_else(String::new, |value| value.as_str().to_owned()),
                 String::new(),
                 String::new(),
@@ -520,11 +540,7 @@ fn write_terms(
                 String::new(),
                 named,
             ],
-            ProjectionTerm::Triple {
-                subject,
-                predicate,
-                object,
-            } => vec![
+            TermRef::Triple { s, p, o } => vec![
                 id.clone(),
                 "triple".to_owned(),
                 String::new(),
@@ -532,9 +548,9 @@ fn write_terms(
                 String::new(),
                 String::new(),
                 String::new(),
-                catalog.id(subject)?.to_owned(),
-                catalog.id(predicate)?.to_owned(),
-                catalog.id(object)?.to_owned(),
+                catalog.id(s)?.to_owned(),
+                catalog.id(p)?.to_owned(),
+                catalog.id(o)?.to_owned(),
                 named,
             ],
         };
@@ -550,15 +566,20 @@ fn write_quads(
 ) -> Result<Vec<u8>, ProjectionError> {
     let mut rows = BTreeMap::new();
     for quad in &dataset.quads {
-        let id = row_identifier("CsvwQuad", quad, config.limits(), "exact CSVW quad")?;
+        let id = row_identifier(
+            "CsvwQuad",
+            |id| dataset.native.as_ref().resolve(id),
+            &quad.fields(),
+            config.limits(),
+        )?;
         let row = vec![
             id.clone(),
-            catalog.id(&quad.subject)?.to_owned(),
-            catalog.id(&quad.predicate)?.to_owned(),
-            catalog.id(&quad.object)?.to_owned(),
+            catalog.id(quad.subject)?.to_owned(),
+            catalog.id(quad.predicate)?.to_owned(),
+            catalog.id(quad.object)?.to_owned(),
             quad.graph
                 .as_ref()
-                .map(|term| catalog.id(term).map(str::to_owned))
+                .map(|term| catalog.id(*term).map(str::to_owned))
                 .transpose()?
                 .unwrap_or_default(),
         ];
@@ -585,18 +606,18 @@ fn write_reifiers(
     for reifier in &dataset.reifiers {
         let id = row_identifier(
             "CsvwReifier",
-            reifier,
+            |id| dataset.native.as_ref().resolve(id),
+            &reifier.fields(),
             config.limits(),
-            "exact CSVW reifier",
         )?;
         let row = vec![
             id.clone(),
-            catalog.id(&reifier.reifier)?.to_owned(),
-            catalog.id(&reifier.statement)?.to_owned(),
+            catalog.id(reifier.reifier)?.to_owned(),
+            catalog.id(reifier.statement)?.to_owned(),
             reifier
                 .graph
                 .as_ref()
-                .map(|term| catalog.id(term).map(str::to_owned))
+                .map(|term| catalog.id(*term).map(str::to_owned))
                 .transpose()?
                 .unwrap_or_default(),
         ];
@@ -623,19 +644,19 @@ fn write_annotations(
     for annotation in &dataset.annotations {
         let id = row_identifier(
             "CsvwAnnotation",
-            annotation,
+            |id| dataset.native.as_ref().resolve(id),
+            &annotation.fields(),
             config.limits(),
-            "exact CSVW annotation",
         )?;
         let row = vec![
             id.clone(),
-            catalog.id(&annotation.reifier)?.to_owned(),
-            catalog.id(&annotation.predicate)?.to_owned(),
-            catalog.id(&annotation.object)?.to_owned(),
+            catalog.id(annotation.reifier)?.to_owned(),
+            catalog.id(annotation.predicate)?.to_owned(),
+            catalog.id(annotation.object)?.to_owned(),
             annotation
                 .graph
                 .as_ref()
-                .map(|term| catalog.id(term).map(str::to_owned))
+                .map(|term| catalog.id(*term).map(str::to_owned))
                 .transpose()?
                 .unwrap_or_default(),
         ];
@@ -889,12 +910,21 @@ struct RawTermRow {
     predicate_id: String,
     object_id: String,
     named_graph: bool,
+    /// Traversal color lives in the buffered declaration, never a second set.
+    active: std::cell::Cell<bool>,
+}
+
+struct DecodedTerms {
+    builder: RdfDatasetBuilder,
+    by_id: BTreeMap<String, TermId>,
+    named_graphs: BTreeSet<TermId>,
 }
 
 fn decode_terms(
     records: &[StringRecord],
     config: &CsvwConfig,
-) -> Result<(BTreeMap<String, ProjectionTerm>, BTreeSet<ProjectionTerm>), ProjectionError> {
+    memory: &mut Memory<'_, Resident>,
+) -> Result<DecodedTerms, ProjectionError> {
     let mut raw = BTreeMap::new();
     let mut previous = None;
     for (index, record) in records.iter().enumerate() {
@@ -925,54 +955,110 @@ fn decode_terms(
             predicate_id: csv_field(record, 8, &path)?.to_owned(),
             object_id: csv_field(record, 9, &path)?.to_owned(),
             named_graph,
+            active: std::cell::Cell::new(false),
         };
         if raw.insert(id, row).is_some() {
             return Err(ProjectionError::integrity("duplicate exact CSVW term id").at_path(path));
         }
     }
     let mut terms = BTreeMap::new();
-    let mut active = BTreeSet::new();
+    let mut builder = RdfDatasetBuilder::new();
     for id in raw.keys() {
-        resolve_term_row(id, &raw, &mut terms, &mut active, config, 0)?;
+        resolve_term_row(id, &raw, &mut terms, config, &mut builder, memory)?;
     }
     let mut named_graphs = BTreeSet::new();
     for row in raw.values().filter(|row| row.named_graph) {
         let term = terms
             .get(&row.id)
             .ok_or_else(|| ProjectionError::integrity("resolved term disappeared"))?;
-        require_graph_name(term, "named_graph term")?;
-        named_graphs.insert(term.clone());
+        require_resource(builder.resolve(term.id), "named_graph term")?;
+        named_graphs.insert(term.id);
     }
-    Ok((terms, named_graphs))
+    Ok(DecodedTerms {
+        builder,
+        by_id: terms.into_iter().map(|(id, term)| (id, term.id)).collect(),
+        named_graphs,
+    })
 }
 
-fn resolve_term_row(
-    id: &str,
-    raw: &BTreeMap<String, RawTermRow>,
-    resolved: &mut BTreeMap<String, ProjectionTerm>,
-    active: &mut BTreeSet<String>,
+fn resolve_term_row<'a>(
+    id: &'a str,
+    raw: &'a BTreeMap<String, RawTermRow>,
+    resolved: &mut BTreeMap<String, CapturedTerm>,
     config: &CsvwConfig,
-    depth: usize,
-) -> Result<ProjectionTerm, ProjectionError> {
-    if let Some(term) = resolved.get(id) {
-        return Ok(term.clone());
-    }
-    if depth > config.limits().max_term_depth() {
-        return Err(ProjectionError::limit(
-            "exact CSVW triple term exceeds configured recursion depth",
-        )
-        .at_path(TERMS_PATH));
-    }
-    if !active.insert(id.to_owned()) {
-        return Err(
-            ProjectionError::integrity("cycle in exact CSVW recursive term references")
-                .at_path(TERMS_PATH),
-        );
-    }
-    let row = raw.get(id).ok_or_else(|| {
-        ProjectionError::integrity("exact CSVW foreign key references an unknown term")
-            .at_path(TERMS_PATH)
-    })?;
+    builder: &mut RdfDatasetBuilder,
+    memory: &mut Memory<'_, Resident>,
+) -> Result<(), ProjectionError> {
+    let mut work = Vec::new();
+    let result = (|| {
+        memory.push(&mut work, (id, 0usize, false))?;
+        while let Some((id, depth, finish)) = work.pop() {
+            if !finish && let Some(term) = resolved.get(id) {
+                check_depth(term.height, depth, config.limits().max_term_depth())?;
+                continue;
+            }
+            let row = raw.get(id).ok_or_else(|| {
+                ProjectionError::integrity("exact CSVW foreign key references an unknown term")
+                    .at_path(TERMS_PATH)
+            })?;
+            if finish {
+                let term = intern_term_row(row, raw, resolved, builder, memory)?;
+                check_depth(term.height, depth, config.limits().max_term_depth())?;
+                if term_identifier(|id| builder.resolve(id), term.id, config.limits())? != row.id {
+                    return Err(ProjectionError::integrity(
+                        "exact CSVW term id does not match its canonical RDF value",
+                    )
+                    .at_path(TERMS_PATH));
+                }
+                row.active.set(false);
+                resolved.insert(id.to_owned(), term);
+                continue;
+            }
+            if row.active.replace(true) {
+                return Err(ProjectionError::integrity(
+                    "cycle in exact CSVW recursive term references",
+                )
+                .at_path(TERMS_PATH));
+            }
+            memory.push(&mut work, (id, depth, true))?;
+            match row.kind.as_str() {
+                "triple" => {
+                    check_depth(1, depth, config.limits().max_term_depth())?;
+                    let next = depth
+                        .checked_add(1)
+                        .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?;
+                    for child in [&row.object_id, &row.predicate_id, &row.subject_id] {
+                        require_nonempty(child, "triple component", TERMS_PATH)?;
+                        memory.push(&mut work, (child.as_str(), next, false))?;
+                    }
+                }
+                "literal" => {
+                    require_nonempty(&row.datatype_id, "literal datatype_id", TERMS_PATH)?;
+                    memory.push(&mut work, (&row.datatype_id, depth, false))?;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    })();
+    let refund = memory.release_vec(work).map_err(ProjectionError::from);
+    result.and(refund)
+}
+
+fn intern_term_row(
+    row: &RawTermRow,
+    raw: &BTreeMap<String, RawTermRow>,
+    resolved: &BTreeMap<String, CapturedTerm>,
+    builder: &mut RdfDatasetBuilder,
+    memory: &mut Memory<'_, Resident>,
+) -> Result<CapturedTerm, ProjectionError> {
+    let dependency = |id: &str| {
+        resolved.get(id).copied().ok_or_else(|| {
+            ProjectionError::integrity("exact CSVW continuation has no resolved dependency")
+                .at_path(TERMS_PATH)
+        })
+    };
+    let mut height = 0;
     let term = match row.kind.as_str() {
         "iri" => {
             require_empty_fields(
@@ -987,9 +1073,9 @@ fn resolve_term_row(
                     "object_id",
                 ],
             )?;
-            ProjectionTerm::Iri {
-                value: row.value.clone(),
-            }
+            validate_absolute_iri(&row.value, "term IRI")
+                .map_err(|error| ProjectionError::term(error.message()))?;
+            builder.intern_iri_with_memory(&row.value, memory)?
         }
         "blank" => {
             require_nonempty(&row.value, "blank label", TERMS_PATH)?;
@@ -1008,10 +1094,8 @@ fn resolve_term_row(
             let scope = row.blank_scope.parse::<u32>().map_err(|error| {
                 ProjectionError::syntax(format!("invalid blank_scope: {error}")).at_path(TERMS_PATH)
             })?;
-            ProjectionTerm::Blank {
-                label: row.value.clone(),
-                scope,
-            }
+            validate_blank_label(&row.value)?;
+            builder.intern_blank_with_memory(&row.value, purrdf_core::BlankScope(scope), memory)?
         }
         "literal" => {
             if !row.blank_scope.is_empty()
@@ -1026,9 +1110,8 @@ fn resolve_term_row(
                 .at_path(TERMS_PATH));
             }
             require_nonempty(&row.datatype_id, "literal datatype_id", TERMS_PATH)?;
-            let datatype =
-                resolve_term_row(&row.datatype_id, raw, resolved, active, config, depth + 1)?;
-            let ProjectionTerm::Iri { value: datatype } = datatype else {
+            let datatype = dependency(&row.datatype_id)?;
+            let TermRef::Iri(_) = builder.resolve(datatype.id) else {
                 return Err(ProjectionError::integrity(
                     "literal datatype_id does not identify an IRI term",
                 )
@@ -1044,12 +1127,19 @@ fn resolve_term_row(
                     })?;
                 Some(direction)
             };
-            ProjectionTerm::Literal {
-                lexical: row.value.clone(),
-                datatype,
-                language: (!row.language.is_empty()).then(|| row.language.clone()),
+            let datatype = &raw
+                .get(&row.datatype_id)
+                .ok_or_else(|| ProjectionError::integrity("resolved datatype row disappeared"))?
+                .value;
+            let language = (!row.language.is_empty()).then_some(row.language.as_str());
+            validate_literal_identity(datatype, language, direction)?;
+            builder.intern_literal_parts_with_memory(
+                &row.value,
+                Some(datatype),
+                language,
                 direction,
-            }
+                memory,
+            )?
         }
         "triple" => {
             if !row.value.is_empty()
@@ -1071,32 +1161,24 @@ fn resolve_term_row(
             ] {
                 require_nonempty(value, name, TERMS_PATH)?;
             }
-            ProjectionTerm::Triple {
-                subject: Box::new(resolve_term_row(
-                    &row.subject_id,
-                    raw,
-                    resolved,
-                    active,
-                    config,
-                    depth + 1,
-                )?),
-                predicate: Box::new(resolve_term_row(
-                    &row.predicate_id,
-                    raw,
-                    resolved,
-                    active,
-                    config,
-                    depth + 1,
-                )?),
-                object: Box::new(resolve_term_row(
-                    &row.object_id,
-                    raw,
-                    resolved,
-                    active,
-                    config,
-                    depth + 1,
-                )?),
+            let (subject, predicate, object) = (
+                dependency(&row.subject_id)?,
+                dependency(&row.predicate_id)?,
+                dependency(&row.object_id)?,
+            );
+            require_resource(builder.resolve(subject.id), "triple-term subject")?;
+            if !matches!(builder.resolve(predicate.id), TermRef::Iri(_)) {
+                return Err(
+                    ProjectionError::term("triple-term predicate must be an IRI")
+                        .at_path(TERMS_PATH),
+                );
             }
+            height = subject
+                .height
+                .max(object.height)
+                .checked_add(1)
+                .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?;
+            builder.intern_triple_with_memory(subject.id, predicate.id, object.id, memory)?
         }
         other => {
             return Err(
@@ -1105,21 +1187,13 @@ fn resolve_term_row(
             );
         }
     };
-    term.validate(config.limits())?;
-    if term_identifier(&term, config.limits())? != row.id {
-        return Err(ProjectionError::integrity(
-            "exact CSVW term id does not match its canonical RDF value",
-        )
-        .at_path(TERMS_PATH));
-    }
-    active.remove(id);
-    resolved.insert(id.to_owned(), term.clone());
-    Ok(term)
+    Ok(CapturedTerm { id: term, height })
 }
 
 fn decode_quads(
     records: &[StringRecord],
-    terms: &BTreeMap<String, ProjectionTerm>,
+    terms: &BTreeMap<String, TermId>,
+    builder: &RdfDatasetBuilder,
     config: &CsvwConfig,
 ) -> Result<BTreeSet<ExactQuad>, ProjectionError> {
     let mut rows = BTreeSet::new();
@@ -1136,8 +1210,19 @@ fn decode_quads(
             object: referenced_term(terms, csv_field(record, 3, &path)?, "object_id", &path)?,
             graph: optional_term(terms, csv_field(record, 4, &path)?, "graph_id", &path)?,
         };
-        require_statement_positions(&row.subject, &row.predicate, row.graph.as_ref(), "quad")?;
-        if row_identifier("CsvwQuad", &row, config.limits(), "exact CSVW quad")? != id {
+        require_statement_positions(
+            builder.resolve(row.subject),
+            builder.resolve(row.predicate),
+            row.graph.map(|id| builder.resolve(id)),
+            "quad",
+        )?;
+        if row_identifier(
+            "CsvwQuad",
+            |id| builder.resolve(id),
+            &row.fields(),
+            config.limits(),
+        )? != id
+        {
             return Err(ProjectionError::integrity(
                 "exact CSVW quad id does not match its canonical row",
             )
@@ -1152,7 +1237,8 @@ fn decode_quads(
 
 fn decode_reifiers(
     records: &[StringRecord],
-    terms: &BTreeMap<String, ProjectionTerm>,
+    terms: &BTreeMap<String, TermId>,
+    builder: &RdfDatasetBuilder,
     config: &CsvwConfig,
 ) -> Result<BTreeSet<ExactReifier>, ProjectionError> {
     let mut rows = BTreeSet::new();
@@ -1168,17 +1254,23 @@ fn decode_reifiers(
             statement: referenced_term(terms, csv_field(record, 2, &path)?, "statement_id", &path)?,
             graph: optional_term(terms, csv_field(record, 3, &path)?, "graph_id", &path)?,
         };
-        require_resource(&row.reifier, "reifier subject")?;
-        if !matches!(row.statement, ProjectionTerm::Triple { .. }) {
+        require_resource(builder.resolve(row.reifier), "reifier subject")?;
+        if !matches!(builder.resolve(row.statement), TermRef::Triple { .. }) {
             return Err(ProjectionError::integrity(
                 "exact CSVW reifier statement_id is not a triple term",
             )
             .at_path(path));
         }
         if let Some(graph) = &row.graph {
-            require_graph_name(graph, "reifier graph")?;
+            require_resource(builder.resolve(*graph), "reifier graph")?;
         }
-        if row_identifier("CsvwReifier", &row, config.limits(), "exact CSVW reifier")? != id {
+        if row_identifier(
+            "CsvwReifier",
+            |id| builder.resolve(id),
+            &row.fields(),
+            config.limits(),
+        )? != id
+        {
             return Err(ProjectionError::integrity(
                 "exact CSVW reifier row id does not match its canonical row",
             )
@@ -1193,7 +1285,8 @@ fn decode_reifiers(
 
 fn decode_annotations(
     records: &[StringRecord],
-    terms: &BTreeMap<String, ProjectionTerm>,
+    terms: &BTreeMap<String, TermId>,
+    builder: &RdfDatasetBuilder,
     config: &CsvwConfig,
 ) -> Result<BTreeSet<ExactAnnotation>, ProjectionError> {
     let mut rows = BTreeSet::new();
@@ -1211,16 +1304,16 @@ fn decode_annotations(
             graph: optional_term(terms, csv_field(record, 4, &path)?, "graph_id", &path)?,
         };
         require_statement_positions(
-            &row.reifier,
-            &row.predicate,
-            row.graph.as_ref(),
+            builder.resolve(row.reifier),
+            builder.resolve(row.predicate),
+            row.graph.map(|id| builder.resolve(id)),
             "annotation",
         )?;
         if row_identifier(
             "CsvwAnnotation",
-            &row,
+            |id| builder.resolve(id),
+            &row.fields(),
             config.limits(),
-            "exact CSVW annotation",
         )? != id
         {
             return Err(ProjectionError::integrity(
@@ -1237,103 +1330,54 @@ fn decode_annotations(
     Ok(rows)
 }
 
-fn lift_exact(dataset: &ExactDataset) -> Result<Arc<RdfDataset>, ProjectionError> {
-    let mut builder = RdfDatasetBuilder::new();
-    for graph in &dataset.named_graphs {
-        let graph = graph.intern(&mut builder)?;
-        builder.declare_named_graph(graph)?;
+fn finish_exact(
+    mut builder: RdfDatasetBuilder,
+    named_graphs: BTreeSet<TermId>,
+    quads: BTreeSet<ExactQuad>,
+    reifiers: BTreeSet<ExactReifier>,
+    annotations: BTreeSet<ExactAnnotation>,
+) -> Result<ExactDataset, ProjectionError> {
+    for graph in &named_graphs {
+        builder.declare_named_graph(*graph)?;
     }
-    for quad in &dataset.quads {
-        let subject = quad.subject.intern(&mut builder)?;
-        let ProjectionTerm::Iri { value: predicate } = &quad.predicate else {
-            return Err(ProjectionError::integrity(
-                "exact CSVW quad predicate is not an IRI",
-            ));
-        };
-        let predicate = builder.intern_iri(predicate)?;
-        let object = quad.object.intern(&mut builder)?;
-        let graph = quad
-            .graph
-            .as_ref()
-            .map(|term| term.intern(&mut builder))
-            .transpose()?;
-        builder.push_quad(subject, predicate, object, graph)?;
+    for quad in &quads {
+        builder.push_quad(quad.subject, quad.predicate, quad.object, quad.graph)?;
     }
-    for row in &dataset.reifiers {
-        let reifier = row.reifier.intern(&mut builder)?;
-        let statement = row.statement.intern(&mut builder)?;
-        let graph = row
-            .graph
-            .as_ref()
-            .map(|term| term.intern(&mut builder))
-            .transpose()?;
-        builder.push_reifier_in_graph(reifier, statement, graph)?;
+    for row in &reifiers {
+        builder.push_reifier_in_graph(row.reifier, row.statement, row.graph)?;
     }
-    for row in &dataset.annotations {
-        let reifier = row.reifier.intern(&mut builder)?;
-        let ProjectionTerm::Iri { value: predicate } = &row.predicate else {
-            return Err(ProjectionError::integrity(
-                "exact CSVW annotation predicate is not an IRI",
-            ));
-        };
-        let predicate = builder.intern_iri(predicate)?;
-        let object = row.object.intern(&mut builder)?;
-        let graph = row
-            .graph
-            .as_ref()
-            .map(|term| term.intern(&mut builder))
-            .transpose()?;
-        builder.push_annotation_in_graph(reifier, predicate, object, graph)?;
+    for row in &annotations {
+        builder.push_annotation_in_graph(row.reifier, row.predicate, row.object, row.graph)?;
     }
-    builder.freeze().map_err(ProjectionError::from)
-}
-
-fn resolve_term<D: DatasetView>(
-    view: &D,
-    id: D::Id,
-    limits: ProjectionLimits,
-    cache: &mut BTreeMap<D::Id, ProjectionTerm>,
-) -> Result<ProjectionTerm, ProjectionError> {
-    if let Some(term) = cache.get(&id) {
-        return Ok(term.clone());
-    }
-    let term = ProjectionTerm::from_view(view, id, limits)?;
-    cache.insert(id, term.clone());
-    Ok(term)
+    Ok(ExactDataset {
+        native: builder.freeze().map_err(ProjectionError::from)?,
+        named_graphs,
+        quads,
+        reifiers,
+        annotations,
+    })
 }
 
 fn require_statement_positions(
-    subject: &ProjectionTerm,
-    predicate: &ProjectionTerm,
-    graph: Option<&ProjectionTerm>,
+    subject: TermRef<'_>,
+    predicate: TermRef<'_>,
+    graph: Option<TermRef<'_>>,
     description: &str,
 ) -> Result<(), ProjectionError> {
     require_resource(subject, &format!("{description} subject"))?;
-    if !matches!(predicate, ProjectionTerm::Iri { .. }) {
+    if !matches!(predicate, TermRef::Iri(_)) {
         return Err(ProjectionError::integrity(format!(
             "{description} predicate is not an IRI"
         )));
     }
     if let Some(graph) = graph {
-        require_graph_name(graph, &format!("{description} graph"))?;
+        require_resource(graph, &format!("{description} graph"))?;
     }
     Ok(())
 }
 
-fn require_resource(term: &ProjectionTerm, description: &str) -> Result<(), ProjectionError> {
-    if matches!(term, ProjectionTerm::Literal { .. }) {
-        return Err(ProjectionError::integrity(format!(
-            "{description} must not be a literal"
-        )));
-    }
-    Ok(())
-}
-
-fn require_graph_name(term: &ProjectionTerm, description: &str) -> Result<(), ProjectionError> {
-    if !matches!(
-        term,
-        ProjectionTerm::Iri { .. } | ProjectionTerm::Blank { .. }
-    ) {
+fn require_resource(term: TermRef<'_>, description: &str) -> Result<(), ProjectionError> {
+    if !matches!(term, TermRef::Iri(_) | TermRef::Blank { .. }) {
         return Err(ProjectionError::integrity(format!(
             "{description} must be an IRI or blank node"
         )));
@@ -1341,20 +1385,27 @@ fn require_graph_name(term: &ProjectionTerm, description: &str) -> Result<(), Pr
     Ok(())
 }
 
-fn term_identifier(
-    term: &ProjectionTerm,
+fn term_identifier<'a>(
+    resolve: impl Fn(TermId) -> TermRef<'a> + Copy,
+    term: TermId,
     limits: ProjectionLimits,
 ) -> Result<String, ProjectionError> {
-    stable_identifier("CsvwTerm", &term.to_canonical_json(limits)?)
+    stable_identifier(
+        "CsvwTerm",
+        &canonical_term_json(resolve, term, limits.max_artifact_bytes())?,
+    )
 }
 
-fn row_identifier<T: ToJson>(
+fn row_identifier<'a>(
     prefix: &str,
-    row: &T,
+    resolve: impl Fn(TermId) -> TermRef<'a> + Copy,
+    fields: &[(&str, Option<TermId>)],
     limits: ProjectionLimits,
-    description: &str,
 ) -> Result<String, ProjectionError> {
-    stable_identifier(prefix, &canonical_json_bounded(row, limits, description)?)
+    stable_identifier(
+        prefix,
+        &canonical_row_json(resolve, fields, limits.max_artifact_bytes())?,
+    )
 }
 
 struct LimitedCsvBytes {
@@ -1524,13 +1575,13 @@ fn require_empty_fields(row: &RawTermRow, names: &[&str]) -> Result<(), Projecti
 }
 
 fn referenced_term(
-    terms: &BTreeMap<String, ProjectionTerm>,
+    terms: &BTreeMap<String, TermId>,
     id: &str,
     field_name: &str,
     path: &str,
-) -> Result<ProjectionTerm, ProjectionError> {
+) -> Result<TermId, ProjectionError> {
     require_nonempty(id, field_name, path)?;
-    terms.get(id).cloned().ok_or_else(|| {
+    terms.get(id).copied().ok_or_else(|| {
         ProjectionError::integrity(format!(
             "exact CSVW {field_name} references an unknown term id"
         ))
@@ -1539,11 +1590,11 @@ fn referenced_term(
 }
 
 fn optional_term(
-    terms: &BTreeMap<String, ProjectionTerm>,
+    terms: &BTreeMap<String, TermId>,
     id: &str,
     field_name: &str,
     path: &str,
-) -> Result<Option<ProjectionTerm>, ProjectionError> {
+) -> Result<Option<TermId>, ProjectionError> {
     if id.is_empty() {
         Ok(None)
     } else {
@@ -1608,6 +1659,10 @@ mod tests {
     use crate::ProjectionErrorKind;
 
     fn test_config(max_records: usize) -> CsvwConfig {
+        test_config_at_depth(max_records, 16)
+    }
+
+    fn test_config_at_depth(max_records: usize, depth: usize) -> CsvwConfig {
         CsvwConfig::new(
             "http://example.org/csvw/",
             super::super::CsvwContext::new("http://www.w3.org/ns/csvw", BTreeMap::new())
@@ -1621,7 +1676,7 @@ mod tests {
             )
             .expect("vocabulary"),
             super::super::CsvwMode::Standard,
-            ProjectionLimits::new(16, 4_000_000, 16_000_000, 20_000_000, 16).expect("limits"),
+            ProjectionLimits::new(16, 4_000_000, 16_000_000, 20_000_000, depth).expect("limits"),
             max_records,
         )
         .expect("config")
@@ -1691,7 +1746,60 @@ mod tests {
     #[test]
     fn exact_csvw_is_backend_independent_byte_stable_and_lossless() {
         let dataset = fixture();
-        let config = test_config(10_000);
+        // This fixture has two triple nodes on its longest path: the root is
+        // depth zero, so max depth one must round-trip its leaf as well.
+        let config = test_config_at_depth(10_000, 1);
+        let native = collect_dataset(dataset.as_ref(), &config).expect("native projection model");
+        let catalog = TermCatalog::build(&native, &config).expect("reachable term catalog");
+        for term in catalog.by_term.keys() {
+            let legacy =
+                crate::ProjectionTerm::from_view(native.native.as_ref(), *term, config.limits())
+                    .expect("bounded legacy identity oracle");
+            assert_eq!(
+                canonical_term_json(
+                    |id| native.native.as_ref().resolve(id),
+                    *term,
+                    config.limits().max_artifact_bytes()
+                )
+                .expect("native term JSON"),
+                legacy
+                    .to_canonical_json(config.limits())
+                    .expect("published term law")
+            );
+        }
+        for fields in native
+            .quads
+            .iter()
+            .map(|row| row.fields().to_vec())
+            .chain(native.reifiers.iter().map(|row| row.fields().to_vec()))
+            .chain(native.annotations.iter().map(|row| row.fields().to_vec()))
+        {
+            let mut legacy = Object::new();
+            for (name, term) in &fields {
+                legacy.insert(
+                    *name,
+                    term.map(|id| {
+                        crate::ProjectionTerm::from_view(
+                            native.native.as_ref(),
+                            id,
+                            config.limits(),
+                        )
+                        .expect("bounded legacy row term")
+                    })
+                    .to_json(),
+                );
+            }
+            assert_eq!(
+                canonical_row_json(
+                    |id| native.native.as_ref().resolve(id),
+                    &fields,
+                    config.limits().max_artifact_bytes()
+                )
+                .expect("native row JSON"),
+                canonical_json_bounded(&Value::Object(legacy), config.limits(), "legacy exact row")
+                    .expect("published row identity")
+            );
+        }
         let projected = project_csvw_exact(dataset.as_ref(), &config).expect("project");
         assert!(projected.loss_ledger.is_empty());
         assert_eq!(projected.package.len(), 5);
@@ -1743,6 +1851,25 @@ mod tests {
         }
         let repeated = project_csvw_exact(dataset.as_ref(), &config).expect("repeat");
         assert!(same_artifacts(&projected.package, &repeated.package));
+
+        let mut over = RdfDatasetBuilder::new();
+        let subject = over.intern_iri("http://example.org/s").expect("subject");
+        let predicate = over.intern_iri("http://example.org/p").expect("predicate");
+        let mut object = subject;
+        for _ in 0..3 {
+            object = over
+                .intern_triple(subject, predicate, object)
+                .expect("triple");
+        }
+        over.push_quad(subject, predicate, object, None)
+            .expect("quad");
+        let over = over.freeze().expect("valid deeper native source");
+        assert_eq!(
+            project_csvw_exact(over.as_ref(), &config)
+                .expect_err("one triple beyond caller depth")
+                .kind(),
+            ProjectionErrorKind::ResourceLimit
+        );
     }
 
     #[test]
@@ -1790,6 +1917,47 @@ mod tests {
             )
             .is_err()
         );
+
+        // Every declared term is validated, but an unreferenced term is outside
+        // the emitted closure and must fail strict canonical re-encoding.
+        let orphan = crate::ProjectionTerm::Iri {
+            value: "http://example.org/orphan".to_owned(),
+        };
+        let orphan_id = stable_identifier(
+            "CsvwTerm",
+            &orphan
+                .to_canonical_json(config.limits())
+                .expect("orphan identity"),
+        )
+        .expect("orphan id");
+        let mut budget = RecordBudget::new(10_000, "CSVW");
+        let mut rows: Vec<Vec<String>> = read_records(terms, &TERM_HEADER, TERMS_PATH, &mut budget)
+            .expect("canonical term rows")
+            .into_iter()
+            .map(|record| record.iter().map(str::to_owned).collect())
+            .collect();
+        rows.push(vec![
+            orphan_id,
+            "iri".to_owned(),
+            "http://example.org/orphan".to_owned(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            "false".to_owned(),
+        ]);
+        rows.sort_by(|a, b| a[0].cmp(&b[0]));
+        let orphan_terms =
+            write_csv(TERMS_PATH, &TERM_HEADER, rows, config.limits()).expect("orphan term table");
+        let error = read_csvw_exact(
+            &replace_artifact(&projected.package, TERMS_PATH, &orphan_terms),
+            &config,
+        )
+        .expect_err("orphan declaration is not canonical");
+        assert_eq!(error.kind(), ProjectionErrorKind::Syntax);
 
         let error = read_csvw_exact(&projected.package, &test_config(1)).expect_err("record limit");
         assert_eq!(error.kind(), ProjectionErrorKind::ResourceLimit);
