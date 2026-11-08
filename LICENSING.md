@@ -112,7 +112,8 @@ The checks have distinct scopes:
   inline SPDX header, or a `REUSE.toml` annotation. It also re-verifies the
   committed MulanPSL-2.0 text against its pinned digest. Today that covers
   the four W3C SPARQL/OWL 2 suites, the OBO Graphs schema closure, and the
-  JSON-Schema-Test-Suite and meta-schemas under `crates/jsonschema/tests/`.
+  JSON-Schema-Test-Suite under `crates/jsonschema/tests/` and the meta-schemas
+  under `crates/testkit/metaschemas/`.
 - `scripts/check-corpus-frozen.py` SHA-256-verifies `vectors/shacl`,
   `vectors/shacl-reports`, `vectors/shacl12`, `vectors/shexTest`, `crates/shapes/corpus`,
   `crates/shapes/spec`, `crates/sparql-conformance/entailment-suite/w3c-owl2`

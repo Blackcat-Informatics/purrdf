@@ -1127,15 +1127,23 @@ impl BaseResolver {
         let dir = dir
             .canonicalize()
             .map_err(|e| format!("resolve manifest directory {}: {e}", dir.display()))?;
-        let workspace_root = purrdf_testkit::paths::workspace_root_from(&dir).ok_or_else(|| {
-            format!(
-                "{}: no ancestor directory carries a Cargo.toml with a [workspace] table, so no \
+        let workspace_root = purrdf_testkit::paths::try_workspace_root_from(&dir)
+            .map_err(|error| {
+                format!(
+                    "{}: read ancestor Cargo manifest from {}: {error}",
+                    manifest_path.display(),
+                    dir.display()
+                )
+            })?
+            .ok_or_else(|| {
+                format!(
+                    "{}: no ancestor directory carries a Cargo.toml with a [workspace] table, so no \
                  workspace-relative manifest identity can be derived. The conformance corpora \
                  must live inside this workspace; a base derived from an absolute path would \
                  differ between checkouts and put machine-specific strings into every case IRI",
-                manifest_path.display()
-            )
-        })?;
+                    manifest_path.display()
+                )
+            })?;
         let relative = dir.strip_prefix(&workspace_root).map_err(|_| {
             format!(
                 "{}: manifest directory is not under the workspace root {}",

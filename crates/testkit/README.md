@@ -25,7 +25,8 @@ native facilities.
 * **Caller workspace paths** — `purrdf_testkit::workspace_root!()` captures
   the calling crate's manifest directory. It selects an explicit ancestor
   `[workspace]`, or the nearest `[package]` when no workspace is declared.
-  `paths::workspace_root_from` accepts an explicit starting path. These helpers
+  `paths::workspace_root_from` accepts an explicit starting path;
+  `paths::try_workspace_root_from` returns manifest read errors. These helpers
   recognize table-header lines; they do not resolve Cargo's
   `package.workspace` override. Downstream corpus paths belong to the caller.
 * **Temporary paths under `target/`** — `temp_dir!()` and `temp_file!()` in

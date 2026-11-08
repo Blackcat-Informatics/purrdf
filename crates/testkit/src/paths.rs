@@ -14,6 +14,7 @@
 //! The root is canonical where the file system can canonicalize it, so paths
 //! joined onto it compare equal to canonicalized paths found by a walk.
 
+use std::io;
 use std::path::{Path, PathBuf};
 
 pub use crate::workspace_root;
@@ -31,38 +32,55 @@ pub use crate::workspace_root;
 /// When an existing ancestor manifest cannot be read as UTF-8.
 #[must_use]
 pub fn workspace_root_from(start: &Path) -> Option<PathBuf> {
+    try_workspace_root_from(start).unwrap_or_else(|error| {
+        panic!(
+            "read Cargo manifest ancestor of {}: {error}",
+            start.display()
+        )
+    })
+}
+
+/// Resolve the workspace as [`workspace_root_from`], returning manifest read errors.
+///
+/// # Errors
+/// Returns the original I/O error when an existing ancestor manifest cannot be
+/// read as UTF-8. Ancestors above the first explicit workspace are not read.
+pub fn try_workspace_root_from(start: &Path) -> io::Result<Option<PathBuf>> {
     let manifests = start.ancestors().filter_map(|directory| {
         let manifest = directory.join("Cargo.toml");
         match std::fs::read_to_string(&manifest) {
-            Ok(text) => Some((directory, text)),
+            Ok(text) => Some(Ok((directory, text))),
             Err(error)
                 if matches!(
                     error.kind(),
-                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                    io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
                 ) =>
             {
                 None
             }
-            Err(error) => panic!("read Cargo manifest {}: {error}", manifest.display()),
+            Err(error) => Some(Err(error)),
         }
     });
-    manifest_root(manifests).map(|root| root.canonicalize().unwrap_or(root))
+    Ok(manifest_root(manifests)?.map(|root| root.canonicalize().unwrap_or(root)))
 }
 
-fn manifest_root<'a>(manifests: impl Iterator<Item = (&'a Path, String)>) -> Option<PathBuf> {
+fn manifest_root<'a>(
+    manifests: impl Iterator<Item = io::Result<(&'a Path, String)>>,
+) -> io::Result<Option<PathBuf>> {
     let mut package = None;
-    for (directory, manifest) in manifests {
+    for manifest in manifests {
+        let (directory, manifest) = manifest?;
         for line in manifest.lines() {
             let header = line.split('#').next().unwrap_or_default().trim();
             if header == "[workspace]" {
-                return Some(directory.to_path_buf());
+                return Ok(Some(directory.to_path_buf()));
             }
             if header == "[package]" && package.is_none() {
                 package = Some(directory.to_path_buf());
             }
         }
     }
-    package
+    Ok(package)
 }
 
 /// Append every `.rs` file under `dir`, at any depth, to `out`.
@@ -111,7 +129,10 @@ pub fn collect_rs_filtered(dir: &Path, out: &mut Vec<PathBuf>, descend: &impl Fn
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-    use super::{collect_rs, collect_rs_filtered, manifest_root, workspace_root_from};
+    use super::{
+        collect_rs, collect_rs_filtered, manifest_root, try_workspace_root_from,
+        workspace_root_from,
+    };
     use crate::TempDir;
     use std::path::Path;
 
@@ -120,6 +141,12 @@ mod tests {
     fn an_unreadable_manifest_cannot_silently_select_an_ancestor() {
         let directory = TempDir::for_unit_test().expect("test directory");
         std::fs::write(directory.path().join("Cargo.toml"), [0xff]).expect("invalid UTF-8");
+        assert_eq!(
+            try_workspace_root_from(directory.path())
+                .expect_err("the fallible scan retains the read failure")
+                .kind(),
+            std::io::ErrorKind::InvalidData
+        );
         let _ = workspace_root_from(directory.path());
     }
 
@@ -128,8 +155,11 @@ mod tests {
         let package = Path::new("standalone/package");
         assert_eq!(
             manifest_root(
-                [(package, "[package] # standalone\nname = \"p\"\n".to_owned())].into_iter()
-            ),
+                [(package, "[package] # standalone\nname = \"p\"\n".to_owned())]
+                    .into_iter()
+                    .map(Ok)
+            )
+            .expect("read manifest records"),
             Some(package.to_path_buf())
         );
     }
