@@ -1,0 +1,9 @@
+{
+  "captured_main_output_byte_identical": true,
+  "diagnostic_separator": "Restored final newline consumed by the diagnostic separator",
+  "bytes": 312165,
+  "only_change": "Two OpenAPI info.version values: 4.0.0 to 4.0.1",
+  "historical_fixture_and_semantic_comparison": "unchanged",
+  "focused_native_result": "PASS: both iri_only_output cases, with 27 unrelated cases filtered out",
+  "command": "cargo test -p purrdf-shapes --locked --test ontology_schema_surface iri_only_output"
+}

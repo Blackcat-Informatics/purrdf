@@ -1,0 +1,32 @@
+{
+  "scope": "Only prohibited automatic HTML attribution comments omitted; substantive feedback and metadata retained. Original bodies remain at the forge.",
+  "files": [
+    {
+      "file": "review-evidence.json",
+      "original_sha256": "3648a53f02deaa9aaf4b681a0e1e52d447009ccfa6874b89310156f46a998f14",
+      "projection_sha256": "8a27723cf3d8cc538f3433f81bbc1292b5d6b4c0d63449dd01a5c5b62a482211",
+      "omitted_automatic_comments": [
+        "b933cb41fc4870569122642ce2fdb8a34b141220cfb72d47af20d249430664df",
+        "b933cb41fc4870569122642ce2fdb8a34b141220cfb72d47af20d249430664df"
+      ]
+    },
+    {
+      "file": "pr-comments.md",
+      "original_sha256": "52ba9481639de6e3362ecf8f2eb6d852482fe8c3c2088cee6b08dfbfb193ef7b",
+      "projection_sha256": "bfc62e521d2ccea015c4729be9a462cf75a3c44f5f65ca820512ed1f346c0887",
+      "omitted_automatic_comments": [
+        "b933cb41fc4870569122642ce2fdb8a34b141220cfb72d47af20d249430664df",
+        "b933cb41fc4870569122642ce2fdb8a34b141220cfb72d47af20d249430664df"
+      ]
+    },
+    {
+      "file": "review-dispositions.json",
+      "original_sha256": "9571e6007dae7a7fa95a5582dd58a9824184e9d3703197abd8a9ed38bb25b315",
+      "projection_sha256": "a4d0b4e1d1bc99da3f0e4c9824be33a5eb201b3bca1a4354cc745e7b6345b888",
+      "omitted_automatic_comments": [
+        "b933cb41fc4870569122642ce2fdb8a34b141220cfb72d47af20d249430664df",
+        "b933cb41fc4870569122642ce2fdb8a34b141220cfb72d47af20d249430664df"
+      ]
+    }
+  ]
+}
