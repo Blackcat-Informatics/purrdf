@@ -57,6 +57,7 @@ mod error;
 mod json_codec;
 mod loss;
 mod lpg;
+mod native_term;
 mod obo_graphs;
 mod okf;
 mod package;
